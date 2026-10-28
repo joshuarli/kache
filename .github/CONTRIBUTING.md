@@ -39,13 +39,12 @@ CARGO_PROFILE_DEV_DEBUG=2 CARGO_PROFILE_DEV_STRIP=none cargo build
 All common tasks live in the `Justfile` — prefer these over raw `cargo` commands:
 
 ```sh
-just check          # fmt + clippy + tests
+just check          # clippy + tests
 just pr             # check + changed-line mutants (run before every PR)
 just ci             # mirrors the GitHub Actions verification flow
 just test           # run all tests
 just lint           # clippy with -D warnings
-just fmt            # auto-format code
-just fix            # auto-fix formatting + clippy warnings
+just fix            # auto-fix clippy warnings
 just coverage       # tests with cargo-llvm-cov coverage
 just coverage-open  # coverage with HTML report
 just mutants-core   # mutation-test all kache-core behavior
@@ -73,7 +72,6 @@ in `.pinact.yaml`; bump its SHA manually when you want a newer release.
 ## Code style
 
 - **Edition**: Rust 2024
-- **Formatting**: `cargo fmt` (default rustfmt settings)
 - **Linting**: `cargo clippy -- -D warnings` — all warnings are errors
 - **Error handling**: Use `anyhow::Result` with `.context()` / `.with_context()` for descriptive errors. Avoid bare `.unwrap()` on I/O or network operations.
 - **Unsafe code**: Avoid unless strictly necessary (OS-level FFI). Document safety invariants with `// SAFETY:` comments.
@@ -120,7 +118,7 @@ just mutants-core
 
 Coding agents: read [AGENTS.md](../AGENTS.md) before opening a PR. The usual CI failure is Mutation testing after a push that only ran `just check`.
 
-Run the PR gate before submitting. `just check` is fmt, clippy with `-D warnings`, and tests. CI also mutation-tests every changed Rust line; `just pr` runs that too.
+Run the PR gate before submitting. `just check` is clippy with `-D warnings` and tests. CI also mutation-tests every changed Rust line; `just pr` runs that too.
 
 ```sh
 just pr
@@ -143,7 +141,7 @@ Clippy on macOS does not type-check `#[cfg(target_os = "linux")]` functions. Ide
 - Keep PRs small and focused on a single change
 - Add tests for new functionality
 - Don't bundle unrelated refactors with feature work
-- CI must pass before merge (fmt, clippy, tests, coverage, changed-line mutants)
+- CI must pass before merge (clippy, tests, coverage, changed-line mutants)
 
 ## Branching and releases
 

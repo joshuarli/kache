@@ -8,7 +8,7 @@ turns every group on without reading stdin (pushes, tags, API failures), so
 `main` still builds the Nix package on every push.
 
 Groups:
-  check  Check (Linux): fmt, clippy, coverage tests, helm lint, the perf gate
+  check  Check (Linux): clippy, coverage tests, helm lint, the perf gate
          comparison tests, and everything else `just ci` runs.
   tests  the platform and hardening matrix: cargo test (macOS/Windows),
          mutation testing, Kani, dependency audit, CUDA and CoW jobs.

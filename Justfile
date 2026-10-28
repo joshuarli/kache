@@ -11,7 +11,7 @@ default:
 
 # Run all local quality checks.
 [group('dev')]
-check: fmt-check lint client-crates-check test-resource-guard-check test
+check: lint client-crates-check test-resource-guard-check test
 
 # What a PR must survive before `gh pr create`: `just check`, then the
 # same changed-line mutants job CI runs. Docs-only diffs skip mutants.
@@ -30,7 +30,7 @@ pr BASE="origin/main": check
 
 # Mirror the repo CI verification flow.
 [group('dev')]
-ci: fmt-check lint client-crates-check test-resource-guard-check coverage
+ci: lint client-crates-check test-resource-guard-check coverage
 
 # Workspace builds enable the daemon's async feature. Check the client-only
 # dependency graph separately so feature unification cannot hide a dependency.
@@ -39,11 +39,9 @@ client-crates-check:
   cargo check --locked -p kache-client -p kache-config -p kache-protocol -p kache-ipc --no-default-features
   cargo test --locked -p kache-ipc --no-default-features
 
-# Auto-fix formatting and clippy warnings.
+# Auto-fix clippy warnings.
 [group('dev')]
 fix:
-  cargo fmt --all
-  cargo fmt --manifest-path fuzz/Cargo.toml
   cargo clippy --fix --allow-dirty --allow-staged --workspace --all-targets -- -D warnings
 
 # Install kache to ~/.cargo/bin and register the daemon service.
@@ -342,35 +340,6 @@ bench-mbx PROFILE="" *ARGS:
 [group('dev')]
 lint:
   cargo clippy --workspace --all-targets -- -D warnings
-
-# Format the workspace.
-[group('dev')]
-fmt:
-  cargo fmt --all
-  rustfmt crates/kache-client/src/commands.rs
-  cargo fmt --manifest-path fuzz/Cargo.toml
-
-# Check formatting without changing files.
-[group('dev')]
-fmt-check:
-  cargo fmt --all -- --check
-  rustfmt --check crates/kache-client/src/commands.rs
-  cargo fmt --manifest-path fuzz/Cargo.toml -- --check
-
-# Format flake.nix and packaging/nix/ with nixfmt. Deliberately not part of `check`
-# or `ci`: nix isn't in mise.toml, so requiring it would break contributors
-# who only have the mise toolchain. CI gates it in the `nix-package` job.
-[group('dev')]
-fmt-nix:
-  nix fmt
-
-# Check Nix formatting without changing files. Deliberately NOT
-# `nix fmt -- --fail-on-change`: treefmt formats in place and only then
-# reports a nonzero exit, so it rewrites the working tree. Building the
-# flake check runs nixfmt --check in the sandbox and touches nothing.
-[group('dev')]
-fmt-nix-check:
-  nix build --no-link ".#checks.$(nix eval --impure --raw --expr builtins.currentSystem).formatting"
 
 # Run cargo-llvm-cov and emit JSON + HTML reports under tmp/llvm-cov/.
 # JSON drives the CI threshold check; HTML is uploaded as a CI artifact

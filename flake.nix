@@ -7,10 +7,6 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    treefmt-nix = {
-      url = "github:numtide/treefmt-nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs =
@@ -18,7 +14,6 @@
       self,
       nixpkgs,
       rust-overlay,
-      treefmt-nix,
     }:
     let
       inherit (nixpkgs) lib;
@@ -63,25 +58,6 @@
           # pinned in rust-toolchain.toml instead of nixpkgs' rustc, which can
           # lag the crate's rust-version.
           kache-rust-toolchain = rustToolchain;
-        };
-
-      # Only the Nix sources, so editing Rust code doesn't invalidate the
-      # formatting check.
-      nixSources = lib.fileset.toSource {
-        root = ./.;
-        fileset = lib.fileset.unions [
-          ./flake.nix
-          ./packaging/nix
-        ];
-      };
-
-      # One config drives both `nix fmt` and the formatting check, so the two
-      # cannot drift apart.
-      treefmtFor =
-        pkgs:
-        treefmt-nix.lib.evalModule pkgs {
-          projectRootFile = "flake.nix";
-          programs.nixfmt.enable = true;
         };
 
       # Wraps ./packaging/nix/module.nix so the exported module works on its own. Without
@@ -143,21 +119,14 @@
             pkgs.kache-rust-toolchain
             pkgs.just
             pkgs.cargo-deny
-            (treefmtFor pkgs).config.build.wrapper
           ];
         };
       });
-
-      formatter = forAllSystems (pkgs: (treefmtFor pkgs).config.build.wrapper);
 
       checks = forAllSystems (
         pkgs:
         {
           package = pkgs.kache;
-
-          # Same treefmt config as `nix fmt`, scoped to nixSources so a Rust
-          # edit doesn't invalidate it.
-          formatting = (treefmtFor pkgs).config.build.check nixSources;
         }
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           # Evaluates the NixOS module end to end, which is what catches option

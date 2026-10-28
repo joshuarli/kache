@@ -8,7 +8,7 @@
 just check
 ```
 
-That is fmt, clippy `-D warnings`, and the workspace tests. Do not open the PR until it exits 0.
+That is clippy `-D warnings` and the workspace tests. Do not open the PR until it exits 0.
 
 Mutants run in CI, not on your machine. Open the PR as a draft; the `Mutation testing (diff k/n)` shards test every changed Rust line in parallel on Linux runners and finish in well under an hour. A red shard prints the missed mutants in its log and uploads them as `missed.txt` in its `mutation-diff-report-<k>` artifact; add the test that kills each one, push, and mark the PR ready when every shard is green. A laptop running the same diff at one to three jobs takes hours and the load makes the fixture-based tests flake.
 
