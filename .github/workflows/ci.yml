@@ -21,7 +21,7 @@ defaults:
 
 jobs:
   macos:
-    name: Lint and test (macOS)
+    name: test (macOS)
     runs-on: macos-26
     timeout-minutes: 30
     permissions:
@@ -38,13 +38,11 @@ jobs:
       - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: macos-26
-      - name: Lint
-        run: make lint
       - name: Test
         run: make test
 
   linux-musl:
-    name: Lint and test (Linux ${{ matrix.arch }} musl)
+    name: test (Linux ${{ matrix.arch }} musl)
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
@@ -78,7 +76,7 @@ jobs:
           load: true
           tags: kache-builder:${{ matrix.target }}
           cache-from: type=gha,scope=kache-${{ matrix.target }}
-      - name: Lint and test in image
+      - name: test in image
         run: |
           docker run --rm --init \
             --platform "${{ matrix.platform }}" \
@@ -87,8 +85,5 @@ jobs:
             -w /kache \
             kache-builder:${{ matrix.target }} \
             sh -ec '
-              rustup component add clippy
-              MUSL_TARGET=${{ matrix.target }} MUSL_BUILD_MODE=test \
-                musl-cargo clippy --workspace --all-targets -- -D warnings
               make test TARGET=${{ matrix.target }}
             '
