@@ -2615,6 +2615,7 @@ fn source_excluded_by_patterns(patterns: &[String], source_path: &Path, roots: &
 ///   the entry; restore materializes it next to the binary, where `lldb`
 ///   prefers it over the stale debug map. Source-level debugging of restored
 ///   executables works, so on by default.
+///
 /// A split-debuginfo configuration (`-Csplit-debuginfo=unpacked`) moves Linux
 /// into the same external-reference shape, but the sidecars are themselves
 /// cached artifacts (`ArtifactKind::DebugSidecar`) and this already applies to

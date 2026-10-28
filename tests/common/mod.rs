@@ -347,6 +347,11 @@ pub fn hermetic_command(
         // build script). A child compile would inherit it and look like a
         // unit with an OUT_DIR.
         .env_remove("OUT_DIR")
+        // CI strips debuginfo from kache's own dev profile via
+        // CARGO_PROFILE_DEV_DEBUG=0. A fixture build must keep its default
+        // debuginfo, or backtraces lose their source locations.
+        .env_remove("CARGO_PROFILE_DEV_DEBUG")
+        .env_remove("CARGO_PROFILE_DEV_STRIP")
         .env("KACHE_HOST_CONFIG", "");
     match config {
         Some(path) => command.env("KACHE_CONFIG", path),

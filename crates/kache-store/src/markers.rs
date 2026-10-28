@@ -155,10 +155,10 @@ pub fn finish_warn_once_per_session(
 /// non-regular files up front, and opens with `O_NOFOLLOW` to prevent
 /// symlink attacks and arbitrary file truncation in shared temporary directories.
 pub fn open_marker_for_lock(marker: &Path) -> Option<std::fs::File> {
-    if let Ok(metadata) = std::fs::symlink_metadata(marker) {
-        if !metadata.file_type().is_file() {
-            return None;
-        }
+    if let Ok(metadata) = std::fs::symlink_metadata(marker)
+        && !metadata.file_type().is_file()
+    {
+        return None;
     }
 
     let mut options = std::fs::OpenOptions::new();

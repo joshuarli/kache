@@ -762,7 +762,8 @@ fn base_dirs_reject_relative_and_parent_traversal_entries() {
     let parent = normalize_base_dirs(["/work/../other".to_string()]).unwrap_err();
     assert!(parent.to_string().contains("must not contain `..`"));
 
-    for root in ["/"] {
+    {
+        let root = "/";
         let error = normalize_base_dirs([root.to_string()]).unwrap_err();
         assert!(
             error
