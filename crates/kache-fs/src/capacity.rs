@@ -13,15 +13,12 @@ use std::path::Path;
 pub enum VolumeId {
     /// Nonzero `statvfs.f_fsid`; zero means the OS did not identify the volume.
     Unix(u64),
-    /// Windows volume GUID path. Network shares may not report one.
-    Windows(String),
 }
 
 impl std::fmt::Display for VolumeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unix(id) => write!(f, "unix:{id:x}"),
-            Self::Windows(name) => f.write_str(name),
         }
     }
 }
@@ -48,8 +45,7 @@ pub struct VolumeStats {
 
 /// Read volume statistics without walking directories. The path must exist;
 /// symlinks are followed. Unix reports identity, bytes and inodes together via
-/// `statvfs`. Windows reports bytes and a volume GUID, with no inode counters.
-/// Unsupported platforms and failed capacity probes return `None`.
+/// `statvfs`. Failed capacity probes return `None`.
 pub fn volume_stats(path: &Path) -> Option<VolumeStats> {
     #[cfg(any(test, feature = "testing"))]
     if let Some(usage) = crate::testutil::mock_volume_usage(path) {
@@ -59,41 +55,9 @@ pub fn volume_stats(path: &Path) -> Option<VolumeStats> {
             inodes: None,
         });
     }
-    #[cfg(unix)]
-    {
-        unix_stats(path)
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::Storage::FileSystem::GetVolumeNameForVolumeMountPointW;
-
-        std::fs::metadata(path).ok()?;
-        let root = crate::volume::volume_root(path)?;
-        let usage = volume_space(Path::new(&root))?;
-        let root: Vec<u16> = std::ffi::OsStr::new(&root)
-            .encode_wide()
-            .chain(Some(0))
-            .collect();
-        let mut name = [0u16; 64];
-        // SAFETY: root and the GUID output buffer are valid for their stated lengths.
-        let ok = unsafe {
-            GetVolumeNameForVolumeMountPointW(root.as_ptr(), name.as_mut_ptr(), name.len() as u32)
-        };
-        Some(VolumeStats {
-            id: windows_id(ok, &name),
-            usage,
-            inodes: None,
-        })
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = path;
-        None
-    }
+    unix_stats(path)
 }
 
-#[cfg(unix)]
 fn unix_stats(path: &Path) -> Option<VolumeStats> {
     use std::os::unix::ffi::OsStrExt;
 
@@ -150,51 +114,6 @@ fn unix_counts(
     })
 }
 
-/// Byte-only observation used by the locality probe as well as full statistics.
-#[cfg(any(windows, test))]
-pub(crate) fn volume_space(path: &Path) -> Option<VolumeUsage> {
-    #[cfg(unix)]
-    {
-        unix_stats(path).map(|stats| stats.usage)
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        let mut free = 0;
-        let mut total = 0;
-        // SAFETY: wide is NUL-terminated and both output counters are valid.
-        let ok = unsafe {
-            GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, &mut total, std::ptr::null_mut())
-        };
-        windows_usage(ok, total, free)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = path;
-        None
-    }
-}
-
-#[cfg(any(windows, test))]
-fn windows_usage(ok: i32, total: u64, free: u64) -> Option<VolumeUsage> {
-    (ok != 0 && total != 0).then_some(VolumeUsage { total, free })
-}
-
-#[cfg(any(windows, test))]
-fn windows_id(ok: i32, name: &[u16]) -> Option<VolumeId> {
-    if ok == 0 {
-        return None;
-    }
-    let end = name.iter().position(|&c| c == 0)?;
-    if end == 0 {
-        return None;
-    }
-    Some(VolumeId::Windows(String::from_utf16(&name[..end]).ok()?))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,45 +165,6 @@ mod tests {
     }
 
     #[test]
-    fn windows_results_keep_unknown_identity_separate_from_capacity() {
-        assert_eq!(
-            windows_usage(1, 100, 7),
-            Some(VolumeUsage {
-                total: 100,
-                free: 7
-            })
-        );
-        assert_eq!(
-            windows_usage(2, 100, 0),
-            Some(VolumeUsage {
-                total: 100,
-                free: 0
-            })
-        );
-        assert_eq!(windows_usage(0, 100, 7), None);
-        assert_eq!(windows_usage(1, 0, 7), None);
-        assert_eq!(windows_usage(0, 0, 7), None);
-        assert_eq!(
-            windows_usage(-1, 100, 7),
-            Some(VolumeUsage {
-                total: 100,
-                free: 7
-            })
-        );
-        let name: Vec<u16> = "volume-guid\0padding".encode_utf16().collect();
-        assert_eq!(
-            windows_id(1, &name),
-            Some(VolumeId::Windows("volume-guid".into()))
-        );
-        assert_eq!(windows_id(1, &name).unwrap().to_string(), "volume-guid");
-        assert_eq!(windows_id(0, &name), None);
-        assert_eq!(windows_id(1, &[0]), None);
-        assert_eq!(windows_id(1, &[65]), None);
-        assert_eq!(windows_id(1, &[0xD800, 0]), None);
-    }
-
-    #[cfg(any(unix, windows))]
-    #[test]
     fn paths_on_one_volume_share_identity_and_missing_paths_are_unknown() {
         let dir = TempDir::new("volume-stats");
         let child = dir.path().join("child");
@@ -296,20 +176,13 @@ mod tests {
         assert!(root.usage.total > 0);
         assert!(volume_stats(&dir.path().join("missing")).is_none());
         assert!(volume_stats(Path::new("\0")).is_none());
-        let bytes = volume_space(dir.path()).unwrap();
-        assert_eq!(bytes.total, root.usage.total);
-        assert!(bytes.free > 0);
-        assert!(volume_space(&dir.path().join("missing")).is_none());
-        #[cfg(unix)]
-        {
-            let alias = dir.path().join("alias");
-            std::os::unix::fs::symlink(&child, &alias).unwrap();
-            assert_eq!(volume_stats(&alias).unwrap().id, nested.id);
-            assert_eq!(
-                crate::volume_usage(dir.path()).unwrap().total,
-                root.usage.total
-            );
-        }
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(&child, &alias).unwrap();
+        assert_eq!(volume_stats(&alias).unwrap().id, nested.id);
+        assert_eq!(
+            crate::volume_usage(dir.path()).unwrap().total,
+            root.usage.total
+        );
     }
 
     #[cfg(feature = "serde")]

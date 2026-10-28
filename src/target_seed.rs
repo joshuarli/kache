@@ -3237,7 +3237,6 @@ source = "git+https://example.com/gitdep#abc"
         assert_eq!(std::fs::read_to_string(&to).unwrap(), "binary");
     }
 
-    #[cfg(windows)]
     #[test]
     fn a_copied_file_can_be_made_readonly_after_setting_its_mtime() {
         let dir = tempfile::tempdir().unwrap();

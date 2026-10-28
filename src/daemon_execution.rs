@@ -1403,11 +1403,9 @@ mod tests {
                     .collect();
             }),
             ("channels", |r| {
-                r.channels = ExecutionChannels::Windows {
-                    stdin: 1,
-                    stdout: 2,
-                    stderr: 3,
-                    process_broker: false,
+                r.channels = ExecutionChannels::UnixClient {
+                    terminal: false,
+                    jobserver: vec![999],
                     trusted_pipeline: false,
                 }
             }),

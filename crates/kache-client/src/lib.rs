@@ -1,17 +1,11 @@
 //! Compiler invocation capture and synchronous handoff to a running Kache daemon.
 
-#[cfg(any(unix, windows))]
 mod execution;
-#[cfg(any(unix, windows))]
 pub use execution::Execution;
 
-#[cfg(any(unix, windows))]
 mod stdio;
-#[cfg(any(unix, windows))]
 pub use stdio::Stdio;
-#[cfg(unix)]
 mod creation_mask;
-#[cfg(unix)]
 pub use creation_mask::creation_mask;
 mod frontend;
 pub use frontend::run;

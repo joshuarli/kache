@@ -69,15 +69,7 @@ impl InvocationEnv {
                 .home_dir()
                 .map(|home| home.join("Library/Caches"));
         }
-        #[cfg(windows)]
-        {
-            invocation.cache = invocation
-                .var_os("LOCALAPPDATA")
-                .map(PathBuf::from)
-                .filter(|path| path.is_absolute())
-                .or_else(|| invocation.home_dir().map(|home| home.join("AppData/Local")));
-        }
-        #[cfg(not(any(target_os = "macos", windows)))]
+        #[cfg(not(target_os = "macos"))]
         {
             invocation.cache = invocation
                 .var_os("XDG_CACHE_HOME")
@@ -128,7 +120,7 @@ impl InvocationEnv {
         &self.temp
     }
 
-    /// Native user cache location, including redirected Windows Known Folders.
+    /// Native user cache location.
     pub fn cache_dir(&self) -> Option<&Path> {
         self.cache.as_deref()
     }
@@ -138,51 +130,9 @@ impl InvocationEnv {
             Some(path.to_owned())
         } else {
             let cwd = self.cwd().filter(|cwd| cwd.is_absolute())?;
-            #[cfg(windows)]
-            if let Some(std::path::Component::Prefix(prefix)) = path.components().next() {
-                return self.resolve_drive_relative(path, cwd, prefix);
-            }
             let resolved = cwd.join(path);
             resolved.is_absolute().then_some(resolved)
         }
-    }
-
-    #[cfg(windows)]
-    fn resolve_drive_relative(
-        &self,
-        path: &Path,
-        cwd: &Path,
-        prefix: std::path::PrefixComponent<'_>,
-    ) -> Option<PathBuf> {
-        // A drive-relative path needs that drive's client directory.
-        // Never let a server's per-drive state resolve it implicitly.
-        use std::path::{Component, Prefix};
-        let drive = match prefix.kind() {
-            Prefix::Disk(drive) => drive,
-            _ => return None,
-        };
-        let same_drive = matches!(cwd.components().next(),
-            Some(Component::Prefix(cwd_prefix))
-            if matches!(cwd_prefix.kind(), Prefix::Disk(cwd_drive) | Prefix::VerbatimDisk(cwd_drive)
-                if cwd_drive.eq_ignore_ascii_case(&drive)));
-        let base = if same_drive {
-            cwd.to_owned()
-        } else {
-            let base = PathBuf::from(self.var_os(&format!("={}:", char::from(drive)))?);
-            if !base.is_absolute() {
-                return None;
-            }
-            match base.components().next()? {
-                Component::Prefix(base_prefix)
-                    if matches!(base_prefix.kind(), Prefix::Disk(base_drive)
-                        if base_drive.eq_ignore_ascii_case(&drive)) =>
-                {
-                    base
-                }
-                _ => return None,
-            }
-        };
-        Some(base.join(path.strip_prefix(prefix.as_os_str()).ok()?))
     }
 
     /// Apply an invocation-local rewrite, such as an OUT_DIR alias.
@@ -214,7 +164,7 @@ impl InvocationEnv {
     pub fn command(&self, program: impl AsRef<OsStr>) -> std::io::Result<Command> {
         let program_path = Path::new(program.as_ref());
         let resolved = self.resolve_program(program_path);
-        if resolved.is_none() && (cfg!(windows) || program_path.components().count() > 1) {
+        if resolved.is_none() && program_path.components().count() > 1 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "compiler program cannot be resolved in the invocation context",
@@ -241,13 +191,7 @@ fn name_matches(key: &OsStr, name: &str) -> bool {
 }
 
 fn name_matches_os(key: &OsStr, name: &OsStr) -> bool {
-    if cfg!(windows) {
-        key.to_str()
-            .zip(name.to_str())
-            .is_some_and(|(key, name)| key.eq_ignore_ascii_case(name))
-    } else {
-        key == name
-    }
+    key == name
 }
 
 /// Identify Cargo manifest-directory keys before normalizing environment values.
@@ -370,21 +314,13 @@ mod tests {
             Some(root.path().to_owned())
         );
         assert_eq!(env.resolve_program(Path::new("missing-compiler")), None);
-        #[cfg(unix)]
-        {
-            assert_eq!(
-                env.resolve_program(Path::new("/")),
-                Some(PathBuf::from("/"))
-            );
-            assert_eq!(
-                env.command("missing-compiler").unwrap().get_program(),
-                "missing-compiler"
-            );
-        }
-        #[cfg(windows)]
         assert_eq!(
-            env.command("missing-compiler").unwrap_err().kind(),
-            std::io::ErrorKind::NotFound
+            env.resolve_program(Path::new("/")),
+            Some(PathBuf::from("/"))
+        );
+        assert_eq!(
+            env.command("missing-compiler").unwrap().get_program(),
+            "missing-compiler"
         );
         let mut missing_cwd = env;
         missing_cwd.cwd = None;
@@ -394,62 +330,6 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn windows_relative_paths_use_only_the_clients_drive_directories() {
-        let env = InvocationEnv::from_parts(
-            [("=D:", r"D:\other-client")],
-            Some(PathBuf::from(r"C:\client")),
-            None,
-            PathBuf::from(r"C:\temp"),
-        );
-        assert_eq!(
-            env.resolve(Path::new(r"C:out")),
-            Some(PathBuf::from(r"C:\client\out"))
-        );
-        assert_eq!(
-            env.resolve(Path::new(r"D:out")),
-            Some(PathBuf::from(r"D:\other-client\out"))
-        );
-        assert_eq!(
-            env.resolve(Path::new(r"\out")),
-            Some(PathBuf::from(r"C:\out"))
-        );
-        assert_eq!(env.resolve(Path::new(r"E:out")), None);
-        assert!(env.command(r"E:compiler.exe").is_err());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_drive_directories_must_be_absolute_and_match_the_requested_drive() {
-        let mut env = InvocationEnv::from_parts(
-            [("=D:", r"D:\other-client")],
-            Some(PathBuf::from(r"C:\client")),
-            None,
-            PathBuf::from(r"C:\temp"),
-        );
-        for invalid in [
-            r"relative",
-            r"D:relative",
-            r"E:\wrong-drive",
-            r"\\server\share",
-        ] {
-            env.set("=D:", invalid);
-            assert_eq!(env.resolve(Path::new(r"D:out")), None, "{invalid}");
-        }
-        env.set("=D:", r"d:\lowercase");
-        assert_eq!(
-            env.resolve(Path::new(r"D:out")),
-            Some(PathBuf::from(r"d:\lowercase\out"))
-        );
-        env.cwd = Some(PathBuf::from(r"\\?\C:\client"));
-        assert_eq!(
-            env.resolve(Path::new(r"c:out")),
-            Some(PathBuf::from(r"\\?\C:\client\out"))
-        );
-    }
-
-    #[cfg(unix)]
     #[test]
     fn children_receive_only_their_invocations_environment_and_directory() {
         let root = tempfile::tempdir().unwrap();
@@ -488,7 +368,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn non_unicode_environment_values_remain_bytes() {
         use std::os::unix::ffi::{OsStrExt, OsStringExt};

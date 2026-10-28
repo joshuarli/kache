@@ -7,7 +7,7 @@
 
 **Build once. Reuse the work.**
 
-Kache is a compiler cache for Rust, C/C++, and CUDA on Linux, macOS, and Windows.
+Kache is a compiler cache for Rust, C/C++, and CUDA on Linux and macOS.
 It restores matching compiler outputs across worktrees and CI runs, so you spend
 less time rebuilding and less disk space storing the same bytes.
 
@@ -30,7 +30,7 @@ Then use Cargo as usual in your project. Kache caches eligible compiler work
 automatically.
 
 Cargo installation needs Rust 1.95 or newer. Prefer a prebuilt package?
-[Homebrew, APT, AUR, Windows packages, mise, and Nix →](https://kunobi.ninja/docs/kache/getting-started/installation)
+[Homebrew, APT, AUR, mise, and Nix →](https://kunobi.ninja/docs/kache/getting-started/installation)
 
 ## See it reuse a build
 
@@ -63,9 +63,9 @@ and build settings. Unsupported compiler invocations run normally.
 
 [![Four Firefox worktrees sharing cached outputs through copy-on-write clones.](https://raw.githubusercontent.com/kunobi-ninja/kache/main/assets/store-worktrees.svg)][hero-image]
 
-Rust executables and build-script runs are cached by default on Linux and macOS.
+Rust executables and build-script runs are cached by default.
 See [platform support and caching limits](https://kunobi.ninja/docs/kache#current-support)
-for Windows and other workload details.
+for workload details.
 
 ## Less disk per worktree
 

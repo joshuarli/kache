@@ -31,7 +31,6 @@ const CARGO_TAG: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
 /// How much of `CACHEDIR.TAG` is read: the signature is in its first line.
 const TAG_READ_BYTES: u64 = 512;
 /// Open a tag without following a symlink or waiting on a FIFO.
-#[cfg(unix)]
 const OPEN_TAG_FLAGS: i32 = libc::O_NOFOLLOW | libc::O_NONBLOCK;
 
 /// Whether Cargo tagged `target` as its build directory. Only a regular
@@ -43,15 +42,8 @@ pub fn cargo_tagged(target: &Path) -> bool {
     let tag = target.join("CACHEDIR.TAG");
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(OPEN_TAG_FLAGS);
-    }
-    #[cfg(not(unix))]
-    if special_tag_without_open_flags(&tag) {
-        return false;
-    }
+    use std::os::unix::fs::OpenOptionsExt;
+    options.custom_flags(OPEN_TAG_FLAGS);
     let Ok(file) = options.open(&tag) else {
         return false;
     };
@@ -64,13 +56,6 @@ pub fn cargo_tagged(target: &Path) -> bool {
         && start
             .windows(CARGO_TAG.len())
             .any(|window| window == CARGO_TAG)
-}
-
-/// Without Unix's open flags, refuse a symlink or special file before
-/// opening it.
-#[cfg(not(unix))]
-fn special_tag_without_open_flags(tag: &Path) -> bool {
-    !std::fs::symlink_metadata(tag).is_ok_and(|meta| meta.file_type().is_file())
 }
 
 /// `path` with `.` dropped and each `..` cancelling the name before it, by
@@ -169,11 +154,8 @@ pub fn retainer_from_meta(path: &Path) -> Option<BlobRetainer> {
     let size = meta.len();
     let (sharing, links) = crate::sharing::probe_with_links(path, size);
     // A blob a build's target directory still hardlinks frees nothing when the
-    // store drops its own name (kunobi-ninja/kache#725). This used to read
-    // `MetadataExt::nlink` behind `#[cfg(unix)]`, so on Windows the guard did
-    // not exist at all and GC evicted still-linked entries, reclaiming no disk
-    // and destroying the hits. NTFS has hardlinks, `cache.windows_hardlink`
-    // and `cache.shared_hardlink_restores` make them, and a link made by
+    // store drops its own name (kunobi-ninja/kache#725).
+    // `cache.shared_hardlink_restores` makes them, and a link made by
     // anything else holds the blocks just the same.
     if links > 1 {
         return Some(BlobRetainer {
@@ -200,19 +182,10 @@ pub fn retainer_from_sharing(size: u64, sharing: Sharing) -> BlobRetainer {
     }
 }
 
-/// Whether any execute bit is set. Always `false` off Unix, where files carry
-/// no execute bit.
+/// Whether any execute bit is set.
 pub fn is_executable(metadata: &std::fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
-        false
-    }
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode() & 0o111 != 0
 }
 
 #[cfg(test)]
@@ -234,7 +207,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn only_a_regular_tag_marks_a_cargo_target() {
         let dir = tempfile::tempdir().unwrap();
@@ -273,7 +245,6 @@ mod tests {
         assert!(!cargo_tagged(&target("untagged")));
     }
 
-    #[cfg(unix)]
     #[test]
     fn is_executable_reads_any_execute_bit() {
         use std::os::unix::fs::PermissionsExt;
@@ -374,10 +345,9 @@ mod tests {
         assert_eq!(r.private_bytes, 1024);
     }
 
-    /// The #725 guard on every platform kache ships on. Hardlinks exist on
-    /// NTFS too, and the count must not come from `MetadataExt`, which only
-    /// Unix has — a Unix-gated guard let Windows GC evict entries whose blobs
-    /// a target directory still held, freeing nothing.
+    /// The #725 guard. Hardlinks exist, and the count must not come from
+    /// a gated guard that evicts entries whose blobs
+    /// a target directory still holds, freeing nothing.
     #[test]
     fn a_hardlinked_blob_reclaims_nothing_and_is_reported_as_retained() {
         let dir = tempfile::tempdir().unwrap();
@@ -461,15 +431,13 @@ mod tests {
         std::fs::create_dir_all(root.join("worktree")).unwrap();
         let through_worktree = root.join("worktree/../shared/./debug/..");
         assert_eq!(registry_path(&through_worktree).unwrap(), shared);
-        // Nothing on disk to compare: the path stays as `absolute` spells it,
-        // which on Windows has already resolved the `..`.
+        // Nothing on disk to compare: the path stays as `absolute` spells it.
         let missing = root.join("gone/../shared");
         assert_eq!(
             registry_path(&missing).unwrap(),
             std::path::absolute(&missing).unwrap()
         );
 
-        #[cfg(unix)]
         {
             let inner = root.join("elsewhere/inner");
             std::fs::create_dir_all(root.join("elsewhere/shared")).unwrap();

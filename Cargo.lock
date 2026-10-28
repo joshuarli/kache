@@ -2392,7 +2392,6 @@ dependencies = [
  "hex",
  "home",
  "interprocess",
- "jobserver",
  "kache-client",
  "kache-config",
  "kache-core",
@@ -2437,7 +2436,6 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "unicode-normalization",
- "windows-sys 0.61.2",
  "zstd",
 ]
 
@@ -2456,7 +2454,6 @@ dependencies = [
  "syn 3.0.9",
  "tempfile",
  "tracing",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2522,7 +2519,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2530,8 +2526,6 @@ name = "kache-ipc"
 version = "2.0.0-rc.2"
 dependencies = [
  "anyhow",
- "blake3",
- "find-msvc-tools",
  "interprocess",
  "kache-fs",
  "kache-protocol",
@@ -2542,7 +2536,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2615,7 +2608,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
- "windows-sys 0.61.2",
 ]
 
 [[package]]

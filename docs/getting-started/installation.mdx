@@ -22,6 +22,9 @@ kache init
     ```
 
     Cargo builds Kache with your local Rust toolchain, which must be Rust 1.95 or newer.
+
+    The default build is local-only. Add `--features remote` for S3, GCS,
+    shared-filesystem, and OCI remotes; release binaries already include them.
   </Tab>
   <Tab value="cargo-binstall">
     ```bash
@@ -34,7 +37,7 @@ kache init
 
 ## Package managers
 
-<Tabs items={["Homebrew", "APT", "Windows", "AUR", "mise"]}>
+<Tabs items={["Homebrew", "APT", "AUR", "mise"]}>
   <Tab value="Homebrew">
     ```bash
     brew install kunobi-ninja/kunobi/kache
@@ -56,18 +59,6 @@ kache init
     Replace `stable` with `unstable` to receive prereleases as well as stable releases.
 
     The package also installs Cargo and compiler shims in `/usr/lib/kache`. Prepend that directory to `PATH` to cache Make and CMake object compiles. See [C and C++](/docs/getting-started/c-cpp).
-  </Tab>
-  <Tab value="Windows">
-    ```powershell
-    winget install kunobi-ninja.kache
-    # or
-    scoop bucket add kunobi https://github.com/kunobi-ninja/scoop-kunobi
-    scoop install kunobi/kache
-    # or
-    choco install kache
-    ```
-
-    The corresponding prerelease packages are `kunobi-ninja.kache.Unstable`, `kunobi/kache-unstable`, and `choco install kache --pre`.
   </Tab>
   <Tab value="AUR">
     ```bash
@@ -140,8 +131,7 @@ Keep the real compilers later in `PATH`. The compiler shims cover C and C++; Rus
 | Platform | Architectures |
 | --- | --- |
 | Linux, musl | x86_64, aarch64 |
-| macOS | x86_64, Apple silicon |
-| Windows, MSVC | x86_64, ARM64 |
+| macOS | Apple silicon |
 
 Other Rust-supported targets may work through `cargo install`, but they are not release-tested targets.
 
@@ -157,8 +147,8 @@ The official AUR packages also install completions for Elvish. For manual setup 
 
 Finish active builds before upgrading to 2.0. Install the matching `kache` and
 `kache-engine` executables together. Update custom install scripts and container
-images that previously copied only `kache`. Manual Windows installs now use the
-paired ZIP archive instead of a standalone EXE.
+images that previously copied only `kache`. Manual installs pick the per-platform
+ZIP archives holding the `kache` and `kache-engine` binaries.
 
 Run `kache daemon restart` after upgrading so clients use the new execution
 protocol. Managed incremental state starts cold once; the next builds recreate

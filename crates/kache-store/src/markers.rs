@@ -126,11 +126,7 @@ pub fn warn_once_per_session_to(
     }
     // Re-check under the lock — another wrapper may have warned between our
     // first check and acquiring the lock. Read through the handle that OWNS the
-    // lock: on Windows the lock is mandatory (`LockFileEx`) and blocks
-    // cross-handle reads, so `marker_is_fresh` (which opens its own handle)
-    // would always read "stale" here and let a second wrapper warn again — on
-    // the very platform this advisory targets. Same reason
-    // `write_marker_timestamp` writes through the locked handle (#348).
+    // lock, and write the timestamp through it.
     finish_warn_once_per_session(&lock_file, session_secs, message, sink)
 }
 
@@ -156,60 +152,29 @@ pub fn finish_warn_once_per_session(
 }
 
 /// Open a marker file safely for locking and updating. Refuses symlinks and
-/// non-regular files up front, and opens with `O_NOFOLLOW` on Unix to prevent
+/// non-regular files up front, and opens with `O_NOFOLLOW` to prevent
 /// symlink attacks and arbitrary file truncation in shared temporary directories.
 pub fn open_marker_for_lock(marker: &Path) -> Option<std::fs::File> {
     if let Ok(metadata) = std::fs::symlink_metadata(marker) {
         if !metadata.file_type().is_file() {
             return None;
         }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-            if is_windows_reparse_point(metadata.file_attributes()) {
-                return None; // Refuse reparse points explicitly
-            }
-        }
     }
 
     let mut options = std::fs::OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        // FILE_FLAG_OPEN_REPARSE_POINT (0x00200000) opens the reparse point itself
-        // without following it to the target file.
-        options.custom_flags(0x0020_0000);
-    }
+    use std::os::unix::fs::OpenOptionsExt;
+    options.custom_flags(libc::O_NOFOLLOW);
 
     let file = options.open(marker).ok()?;
 
-    // Post-open verification: ensure the opened file handle itself is a regular file.
     let meta = file.metadata().ok()?;
     if !meta.file_type().is_file() {
         return None;
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if is_windows_reparse_point(meta.file_attributes()) {
-            return None; // Refuse reparse points explicitly
-        }
-    }
 
     Some(file)
-}
-
-#[cfg(any(windows, test))]
-fn is_windows_reparse_point(attributes: u32) -> bool {
-    attributes & 0x400 != 0
 }
 
 pub fn marker_is_fresh(marker: &std::path::Path, timeout_secs: u64) -> bool {
@@ -226,8 +191,7 @@ pub fn marker_is_fresh(marker: &std::path::Path, timeout_secs: u64) -> bool {
 }
 
 /// Marker freshness read through an ALREADY-OPEN handle. A caller holding the
-/// exclusive lock must use this rather than [`marker_is_fresh`]: on Windows the
-/// lock is mandatory and blocks reads from any other handle (#348).
+/// exclusive lock must use this rather than [`marker_is_fresh`].
 pub fn marker_file_is_fresh(mut file: &std::fs::File, timeout_secs: u64) -> bool {
     use std::io::{Read, Seek, SeekFrom};
 
@@ -252,11 +216,7 @@ pub fn timestamp_is_fresh(content: &str, timeout_secs: u64) -> bool {
 /// already-locked handle.
 ///
 /// The caller holds an exclusive lock on this file (see `maybe_trigger_prefetch`).
-/// On Windows that lock is *mandatory* (`LockFileEx`), so writing through a
-/// *separate* handle (e.g. `std::fs::write`) to the locked file fails with a
-/// lock violation — the timestamp never lands and every rustc re-detects a new
-/// build session, re-firing the prefetch hint. Writing through the same handle
-/// that owns the lock is always permitted. (kache #348)
+/// Writing through the same handle that owns the lock is always permitted. (kache #348)
 pub fn write_marker_timestamp(mut file: &std::fs::File) {
     use std::io::{Seek, SeekFrom, Write};
     let now = std::time::SystemTime::now()
@@ -357,14 +317,6 @@ mod tests {
         assert!(!marker_is_fresh(dir.path(), 60));
     }
 
-    #[test]
-    fn windows_reparse_flag_is_checked_independently_of_other_attributes() {
-        assert!(!is_windows_reparse_point(0));
-        assert!(!is_windows_reparse_point(0x20));
-        assert!(is_windows_reparse_point(0x400));
-        assert!(is_windows_reparse_point(0x420));
-    }
-
     /// A build spawns hundreds of wrapper processes, so "warn once" has to hold
     /// ACROSS processes, not just within one (#508). The marker is the only
     /// thing carrying that state — a second wrapper hitting a fresh marker must
@@ -451,7 +403,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn warn_once_per_session_refuses_symlink() {
         let temp = tempfile::TempDir::new().unwrap();
         let target = temp.path().join("target_file");
@@ -471,7 +422,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn open_marker_for_lock_refuses_symlink_target() {
         let temp = tempfile::TempDir::new().unwrap();
         let target = temp.path().join("target_file");
@@ -574,15 +524,6 @@ mod tests {
     /// Regression for kache #348: the build-session marker must record a fresh
     /// timestamp even though `maybe_trigger_prefetch` writes it *while still
     /// holding the exclusive lock* on the same file.
-    ///
-    /// On Windows `File::try_lock` is a *mandatory* `LockFileEx` lock, so a
-    /// write through a *second* handle (`std::fs::write`) to the locked file
-    /// fails with a lock violation — the timestamp never lands, the marker
-    /// stays empty, and every subsequent rustc re-detects a "new build
-    /// session" and re-fires the prefetch hint (the 1147-crate spam in the
-    /// bug report). On Unix `flock(2)` is advisory and the second write
-    /// succeeds, which is why this only reproduces on Windows and was never
-    /// caught by the Linux/macOS `cargo test` jobs.
     #[test]
     fn build_session_marker_persists_while_lock_is_held() {
         let dir = tempfile::tempdir().unwrap();
@@ -604,9 +545,8 @@ mod tests {
 
         write_marker_timestamp(&lock_file);
 
-        // Release the lock before reading back: on Windows a mandatory lock
-        // also blocks cross-handle reads, so `marker_is_fresh` (which opens
-        // its own handle) could only observe the write after we unlock.
+        // Release the lock before reading back so `marker_is_fresh`
+        // (which opens its own handle) observes the write.
         let _ = std::fs::File::unlock(&lock_file);
         drop(lock_file);
 

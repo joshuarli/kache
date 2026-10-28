@@ -137,9 +137,7 @@ pub fn probe(path: &Path) -> FsProbe {
     let probe = probe_macos(path);
     #[cfg(target_os = "linux")]
     let probe = probe_linux(path);
-    #[cfg(windows)]
-    let probe = probe_windows(path);
-    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let probe = probe_unsupported(path);
     probe
 }
@@ -329,7 +327,7 @@ fn statfs_of(path: &Path) -> Option<libc::statfs> {
 
 /// `path` if it exists, else its nearest existing ancestor. Used so the probe
 /// works before `Store::open` has created the cache directory.
-#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn nearest_existing(path: &Path) -> Option<std::path::PathBuf> {
     let mut current = path;
     loop {
@@ -340,119 +338,8 @@ fn nearest_existing(path: &Path) -> Option<std::path::PathBuf> {
     }
 }
 
-// ── Windows ─────────────────────────────────────────────────────────────────
-//
-// `GetDriveTypeW` answers locality directly (`DRIVE_REMOTE` for a mapped network
-// drive), and a UNC path (`\\server\share`) is remote by construction — it has
-// no drive letter for `GetDriveTypeW` to classify, so it is checked first.
-#[cfg(windows)]
-fn probe_windows(path: &Path) -> FsProbe {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetVolumeInformationW};
-
-    // Values from winbase.h; windows-sys exposes the function but not these.
-    const DRIVE_UNKNOWN: u32 = 0;
-    const DRIVE_NO_ROOT_DIR: u32 = 1;
-    const DRIVE_REMOTE: u32 = 4;
-
-    let Some(target) = nearest_existing(path) else {
-        return FsProbe::unknown();
-    };
-
-    // A UNC path is a network share whatever the drive-type call makes of it.
-    if is_unc_path(&target) {
-        return FsProbe {
-            name: Some("a network share (UNC path)".to_string()),
-            is_local: Some(false),
-            total_bytes: volume_total_bytes_windows(&target),
-        };
-    }
-
-    let Some(root) = volume_root(&target) else {
-        return FsProbe::unknown();
-    };
-    let wide: Vec<u16> = std::ffi::OsStr::new(&root)
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-
-    let drive_type = unsafe { GetDriveTypeW(wide.as_ptr()) };
-    let is_local = match drive_type {
-        DRIVE_REMOTE => Some(false),
-        // No answer: don't guess in either direction.
-        DRIVE_UNKNOWN | DRIVE_NO_ROOT_DIR => None,
-        // Fixed / removable / ramdisk / CD-ROM are all machine-local.
-        _ => Some(true),
-    };
-
-    // Name is best-effort decoration; a failure here must not discard the
-    // locality answer we already have.
-    let mut fs_name = [0u16; 64];
-    let ok = unsafe {
-        GetVolumeInformationW(
-            wide.as_ptr(),
-            std::ptr::null_mut(),
-            0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            fs_name.as_mut_ptr(),
-            fs_name.len() as u32,
-        )
-    };
-    let name = (ok != 0).then(|| {
-        let len = fs_name
-            .iter()
-            .position(|&c| c == 0)
-            .unwrap_or(fs_name.len());
-        String::from_utf16_lossy(&fs_name[..len])
-    });
-
-    FsProbe {
-        name,
-        is_local,
-        total_bytes: volume_total_bytes_windows(&target),
-    }
-}
-
-#[cfg(any(windows, test))]
-fn volume_total_bytes_windows(path: &Path) -> Option<u64> {
-    crate::capacity::volume_space(path).map(|usage| usage.total)
-}
-
-/// Volume mount root (`C:\`) holding `path`. Mirrors `link::windows_volume_root`
-/// — duplicated rather than shared because that one is private to the restore
-/// path and this module must not depend on it.
-#[cfg(windows)]
-pub(crate) fn volume_root(path: &Path) -> Option<String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::GetVolumePathNameW;
-
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let mut root = [0u16; 260];
-    let ok = unsafe { GetVolumePathNameW(wide.as_ptr(), root.as_mut_ptr(), root.len() as u32) };
-    if ok == 0 {
-        return None;
-    }
-    let len = root.iter().position(|&c| c == 0).unwrap_or(root.len());
-    Some(String::from_utf16_lossy(&root[..len]))
-}
-
-/// Whether `path` is a UNC path (`\\server\share`, or the `\\?\UNC\...` form).
-/// Pure string inspection, so it is tested on every platform.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn is_unc_path(path: &Path) -> bool {
-    let s = path.to_string_lossy();
-    let s = s.replace('/', "\\");
-    if let Some(rest) = s.strip_prefix("\\\\?\\") {
-        return rest.to_ascii_uppercase().starts_with("UNC\\");
-    }
-    // `\\server\share` but not the `\\.\` device namespace.
-    s.starts_with("\\\\") && !s.starts_with("\\\\.\\")
-}
-
 // ── Unsupported targets ─────────────────────────────────────────────────────
-#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn probe_unsupported(_path: &Path) -> FsProbe {
     FsProbe::unknown()
 }
@@ -461,17 +348,11 @@ fn probe_unsupported(_path: &Path) -> FsProbe {
 mod tests {
     use super::*;
 
-    #[cfg(any(unix, windows))]
     #[test]
-    fn volume_total_projection_preserves_capacity_and_failed_probes() {
+    fn volume_total_projection_preserves_capacity() {
         let dir = tempfile::tempdir().unwrap();
         let total = crate::volume_stats(dir.path()).unwrap().usage.total;
         assert!(total > 1);
-        assert_eq!(volume_total_bytes_windows(dir.path()), Some(total));
-        assert_eq!(
-            volume_total_bytes_windows(&dir.path().join("missing")),
-            None
-        );
     }
 
     #[test]
@@ -637,18 +518,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn unc_paths_are_recognised_in_every_spelling() {
-        assert!(is_unc_path(Path::new(r"\\server\share\kache")));
-        assert!(is_unc_path(Path::new(r"\\?\UNC\server\share\kache")));
-        // Device namespace is not a network share.
-        assert!(!is_unc_path(Path::new(r"\\.\PhysicalDrive0")));
-        // Ordinary local paths.
-        assert!(!is_unc_path(Path::new(r"C:\Users\me\.cache\kache")));
-        assert!(!is_unc_path(Path::new(r"\\?\C:\Users\me\.cache\kache")));
-        assert!(!is_unc_path(Path::new("/home/me/.cache/kache")));
-    }
-
     // The Linux table is pure, so it is exercised on every platform — the
     // literals below are the kernel's magic.h values, deliberately written out
     // rather than referencing `magic::*`, so a typo in the table is caught
@@ -742,7 +611,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&missing);
         let probe = probe(&missing);
         assert_ne!(probe.is_local, Some(false));
-        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         assert!(
             probe.is_local.is_some(),
             "a missing cache dir must still resolve through its parent: {probe:?}"

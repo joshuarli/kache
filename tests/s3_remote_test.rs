@@ -1,3 +1,4 @@
+#![cfg(feature = "remote")]
 //! Process-level acceptance for the S3 sync path (kunobi-ninja/kache#695).
 //!
 //! The in-process remote tests prove individual object operations. This test

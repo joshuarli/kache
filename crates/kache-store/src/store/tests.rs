@@ -740,16 +740,11 @@ fn content_hash_distinguishes_transposition_exec_bit_and_is_order_independent() 
 /// insert-only exclusions documented on `hardlink_eligible`.
 #[test]
 fn hardlink_eligibility_mirrors_restore_strategy_with_insert_exclusions() {
-    // On Windows the gate additionally requires the `windows_hardlink`
-    // opt-in, which is off in tests — eligibility is all-false there.
-    let gate_open = !cfg!(windows);
-
     // Immutable kinds the restore side hardlinks: eligible.
     for name in ["libserde-abc123.rlib", "foo.rcgu.o", "foo.obj", "foo.dwo"] {
-        assert_eq!(
+        assert!(
             hardlink_eligible::<TestPolicy>(name, false),
-            gate_open,
-            "{name} should be hardlink-eligible on insert (behind the Windows gate)"
+            "{name} should be hardlink-eligible on insert"
         );
     }
 
@@ -1496,8 +1491,7 @@ fn dropping_a_hardlinked_temp_restores_the_source_writable() {
 }
 
 /// One rename attempt: a winner in place is a lost race whatever the error
-/// says, because Windows reports a read-only winner with the same code as
-/// a delete-pending name (#1128). Anything else goes back to the retry.
+/// says. Anything else goes back to the retry.
 #[test]
 fn publish_attempt_outcome_lets_the_destination_decide() {
     let denied = || Err(std::io::Error::from_raw_os_error(5));
@@ -1651,7 +1645,7 @@ fn publish_rename_fails_on_a_settled_error_or_an_obstructed_name() {
 
 /// The real rename onto a read-only winner, past the early `is_file`
 /// check the way a lost race gets there. Unix replaces the identical
-/// blob; Windows refuses with ERROR_ACCESS_DENIED. Either way one rename
+/// blob; the OS refuses with ERROR_ACCESS_DENIED. Either way one rename
 /// settles it and the winner's bytes stay.
 #[test]
 fn publish_rename_onto_a_read_only_winner_settles_in_one_attempt() {
@@ -1677,26 +1671,6 @@ fn publish_rename_onto_a_read_only_winner_settles_in_one_attempt() {
     assert_eq!(fs::read(&blob).unwrap(), b"same-bytes");
     unlink_blob(&blob);
     unlink_blob(&staged);
-}
-
-/// The Windows fact #1128 rests on: renaming onto a read-only file is
-/// refused with ERROR_ACCESS_DENIED, the code the retry treats as
-/// transient. If this stops holding, revisit `publish_attempt_outcome`.
-#[cfg(windows)]
-#[test]
-fn rename_onto_a_read_only_file_is_access_denied_on_windows() {
-    let dir = tempfile::tempdir().unwrap();
-    let blob = dir.path().join("blob");
-    let staged = dir.path().join("staged");
-    fs::write(&blob, b"winner").unwrap();
-    fs::write(&staged, b"loser").unwrap();
-    set_blob_readonly(&blob);
-
-    let err = fs::rename(&staged, &blob).unwrap_err();
-    assert_eq!(err.raw_os_error(), Some(5));
-    assert!(crate::atomic::is_transient_rename_error(&err));
-    assert_eq!(fs::read(&blob).unwrap(), b"winner");
-    unlink_blob(&blob);
 }
 
 /// A deferred publish leaves nothing behind and reports no error; the
@@ -1898,12 +1872,11 @@ fn free_staging_path_skips_occupied_names() {
 fn free_staging_path_propagates_real_errors() {
     let dir = tempfile::tempdir().unwrap();
     // A FILE used as the parent path. Unix stats that as ENOTDIR;
-    // Windows reports it with the same shape as a free name.
+    // It reports with the same shape as a free name.
     let not_a_dir = dir.path().join("not-a-dir");
     fs::write(&not_a_dir, b"").unwrap();
     let result = free_staging_path(|n| not_a_dir.join(format!("x-{n}")));
 
-    #[cfg(unix)]
     {
         // ENOTDIR: a real fault must surface as itself, never as an
         // exhausted-name collision, and never be skipped past.
@@ -1913,14 +1886,6 @@ fn free_staging_path_propagates_real_errors() {
             std::io::ErrorKind::AlreadyExists,
             "a real fault must not be reported as a name collision: {err}"
         );
-    }
-    #[cfg(windows)]
-    {
-        // Windows cannot tell this fault from a free name, so the search
-        // hands the candidate back and the ingest is what fails. What
-        // must not happen either way is spinning through every attempt.
-        let candidate = result.expect("windows reports the parent as absent");
-        assert!(candidate.starts_with(&not_a_dir));
     }
 }
 
@@ -2133,84 +2098,6 @@ fn a_read_only_blob_flushes_and_a_missing_one_reports_not_found() {
             .kind(),
         std::io::ErrorKind::NotFound
     );
-}
-
-#[cfg(windows)]
-#[test]
-fn strict_flush_serializes_the_windows_readonly_open_window() {
-    use std::sync::mpsc::{self, Receiver, Sender};
-
-    #[derive(Debug, PartialEq, Eq)]
-    enum Step {
-        WaitingForWriter,
-        PermissionsRead(bool),
-    }
-    thread_local! {
-        static NEXT_STEP: std::cell::RefCell<Option<(Sender<Step>, Receiver<()>)>> =
-            const { std::cell::RefCell::new(None) };
-    }
-    fn notify_and_wait(step: Step) -> bool {
-        NEXT_STEP.with(|slot| {
-            let Some((notify, resume)) = slot.borrow_mut().take() else {
-                return true;
-            };
-            notify.send(step).is_ok() && resume.recv_timeout(Duration::from_secs(10)).is_ok()
-        })
-    }
-    fn waiting_for_writer(_: i32) -> bool {
-        notify_and_wait(Step::WaitingForWriter)
-    }
-
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.deferred_durability = true;
-    let holder = Store::open(&config).unwrap();
-    let bytes = b"a shared pending Windows blob";
-    let cache_key = put_entry(&holder, dir.path(), 92, "pending", bytes);
-    let blob = holder.blob_path(blake3::hash(bytes).to_hex().as_str());
-    config.deferred_durability = false;
-    let flusher = Store::open(&config).unwrap();
-    let permissions = fs::metadata(&blob).unwrap().permissions();
-    assert!(permissions.readonly());
-
-    let writer =
-        rusqlite::Transaction::new_unchecked(&holder.db, rusqlite::TransactionBehavior::Immediate)
-            .unwrap();
-    // Reproduce another opener/publisher's temporary writable window. It
-    // restores read-only while holding the writer guard, before our opener
-    // may inspect permissions. Without that guard our opener snapshots false
-    // and then tries a write-open after this test has restored read-only.
-    let mut writable = permissions.clone();
-    writable.set_readonly(false);
-    fs::set_permissions(&blob, writable).unwrap();
-    let (notify, notified) = mpsc::channel();
-    let (resume, resumed) = mpsc::channel();
-    let worker_key = cache_key.clone();
-    let worker = std::thread::spawn(move || {
-        NEXT_STEP.with(|slot| *slot.borrow_mut() = Some((notify, resumed)));
-        DURABILITY_OPEN_HOOK.with(|slot| {
-            *slot.borrow_mut() = Some(Box::new(|readonly| {
-                assert!(notify_and_wait(Step::PermissionsRead(readonly)));
-            }));
-        });
-        flusher.db.busy_handler(Some(waiting_for_writer)).unwrap();
-        flusher.finish_strict_durability(&worker_key)
-    });
-
-    // Always finish the held window and release the worker before asserting,
-    // including when its first operation failed or a handshake timed out.
-    let step = notified.recv_timeout(Duration::from_secs(10));
-    let restored = fs::set_permissions(&blob, permissions);
-    let committed = writer.commit();
-    let _ = resume.send(());
-    let result = worker.join();
-    restored.unwrap();
-    committed.unwrap();
-    assert_eq!(step.unwrap(), Step::WaitingForWriter);
-    result.unwrap().expect("the shared pending blob must flush");
-    assert!(holder.entry_is_durable(&cache_key));
-    assert_eq!(fs::read(&blob).unwrap(), bytes);
-    assert!(fs::metadata(&blob).unwrap().permissions().readonly());
 }
 
 /// Opening another handle must not change the first store's flush policy.
@@ -4193,10 +4080,10 @@ fn rebuild_index_skips_entries_whose_blobs_are_missing_or_wrong_size() {
     let blob_of = |h: &str| blob_path_in_store_dir(&config.store_dir(), h);
     let gone_blob = blob_of(&gone_hash);
     let trunc_blob = blob_of(&trunc_hash);
-    // Blobs are stored read-only (`set_blob_readonly`). Windows refuses to
+    // Blobs are stored read-only (`set_blob_readonly`). The OS refuses to
     // delete or write a read-only file, so clear the bit before doing either
     // — on Unix `remove_file` would have succeeded regardless, which is why
-    // omitting it passed locally and only failed on Windows CI.
+    // omitting it passed locally and only failed in CI.
     let make_writable = |p: &Path| {
         let mut perms = std::fs::metadata(p).unwrap().permissions();
         #[allow(clippy::permissions_set_readonly_false)]
@@ -4274,7 +4161,7 @@ fn rebuild_index_validates_artifact_names_and_hashes_independently() {
 fn rebuild_index_ignores_the_blobs_dir_and_foreign_names() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
-    // Scoped so the connection is closed before index.db is deleted: Windows
+    // Scoped so the connection is closed before index.db is deleted.
     // refuses to remove a file another handle still has open.
     {
         let store = Store::open(&config).unwrap();
@@ -4671,10 +4558,8 @@ fn is_sqlite_contention_matches_busy_and_locked_only() {
     assert_eq!(stats.entries_busy_snapshot, 1);
 }
 
-/// Not `#[cfg(unix)]`: NTFS has hardlinks, `cache.windows_hardlink` and
-/// `cache.shared_hardlink_restores` make them, so the #725 guard has to
-/// hold there too. Gating this test to Unix is how the guard stayed
-/// compiled out on Windows.
+/// `cache.shared_hardlink_restores` makes hardlinks, so the #725 guard has to
+/// hold too.
 #[test]
 fn evict_leaves_an_entry_whose_blob_is_still_hardlinked_outside() {
     let dir = tempfile::tempdir().unwrap();
@@ -9094,7 +8979,7 @@ fn test_blob_path_sharding() {
     let hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
     let path = store.blob_path(hash);
     // Normalise separators: the path is built with `PathBuf::join`, so the
-    // shard dirs are `blobs\ab\…` on Windows.
+    // shard dirs are `blobs/ab/…`.
     assert!(
         path.to_string_lossy()
             .replace('\\', "/")
@@ -9420,9 +9305,9 @@ fn test_concurrent_puts_sharing_blob_are_consistent() {
 
     let content = b"identical artifact content shared across all entries";
 
-    // Same Windows-runner caveat as test_concurrent_put_remove_never_dangles:
+    // Same runner caveat as test_concurrent_put_remove_never_dangles:
     // this proves refcount consistency, not the production five-second
-    // fail-fast. Eight WAL writers on a two-core hosted Windows runner
+    // fail-fast. Eight WAL writers on a two-core hosted runner
     // queue past 5s and surface SQLITE_BUSY (v0.16.1 tag CI).
     let stores: Vec<_> = (0..N)
         .map(|_| {
@@ -9521,8 +9406,8 @@ fn test_concurrent_put_remove_never_dangles() {
     let content = b"hot shared blob churned by concurrent puts and removes";
 
     // This test proves publication/removal atomicity, not the production
-    // five-second fail-fast policy. A two-core hosted Windows runner can
-    // keep eight WAL writers queued past that timeout. The full Windows
+    // five-second fail-fast policy. A two-core hosted runner can
+    // keep eight WAL writers queued past that timeout. The full
     // suite has also exhausted 30 seconds under mutation-runner load, so
     // give these test connections enough time for every logical operation
     // to commit and reach the invariant checks below.
@@ -11678,7 +11563,7 @@ fn acquire_reopens_when_the_lock_file_was_replaced_between_open_and_lock() {
     );
     assert!(StoreLock::try_acquire(&path).unwrap().is_none());
     drop(lock);
-    // Read after release: Windows refuses reads of a locked range.
+    // Read after release: the OS refuses reads of a locked range.
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
         std::process::id().to_string()
@@ -11801,16 +11686,9 @@ fn verify_restores_evicts_a_corrupted_blob() {
 
     // Corrupt the blob in place, keeping the SAME size so the size check
     // passes and only the content (vs its address) differs.
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&blob, std::fs::Permissions::from_mode(0o644)).unwrap();
-    }
-    #[cfg(not(unix))]
-    {
-        let mut p = std::fs::metadata(&blob).unwrap().permissions();
-        p.set_readonly(false);
-        std::fs::set_permissions(&blob, p).unwrap();
     }
     std::fs::write(&blob, vec![b'X'; meta.files[0].size as usize]).unwrap();
 
@@ -14651,7 +14529,7 @@ fn read_only_maintenance_preserves_files_and_registered_incremental_directories(
     let old = filetime::FileTime::from_unix_time(0, 0);
     filetime::set_file_mtime(&staging, old).unwrap();
     filetime::set_file_mtime(&stale_lock, old).unwrap();
-    // Apply fixture timestamps before readonly permissions for Windows.
+    // Apply fixture timestamps before readonly permissions.
     let mut perms = fs::metadata(&staging).unwrap().permissions();
     perms.set_readonly(true);
     fs::set_permissions(&staging, perms).unwrap();
@@ -14676,7 +14554,7 @@ fn read_only_maintenance_preserves_files_and_registered_incremental_directories(
     assert!(stale_lock.exists());
     assert!(fs::metadata(&staging).unwrap().permissions().readonly());
     assert_eq!(ro_tree_snapshot(dir.path()), before);
-    // Keep Windows TempDir cleanup independent of the test's readonly file.
+    // Keep TempDir cleanup independent of the test's readonly file.
     drop(ro);
     drop(owner);
     fs::remove_file(&staging)

@@ -1589,18 +1589,9 @@ printf 'host %s %s %s\n' "$CLIENT_VALUE" "$flavor" "$PWD"
         name: &str,
         body: &str,
     ) -> std::path::PathBuf {
-        #[cfg(unix)]
-        {
-            let path = dir.join(name);
-            kache_fs::testutil::write_executable(&path, format!("#!/bin/sh\n{body}\n"));
-            path
-        }
-        #[cfg(windows)]
-        {
-            let path = dir.join(format!("{name}.bat"));
-            std::fs::write(&path, format!("@echo off\r\n{body}\r\n")).unwrap();
-            path
-        }
+        let path = dir.join(name);
+        kache_fs::testutil::write_executable(&path, format!("#!/bin/sh\n{body}\n"));
+        path
     }
 
     /// `probe_compiler_family` with a brief retry (kunobi-ninja/kache#673):

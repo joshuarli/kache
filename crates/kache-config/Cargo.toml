@@ -30,6 +30,3 @@ tracing = "0.1"
 [dev-dependencies]
 kache-fs = { version = "2.0.0-rc.2", path = "../kache-fs", features = ["testing"] }
 tempfile = "3"
-
-[target.'cfg(windows)'.dependencies]
-blake3 = { version = "1", features = ["pure"] }

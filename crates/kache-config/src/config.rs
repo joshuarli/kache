@@ -92,8 +92,7 @@ pub const UPLOAD_SPOOL_MAX_JOBS: usize = 65_536;
 /// global — a shard is an address, never an identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeStore {
-    /// Normalized volume root this shard serves (`D:\` on Windows,
-    /// `/mnt/biglake/` on Unix).
+    /// Normalized volume root this shard serves (`/mnt/biglake/`).
     pub volume: String,
     /// Shard store dir on that volume (holds `blobs/`, `index.db`,
     /// `staging/`). Sockets, events, and markers stay in the main runtime.
@@ -441,20 +440,6 @@ pub struct Config {
     /// GC run append one line to `telemetry/gc-runs.jsonl`. Off by default. Set via `KACHE_RECORD_SESSIONS=1`/`=true` or `[cache]
     /// record_sessions`; env wins over the file.
     pub record_sessions: bool,
-    /// Windows only: restore cache hits via HARDLINK instead of copy (#429).
-    /// Off by default — and only relevant on a non-CoW volume (NTFS), where the
-    /// default is an independent copy because a hardlink to a read-only store
-    /// blob is itself read-only and breaks any consumer that deletes or rewrites
-    /// its output (Firefox's configure conftest). A ReFS volume (Dev Drive)
-    /// always block-clones regardless of this flag — independent AND deduped.
-    /// Turn this on ONLY if you accept the risk: your build must never delete or
-    /// modify a restored object in place (an in-place strip/objcopy or a later
-    /// overwrite would corrupt the shared store blob), and concurrent builds
-    /// sharing the store may re-date an artifact another process is reading
-    /// (#794). Trades correctness for working-tree dedup on NTFS. No effect off
-    /// Windows. Set via
-    /// `KACHE_WINDOWS_HARDLINK=1`/`=true` or `[cache] windows_hardlink`.
-    pub windows_hardlink: bool,
     /// Let every target directory hardlink the same store blob (Unix, no
     /// reflink). Off, at most one target directory shares a blob's inode and
     /// later consumers get a private copy, because the restore-time mtime
@@ -590,8 +575,7 @@ pub struct Config {
     /// commands print it on stderr; compiler wrappers send it to the tracing
     /// log (`KACHE_LOG=warn`) so it never mixes with compiler output (#1067),
     /// and `kache doctor` and `kache report` show the copy reasons. Set
-    /// `= false` when the layout is intentional and unfixable (e.g. an
-    /// NTFS-only laptop that can never host a ReFS Dev Drive): the advisories
+    /// `= false` when the layout is intentional and unfixable: the advisories
     /// drop to debug logging. Genuine clone *faults* (a large file failing to
     /// block-clone on a CoW-capable volume) are still reported — this knob
     /// mutes advice, never fault reports. Set via
@@ -918,8 +902,6 @@ pub struct CacheFileConfig {
     pub input_predictions: Option<bool>,
     /// Session recording. See [`Config::record_sessions`].
     pub record_sessions: Option<bool>,
-    /// Windows hardlink restore opt-in. See [`Config::windows_hardlink`].
-    pub windows_hardlink: Option<bool>,
     /// Shared-inode restore opt-in. See [`Config::shared_hardlink_restores`].
     pub shared_hardlink_restores: Option<bool>,
     /// Compile-before-key toggle. See [`Config::deferred_discovery`].
@@ -1235,36 +1217,13 @@ fn normalize_base_dirs(raw: impl IntoIterator<Item = String>) -> Result<Vec<Stri
         if value.is_empty() {
             anyhow::bail!("[paths].base_dirs[{index}] must not be empty");
         }
-        if value.starts_with(r"\\?\") || value.starts_with("//?/") {
-            anyhow::bail!(
-                "[paths].base_dirs[{index}] must not use a Windows verbatim prefix, got \
-                 {value:?}"
-            );
-        }
-
-        let bytes = value.as_bytes();
-        let windows_drive = bytes.len() >= 3
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && matches!(bytes[2], b'/' | b'\\');
-        let unc = value.starts_with("//") || value.starts_with(r"\\");
-        let posix = value.starts_with('/');
-        if !windows_drive && !unc && !posix {
+        if !value.starts_with('/') {
             anyhow::bail!("[paths].base_dirs[{index}] must be absolute, got {value:?}");
         }
-        let components: Vec<&str> = if windows_drive || unc {
-            value
-                .split(['/', '\\'])
-                .filter(|component| !component.is_empty() && *component != ".")
-                .collect()
-        } else {
-            // A backslash is an ordinary filename character on Unix. Treat it
-            // as a separator only for explicitly Windows-shaped paths.
-            value
-                .split('/')
-                .filter(|component| !component.is_empty() && *component != ".")
-                .collect()
-        };
+        let components: Vec<&str> = value
+            .split('/')
+            .filter(|component| !component.is_empty() && *component != ".")
+            .collect();
         if components.contains(&"..") {
             anyhow::bail!(
                 "[paths].base_dirs[{index}] must be normalized and must not contain `..`, got \
@@ -1272,26 +1231,7 @@ fn normalize_base_dirs(raw: impl IntoIterator<Item = String>) -> Result<Vec<Stri
             );
         }
 
-        // Store a host-independent normalized spelling. Windows roots use `/`
-        // here even on Windows; PathNormalizer adds native-separator variants
-        // when constructing its rules.
-        let normalized = if windows_drive {
-            let drive = value[..2].to_ascii_uppercase();
-            let tail = components.iter().skip(1).copied().collect::<Vec<_>>();
-            if tail.is_empty() {
-                format!("{drive}/")
-            } else {
-                format!("{drive}/{}", tail.join("/"))
-            }
-        } else if unc {
-            if components.len() < 2 {
-                anyhow::bail!(
-                    "[paths].base_dirs[{index}] UNC root must include server and share, got \
-                     {value:?}"
-                );
-            }
-            format!("//{}", components.join("/"))
-        } else if components.is_empty() {
+        let normalized = if components.is_empty() {
             "/".to_string()
         } else {
             format!("/{}", components.join("/"))
@@ -1367,7 +1307,6 @@ const IGNORE_ENV_GATED_VARS: &[&str] = &[
     "KACHE_MODIFIED_INPUT_GUARD",
     "KACHE_INPUT_PREDICTIONS",
     "KACHE_RECORD_SESSIONS",
-    "KACHE_WINDOWS_HARDLINK",
     "KACHE_SHARED_HARDLINK_RESTORES",
     "KACHE_DEFERRED_DISCOVERY",
     "KACHE_DAEMON_PUBLISH",
@@ -1473,7 +1412,6 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
     ("KACHE_MODIFIED_INPUT_GUARD", "cache.modified_input_guard"),
     ("KACHE_INPUT_PREDICTIONS", "cache.input_predictions"),
     ("KACHE_RECORD_SESSIONS", "cache.record_sessions"),
-    ("KACHE_WINDOWS_HARDLINK", "cache.windows_hardlink"),
     (
         "KACHE_SHARED_HARDLINK_RESTORES",
         "cache.shared_hardlink_restores",
@@ -2145,7 +2083,6 @@ impl Config {
         let modified_input_guard = Self::modified_input_guard_enabled_for(invocation, &file_config);
         let input_predictions = Self::input_predictions_enabled_for(invocation, &file_config);
         let record_sessions = Self::record_sessions_enabled_for(invocation, &file_config);
-        let windows_hardlink = Self::windows_hardlink_enabled_for(invocation, &file_config);
         let shared_hardlink_restores =
             Self::shared_hardlink_restores_enabled_for(invocation, &file_config);
         let deferred_discovery = Self::deferred_discovery_enabled_for(invocation, &file_config);
@@ -2306,7 +2243,6 @@ impl Config {
             modified_input_guard,
             input_predictions,
             record_sessions,
-            windows_hardlink,
             shared_hardlink_restores,
             deferred_discovery,
             out_dir_alias,
@@ -2741,7 +2677,7 @@ impl Config {
             if prefix.contains(':') {
                 anyhow::bail!(
                     "[cache.remote] filesystem prefix cannot contain ':' because it can escape \
-                     the configured root or address an alternate data stream on Windows: {prefix:?}"
+                     the configured root: {prefix:?}"
                 );
             }
 
@@ -2950,8 +2886,6 @@ impl Config {
             .unwrap_or(false)
     }
 
-    /// Windows hardlink-restore opt-in: `KACHE_WINDOWS_HARDLINK=1`/`true`, else
-    /// `[cache] windows_hardlink`, else off. See [`Config::windows_hardlink`].
     fn deferred_discovery_enabled_for(
         invocation: &InvocationEnv,
         file_config: &Result<FileConfig>,
@@ -3080,22 +3014,6 @@ impl Config {
             .ok()
             .and_then(|c| c.cache.as_ref())
             .and_then(|c| c.shared_hardlink_restores)
-            .unwrap_or(false)
-    }
-
-    fn windows_hardlink_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_WINDOWS_HARDLINK", ignore_env) {
-            return v == "1" || v.eq_ignore_ascii_case("true");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.windows_hardlink)
             .unwrap_or(false)
     }
 
@@ -3530,8 +3448,7 @@ impl Config {
         }
     }
 
-    /// Append `sep` unless already there. Pure and platform-neutral so the
-    /// Linux mutation lane covers the Windows trailing-separator rule too.
+    /// Append `sep` unless already there.
     fn ensure_trailing_sep(mut text: String, sep: char) -> String {
         if !text.ends_with(sep) {
             text.push(sep);
@@ -3540,32 +3457,21 @@ impl Config {
     }
 
     /// Normalize a `[cache.volumes]` key to a canonical root with a trailing
-    /// separator, so `D:`, `d:/`, and `D:\` name one volume (case-insensitive
-    /// on Windows, case-sensitive elsewhere). `None` for empty or, on Unix,
-    /// non-absolute roots: those can never match a real path.
+    /// separator. `None` for empty or non-absolute roots:
+    /// those can never match a real path.
     fn normalize_volume_root(root: &str) -> Option<String> {
         let root = root.trim();
         if root.is_empty() {
             return None;
         }
-        #[cfg(windows)]
-        {
-            Some(Self::ensure_trailing_sep(
-                root.replace('/', "\\").to_uppercase(),
-                '\\',
-            ))
+        if !root.starts_with('/') {
+            return None;
         }
-        #[cfg(not(windows))]
-        {
-            if !root.starts_with('/') {
-                return None;
-            }
-            let trimmed = root.trim_end_matches('/');
-            if trimmed.is_empty() {
-                Some("/".to_string())
-            } else {
-                Some(Self::ensure_trailing_sep(trimmed.to_string(), '/'))
-            }
+        let trimmed = root.trim_end_matches('/');
+        if trimmed.is_empty() {
+            Some("/".to_string())
+        } else {
+            Some(Self::ensure_trailing_sep(trimmed.to_string(), '/'))
         }
     }
 
@@ -3873,10 +3779,6 @@ fn source_excluded_by_patterns(patterns: &[String], source_path: &Path, roots: &
 ///   the entry; restore materializes it next to the binary, where `lldb`
 ///   prefers it over the stale debug map. Source-level debugging of restored
 ///   executables works, so on by default.
-/// - **Windows**: off by default. When enabled, the Rust adapter checks PE
-///   outputs against their named PDBs and refuses debug records it cannot
-///   restore with the executable.
-///
 /// A split-debuginfo configuration (`-Csplit-debuginfo=unpacked`) moves Linux
 /// into the same external-reference shape, but the sidecars are themselves
 /// cached artifacts (`ArtifactKind::DebugSidecar`) and this already applies to
@@ -4555,15 +4457,6 @@ pub fn resolve_config_path_for(invocation: &InvocationEnv) -> Result<PathBuf> {
     let absolute = resolve_invocation_path(invocation, &path)?;
     // Absolute inputs do not need the process cwd. Preserve symlinks and `..`
     // while matching the existing provenance identity for `.` components.
-    // Windows absolute() collapses parent components, which would hide an
-    // ambiguous workspace-rule root before extra_inputs can reject it.
-    #[cfg(windows)]
-    if absolute
-        .components()
-        .any(|part| part == std::path::Component::ParentDir)
-    {
-        return Ok(absolute);
-    }
     Ok(std::path::absolute(&absolute).unwrap_or(absolute))
 }
 

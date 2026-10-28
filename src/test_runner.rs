@@ -383,7 +383,6 @@ pub(crate) fn finish(disposition: Disposition) -> i32 {
     }
 }
 
-#[cfg(unix)]
 pub(crate) mod signals {
     use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -441,29 +440,6 @@ pub(crate) mod signals {
             libc::raise(signal);
         }
     }
-}
-
-// Named apart from the Unix module so the Linux mutation lane, which never
-// compiles it, can exclude it by name.
-#[cfg(windows)]
-pub(crate) use windows_signals as signals;
-
-#[cfg(windows)]
-pub(crate) mod windows_signals {
-    /// Leave Ctrl-C to the child, which shares the console and receives it
-    /// itself. The runner then exits the way the child does.
-    pub(crate) fn forward_to(_child: u32) {
-        // SAFETY: a null handler with TRUE makes this process ignore Ctrl-C.
-        unsafe {
-            windows_sys::Win32::System::Console::SetConsoleCtrlHandler(None, 1);
-        }
-    }
-
-    pub(crate) fn of(_status: &std::process::ExitStatus) -> Option<i32> {
-        None
-    }
-
-    pub(super) fn raise(_signal: i32) {}
 }
 
 #[cfg(test)]

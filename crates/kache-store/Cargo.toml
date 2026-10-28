@@ -38,20 +38,6 @@ proptest = { version = "1.12.0", default-features = false, features = ["std", "h
 tempfile = "3"
 serde_json = "1"
 
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_System_Threading",
-    "Win32_Storage_FileSystem",
-    # FILE_SUPPORTS_BLOCK_REFCOUNTING — ask the volume whether it block-clones
-    # instead of inferring "no CoW" from one failed clone (#508).
-    "Win32_System_SystemServices",
-    # GetSystemTimeAsFileTime: the system time NTFS stamps files with, which
-    # a build start is read from (file_hash::stamp_clock_ns).
-    "Win32_System_SystemInformation",
-] }
-blake3 = { version = "1", features = ["pure"] }
-
 # Preserve the lint settings of the binary these modules came from.
 [lints.clippy]
 permissions_set_readonly_false = "allow"

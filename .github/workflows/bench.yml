@@ -12,9 +12,8 @@ name: Bench
 #   - dispatch  : manual, pick a scenario (default all, excluding Firefox).
 #                 Extra flags depend on the selected recipe.
 #
-# The two Firefox/Windows benchmarks live in bench-firefox-windows.yml. They
-# take five to six hours each, and a run is finished only when its slowest job
-# is, so keeping them here held every other arm's telemetry behind them.
+# The Firefox/Windows benchmarks were removed with Windows support. The
+# remaining arms run here; see the plan matrix below for dispatch.
 #
 # Runs on the kunobi self-hosted Linux ARC runners in
 # tenant-int-dev/zur1-builder1: `kunobi-runners-large`, runners with a 120Gi

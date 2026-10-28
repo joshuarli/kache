@@ -20,11 +20,7 @@ use kunobi_daemon::Lifecycle;
 #[path = "daemon_lifecycle.rs"]
 mod lifecycle_client;
 pub(crate) use lifecycle_client::Ensured;
-#[cfg(unix)]
 #[path = "daemon_execution.rs"]
-mod execution;
-#[cfg(windows)]
-#[path = "daemon_execution_windows.rs"]
 mod execution;
 #[path = "daemon_control.rs"]
 mod lifecycle_control;
@@ -127,12 +123,20 @@ fn listing_was_refused(
         remote.map(|remote| &remote.backend),
         Some(crate::config::RemoteBackendConfig::S3(_))
     );
-    s3 && error.chain().any(|cause| {
-        cause.downcast_ref::<opendal::Error>().is_some_and(|error| {
-            error.kind() == opendal::ErrorKind::PermissionDenied
-                && !crate::remote_backend::credentials_rejected(error)
+    #[cfg(feature = "remote")]
+    {
+        s3 && error.chain().any(|cause| {
+            cause.downcast_ref::<opendal::Error>().is_some_and(|error| {
+                error.kind() == opendal::ErrorKind::PermissionDenied
+                    && !crate::remote_backend::credentials_rejected(error)
+            })
         })
-    })
+    }
+    #[cfg(not(feature = "remote"))]
+    {
+        let _ = (s3, error);
+        false
+    }
 }
 
 const LISTING_REFUSED: &str = "the remote refused to list its keys, so the daemon \
@@ -325,22 +329,13 @@ struct DaemonCoordGuard {
 
 /// Platform adapter for shared, inode-checked socket cleanup.
 struct SocketCleanupGuard {
-    #[cfg(unix)]
     _guard: kunobi_daemon::local::unix_socket::SocketGuard,
 }
 impl SocketCleanupGuard {
     fn new(path: &Path) -> std::io::Result<Self> {
-        #[cfg(unix)]
-        {
-            Ok(Self {
-                _guard: kunobi_daemon::local::unix_socket::SocketGuard::capture(path)?,
-            })
-        }
-        #[cfg(windows)]
-        {
-            let _ = path;
-            Ok(Self {})
-        }
+        Ok(Self {
+            _guard: kunobi_daemon::local::unix_socket::SocketGuard::capture(path)?,
+        })
     }
 }
 
@@ -440,7 +435,7 @@ pub(crate) fn process_is_alive(pid: u32) -> bool {
 }
 
 /// Whether a process the OS reports as `state` may still be running. A state
-/// the OS could not establish (access denied on Windows, say) counts as
+/// the OS could not establish counts as
 /// running: both callers wait or report rather than act on it, and waiting
 /// is the safe error. PIDs 0 and 1 and values past `i32::MAX` never name a
 /// daemon (the first is the kernel's, the second init's, the last read as
@@ -1857,7 +1852,6 @@ pub(crate) struct Daemon {
     readonly_skip_warned: Mutex<Option<Instant>>,
     /// Bound pipeline requests, leaving RPC capacity for their remote checks
     /// and publication requests. Compiler scheduling has its own permits.
-    #[cfg(any(unix, windows))]
     execution_workers: Arc<tokio::sync::Semaphore>,
     capacity: DaemonCapacity,
 }
@@ -2001,7 +1995,6 @@ impl Daemon {
             request_clock: Arc::new(crate::maintenance::RequestClock::new()),
             gc_hint_pending: AtomicBool::new(false),
             readonly_skip_warned: Mutex::new(None),
-            #[cfg(any(unix, windows))]
             execution_workers: Arc::new(tokio::sync::Semaphore::new(capacity.executions)),
             capacity,
             config,
@@ -2664,7 +2657,7 @@ impl Daemon {
         Ok(Arc::clone(self.v3_remote().await?) as Arc<dyn crate::cache_remote::CacheRemote>)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "remote"))]
     pub(crate) fn set_remote_backend_for_test(
         &self,
         backend: Arc<dyn crate::remote_backend::RemoteBackend>,
@@ -4083,7 +4076,7 @@ impl Daemon {
     }
 
     /// Handle a batch remote check concurrently.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "remote"))]
     pub async fn handle_batch_remote_check(
         self: &Arc<Self>,
         req: &BatchRemoteCheckRequest,
@@ -5597,11 +5590,19 @@ impl Daemon {
     }
 
     pub async fn handle_build_started(self: &Arc<Self>, req: &BuildStartedRequest) -> Response {
-        self.handle_build_started_with_planner(
-            req,
-            crate::planner_client::resolve_prefetch_plan(&req.intent),
-        )
-        .await
+        #[cfg(feature = "remote")]
+        {
+            self.handle_build_started_with_planner(
+                req,
+                crate::planner_client::resolve_prefetch_plan(&req.intent),
+            )
+            .await
+        }
+        #[cfg(not(feature = "remote"))]
+        {
+            self.handle_build_started_with_planner(req, async { Ok(None) })
+                .await
+        }
     }
 
     async fn handle_build_started_with_planner<F>(
@@ -6359,7 +6360,6 @@ pub fn run_server(
         tracing::info!("another daemon holds the run lock, exiting");
         return Ok(());
     };
-    #[cfg(unix)]
     match crate::platform::raise_open_file_limit() {
         Ok(Some((before, after))) => {
             tracing::info!("raised the open-file limit from {before} to {after}");
@@ -6373,11 +6373,7 @@ pub fn run_server(
         .context("writing daemon coordinator state")?;
     let _coord_guard = DaemonCoordGuard::new(coord.path.clone());
 
-    #[cfg(not(windows))]
     let manifest_path = PathBuf::from("Cargo.lock");
-    #[cfg(windows)]
-    let manifest_path = crate::platform::release_daemon_working_directory(&config.runtime_dir)
-        .context("releasing the build working directory")?;
 
     let capacity = DaemonCapacity::discover(config.daemon_execution_concurrency);
     tracing::info!(
@@ -6930,17 +6926,13 @@ const ACCEPT_LOOP_IDLE_TICK: Duration = Duration::from_secs(60);
 /// How long the accept loop pauses after the process runs out of file
 /// descriptors. Retrying at once spins on the same error until a handler
 /// closes one; the queued clients wait in the listen backlog either way.
-#[cfg(unix)]
 const ACCEPT_EXHAUSTED_BACKOFF: Duration = Duration::from_millis(50);
 
 /// The pause before accepting again after `error`, if any.
 fn accept_backoff(error: &std::io::Error) -> Option<Duration> {
-    #[cfg(unix)]
     if matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE)) {
         return Some(ACCEPT_EXHAUSTED_BACKOFF);
     }
-    #[cfg(not(unix))]
-    let _ = error;
     None
 }
 
@@ -7812,7 +7804,6 @@ async fn handle_connection_after_queue(
     // Peer-credential gate before anything else: the check is a cheap
     // syscall, so unauthenticated peers are dropped before they can park on
     // the connection limiter or read a single request frame.
-    #[cfg(unix)]
     if let Err(error) = crate::transport::require_self_peer(crate::transport::peer_euid(&stream)) {
         tracing::warn!(%error, "rejected IPC connection from another local user");
         return Ok(());
@@ -7892,18 +7883,9 @@ async fn handle_connection_started_at(
                 response
             }
             Ok(Request::ExecuteV1(req)) => {
-                #[cfg(any(unix, windows))]
-                {
-                    let result =
-                        execution::handle(&stream, &mut reader, *req, daemon, lifecycle).await;
-                    retire_for_newer_client(daemon, lifecycle, client_version.as_deref());
-                    return result;
-                }
-                #[cfg(not(any(unix, windows)))]
-                {
-                    let _ = req;
-                    Response::err("compiler execution is unavailable on this platform")
-                }
+                let result = execution::handle(&stream, &mut reader, *req, daemon, lifecycle).await;
+                retire_for_newer_client(daemon, lifecycle, client_version.as_deref());
+                return result;
             }
             Ok(Request::Upload(ref job)) => {
                 tracing::debug!(
@@ -8310,8 +8292,7 @@ pub fn send_remote_check(
     let socket_path = config.socket_path();
 
     // Fast path: if the daemon is not reachable, skip the full request.
-    // On Unix this checks if the socket file exists and accepts connections.
-    // On Windows (named pipes), this attempts a quick connect probe.
+    // This checks if the socket file exists and accepts connections.
     if !crate::transport::is_reachable(&socket_path) {
         return None;
     }
@@ -8539,19 +8520,12 @@ fn prune_in_flight(map: &mut HashMap<u32, CompileStartedRequest>) {
 /// bare probe rather than [`process_is_alive`]. It refuses PIDs 0 and 1, because
 /// `kill(-1, 0)` succeeds whenever anything is signalable and would keep
 /// bogus entries alive in the map forever.
-#[cfg(unix)]
 fn pid_alive(pid: u32) -> bool {
     if pid <= 1 || i32::try_from(pid).is_err() {
         return false;
     }
     let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
     rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-/// No cheap portable probe off unix — age-based pruning still applies.
-#[cfg(not(unix))]
-fn pid_alive(_pid: u32) -> bool {
-    true
 }
 
 /// Register an in-flight compile (kunobi-ninja/kache#131). Fire-and-forget
@@ -8841,15 +8815,7 @@ pub(crate) fn send_request_with_timeout(
     req: &Request,
     read_timeout: std::time::Duration,
 ) -> Result<String> {
-    #[cfg(windows)]
-    {
-        send_request_with_async_timeout(socket_path, req, read_timeout)
-    }
-
-    #[cfg(not(windows))]
-    {
-        send_request_with_socket_timeout(socket_path, req, read_timeout)
-    }
+    send_request_with_socket_timeout(socket_path, req, read_timeout)
 }
 
 pub(crate) fn compiler_execution_status(
@@ -8869,7 +8835,6 @@ pub(crate) fn compiler_execution_status(
         .context("daemon execution protocol differs; restart it with this release")
 }
 
-#[cfg(not(windows))]
 fn send_request_with_socket_timeout(
     socket_path: &Path,
     req: &Request,
@@ -8878,11 +8843,10 @@ fn send_request_with_socket_timeout(
     use interprocess::local_socket::traits::Stream as _;
     use std::io::{BufRead, Write};
 
-    let mut stream = crate::transport::connect_sync(socket_path, crate::transport::BUSY_PIPE_WAIT)
+    let mut stream = crate::transport::connect_sync(socket_path, std::time::Duration::from_secs(2))
         .with_context(|| format!("connecting to daemon socket {}", socket_path.display()))
         .context(DaemonConnectionFailure)?;
 
-    // Best-effort timeouts: supported on Unix (UDS), not on Windows (named pipes).
     let _ = stream.set_recv_timeout(Some(read_timeout));
     let _ = stream.set_send_timeout(Some(std::time::Duration::from_secs(5)));
 
@@ -8906,75 +8870,18 @@ fn send_request_with_socket_timeout(
     Ok(resp)
 }
 
-#[cfg(windows)]
-fn send_request_with_async_timeout(
-    socket_path: &Path,
-    req: &Request,
-    read_timeout: std::time::Duration,
-) -> Result<String> {
-    let mut line = serde_json::to_string(req)?;
-    line.push('\n');
-
-    with_windows_client(|| async {
-        tokio::time::timeout(
-            read_timeout,
-            send_request_with_async_transport(socket_path, line, read_timeout),
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "daemon request timed out after {:?} (socket {})",
-                read_timeout,
-                socket_path.display()
-            )
-        })?
-    })
-}
-
-/// Run cancelable client I/O in an owned runtime. A caller already inside a
-/// Tokio runtime uses a joined scoped thread, never a detached I/O worker.
-#[cfg(windows)]
-fn with_windows_client<T, F>(exchange: impl FnOnce() -> F + Send) -> Result<T>
-where
-    T: Send,
-    F: std::future::Future<Output = Result<T>>,
-{
-    let run = || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_io()
-            .enable_time()
-            .build()
-            .context("creating daemon client runtime")?;
-        runtime.block_on(exchange())
-    };
-    if tokio::runtime::Handle::try_current().is_ok() {
-        std::thread::scope(|scope| {
-            std::thread::Builder::new()
-                .name("kache-client-runtime".into())
-                .spawn_scoped(scope, run)
-                .context("starting daemon client runtime thread")?
-                .join()
-                .map_err(|_| anyhow::anyhow!("daemon client runtime thread panicked"))?
-        })
-    } else {
-        run()
-    }
-}
-
-#[cfg(any(windows, test))]
+#[cfg(test)]
 async fn send_request_with_async_transport(
     socket_path: &Path,
     line: String,
     read_timeout: std::time::Duration,
 ) -> Result<String> {
     // Busy-pipe retries are cancelable and share the caller's timeout.
-    let busy_wait = crate::transport::BUSY_PIPE_WAIT.min(read_timeout);
+    let busy_wait = std::time::Duration::from_secs(2).min(read_timeout);
     let stream = crate::transport::connect_tokio(socket_path, busy_wait)
         .await
         .with_context(|| format!("connecting to daemon socket {}", socket_path.display()))
         .context(DaemonConnectionFailure)?;
-    #[cfg(windows)]
-    let _discard = crate::transport::discard_pipe_writes_on_drop(&stream);
     let mut stream = &stream;
 
     stream
@@ -9012,11 +8919,9 @@ fn send_request_fire_and_forget(socket_path: &Path, req: &Request) -> Result<()>
 }
 
 /// How long a fire-and-forget request may take to hand its line to the
-/// daemon: the socket's send timeout on Unix, the helper thread's wait on
-/// Windows.
+/// daemon: the socket's send timeout.
 const FIRE_AND_FORGET_SEND_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
-#[cfg(not(windows))]
 fn send_line_fire_and_forget(
     socket_path: &Path,
     line: String,
@@ -9025,7 +8930,7 @@ fn send_line_fire_and_forget(
     use interprocess::local_socket::traits::Stream as _;
     use std::io::Write;
 
-    let mut stream = crate::transport::connect_sync(socket_path, crate::transport::BUSY_PIPE_WAIT)
+    let mut stream = crate::transport::connect_sync(socket_path, std::time::Duration::from_secs(2))
         .with_context(|| format!("connecting to daemon socket {}", socket_path.display()))
         .context(DaemonConnectionFailure)?;
 
@@ -9041,55 +8946,6 @@ fn send_line_fire_and_forget(
     Ok(())
 }
 
-/// Windows: the same exchange, bounded by `send_wait` as a whole.
-///
-/// A named pipe has no send timeout. Two reusable I/O workers bound blocked
-/// writes and flushes; queued work expires without starting. A timeout or a
-/// full queue is a best-effort failure. Upload intent is already durable.
-/// A worker flushes before closing so successful delivery does not depend on
-/// interprocess starting another, unbounded background flush.
-#[cfg(windows)]
-fn send_line_fire_and_forget_windows(
-    socket_path: &Path,
-    line: String,
-    send_wait: std::time::Duration,
-) -> Result<()> {
-    let deadline = std::time::Instant::now() + send_wait;
-    let socket = socket_path.to_path_buf();
-    let sent = crate::transport::finish_by(deadline, move || -> Result<()> {
-        use std::io::Write;
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        let busy_wait = crate::transport::BUSY_PIPE_WAIT.min(remaining);
-        let stream = crate::transport::connect_sync(&socket, busy_wait)
-            .with_context(|| format!("connecting to daemon socket {}", socket.display()))
-            .context(DaemonConnectionFailure)?;
-        let _discard = crate::transport::discard_sync_pipe_writes_on_drop(&stream);
-        (&stream)
-            .write_all(line.as_bytes())
-            .context("writing request to daemon")?;
-        let crate::transport::SyncStream::NamedPipe(pipe) = &stream;
-        pipe.inner().flush().context("flushing request to daemon")?;
-        Ok(())
-    });
-    sent.unwrap_or_else(|| {
-        Err(anyhow::anyhow!(
-            "writing request to daemon socket {} took longer than {send_wait:?}",
-            socket_path.display()
-        ))
-    })
-}
-
-#[cfg(windows)]
-use self::send_line_fire_and_forget_windows as send_line_fire_and_forget;
-
-/// Start the daemon in the background and wait for it to be ready.
-///
-/// Uses a file lock to ensure only one process spawns the daemon when
-/// multiple rustc wrapper processes race to auto-start simultaneously.
-/// Processes that lose the lock race simply wait for the socket to appear.
-///
-/// Returns `Ok(true)` if the daemon is accepting connections,
-/// `Ok(false)` if the timeout elapsed.
 pub fn start_daemon_background() -> Result<bool> {
     let ready = start_daemon_background_inner()?;
     if !ready {
@@ -9241,15 +9097,10 @@ fn daemon_run_command(exe: &Path) -> std::process::Command {
 /// Start `kache daemon run` detached from this process, with stderr going to
 /// `stderr_target`.
 ///
-/// kunobi-daemon does the detaching. On Unix the daemon leads a new session,
+/// kunobi-daemon does the detaching. The daemon leads a new session,
 /// so Ctrl-C and the hangup of the terminal a build runs in do not reach it
 /// (kunobi-ninja/kache#1205), and it holds no descriptor of ours beyond its
-/// standard streams. On Windows it inherits only its three standard handles,
-/// so a caller's pipe cannot stay open because of it and keep cargo waiting
-/// for end of file (kunobi-ninja/kache#704, #1001), and it leaves the caller's
-/// job object when the job allows it. Cargo's job does not: a daemon started
-/// under cargo stays in cargo's job and stops when the build is interrupted.
-/// `kache daemon install` starts it from a scheduled task instead.
+/// standard streams.
 fn spawn_detached_daemon(
     exe: &Path,
     stderr_target: kunobi_daemon::launch::DaemonOutput,
@@ -9259,7 +9110,6 @@ fn spawn_detached_daemon(
     let mut daemon = detached_command(&command);
     daemon.stderr(stderr_target).readiness_channel();
     let child = {
-        #[cfg(unix)]
         let _admission = kache_ipc::descriptors::spawn_guard();
         daemon.spawn().context("spawning daemon process")?
     };
@@ -9280,7 +9130,7 @@ fn spawn_detached_daemon(
 /// argv[0] is not carried over: kunobi-daemon cannot set it. That is safe
 /// because [`crate::platform::SELF_SPAWN_ENV`] and the `daemon` argument
 /// already route the child as a self-spawn before any compiler-shim name is
-/// considered, which is how Windows has always worked.
+/// considered.
 fn detached_command(command: &std::process::Command) -> kunobi_daemon::launch::DaemonCommand {
     let mut daemon = kunobi_daemon::launch::DaemonCommand::new(command.get_program());
     daemon.args(command.get_args());
@@ -9295,9 +9145,7 @@ fn detached_command(command: &std::process::Command) -> kunobi_daemon::launch::D
 
 // ── Tests ────────────────────────────────────────────────────────
 
-// Daemon tests run on every platform via the cross-platform `transport` layer
-// (Unix domain sockets on Unix, named pipes on Windows). The handful of tests
-// that exercise Unix-only semantics directly — socket *files* on disk, POSIX
-// process termination via `sh` — are individually `#[cfg(unix)]`-gated below.
+// Daemon tests exercise Unix semantics directly — socket *files* on disk,
+// POSIX process termination via `sh`.
 #[cfg(test)]
 mod tests;

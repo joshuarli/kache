@@ -21,54 +21,7 @@ use super::KacheCommandExecute;
 const KACHE_KEYS: &str = "KACHE_S3_ACCESS_KEY and KACHE_S3_SECRET_KEY";
 const ENVIRONMENT_KEYS: &str = "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY";
 
-/// Why the chain stopped instead of trying the next credential source.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CredentialFailure {
-    /// One of `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` without the other.
-    PartialEnvironmentKeys {
-        present: &'static str,
-        missing: &'static str,
-    },
-    /// The selected profile supplied no credentials, or failed to.
-    Profile {
-        name: String,
-        selected_by: &'static str,
-        problem: String,
-    },
-}
-
-impl std::fmt::Display for CredentialFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::PartialEnvironmentKeys { present, missing } => {
-                write!(f, "{present} is set without {missing}")
-            }
-            Self::Profile {
-                name,
-                selected_by,
-                problem,
-            } => write!(
-                f,
-                "cannot load AWS profile \"{name}\" (selected by {selected_by}): {problem}"
-            ),
-        }
-    }
-}
-
-impl CredentialFailure {
-    /// What to change so the remote can sign requests again.
-    pub(crate) fn fix(&self) -> String {
-        match self {
-            Self::PartialEnvironmentKeys { .. } => {
-                "set both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or neither".to_string()
-            }
-            Self::Profile { selected_by, .. } => format!(
-                "fix the profile, or unset {selected_by} so kache can use web identity, ECS or \
-                 EC2 instance credentials"
-            ),
-        }
-    }
-}
+use super::CredentialFailure;
 
 /// What the chain last did. The backend reads a failure back to name it in
 /// the error of a request the chain stopped, and `kache doctor` reads the

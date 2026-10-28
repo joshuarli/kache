@@ -3,7 +3,6 @@
 use std::io;
 use std::path::Path;
 
-#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
 use crate::{FileSizing, ProbeCaps, Sharing, SizeProbe};
@@ -15,10 +14,7 @@ impl SizeProbe for FallbackProbe {
         let md = std::fs::symlink_metadata(path)?;
 
         let (inode, nlink) = crate::identity::metadata_identity(path, &md, false)?;
-        #[cfg(unix)]
         let allocated = md.blocks().saturating_mul(512);
-        #[cfg(not(unix))]
-        let allocated = md.len();
 
         Ok(FileSizing {
             logical: md.len(),

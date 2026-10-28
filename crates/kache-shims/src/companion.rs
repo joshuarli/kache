@@ -3,13 +3,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-#[cfg(windows)]
-const ENGINE: &str = "kache-engine.exe";
-#[cfg(not(windows))]
 const ENGINE: &str = "kache-engine";
-#[cfg(windows)]
-const FRONTEND: &str = "kache.exe";
-#[cfg(not(windows))]
 const FRONTEND: &str = "kache";
 
 /// Frontend image captured before entering the engine.
@@ -71,11 +65,8 @@ mod tests {
         let frontend = root.path().join(FRONTEND);
         for path in [&engine, &frontend] {
             std::fs::write(path, "image").unwrap();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-            }
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let env = crate::Env {
             exe: engine.clone(),
@@ -109,7 +100,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn compiler_shims_find_the_engine_in_the_resolved_installation() {
         use std::os::unix::fs::{PermissionsExt, symlink};

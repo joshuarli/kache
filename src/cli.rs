@@ -19,6 +19,7 @@ use crate::store::{STAGING_SWEEP_GRACE, Store, StoreLock};
 mod doctor_daemon;
 mod doctor_probe;
 mod doctor_storage;
+#[cfg(feature = "remote")]
 pub mod login;
 mod miss_diagnosis;
 mod sync_scope;
@@ -510,12 +511,32 @@ pub fn telemetry_push(
         return Ok(());
     };
 
+    #[cfg(feature = "remote")]
+    {
+        push_timelines(&planner, &records)?;
+        Ok(())
+    }
+    #[cfg(not(feature = "remote"))]
+    {
+        let _ = (planner, records);
+        Err(anyhow::anyhow!(
+            "telemetry push needs remote support; rebuild with --features remote"
+        ))
+    }
+}
+
+/// Send collected timeline records to the planner.
+#[cfg(feature = "remote")]
+fn push_timelines(
+    planner: &crate::config::PlannerConfig,
+    records: &[kache_core::timeline::BuildTimeline],
+) -> Result<()> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("building tokio runtime")?;
-    for record in &records {
-        match rt.block_on(crate::timeline_client::push_timeline(&planner, record)) {
+    for record in records {
+        match rt.block_on(crate::timeline_client::push_timeline(planner, record)) {
             Ok(answer) => println!(
                 "sent session {} ({}): {}",
                 record.session_id,
@@ -3196,7 +3217,6 @@ struct CacheCandidate {
     hardlink_id: Option<FileIdentity>,
 }
 
-#[cfg(unix)]
 fn clamp_private_bytes(size: u64, private_bytes: u64, allocated_bytes: Option<u64>) -> u64 {
     let private_bytes = private_bytes.min(size);
     allocated_bytes.map_or(private_bytes, |allocated| {
@@ -3204,7 +3224,6 @@ fn clamp_private_bytes(size: u64, private_bytes: u64, allocated_bytes: Option<u6
     })
 }
 
-#[cfg(unix)]
 fn observe_storage(path: &std::path::Path, meta: &std::fs::Metadata) -> StorageObservation {
     let size = meta.len();
     let mut sharing = crate::sharing::probe(path, size);
@@ -3226,7 +3245,7 @@ fn observe_storage(path: &std::path::Path, meta: &std::fs::Metadata) -> StorageO
 /// Reconstruct Windows' 64-bit file index from the two DWORDs returned by
 /// `GetFileInformationByHandle`. Kept platform-neutral so the Linux mutation
 /// lane can exercise the packing rule that the Windows syscall wrapper uses.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[allow(dead_code)]
 fn windows_file_identity_from_parts(
     volume_serial: u32,
     file_index_high: u32,
@@ -3241,7 +3260,7 @@ fn windows_file_identity_from_parts(
 /// Turn a successful or failed Windows identity query into conservative
 /// reclaim evidence. This is pure so every link-count boundary remains covered
 /// on the Linux mutation workers as well as by the hosted Windows tests.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[allow(dead_code)]
 fn windows_storage_observation(
     size: u64,
     identity: Option<(FileIdentity, u64)>,
@@ -3265,60 +3284,16 @@ fn windows_storage_observation(
     }
 }
 
-#[cfg(windows)]
-fn query_windows_file_identity(path: &std::path::Path) -> Option<(FileIdentity, u64)> {
-    use std::os::windows::fs::OpenOptionsExt;
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, GetFileInformationByHandle,
-    };
-
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(path)
-        .ok()?;
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
-    (ok != 0).then_some((
-        windows_file_identity_from_parts(
-            info.dwVolumeSerialNumber,
-            info.nFileIndexHigh,
-            info.nFileIndexLow,
-        ),
-        u64::from(info.nNumberOfLinks),
-    ))
-}
-
-#[cfg(windows)]
-fn observe_storage_windows(path: &std::path::Path, meta: &std::fs::Metadata) -> StorageObservation {
-    windows_storage_observation(meta.len(), query_windows_file_identity(path))
-}
-
-#[cfg(windows)]
-use self::observe_storage_windows as observe_storage;
-
 /// Conservative fallback for targets without a native sharing/identity probe.
-/// The pure helper keeps the actual fallback value visible to Linux mutation
-/// testing even though the platform wrapper itself is cfg-only.
-#[cfg_attr(any(unix, windows), allow(dead_code))]
+/// The pure helper keeps the actual fallback value visible to mutation
+/// testing.
+#[allow(dead_code)]
 fn unsupported_storage_observation(size: u64) -> StorageObservation {
     StorageObservation {
         sharing: crate::sharing::Sharing::unknown_for(size),
         hardlink: None,
     }
 }
-
-#[cfg(not(any(unix, windows)))]
-fn observe_storage_unsupported(
-    _path: &std::path::Path,
-    meta: &std::fs::Metadata,
-) -> StorageObservation {
-    unsupported_storage_observation(meta.len())
-}
-
-#[cfg(not(any(unix, windows)))]
-use self::observe_storage_unsupported as observe_storage;
 
 fn add_local_bytes(
     stats: &mut ProjectStats,
@@ -3958,7 +3933,6 @@ fn resolve_pager_argv(
     stdout_is_terminal: bool,
     kache_pager: Option<&str>,
     pager: Option<&str>,
-    is_windows: bool,
 ) -> Option<Vec<String>> {
     if no_pager || !stdout_is_terminal {
         return None;
@@ -3966,7 +3940,7 @@ fn resolve_pager_argv(
 
     let command = match kache_pager {
         Some(command) => command,
-        None => pager.unwrap_or(if is_windows { "more.com" } else { "less -FRX" }),
+        None => pager.unwrap_or("less -FRX"),
     };
     let argv = parse_pager_argv(command)?;
     if argv.first().is_none_or(|program| program.is_empty())
@@ -4056,7 +4030,6 @@ fn write_paged(lines: &[String], no_pager: bool) {
             .as_deref()
             .map(|value| value.to_str().unwrap_or("")),
         pager.as_deref().map(|value| value.to_str().unwrap_or("")),
-        cfg!(windows),
     ) else {
         plain();
         return;
@@ -5303,28 +5276,9 @@ fn confirm_removal_with(
     prompt(question)
 }
 
-/// `argv` as one line the platform's shell reads back as the same words:
-/// [`shell_line`] for a POSIX shell, double quotes for cmd and PowerShell.
-fn command_line(argv: &[String], windows: bool) -> String {
-    if !windows {
-        return shell_line(argv);
-    }
-    let plain = |word: &str| {
-        !word.is_empty()
-            && word
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "-_./:=@+,\\~".contains(c))
-    };
-    argv.iter()
-        .map(|word| {
-            if plain(word) {
-                word.clone()
-            } else {
-                format!("\"{}\"", word.replace('"', "\\\""))
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+/// `argv` as one line a POSIX shell reads back as the same words.
+fn command_line(argv: &[String]) -> String {
+    shell_line(argv)
 }
 
 /// The arguments this process was started with, after the program name.
@@ -5360,7 +5314,7 @@ fn retry_with_yes(outcome: &str, why: &str, args: &[String], preview: bool) -> a
     };
     anyhow::anyhow!(
         "{outcome}: {why}. Run `{}` to go ahead without asking{preview}.",
-        command_line(&argv, cfg!(windows))
+        command_line(&argv)
     )
 }
 
@@ -7409,6 +7363,24 @@ fn doctor_shows_native_linker(linux: bool, no_compiler: bool) -> bool {
 
 /// Doctor's "Native linker" check: the linker a native Linux link runs with
 /// this shell's `RUSTFLAGS`, placed the way its cache key places it.
+fn linker_banner(
+    linker: &std::path::Path,
+    env: &crate::invocation::InvocationEnv,
+) -> Option<String> {
+    use crate::invocation::process::CommandExt;
+    let output = env
+        .command(linker)
+        .ok()?
+        .arg("--version")
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .invocation_output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.lines().next()?.trim();
+    (!line.is_empty()).then(|| line.to_string())
+}
+
 fn native_linker_check(env: &crate::invocation::InvocationEnv) -> Check {
     let mut argv: Vec<String> = ["rustc", "--crate-type", "bin", "main.rs"]
         .into_iter()
@@ -7430,7 +7402,7 @@ fn native_linker_check(env: &crate::invocation::InvocationEnv) -> Check {
         Ok(linker) => Check {
             label: "Native linker",
             pass: true,
-            detail: match crate::native_link_key::linker_banner(&linker, env) {
+            detail: match linker_banner(&linker, env) {
                 Some(banner) => format!("{} ({banner})", linker.display()),
                 None => linker.display().to_string(),
             },
@@ -7930,7 +7902,7 @@ pub fn doctor(
     let mut checks: Vec<Check> = Vec::new();
 
     // 1. Binary on PATH
-    let which_cmd = if cfg!(windows) { "where" } else { "which" };
+    let which_cmd = "which";
     let (bin_pass, bin_detail) = if let Ok(output) =
         std::process::Command::new(which_cmd).arg("kache").output()
         && output.status.success()
@@ -7984,11 +7956,8 @@ pub fn doctor(
 
     let rustdoc_setting = crate::wrapper_config::cargo_rustdoc_setting();
     let rustdoc_value = rustdoc_setting.as_ref().map(|(value, _)| value.as_str());
-    #[cfg(unix)]
     let rustdoc_path_ok = rustdoc_value.is_some_and(rustdoc_shim_path_ok);
-    #[cfg(not(unix))]
-    let rustdoc_path_ok = false;
-    let (doc_pass, doc_class) = rustdoc_doctor_fields(cfg!(unix), rustdoc_value, rustdoc_path_ok);
+    let (doc_pass, doc_class) = rustdoc_doctor_fields(rustdoc_value, rustdoc_path_ok);
     checks.push(Check {
         label: "cargo doc",
         pass: doc_pass,
@@ -8154,6 +8123,7 @@ pub fn doctor(
             detail: access.detail,
             fix: access.fix,
         });
+        #[cfg(feature = "remote")]
         if let crate::config::RemoteBackendConfig::S3(s3) = &remote.backend
             && let Some(endpoint) = crate::remote_backend::s3_endpoint(s3)
             && crate::remote_backend::plain_http_remote_endpoint(&endpoint)
@@ -8757,10 +8727,7 @@ fn migrate(purge_sccache: bool) -> Result<()> {
         }
 
         // Uninstall sccache binary if cargo-installed
-        if let Ok(output) =
-            std::process::Command::new(if cfg!(windows) { "where" } else { "which" })
-                .arg("sccache")
-                .output()
+        if let Ok(output) = std::process::Command::new("which").arg("sccache").output()
             && output.status.success()
         {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -10517,13 +10484,9 @@ pub(crate) fn rustdoc_doctor_fix(pass: bool) -> Option<String> {
 }
 
 pub(crate) fn rustdoc_doctor_fields(
-    unix_shims: bool,
     configured: Option<&str>,
     path_ok: bool,
 ) -> (bool, &'static str) {
-    if !unix_shims {
-        return (true, "not cached on Windows");
-    }
     if configured.is_none() {
         return (true, "not set");
     }

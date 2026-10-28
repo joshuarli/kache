@@ -1847,26 +1847,18 @@ fn pattern_uses_dynamic_expansion(pattern: &str) -> bool {
     false
 }
 
-#[cfg(any(windows, test))]
+#[cfg(test)]
 fn windows_root_shape_is_ambiguous(is_absolute: bool, has_root: bool, has_prefix: bool) -> bool {
     !is_absolute && (has_root || has_prefix)
 }
 
-#[cfg(windows)]
-fn windows_pattern_has_ambiguous_root(path: &Path) -> bool {
-    windows_root_shape_is_ambiguous(
-        path.is_absolute(),
-        path.has_root(),
-        matches!(path.components().next(), Some(Component::Prefix(_))),
-    )
-}
-
-#[cfg(not(windows))]
+/// Windows drive-relative shapes can only arise on a Windows host; here this
+/// is always false.
 fn windows_pattern_has_ambiguous_root(_path: &Path) -> bool {
     false
 }
 
-#[cfg(any(windows, test))]
+#[cfg(test)]
 fn windows_prefix_uses_device_namespace(prefix: std::path::Prefix<'_>) -> bool {
     use std::path::Prefix;
     matches!(
@@ -1878,15 +1870,8 @@ fn windows_prefix_uses_device_namespace(prefix: std::path::Prefix<'_>) -> bool {
     )
 }
 
-#[cfg(windows)]
-fn windows_path_uses_device_namespace(path: &Path) -> bool {
-    matches!(
-        path.components().next(),
-        Some(Component::Prefix(prefix)) if windows_prefix_uses_device_namespace(prefix.kind())
-    )
-}
-
-#[cfg(not(windows))]
+/// Device-namespace prefixes can only arise on a Windows host; here this is
+/// always false.
 fn windows_path_uses_device_namespace(_path: &Path) -> bool {
     false
 }
@@ -2111,31 +2096,13 @@ fn walks_filesystem_root(glob_pattern: &str) -> bool {
         return false;
     };
     let base = Path::new(&glob_pattern[..=slash]);
-    // Unix: only absolute paths are rooted. Windows: `Path::is_absolute()` is
-    // false for a bare "/" (it expects a drive), but "/" is still the
-    // current-drive root and walks a huge tree — treat a leading RootDir as
-    // rooted there. Keeping the RootDir arm behind `cfg(windows)` makes the
-    // Linux mutation lane observe a single killable absolute check instead of
-    // an equivalent `||` / `&&` pair.
+    // Only absolute paths are rooted.
     let rooted = path_base_is_rooted(base);
     rooted && base.parent().is_none()
 }
 
 fn path_base_is_rooted(base: &Path) -> bool {
-    if base.is_absolute() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        matches!(
-            base.components().next(),
-            Some(std::path::Component::RootDir)
-        )
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
+    base.is_absolute()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2547,7 +2514,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(windows))]
     #[test]
     fn windows_only_path_rejections_stay_disabled_on_other_platforms() {
         assert!(!windows_pattern_has_ambiguous_root(Path::new(
@@ -3998,58 +3964,6 @@ inputs = ["shared/value.txt"]
             format!("{error:#}").contains("traverses `..` after a wildcard"),
             "{error:#}"
         );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn active_snapshot_rejects_ambiguous_windows_root_shapes() {
-        assert!(windows_pattern_has_ambiguous_root(Path::new(
-            r"\shared\data.json"
-        )));
-        assert!(windows_pattern_has_ambiguous_root(Path::new(
-            r"C:shared\data.json"
-        )));
-        assert!(!windows_pattern_has_ambiguous_root(Path::new(
-            r"C:\shared\data.json"
-        )));
-
-        for pattern in ["/shared/**/*.json", "C:shared/**/*.json"] {
-            let config = format!("extra_inputs = ['{pattern}']");
-            let (_dir, src) = crate_fixture(&[("kache.toml", config.as_str())]);
-            let error = ExtraInputsSnapshot::resolve(Some(&src), "x", true, &FileHasher::new())
-                .expect_err("ambiguous Windows anchoring must fail closed");
-            assert!(
-                format!("{error:#}").contains("rooted-without-drive or drive-relative"),
-                "{error:#}"
-            );
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn active_snapshot_rejects_windows_device_namespace_patterns() {
-        for pattern in [
-            r"\\?\C:\shared\**\*.json",
-            r"\\?\UNC\server\share\**\*.json",
-        ] {
-            let config = format!("extra_inputs = ['{pattern}']");
-            let (_dir, src) = crate_fixture(&[("kache.toml", config.as_str())]);
-            let error = ExtraInputsSnapshot::resolve(Some(&src), "x", true, &FileHasher::new())
-                .expect_err("glob cannot safely enumerate a device namespace");
-            assert!(
-                format!("{error:#}").contains("verbatim/device namespace"),
-                "{error:#}"
-            );
-        }
-        assert!(windows_path_uses_device_namespace(Path::new(
-            r"\\?\C:\repo\crate"
-        )));
-        assert!(!windows_path_uses_device_namespace(Path::new(
-            r"C:\repo\crate"
-        )));
-        assert!(!windows_path_uses_device_namespace(Path::new(
-            r"\\server\share\crate"
-        )));
     }
 
     #[cfg(target_os = "linux")]

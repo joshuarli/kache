@@ -681,7 +681,6 @@ fn finish_handoff(receipt: &HandoffReceipt, reply: Result<String>) -> Handoff {
 /// Bound connection, writes, and reads by the same deadline. The general
 /// daemon client only bounds reads and can spend seconds sending a memo to
 /// a stalled daemon.
-#[cfg(unix)]
 fn send_handoff(socket: &Path, request: &PublishCcRequest, budget: Duration) -> Result<String> {
     use interprocess::local_socket::{ConnectOptions, traits::Stream as _};
     use std::io::{Read, Write};
@@ -732,22 +731,6 @@ fn peer_may_have_closed(result: std::io::Result<()>) -> std::io::Result<()> {
         Err(error) if error.raw_os_error() == Some(libc::EINVAL) => Ok(()),
         other => other,
     }
-}
-
-#[cfg(windows)]
-use send_handoff_windows as send_handoff;
-
-#[cfg(windows)]
-fn send_handoff_windows(
-    socket: &Path,
-    request: &PublishCcRequest,
-    budget: Duration,
-) -> Result<String> {
-    crate::daemon::send_request_with_timeout(
-        socket,
-        &crate::daemon::Request::PublishCc(Box::new(request.clone())),
-        budget,
-    )
 }
 
 /// Snapshot `files` (each `(source, store_name)`) into the handoff directory
@@ -882,8 +865,8 @@ mod tests {
         let now = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
         let grace = Duration::from_secs(3600);
         assert!(!handoff_is_abandoned(now, now, grace));
-        // One millisecond, not one nanosecond: Windows keeps SystemTime in
-        // 100 ns steps and would round a nanosecond away.
+        // One millisecond, not one nanosecond: SystemTime resolution
+        // could round a nanosecond away.
         assert!(!handoff_is_abandoned(
             now - grace + Duration::from_millis(1),
             now,

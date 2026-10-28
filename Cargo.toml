@@ -23,6 +23,30 @@ path = "src/frontend.rs"
 name = "kache-engine"
 path = "src/engine.rs"
 
+[features]
+default = []
+# Remote backends (S3, GCS, filesystem, OCI) and the planner/login clients.
+# The default build is local-only; enabling `remote` pulls in the object-store
+# and auth stack.
+remote = [
+    "dep:opendal",
+    "dep:opendal-http-transport-reqwest",
+    "dep:opendal-layer-retry",
+    "dep:opendal-service-fs",
+    "dep:opendal-service-s3",
+    "dep:opendal-service-gcs",
+    "dep:oci-client",
+    "dep:docker_credential",
+    "dep:reqsign-aws-v4",
+    "dep:reqsign-core",
+    "dep:reqwest",
+    "dep:kunobi-auth",
+    "dep:rustls",
+    "dep:sha2",
+    "dep:hex",
+    "dep:base64",
+]
+
 [workspace]
 members = [
     "crates/kache-core",
@@ -68,30 +92,31 @@ bytes = "1"
 # OpenDAL publishes its modules as separate crates. Depending on only the
 # core, S3, filesystem, retry, and reqwest transport modules keeps Kache's
 # supported backend set explicit and avoids compiling unused services.
-opendal = { package = "opendal-core", version = "=0.59.5", default-features = false, features = ["executors-tokio"] }
-opendal-http-transport-reqwest = { version = "=0.59.5", default-features = false, features = ["rustls-no-provider"] }
-opendal-layer-retry = { version = "=0.59.5", default-features = false }
-opendal-service-fs = { version = "=0.59.5", default-features = false }
-opendal-service-s3 = { version = "=0.59.5", default-features = false }
-opendal-service-gcs = { version = "=0.59.5", default-features = false }
-oci-client = { version = "0.18", default-features = false, features = ["rustls-tls-no-provider"] }
-docker_credential = "1.4"
-sha2 = "0.11"
-hex = "0.4"
+# Remote-only: enabled by the `remote` feature; the default build is local-only.
+opendal = { package = "opendal-core", version = "=0.59.5", default-features = false, features = ["executors-tokio"], optional = true }
+opendal-http-transport-reqwest = { version = "=0.59.5", default-features = false, features = ["rustls-no-provider"], optional = true }
+opendal-layer-retry = { version = "=0.59.5", default-features = false, optional = true }
+opendal-service-fs = { version = "=0.59.5", default-features = false, optional = true }
+opendal-service-s3 = { version = "=0.59.5", default-features = false, optional = true }
+opendal-service-gcs = { version = "=0.59.5", default-features = false, optional = true }
+oci-client = { version = "0.18", default-features = false, features = ["rustls-tls-no-provider"], optional = true }
+docker_credential = { version = "1.4", optional = true }
+sha2 = { version = "0.11", optional = true }
+hex = { version = "0.4", optional = true }
 # OpenDAL exposes a custom credential chain but not a profile-name shortcut.
 # These published reqsign APIs preserve Kache's explicit profile selection
 # (including SSO and credential_process) without a git-only patch.
-reqsign-aws-v4 = { version = "=3.3.1", default-features = false }
-reqsign-core = { version = "=3.3.2", default-features = false }
+reqsign-aws-v4 = { version = "=3.3.1", default-features = false, optional = true }
+reqsign-core = { version = "=3.3.2", default-features = false, optional = true }
 # Direct dep so OpenDAL/reqwest can use ring without reintroducing aws-lc.
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
 kache-core = { version = "2.0.0-rc.2", path = "crates/kache-core", default-features = false, features = ["planning"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "fs", "io-util", "net", "time", "signal", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 semver = "1"
-base64 = "0.23"
+base64 = { version = "0.23", optional = true }
 toml = "1"
 toml_edit = "0.25"
 clap = { version = "4", features = ["derive", "string"] }
@@ -120,10 +145,10 @@ libc = "0.2"
 mutants = "0.0.4"
 memchr = "2"
 tempfile = "3"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"], optional = true }
 # `kache login` and planner bearer sessions. The -core features keep reqwest
 # on `rustls-no-provider`, so ring stays the only TLS provider (no aws-lc).
-kunobi-auth = { version = "1.1.0", default-features = false, features = ["client-core", "browser-login-core", "rust_crypto"] }
+kunobi-auth = { version = "1.1.0", default-features = false, features = ["client-core", "browser-login-core", "rust_crypto"], optional = true }
 interprocess = { version = "2.4.7", features = ["tokio"] }
 # Unicode tables affect persisted cache-key bytes. Keep Unicode 17 until
 # normalization changes have a reviewed cache-key compatibility migration.
@@ -135,29 +160,6 @@ unicode-normalization = "=0.1.25"
 # requirement.
 regex = { version = "1", default-features = false, features = ["std", "perf"] }
 regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "meta", "nfa-pikevm"] }
-
-[target.'cfg(windows)'.dependencies]
-# `pure` drops blake3's C SIMD (`c/blake3_neon.c` / SSE intrinsics), whose
-# arm64 NEON path doesn't cross-compile under cargo-xwin's clang + MSVC
-# sysroot. Windows-only so native/Linux/macOS keep the fast C SIMD backend.
-blake3 = { version = "1", features = ["pure"] }
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_System_Threading",
-    "Win32_Storage_FileSystem",
-    # ReFS block-cloning (FSCTL_DUPLICATE_EXTENTS_TO_FILE) for zero-copy,
-    # write-isolated restore on a Dev Drive — see link::try_reflink (#429).
-    "Win32_System_IO",
-    "Win32_System_Ioctl",
-    # FILE_SUPPORTS_BLOCK_REFCOUNTING — ask the volume whether it block-clones
-    # instead of inferring "no CoW" from one failed clone (#508).
-    "Win32_System_SystemServices",
-    # `kache test-runner` leaves Ctrl-C to the test it runs.
-    "Win32_System_Console",
-    "Win32_System_JobObjects",
-    "Win32_System_Diagnostics_ToolHelp",
-    "Win32_Security",
-] }
 
 [dev-dependencies]
 kache-config = { version = "2.0.0-rc.2", path = "crates/kache-config", features = ["test-support"] }
@@ -171,23 +173,9 @@ proptest = { version = "1.12.0", default-features = false, features = ["std", "h
 serde_json = "1"
 bytes = "1"
 
-[target.'cfg(windows)'.dev-dependencies]
-jobserver = "0.1.35"
-
-# `{ archive-suffix }` resolves from each target's pkg-fmt (".tar.gz" for
-# tgz, ".zip" for zip) — never hardcode the extension here: the release
-# workflow (_release-rust.yml) packages Windows targets as .zip and
-# everything else as .tar.gz (see #311). Guarded by
-# tests/binstall_metadata_test.rs.
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
 pkg-fmt = "tgz"
-
-[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
-pkg-fmt = "zip"
-
-[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
-pkg-fmt = "zip"
 
 # Debian packaging (cargo-deb). Read by the _workflows build_deb step to
 # produce kache_<version>_{amd64,arm64}.deb, which package-publish.yml then
@@ -222,10 +210,16 @@ debug = 0
 strip = "symbols"
 
 [profile.release]
-debug = 0
+opt-level = 3
+lto = "thin"
+panic = "abort"
+strip = false
+
+[profile.dist]
+inherits = "release"
 lto = "fat"
 codegen-units = 1
-strip = "symbols"
+strip = true
 
 [lints.rust]
 warnings = "deny"

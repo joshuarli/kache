@@ -843,7 +843,7 @@ mod tests {
 
     /// No file can match a row recorded without a stamp: not by the stamp a
     /// lookup reads back, nor by the columns an older release reads without
-    /// the proof. Windows reports inode 0, and 0 for times before 1970, so
+    /// the proof, so
     /// only the size rules such a file out, and no file's size is negative.
     #[test]
     fn a_row_recorded_without_a_stamp_matches_no_file() {

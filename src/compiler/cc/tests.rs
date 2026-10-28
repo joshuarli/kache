@@ -833,33 +833,17 @@ fn recognizes_unknown_wrapper_via_probe() {
     };
 
     // Copy or symlink it to an unrecognized name in temp directory.
-    let custom_name = if cfg!(windows) {
-        "my custom & compiler.cmd"
-    } else {
-        "my-custom-compiler"
-    };
+    let custom_name = "my-custom-compiler";
     let dest_path = temp.path().join(custom_name);
 
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(&source_path, &dest_path).unwrap();
-    }
-    #[cfg(windows)]
-    {
-        std::fs::write(
-            &dest_path,
-            format!("@echo off\r\n\"{}\" %*", source_path.display()),
-        )
-        .unwrap();
-    }
+    std::os::unix::fs::symlink(&source_path, &dest_path).unwrap();
 
     // recognizes() should successfully probe and return true!
     let dest_str = dest_path.to_str().unwrap().to_string();
     assert!(CcCompiler::recognizes(std::slice::from_ref(&dest_str)));
 
     // The same wrapper must be detected when it is found by PATH. This
-    // exercises the bare-name guard and the OS's safe argument handling
-    // for the Windows `.cmd` name containing spaces and `&`.
+    // exercises the bare-name guard.
     let previous_path = std::env::var_os("PATH");
     let mut path_entries = vec![temp.path().to_path_buf()];
     if let Some(previous) = previous_path.as_deref() {
@@ -6584,37 +6568,6 @@ fn cc_output_safety_refuses_all_hardlinks() {
         "read-only hardlinks are user-owned unless proven otherwise"
     );
     assert!(discover_cc_output_artifacts(&parsed).is_empty());
-}
-
-#[cfg(windows)]
-#[test]
-fn cc_output_safety_refuses_windows_hardlinks() {
-    let dir = tempfile::tempdir().unwrap();
-    let target = dir.path().join("real.obj");
-    let output = dir.path().join("link.obj");
-    std::fs::write(&target, b"original").unwrap();
-    std::fs::hard_link(&target, &output).unwrap();
-
-    let output_str = output.to_string_lossy().into_owned();
-    let output_arg = format!("/Fo{output_str}");
-    let parsed = CcArgs::parse(&s(&["clang-cl.exe", "/c", "foo.c", &output_arg])).unwrap();
-    assert_eq!(
-        parsed.object_output_path().as_deref(),
-        Some(output.as_path())
-    );
-    assert!(parsed.requires_compiler_output_semantics());
-    assert!(discover_cc_output_artifacts(&parsed).is_empty());
-
-    let mut perms = std::fs::metadata(&output).unwrap().permissions();
-    perms.set_readonly(true);
-    std::fs::set_permissions(&output, perms).unwrap();
-    assert!(parsed.requires_compiler_output_semantics());
-
-    // TempDir cleanup cannot remove a read-only Windows hardlink.
-    let mut perms = std::fs::metadata(&output).unwrap().permissions();
-    #[allow(clippy::permissions_set_readonly_false)]
-    perms.set_readonly(false);
-    std::fs::set_permissions(&output, perms).unwrap();
 }
 
 /// A user-owned non-regular output must never be unlinked by pre-clean or

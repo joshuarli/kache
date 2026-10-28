@@ -29,7 +29,6 @@ pub(crate) fn env_triple(triple: &str) -> String {
 }
 
 /// The variable that sets Cargo's runner for `triple`.
-#[cfg(any(unix, test))]
 pub(crate) fn runner_var(triple: &str) -> String {
     format!("CARGO_TARGET_{}_RUNNER", env_triple(triple))
 }
@@ -936,7 +935,6 @@ mod tests {
             vec![real.clone(), dir.path().canonicalize().unwrap()]
         );
         // `$PWD` through a symlink is the same directory.
-        #[cfg(unix)]
         {
             let link = dir.path().join("link");
             std::os::unix::fs::symlink(&pkg, &link).unwrap();

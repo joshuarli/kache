@@ -8,6 +8,7 @@ use std::path::PathBuf;
 /// on Linux and `HOME` on macOS, and the Nix sandbox sets `HOME` to a
 /// directory the build cannot write. Hold one of these for any test that
 /// calls `TofuStore::trust` or `check_and_pin`.
+#[cfg(feature = "remote")]
 pub(crate) struct KunobiConfigGuard {
     _lock: ProcessStateTestGuard,
     /// Kept so the directory outlives the tests that pin a service into it.
@@ -17,6 +18,7 @@ pub(crate) struct KunobiConfigGuard {
     saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
 }
 
+#[cfg(feature = "remote")]
 impl KunobiConfigGuard {
     pub(crate) fn new() -> Self {
         let lock = process_state_test_lock();
@@ -42,6 +44,7 @@ impl KunobiConfigGuard {
     }
 }
 
+#[cfg(feature = "remote")]
 impl Drop for KunobiConfigGuard {
     fn drop(&mut self) {
         for (key, value) in self.saved.drain(..) {
@@ -89,7 +92,6 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
         input_predictions: false,
         record_sessions: false,
         volume_stores: Vec::new(),
-        windows_hardlink: false,
         shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,

@@ -39,7 +39,7 @@ The staging directory must:
 - be on the same filesystem as `path`
 - sit outside the object subtree `<prefix>/v3/`
 
-Kache rejects a relative path, or one inside `<prefix>/v3/`, when it loads the configuration. On Unix it also refuses a staging directory on another filesystem when it opens the remote. Windows has no such check, so a cross-volume staging directory makes every write fail instead.
+Kache rejects a relative path, or one inside `<prefix>/v3/`, when it loads the configuration. It also refuses a staging directory on another filesystem when it opens the remote.
 
 ## Layout
 
@@ -53,7 +53,7 @@ Kache rejects a relative path, or one inside `<prefix>/v3/`, when it loads the c
     └── _manifests/
 ```
 
-Filesystem prefixes cannot contain `:`, and no path segment may end in a dot or a space. Windows strips those characters, so the same share would name different files from different machines.
+Filesystem prefixes cannot contain `:`, and no path segment may end in a dot or a space. Those characters are not portable across filesystems, so the same share would name different files from different machines.
 
 The [v3 download limits](/docs/remote-cache/s3-setup#object-layout-and-policy) also apply to shared folders: 8 GiB compressed and 8 GiB extracted per entry. Compiler invocations recompile when a remote entry exceeds either limit.
 

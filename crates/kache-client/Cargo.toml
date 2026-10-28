@@ -15,18 +15,9 @@ kache-ipc = { version = "2.0.0-rc.2", path = "../kache-ipc" }
 kache-protocol = { version = "2.0.0-rc.2", path = "../kache-protocol" }
 anyhow = "1"
 tracing = "0.1"
-
-kache-shims = { version = "2.0.0-rc.2", path = "../kache-shims" }
-
-[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_System_Console",
-    "Win32_System_Threading",
-] }
+kache-shims = { version = "2.0.0-rc.2", path = "../kache-shims" }
 
 [dev-dependencies]
 tempfile = "3"

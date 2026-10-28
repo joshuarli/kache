@@ -11,7 +11,7 @@ MSVC `cl.exe` runs directly without caching, including when the `cc` crate selec
 
 `kache init` covers both rustc and the objects a build script compiles through the `cc` crate. Without it, put a shim on `PATH`.
 
-On Unix, `kache init` sets `HOST_CC` and `HOST_CXX` in Cargo's config, and `CC_KNOWN_WRAPPER_CUSTOM=kache`. It adds each key only when Cargo's `[env]` table does not set it already, so an existing `HOST_CC` keeps its value and still decides which compiler build scripts run. On Windows it sets only `CC_KNOWN_WRAPPER_CUSTOM`, so choose clang-cl through `CC` as shown under [Prefix method](#prefix-method). Init never sets `CC` or `CXX`, so `cargo build --target` keeps the cross compiler the `cc` crate would have found.
+`kache init` sets `HOST_CC` and `HOST_CXX` in Cargo's config, and `CC_KNOWN_WRAPPER_CUSTOM=kache`. It adds each key only when Cargo's `[env]` table does not set it already, so an existing `HOST_CC` keeps its value and still decides which compiler build scripts run. Init never sets `CC` or `CXX`, so `cargo build --target` keeps the cross compiler the `cc` crate would have found.
 
 PATH shims also cover C code in Cargo builds when the crate invokes `cc` or `gcc` from `PATH` without `HOST_CC`.
 

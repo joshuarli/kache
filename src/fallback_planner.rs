@@ -424,14 +424,17 @@ mod tests {
         DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS, DEFAULT_S3_POOL_IDLE_SECS,
     };
     use crate::store::Store;
+    #[cfg(feature = "remote")]
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    #[cfg(feature = "remote")]
     struct FailFirstManifestGetBackend {
         inner: Arc<dyn crate::remote_backend::RemoteBackend>,
         manifest_gets: AtomicU64,
     }
 
     #[async_trait::async_trait]
+    #[cfg(feature = "remote")]
     impl crate::remote_backend::RemoteBackend for FailFirstManifestGetBackend {
         async fn head(&self, key: &str) -> Result<bool> {
             self.inner.head(key).await
@@ -467,11 +470,13 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "remote")]
     struct EnvRestore {
         key: &'static str,
         previous: Option<std::ffi::OsString>,
     }
 
+    #[cfg(feature = "remote")]
     impl Drop for EnvRestore {
         fn drop(&mut self) {
             unsafe {
@@ -483,6 +488,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "remote")]
     fn set_env(key: &'static str, value: Option<&str>) -> EnvRestore {
         let previous = std::env::var_os(key);
         unsafe {
@@ -512,7 +518,6 @@ mod tests {
             input_predictions: false,
             record_sessions: false,
             volume_stores: Vec::new(),
-            windows_hardlink: false,
             shared_hardlink_restores: false,
             deferred_discovery: true,
             out_dir_alias: true,
@@ -647,6 +652,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "remote")]
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::await_holding_lock)]
     async fn identity_candidates_return_entries_from_the_first_manifest() {
@@ -687,6 +693,7 @@ mod tests {
         assert_eq!(candidates[0].size_bytes, Some(4096));
     }
 
+    #[cfg(feature = "remote")]
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::await_holding_lock)]
     async fn speculative_identity_falls_back_to_the_legacy_alias_after_a_miss() {
@@ -729,6 +736,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "remote")]
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::await_holding_lock)]
     async fn speculative_manifest_error_is_retried_by_ordinary_fallback_lookup() {
@@ -785,6 +793,7 @@ mod tests {
         assert_eq!(plan.candidates[0].cache_key, cache_key);
     }
 
+    #[cfg(feature = "remote")]
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::await_holding_lock)]
     async fn successful_speculative_miss_is_authoritative() {

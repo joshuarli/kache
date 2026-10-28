@@ -18,9 +18,6 @@ pub(crate) struct CargoEnvAssignment {
     pub value: &'static str,
 }
 
-/// Keys init may add. Unix gets host compiler wrappers; Windows only tells the
-/// `cc` crate that `kache` is a known wrapper, because choosing clang-cl vs
-/// MSVC is the user's call.
 pub(crate) fn desired_assignments() -> &'static [CargoEnvAssignment] {
     #[cfg(unix)]
     {
@@ -38,13 +35,6 @@ pub(crate) fn desired_assignments() -> &'static [CargoEnvAssignment] {
                 value: "kache",
             },
         ]
-    }
-    #[cfg(windows)]
-    {
-        &[CargoEnvAssignment {
-            name: "CC_KNOWN_WRAPPER_CUSTOM",
-            value: "kache",
-        }]
     }
 }
 
@@ -247,13 +237,5 @@ mod tests {
         let out = apply_cargo_env_edit("", desired_assignments());
         assert!(out.contains("HOST_CC = \"kache cc\""));
         assert!(out.contains("HOST_CXX = \"kache c++\""));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_assignments_do_not_pick_a_c_compiler() {
-        let names: Vec<_> = desired_assignments().iter().map(|a| a.name).collect();
-        assert!(!names.contains(&"HOST_CC"));
-        assert!(!names.contains(&"HOST_CXX"));
     }
 }

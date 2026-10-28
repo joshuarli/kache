@@ -1008,18 +1008,14 @@ fn path_start(token: &str) -> Option<usize> {
 }
 
 /// Whether `rest` opens with a path: an absolute one of at least two
-/// components, a Windows drive path, or a `./`, `../` or `~/` relative one. A
-/// single leading slash is not enough, because MSVC options look like that
-/// (`/DEF`, `/MANIFESTFILE`).
+/// components, or a `./`, `../` or `~/` relative one.
 fn starts_path(rest: &str) -> bool {
     let b = rest.as_bytes();
-    let drive =
-        b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/');
-    let relative = ["./", "../", "~/", ".\\", "..\\"]
+    let relative = ["./", "../", "~/"]
         .iter()
         .any(|prefix| rest.starts_with(prefix));
-    let absolute = matches!(b.first(), Some(b'/' | b'\\')) && rest[1..].contains(['/', '\\']);
-    drive || relative || absolute
+    let absolute = matches!(b.first(), Some(b'/')) && rest[1..].contains('/');
+    relative || absolute
 }
 
 /// Passthrough reasons merged by [`reason_label`] as `(label, compiles,
@@ -1248,31 +1244,13 @@ fn acquire_work_dir_lock(work_dir: &Path) -> Result<File> {
     }
 }
 
-/// Strip Windows' `\\?\` extended-length prefix after canonicalization.
-/// Many external tools, including git, reject verbatim paths.
 fn de_verbatim(p: PathBuf) -> PathBuf {
-    #[cfg(windows)]
-    {
-        let s = p.to_string_lossy();
-        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
-            return PathBuf::from(format!(r"\\{rest}"));
-        }
-        if let Some(rest) = s.strip_prefix(r"\\?\") {
-            return PathBuf::from(rest.to_string());
-        }
-    }
     p
 }
 
-/// Return `path` if it exists, else `path.exe` if that exists. This lets the
-/// Unix-style default `./target/release/kache` resolve on Windows.
 fn resolve_binary(path: &Path) -> PathBuf {
     if path.exists() {
         return path.to_path_buf();
-    }
-    let exe = path.with_extension("exe");
-    if exe.exists() {
-        return exe;
     }
     if path.components().count() == 1
         && let Some(found) = find_on_path(path)
@@ -1289,13 +1267,6 @@ fn find_on_path(program: &Path) -> Option<PathBuf> {
         let candidate = dir.join(name);
         if candidate.is_file() {
             return Some(candidate);
-        }
-        #[cfg(windows)]
-        {
-            let exe = candidate.with_extension("exe");
-            if exe.is_file() {
-                return Some(exe);
-            }
         }
         None
     })
@@ -1316,47 +1287,7 @@ fn tool_version(tool: &Path) -> Option<String> {
 
 /// Resolve a POSIX `sh` for scenario setup/build snippets.
 fn posix_sh() -> Result<PathBuf> {
-    #[cfg(not(windows))]
-    {
-        Ok(PathBuf::from("sh"))
-    }
-    #[cfg(windows)]
-    {
-        find_windows_sh()
-            .context("no POSIX `sh` found; install Git for Windows or put sh.exe on PATH")
-    }
-}
-
-#[cfg(windows)]
-fn find_windows_sh() -> Option<PathBuf> {
-    if let Some(paths) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            let cand = dir.join("sh.exe");
-            if cand.is_file() {
-                return Some(cand);
-            }
-        }
-    }
-
-    if let Ok(out) = Command::new("git").arg("--exec-path").output()
-        && out.status.success()
-    {
-        let exec = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-        for anc in exec.ancestors() {
-            let cand = anc.join("usr").join("bin").join("sh.exe");
-            if cand.is_file() {
-                return Some(cand);
-            }
-        }
-    }
-
-    for root in [r"C:\Program Files\Git", r"C:\Program Files (x86)\Git"] {
-        let cand = Path::new(root).join(r"usr\bin\sh.exe");
-        if cand.is_file() {
-            return Some(cand);
-        }
-    }
-    None
+    Ok(PathBuf::from("sh"))
 }
 
 /// Run the scenario's one-time `setup` steps (e.g. `./mach bootstrap`,
@@ -2997,7 +2928,7 @@ fn key_stability(cold_raw: &serde_json::Value, warm_raw: &serde_json::Value) -> 
 ///
 /// `-kP` forces 1024-byte blocks and the POSIX one-line-per-filesystem format,
 /// so the "Available" column is field 4 on both macOS and Linux. Returns
-/// `None` if `df` is missing or unparseable (e.g. Windows) — the caller treats
+/// `None` if `df` is missing or unparseable — the caller treats
 /// a missing measurement as "skip the free-space verify", never as an error.
 fn available_bytes(path: &Path) -> Option<u64> {
     let out = Command::new("df").arg("-kP").arg(path).output().ok()?;
@@ -3492,11 +3423,6 @@ fn run_mbx_bench(
     run_archive_dir: &Path,
     cache_tool_version: Option<&str>,
 ) -> Result<()> {
-    if cfg!(windows) {
-        bail!(
-            "--cache-backend mbx drives mbx through a POSIX `cargo` shim; not supported on Windows"
-        );
-    }
     let cold_metrics = if retry {
         retry_load_mbx_cold(&profile.name, cache_dir, work_dir)?
     } else {
@@ -3644,7 +3570,6 @@ fn run_mbx_pull_bench(
     force_setup: bool,
     sh: &Path,
 ) -> Result<()> {
-    anyhow::ensure!(!cfg!(windows), "mbx benchmark requires a POSIX Cargo shim");
     let child = profile.ref_next.as_deref().context("missing ref_next")?;
     source::clone_worktrees_pull(&profile.repo, &profile.git_ref, child, mirror, checkout)?;
     run_setup(profile, checkout, mbx, force_setup, sh)?;

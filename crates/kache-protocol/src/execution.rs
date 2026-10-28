@@ -4,19 +4,17 @@ use std::ffi::{OsStr, OsString};
 
 pub mod process;
 pub mod unix;
-pub mod windows;
 pub mod workspace;
 
 /// Version 2 requires client-owned restores on every supported platform.
 pub const EXECUTION_VERSION: u32 = 2;
 
-/// Native strings retain Unix bytes or Windows UTF-16, including values that
-/// cannot be represented by a Rust String. A receiver rejects a foreign encoding.
+/// Native strings retain Unix bytes, including values that
+/// cannot be represented by a Rust String.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "encoding", content = "units", rename_all = "snake_case")]
 pub enum NativeString {
     Unix(Vec<u8>),
-    Windows(Vec<u16>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,21 +35,12 @@ impl std::error::Error for NativeStringError {}
 
 impl NativeString {
     pub fn capture(value: &OsStr) -> Self {
-        #[cfg(unix)]
-        {
-            use std::os::unix::ffi::OsStrExt;
-            Self::Unix(value.as_bytes().to_owned())
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::ffi::OsStrExt;
-            Self::Windows(value.encode_wide().collect())
-        }
+        use std::os::unix::ffi::OsStrExt;
+        Self::Unix(value.as_bytes().to_owned())
     }
 
     pub fn decode(&self) -> Result<OsString, NativeStringError> {
         match self {
-            #[cfg(unix)]
             Self::Unix(bytes) => {
                 use std::os::unix::ffi::OsStringExt;
                 if bytes.contains(&0) {
@@ -59,15 +48,6 @@ impl NativeString {
                 }
                 Ok(OsString::from_vec(bytes.clone()))
             }
-            #[cfg(windows)]
-            Self::Windows(units) => {
-                use std::os::windows::ffi::OsStringExt;
-                if units.contains(&0) {
-                    return Err(NativeStringError::Nul);
-                }
-                Ok(OsString::from_wide(units))
-            }
-            _ => Err(NativeStringError::ForeignEncoding),
         }
     }
 }
@@ -127,18 +107,6 @@ pub enum ExecutionChannels {
         #[serde(default)]
         trusted_pipeline: bool,
     },
-    /// The server duplicates these from its authenticated named-pipe peer.
-    Windows {
-        stdin: u64,
-        stdout: u64,
-        stderr: u64,
-        /// Native children and console writes remain in the original client.
-        #[serde(default)]
-        process_broker: bool,
-        /// Permit the daemon pipeline to use its own file-access context.
-        #[serde(default)]
-        trusted_pipeline: bool,
-    },
 }
 
 impl ExecutionChannels {
@@ -147,9 +115,6 @@ impl ExecutionChannels {
         daemon_trust
             && match self {
                 Self::UnixClient {
-                    trusted_pipeline, ..
-                }
-                | Self::Windows {
                     trusted_pipeline, ..
                 } => *trusted_pipeline,
                 Self::Unix { .. } => false,
@@ -177,10 +142,6 @@ pub enum ExecutionReply {
     },
     Failed {
         message: String,
-    },
-    /// Windows launches native children in the client's security/console context.
-    WindowsControl {
-        command: windows::Command,
     },
 }
 
@@ -228,25 +189,19 @@ mod tests {
     #[test]
     fn pipeline_trust_requires_both_peers_and_defaults_to_false() {
         use super::ExecutionChannels;
-        for platform in ["windows", "unix_client"] {
-            let legacy = if platform == "windows" {
-                r#"{"platform":"windows","stdin":0,"stdout":0,"stderr":0,"process_broker":true}"#
-            } else {
-                r#"{"platform":"unix_client","terminal":false,"jobserver":[]}"#
-            };
-            let channels: ExecutionChannels = serde_json::from_str(legacy).unwrap();
-            assert!(!channels.trusted_pipeline(true));
-            for client in [false, true] {
-                let mut json: serde_json::Value = serde_json::from_str(legacy).unwrap();
-                json["trusted_pipeline"] = client.into();
-                let channels: ExecutionChannels = serde_json::from_value(json).unwrap();
-                for daemon in [false, true] {
-                    assert_eq!(channels.trusted_pipeline(daemon), client && daemon);
-                }
-                let round_trip: ExecutionChannels =
-                    serde_json::from_str(&serde_json::to_string(&channels).unwrap()).unwrap();
-                assert_eq!(round_trip, channels);
+        let legacy = r#"{"platform":"unix_client","terminal":false,"jobserver":[]}"#;
+        let channels: ExecutionChannels = serde_json::from_str(legacy).unwrap();
+        assert!(!channels.trusted_pipeline(true));
+        for client in [false, true] {
+            let mut json: serde_json::Value = serde_json::from_str(legacy).unwrap();
+            json["trusted_pipeline"] = client.into();
+            let channels: ExecutionChannels = serde_json::from_value(json).unwrap();
+            for daemon in [false, true] {
+                assert_eq!(channels.trusted_pipeline(daemon), client && daemon);
             }
+            let round_trip: ExecutionChannels =
+                serde_json::from_str(&serde_json::to_string(&channels).unwrap()).unwrap();
+            assert_eq!(round_trip, channels);
         }
         assert!(
             !ExecutionChannels::Unix {
@@ -335,30 +290,14 @@ mod tests {
 
     #[test]
     fn native_strings_round_trip_without_loss_and_reject_nuls() {
-        #[cfg(unix)]
-        let (native, nul, foreign) = {
-            use std::os::unix::ffi::OsStringExt;
-            (
-                OsString::from_vec(vec![b'x', 255, 128]),
-                NativeString::Unix(vec![0]),
-                NativeString::Windows(vec![120]),
-            )
-        };
-        #[cfg(windows)]
-        let (native, nul, foreign) = {
-            use std::os::windows::ffi::OsStringExt;
-            (
-                OsString::from_wide(&[120, 0xd800, 0xdc00, 0xdfff]),
-                NativeString::Windows(vec![0]),
-                NativeString::Unix(vec![120]),
-            )
-        };
+        use std::os::unix::ffi::OsStringExt;
+        let native = OsString::from_vec(vec![b'x', 255, 128]);
+        let nul = NativeString::Unix(vec![0]);
         let captured = NativeString::capture(&native);
         let json = serde_json::to_vec(&captured).unwrap();
         let decoded: NativeString = serde_json::from_slice(&json).unwrap();
         assert_eq!(decoded.decode().unwrap(), native);
         assert_eq!(nul.decode(), Err(NativeStringError::Nul));
-        assert_eq!(foreign.decode(), Err(NativeStringError::ForeignEncoding));
     }
 
     #[test]

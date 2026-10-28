@@ -31,13 +31,7 @@ pub fn prepare_relocated_dir(src: &Path) -> Result<RelocatedDir> {
     copy_dir_recursive(src, dst.path())
         .with_context(|| format!("copying relocated fixture {}", src.display()))?;
     copy_toolchain_pin(src, dst.path());
-    let root = if cfg!(windows) {
-        std::fs::canonicalize(dst.path())
-            .map(|c| crate::portable_path(&c))
-            .unwrap_or_else(|_| dst.path().to_path_buf())
-    } else {
-        dst.path().to_path_buf()
-    };
+    let root = dst.path().to_path_buf();
     Ok(RelocatedDir { _temp: dst, root })
 }
 
@@ -374,19 +368,8 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
 fn copy_symlink(from: &Path, to: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(std::fs::read_link(from)?, to)
-}
-
-#[cfg(windows)]
-fn copy_symlink(from: &Path, to: &Path) -> std::io::Result<()> {
-    let target = std::fs::read_link(from)?;
-    if std::fs::metadata(from)?.is_dir() {
-        std::os::windows::fs::symlink_dir(target, to)
-    } else {
-        std::os::windows::fs::symlink_file(target, to)
-    }
 }
 
 #[cfg(test)]

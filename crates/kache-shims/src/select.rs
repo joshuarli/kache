@@ -188,23 +188,13 @@ pub fn running_identity() -> Option<InodeId> {
 }
 
 fn process_elevation(home: Option<&Path>, user: Option<&str>) -> Option<Elevation> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        // SAFETY: geteuid has no preconditions.
-        let euid = unsafe { libc::geteuid() };
-        let sudo_user = std::env::var("SUDO_USER").ok();
-        let home_owner = home.and_then(|home| std::fs::metadata(home).ok().map(|m| m.uid()));
-        elevation(euid, sudo_user, user, home, home_owner)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (home, user);
-        None
-    }
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: geteuid has no preconditions.
+    let euid = unsafe { libc::geteuid() };
+    let sudo_user = std::env::var("SUDO_USER").ok();
+    let home_owner = home.and_then(|home| std::fs::metadata(home).ok().map(|m| m.uid()));
+    elevation(euid, sudo_user, user, home, home_owner)
 }
-
-#[cfg_attr(not(unix), allow(dead_code))]
 /// sudo to root, or `sudo -u <other>`; a `SUDO_USER` equal to the current
 /// user is a leftover.
 fn elevation(

@@ -33,10 +33,9 @@ pub fn probe(path: &Path, size: u64) -> Sharing {
 
 /// The same estimate plus the file's hardlink count, from one measurement.
 ///
-/// The count has to come from `kache_fs`: `std::fs::Metadata` carries `nlink`
-/// on Unix only, while Windows needs a `GetFileInformationByHandle` call that
-/// `kache_fs::measure_file` already makes. A caller that reads the count off
-/// `MetadataExt` gets a guard that is compiled out on Windows.
+/// The count has to come from `kache_fs`: `kache_fs::measure_file`
+/// already makes it. A caller that reads the count off `MetadataExt`
+/// directly would duplicate that logic.
 ///
 /// An unmeasurable file reports one link: unknown sharing already means
 /// "assume every byte is private", and claiming extra links would make the
@@ -85,7 +84,6 @@ fn from_measurement(
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     fn capability_test_probe(path: &Path, size: u64) -> Option<Sharing> {
         let s = kache_fs::measure_file(path).expect("filesystem measurement");
         s.unique
@@ -218,9 +216,8 @@ mod tests {
         );
     }
 
-    /// The count `retainer_from_meta` decides on. `std::fs::Metadata` has it
-    /// on Unix only, so it comes from the kache-fs measurement instead — the
-    /// same path on Windows, where `GetFileInformationByHandle` supplies it.
+    /// The count `retainer_from_meta` decides on. It comes from the kache-fs
+    /// measurement instead of `std::fs::Metadata` directly.
     #[test]
     fn probe_with_links_reports_how_many_names_hold_the_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -245,7 +242,6 @@ mod tests {
         assert_eq!(s.private_bytes, 0, "an empty file frees no bytes: {s:?}");
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_sparse_file_reports_only_its_allocated_bytes_as_private() {
         use std::io::{Seek, SeekFrom, Write};
@@ -280,7 +276,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_reflinked_copy_is_detected_as_shared_despite_nlink_1() {
         use std::os::unix::fs::MetadataExt;

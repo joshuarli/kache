@@ -661,17 +661,27 @@ mod tests {
 
     #[test]
     fn activation_preserves_an_empty_or_already_exact_path() {
-        // Nix provides Bash in its store, not at /bin/bash. Resolve it before
-        // replacing the child's PATH with the value this test exercises.
+        // Run the POSIX activation under a shell that cannot be a shim or
+        // alias: a PATH-resolved shell may source user config and rewrite
+        // PATH before the activation runs. The activation is POSIX, so the
+        // system shell suffices; PATH resolution stays as the Nix fallback,
+        // where no system shell exists.
         let _guard = crate::test_support::process_state_test_lock();
-        let bash = crate::compiler::resolve_program_on_path("bash").expect("Bash on test PATH");
+        let shell = ["/bin/sh", "/usr/bin/sh"]
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .find(|path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()))
+            .or_else(|| crate::compiler::resolve_program_on_path("sh"))
+            .or_else(|| crate::compiler::resolve_program_on_path("bash"))
+            .expect("a POSIX shell on test PATH");
         for initial in ["", "/shims", "/shims:/bin", "/shims-other:/bin"] {
             let activation = Shell::Bash.activation(Path::new("/shims")).unwrap();
             let script = format!("{activation}\nprintf '%s' \"$PATH\"");
-            let output = std::process::Command::new(&bash)
-                .args(["--noprofile", "--norc", "-c", &script])
+            let output = std::process::Command::new(&shell)
+                .args(["-c", &script])
                 .env("PATH", initial)
                 .env_remove("BASH_ENV")
+                .env_remove("ENV")
                 .output()
                 .unwrap();
             assert!(output.status.success());

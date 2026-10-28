@@ -9,6 +9,10 @@ an exact matching entry; it uploads new entries in the background.
 
 You do not need a remote for local builds or reuse between worktrees on one machine.
 
+Remotes need a remote-enabled build: release binaries include them, while
+`cargo install` defaults to local-only — add `--features remote` for
+S3, GCS, shared-filesystem, and OCI backends.
+
 ## Choose a backend
 
 | You already have… | Use | Setup |

@@ -1268,7 +1268,6 @@ pub(crate) fn run_nvcc_for(
     let _trace = crate::phase_trace::start_for("nvcc", wrapper_args, env);
     let start = wrapper_entry();
     let invocation_start_ns = crate::cache_key::stamp_clock_ns();
-    crate::link::set_windows_hardlink_restore(config.windows_hardlink);
     crate::link::set_shared_hardlink_restores(config.shared_hardlink_restores);
     crate::link::set_storage_layout_advice(config.storage_layout_advice);
     crate::link::set_layout_advice_to_log(true);
@@ -2001,7 +2000,6 @@ fn run_cc_inner(
     invocation_start_ns: i64,
     env: &crate::invocation::InvocationEnv,
 ) -> Result<i32> {
-    crate::link::set_windows_hardlink_restore(config.windows_hardlink);
     crate::link::set_shared_hardlink_restores(config.shared_hardlink_restores);
     crate::link::set_storage_layout_advice(config.storage_layout_advice);
     crate::link::set_layout_advice_to_log(true);
@@ -3499,7 +3497,6 @@ pub(crate) fn run_for(
 ) -> Result<i32> {
     let _trace = crate::phase_trace::start_for("rustc", wrapper_args, env);
     let start = wrapper_entry();
-    crate::link::set_windows_hardlink_restore(config.windows_hardlink);
     crate::link::set_shared_hardlink_restores(config.shared_hardlink_restores);
     crate::link::set_storage_layout_advice(config.storage_layout_advice);
     crate::link::set_layout_advice_to_log(true);

@@ -500,6 +500,7 @@ impl std::error::Error for EntryNotFound {}
 // drive the remote download-success paths against the mock (sync pull, daemon
 // remote-check HIT, prefetch). Production callers are all within this module.
 #[cfg(test)]
+#[cfg(feature = "remote")]
 pub(crate) fn create_entry_pack_zstd(
     entry_dir: &Path,
     blobs_dir: &Path,
@@ -636,6 +637,7 @@ fn is_rooted_path(path: &Path) -> bool {
 }
 
 #[cfg(test)]
+#[cfg(feature = "remote")]
 fn extract_entry_pack<R: std::io::Read>(reader: R, dest_dir: &Path) -> Result<u64> {
     Ok(extract_entry_pack_until(reader, dest_dir, None, None)?.original_bytes)
 }
@@ -811,6 +813,7 @@ fn extract_entry_pack_until<R: std::io::Read>(
 }
 
 #[cfg(test)]
+#[cfg(feature = "remote")]
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     copy_dir_all_until(src, dst, None)
 }
@@ -832,7 +835,7 @@ fn copy_dir_all_until(src: &Path, dst: &Path, deadline: Option<Instant>) -> Resu
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "remote"))]
 pub(crate) mod tests {
     use super::{
         DeadlineReader, DeadlineWriter, DownloadObserver, EntryNotFound, HashingWriter,
@@ -870,11 +873,6 @@ pub(crate) mod tests {
         assert!(!is_rooted_path(Path::new("deps/libfoo.rlib")));
         assert!(!is_rooted_path(Path::new("foo")));
         assert!(!is_rooted_path(Path::new("../escape")));
-        #[cfg(windows)]
-        {
-            assert!(is_rooted_path(Path::new(r"C:\Windows")));
-            assert!(is_rooted_path(Path::new(r"\\server\share")));
-        }
     }
 
     #[test]
@@ -1039,7 +1037,6 @@ pub(crate) mod tests {
             input_predictions: false,
             record_sessions: false,
             volume_stores: Vec::new(),
-            windows_hardlink: false,
             shared_hardlink_restores: false,
             deferred_discovery: true,
             out_dir_alias: true,
@@ -1158,7 +1155,6 @@ pub(crate) mod tests {
             input_predictions: false,
             record_sessions: false,
             volume_stores: Vec::new(),
-            windows_hardlink: false,
             shared_hardlink_restores: false,
             deferred_discovery: true,
             out_dir_alias: true,
@@ -1360,7 +1356,6 @@ pub(crate) mod tests {
             input_predictions: false,
             record_sessions: false,
             volume_stores: Vec::new(),
-            windows_hardlink: false,
             shared_hardlink_restores: false,
             deferred_discovery: true,
             out_dir_alias: true,
@@ -1536,7 +1531,6 @@ pub(crate) mod tests {
             input_predictions: false,
             record_sessions: false,
             volume_stores: Vec::new(),
-            windows_hardlink: false,
             shared_hardlink_restores: false,
             deferred_discovery: true,
             out_dir_alias: true,

@@ -5,7 +5,6 @@ use kache_protocol::execution::{
 };
 use std::ffi::OsString;
 use std::fs::File;
-#[cfg(unix)]
 use std::os::fd::AsFd;
 use std::path::Path;
 use std::time::Instant;
@@ -25,7 +24,6 @@ pub struct Execution<'a> {
 
 struct Prepared {
     request: ExecutionRequest,
-    #[cfg(unix)]
     jobserver: kache_ipc::jobserver::Descriptors,
 }
 
@@ -49,25 +47,16 @@ impl Execution<'_> {
                 return Ok(None);
             }
         };
-        #[cfg(unix)]
         let descriptors = self
             .files
             .iter()
             .map(AsFd::as_fd)
             .chain(prepared.jobserver.files().iter().map(AsFd::as_fd))
             .collect::<Vec<_>>();
-        #[cfg(unix)]
-        {
-            kache_ipc::execution::try_execute(socket, &prepared.request, &descriptors)
-        }
-        #[cfg(windows)]
-        {
-            kache_ipc::execution::try_execute(socket, &prepared.request)
-        }
+        kache_ipc::execution::try_execute(socket, &prepared.request, &descriptors)
     }
 
     fn prepare(&self, trusted_pipeline: bool) -> Result<Prepared> {
-        #[cfg(unix)]
         anyhow::ensure!(
             self.files.len() == 3 + usize::from(self.terminal),
             "invalid compiler stream manifest"
@@ -78,33 +67,11 @@ impl Execution<'_> {
             "compiler executable must be absolute"
         );
         let env = self.env.vars_os().collect::<Vec<_>>();
-        #[cfg(unix)]
         let (originals, jobserver) = kache_ipc::jobserver::capture(&env)?;
-        #[cfg(unix)]
         let channels = ExecutionChannels::UnixClient {
             terminal: self.terminal,
             jobserver: originals,
             trusted_pipeline,
-        };
-        #[cfg(windows)]
-        let channels = {
-            use std::os::windows::io::AsRawHandle;
-            anyhow::ensure!(
-                self.files.is_empty() || self.files.len() == 3,
-                "invalid Windows compiler stream manifest"
-            );
-            let handle = |index: usize| {
-                self.files
-                    .get(index)
-                    .map_or(0, |file| file.as_raw_handle() as usize as u64)
-            };
-            ExecutionChannels::Windows {
-                stdin: handle(0),
-                stdout: handle(1),
-                stderr: handle(2),
-                process_broker: true,
-                trusted_pipeline,
-            }
         };
         let native_path = |path: &Path| NativeString::capture(path.as_os_str());
         Ok(Prepared {
@@ -113,10 +80,7 @@ impl Execution<'_> {
                 entry: self.entry,
                 client_version: self.client_version.to_owned(),
                 client_pid: std::process::id(),
-                #[cfg(unix)]
                 creation_mask: crate::creation_mask(),
-                #[cfg(windows)]
-                creation_mask: None,
                 argv: self
                     .args
                     .iter()
@@ -139,13 +103,12 @@ impl Execution<'_> {
                     .unwrap_or(u64::MAX),
                 channels,
             },
-            #[cfg(unix)]
             jobserver,
         })
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::ffi::OsStringExt;
@@ -353,61 +316,5 @@ mod tests {
             execution.try_execute(&root.path().join("absent")).unwrap(),
             None
         );
-    }
-}
-
-#[cfg(all(test, windows))]
-mod windows_tests {
-    use super::*;
-    use std::os::windows::ffi::OsStringExt;
-    use std::os::windows::io::AsRawHandle;
-
-    #[test]
-    fn request_borrows_owned_handles_and_preserves_native_windows_strings() {
-        let root = tempfile::tempdir().unwrap();
-        let files = (0..3)
-            .map(|i| File::create(root.path().join(i.to_string())).unwrap())
-            .collect::<Vec<_>>();
-        let native = OsString::from_wide(&[b'x' as u16, 0xd800]);
-        let args = [OsString::from("rustc"), native.clone()];
-        let env = InvocationEnv::from_parts(
-            [(OsString::from("NATIVE"), native.clone())],
-            Some(root.path().to_owned()),
-            None,
-            root.path().to_owned(),
-        );
-        let executable = std::env::current_exe().unwrap();
-        let execution = Execution {
-            entry: ExecutionEntry::Original,
-            args: &args,
-            env: &env,
-            started_at: Instant::now(),
-            executable: &executable,
-            files: &files,
-            terminal: false,
-            client_version: "fixture",
-        };
-        for trusted_pipeline in [false, true] {
-            let prepared = execution.prepare(trusted_pipeline).unwrap();
-            assert_eq!(prepared.request.argv[1].decode().unwrap(), native);
-            assert_eq!(prepared.request.env[0].1.decode().unwrap(), native);
-            assert_eq!(prepared.request.creation_mask, None);
-            assert_eq!(
-                prepared.request.channels,
-                ExecutionChannels::Windows {
-                    stdin: files[0].as_raw_handle() as usize as u64,
-                    stdout: files[1].as_raw_handle() as usize as u64,
-                    stderr: files[2].as_raw_handle() as usize as u64,
-                    process_broker: true,
-                    trusted_pipeline,
-                }
-            );
-        }
-        for file in files {
-            assert!(
-                file.metadata().is_ok(),
-                "request construction must not consume the handles"
-            );
-        }
     }
 }

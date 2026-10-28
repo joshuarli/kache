@@ -79,7 +79,7 @@ fn invocation_boolean_policies_follow_each_clients_snapshot() {
             root.path().to_owned(),
         )
     };
-    let policies: [(&str, &str, Policy, bool); 5] = [
+    let policies: [(&str, &str, Policy, bool); 4] = [
         (
             "KACHE_REMOTE_READONLY",
             "remote_readonly",
@@ -90,12 +90,6 @@ fn invocation_boolean_policies_follow_each_clients_snapshot() {
             "KACHE_MODIFIED_INPUT_GUARD",
             "modified_input_guard",
             Config::modified_input_guard_enabled_for,
-            false,
-        ),
-        (
-            "KACHE_WINDOWS_HARDLINK",
-            "windows_hardlink",
-            Config::windows_hardlink_enabled_for,
             false,
         ),
         (
@@ -208,15 +202,13 @@ fn relative_volume_routing_uses_the_client_directory() {
 /// kunobi-ninja/kache#319: executables are cached by default only where a
 /// restored binary keeps source-level debugging. Linux embeds DWARF; macOS
 /// gets a store-time `.dSYM` cached with the entry (shipped for #319);
-/// Windows `.pdb` paths still point outside the binary, so it stays off
-/// pending the equivalent work. Pinned as a test because this is a
-/// deliberate platform split, not an accident of the code.
+/// Pinned as a test because this is a deliberate platform default.
 #[test]
 fn cache_executables_defaults_on_for_linux_and_macos() {
     assert_eq!(
         default_cache_executables(),
         cfg!(target_os = "linux") || cfg!(target_os = "macos"),
-        "executables default on for Linux and macOS, off for Windows (see #319)"
+        "executables default on for Linux and macOS (see #319)"
     );
 }
 
@@ -1059,21 +1051,13 @@ fn test_parse_size() {
 fn base_dirs_validate_and_normalize_host_independent_absolute_syntax() {
     let normalized = normalize_base_dirs([
         "/var//lib/./flatpak/".to_string(),
-        r"C:\Build\Root\.".to_string(),
-        r"\\server\share\app".to_string(),
         "/snap".to_string(),
-        r"/work/a\b/./root".to_string(),
+        "/work/a/./root".to_string(),
     ])
     .unwrap();
     assert_eq!(
         normalized,
-        vec![
-            "//server/share/app",
-            "/snap",
-            "/var/lib/flatpak",
-            r"/work/a\b/root",
-            "C:/Build/Root",
-        ]
+        vec!["/snap", "/var/lib/flatpak", "/work/a/root",]
     );
 }
 
@@ -1085,28 +1069,13 @@ fn base_dirs_reject_relative_and_parent_traversal_entries() {
     let parent = normalize_base_dirs(["/work/../other".to_string()]).unwrap_err();
     assert!(parent.to_string().contains("must not contain `..`"));
 
-    let windows_parent = normalize_base_dirs([r"C:\work\..\other".to_string()]).unwrap_err();
-    assert!(windows_parent.to_string().contains("must not contain `..`"));
-
-    for root in [
-        "/",
-        "C:/",
-        r"C:\",
-        "//server/share",
-        "//server/share/",
-        r"\\server\share",
-        r"\\server\share\",
-    ] {
+    for root in ["/"] {
         let error = normalize_base_dirs([root.to_string()]).unwrap_err();
         assert!(
             error
                 .to_string()
                 .contains("narrower than a filesystem root")
         );
-    }
-    for verbatim in [r"\\?\C:\work", "//?/C:/work"] {
-        let error = normalize_base_dirs([verbatim.to_string()]).unwrap_err();
-        assert!(error.to_string().contains("Windows verbatim prefix"));
     }
 }
 
@@ -2097,25 +2066,13 @@ fn config_provenance_keeps_symlink_identity_and_detects_retarget() {
 fn normalize_volume_root_canonicalizes_roots() {
     assert_eq!(Config::normalize_volume_root(""), None);
     assert_eq!(Config::normalize_volume_root("   "), None);
-    if cfg!(windows) {
-        assert_eq!(Config::normalize_volume_root("D:").as_deref(), Some("D:\\"));
-        assert_eq!(
-            Config::normalize_volume_root("d:/").as_deref(),
-            Some("D:\\")
-        );
-        assert_eq!(
-            Config::normalize_volume_root("\\\\srv\\share").as_deref(),
-            Some("\\\\SRV\\SHARE\\")
-        );
-    } else {
-        assert_eq!(Config::normalize_volume_root("/").as_deref(), Some("/"));
-        assert_eq!(
-            Config::normalize_volume_root("/mnt/biglake/").as_deref(),
-            Some("/mnt/biglake/")
-        );
-        assert_eq!(Config::normalize_volume_root("relative/dir"), None);
-        assert_eq!(Config::normalize_volume_root("D:"), None);
-    }
+    assert_eq!(Config::normalize_volume_root("/").as_deref(), Some("/"));
+    assert_eq!(
+        Config::normalize_volume_root("/mnt/biglake/").as_deref(),
+        Some("/mnt/biglake/")
+    );
+    assert_eq!(Config::normalize_volume_root("relative/dir"), None);
+    assert_eq!(Config::normalize_volume_root("D:"), None);
 }
 
 #[test]
@@ -2134,8 +2091,7 @@ fn ensure_trailing_sep_appends_only_when_missing() {
 
 #[test]
 fn load_volume_stores_dedupes_duplicate_roots_deterministically() {
-    // "/mnt/" and "/mnt" normalize alike (likewise "D:"/"d:/" on
-    // Windows); the lexicographically-first store wins, stably.
+    // "/mnt/" and "/mnt" normalize alike; the lexicographically-first store wins, stably.
     let file_config: Result<FileConfig> = Ok(FileConfig {
         cache: Some(CacheFileConfig {
             volumes: Some(
@@ -2156,17 +2112,11 @@ fn load_volume_stores_dedupes_duplicate_roots_deterministically() {
         .iter()
         .map(|shard| (shard.volume.as_str(), shard.store.to_str().unwrap()))
         .collect();
-    if cfg!(windows) {
-        // Unix-style keys still normalize consistently there; the point
-        // here is dedup mechanics, not platform roots.
-        assert_eq!(kept.len(), 2);
-    } else {
-        assert_eq!(
-            kept,
-            vec![("/mnt/", "a-store"), ("/other/", "c-store"),],
-            "duplicates collapse to the first store, distinct roots survive"
-        );
-    }
+    assert_eq!(
+        kept,
+        vec![("/mnt/", "a-store"), ("/other/", "c-store"),],
+        "duplicates collapse to the first store, distinct roots survive"
+    );
 }
 
 #[test]
@@ -2185,24 +2135,6 @@ fn match_volume_store_prefers_the_tightest_root() {
             },
         ]
     };
-    #[cfg(windows)]
-    {
-        let shards = shards("C:\\", "C:\\work\\");
-        assert_eq!(
-            Config::match_volume_store(&shards, Path::new("C:\\work\\a.rlib")),
-            Some(Path::new("tight-store")),
-            "overlapping roots resolve to the longest match"
-        );
-        assert_eq!(
-            Config::match_volume_store(&shards, Path::new("C:\\other\\a.rlib")),
-            Some(Path::new("loose-store"))
-        );
-        assert_eq!(
-            Config::match_volume_store(&shards, Path::new("D:\\a.rlib")),
-            None
-        );
-    }
-    #[cfg(not(windows))]
     {
         let shards = shards("/mnt/", "/mnt/biglake/");
         assert_eq!(
@@ -2240,13 +2172,8 @@ fn load_volume_stores_skips_invalid_entries() {
         ..Default::default()
     });
     let shards = Config::load_volume_stores(&file_config, None);
-    if cfg!(windows) {
-        assert_eq!(shards.len(), 1);
-        assert_eq!(shards[0].volume, "D:\\");
-    } else {
-        // Unix keys must be absolute paths; drive letters never match.
-        assert!(shards.is_empty());
-    }
+    // Unix keys must be absolute paths; drive letters never match.
+    assert!(shards.is_empty());
 }
 
 #[test]
@@ -2267,9 +2194,7 @@ fn load_volume_stores_carries_the_explicit_max_size_to_each_shard() {
     });
     let explicit = Config::load_volume_stores(&file_config, Some(7));
     let derived = Config::load_volume_stores(&file_config, None);
-    if !cfg!(windows) {
-        assert_eq!(explicit.len(), 2);
-    }
+    assert_eq!(explicit.len(), 2);
     assert!(explicit.iter().all(|shard| shard.max_size == Some(7)));
     assert!(derived.iter().all(|shard| shard.max_size.is_none()));
 }
@@ -2360,14 +2285,7 @@ fn volume_store_for_routes_by_toml_config() {
     let config_path = dir.path().join("kache/config.toml");
     let _env_guard = set_kache_config_for_test(&config_path);
     std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
-    #[cfg(windows)]
-        std::fs::write(
-            &config_path,
-            "[cache]\nlocal_store = \"C:/kache-test-cache\"\n[cache.volumes]\n\"D:\" = \"D:/kache-test-store\"\n",
-        )
-        .unwrap();
-    #[cfg(not(windows))]
-        std::fs::write(
+    std::fs::write(
             &config_path,
             "[cache]\nlocal_store = \"/tmp/kache-test-cache\"\n[cache.volumes]\n\"/mnt/biglake\" = \"/mnt/biglake/kache-test-store\"\n",
         )
@@ -2378,20 +2296,6 @@ fn volume_store_for_routes_by_toml_config() {
         config.volume_stores[0].max_size, None,
         "with no explicit max size a shard derives its own budget"
     );
-    #[cfg(windows)]
-    {
-        assert_eq!(
-            config.volume_store_for(Path::new("D:/work/a.rlib")),
-            Some(Path::new("D:/kache-test-store"))
-        );
-        assert_eq!(config.volume_store_for(Path::new("C:/work/a.rlib")), None);
-        let routed = config.routed_for_path(Path::new("D:/work/a.rlib"));
-        assert_eq!(routed.cache_dir, PathBuf::from("D:/kache-test-store"));
-        assert_eq!(routed.runtime_dir, config.runtime_dir);
-        let unmapped = config.routed_for_path(Path::new("C:/work/a.rlib"));
-        assert_eq!(unmapped.cache_dir, config.cache_dir);
-    }
-    #[cfg(not(windows))]
     {
         assert_eq!(
             config.volume_store_for(Path::new("/mnt/biglake/work/a.rlib")),
@@ -2411,9 +2315,6 @@ fn volume_store_for_routes_by_toml_config() {
 
 #[test]
 fn absolutize_volume_path_keeps_absolute_and_joins_relative() {
-    #[cfg(windows)]
-    let abs = Path::new(r"C:\kache-vol-abs");
-    #[cfg(not(windows))]
     let abs = Path::new("/tmp/kache-vol-abs");
     assert_eq!(absolutize_volume_path(abs), abs);
     let rel = absolutize_volume_path(Path::new("kache-vol-rel"));
@@ -2813,7 +2714,6 @@ fn test_file_config_roundtrip() {
             modified_input_guard: None,
             input_predictions: None,
             record_sessions: None,
-            windows_hardlink: None,
             shared_hardlink_restores: None,
             deferred_discovery: None,
             out_dir_alias: None,
@@ -3470,7 +3370,6 @@ fn test_config_store_dir() {
         input_predictions: false,
         record_sessions: false,
         volume_stores: Vec::new(),
-        windows_hardlink: false,
         shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
@@ -3556,7 +3455,6 @@ fn test_config_index_db_path() {
         input_predictions: false,
         record_sessions: false,
         volume_stores: Vec::new(),
-        windows_hardlink: false,
         shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
@@ -3638,7 +3536,6 @@ fn test_config_event_log_path() {
         input_predictions: false,
         record_sessions: false,
         volume_stores: Vec::new(),
-        windows_hardlink: false,
         shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
@@ -3739,7 +3636,6 @@ fn test_config_socket_path() {
         input_predictions: false,
         record_sessions: false,
         volume_stores: Vec::new(),
-        windows_hardlink: false,
         shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
@@ -4014,11 +3910,7 @@ fn socket_path_override_is_validated_and_snapshotted() {
     for invalid in [OsString::new(), OsString::from("daemon.sock")] {
         assert_eq!(resolve_socket_path_override(Some(invalid)), None);
     }
-    let root = if cfg!(windows) {
-        Path::new(r"C:\")
-    } else {
-        Path::new("/")
-    };
+    let root = Path::new("/");
     assert_eq!(
         resolve_socket_path_override(Some(root.as_os_str().to_owned())),
         None
@@ -4477,7 +4369,6 @@ fn test_save_and_load_file_config() {
             modified_input_guard: None,
             input_predictions: None,
             record_sessions: None,
-            windows_hardlink: None,
             shared_hardlink_restores: None,
             deferred_discovery: None,
             out_dir_alias: None,
@@ -5235,7 +5126,7 @@ fn filesystem_remote_ignores_legacy_s3_environment_overrides() {
 }
 
 #[test]
-fn filesystem_remote_rejects_a_windows_drive_prefix() {
+fn filesystem_remote_rejects_a_drive_prefix() {
     let root = tempfile::tempdir().unwrap();
     let file = FileConfig {
         cache: Some(CacheFileConfig {

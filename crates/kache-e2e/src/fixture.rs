@@ -438,31 +438,6 @@ fn expand_tokens(value: &str, kache_path: &Path, fallback_path: &Path) -> String
 }
 
 impl Fixture {
-    /// Replace base fields with the `[windows]` overrides (build command, the
-    /// verify run path, and the diff artifact paths). Each is applied only when
-    /// both the override and its target section are present. Clone the override
-    /// out first so we don't borrow `self` immutably and mutably at once.
-    fn apply_windows_overrides(&mut self) {
-        let Some(ov) = self.windows.clone() else {
-            return;
-        };
-        if let Some(build) = ov.build {
-            self.commands.build = build;
-        }
-        if let (Some(run), Some(verify)) = (ov.run, self.verify.as_mut()) {
-            verify.run = run;
-        }
-        if let (Some(artifacts), Some(diff)) = (ov.artifacts, self.diff.as_mut()) {
-            diff.artifacts = artifacts;
-        }
-        // Merge env overrides last (override-wins). `load` runs this BEFORE
-        // its token-expansion pass, so these values get `$KACHE`/`$KACHE_CC`/
-        // … expanded just like the base env.
-        for (key, value) in ov.env {
-            self.env.insert(key, value);
-        }
-    }
-
     /// Load a fixture from `<dir>/scenario.toml`, expanding `$KACHE` and
     /// `$FALLBACK` in env values against the binaries under test.
     pub fn load(dir: &Path, kache_path: &Path, fallback_path: &Path) -> Result<Self> {
@@ -507,15 +482,6 @@ impl Fixture {
             }
             None => dir.to_path_buf(),
         };
-
-        // Apply platform overrides BEFORE token expansion so the
-        // `[windows].env` values (which may use `$KACHE_CC` etc.) are
-        // expanded too. Runtime `cfg!` (not `#[cfg]`) so the `windows` field
-        // counts as read on every platform — the table is parsed everywhere
-        // but only consulted on its target OS.
-        if cfg!(windows) {
-            fixture.apply_windows_overrides();
-        }
 
         // Expand $KACHE / $FALLBACK / $KACHE_CC / $KACHE_CXX in env values;
         // runners receive a pre-resolved env map and don't need to know about
