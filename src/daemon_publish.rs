@@ -36,7 +36,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 
 use crate::config::Config;
-use crate::daemon::{Daemon, Response, UploadJob};
+use crate::daemon::{Daemon, Response};
 use crate::events::{BuildEvent, EventResult};
 use crate::store::{BuildClaim, KeyLock, Store};
 
@@ -458,9 +458,6 @@ fn publish_one(daemon: &Arc<Daemon>, config: &Config, store: &Store, job: Publis
             {
                 tracing::debug!("daemon could not record the cc memo: {error}");
             }
-            if request.publishes_to_remote && config.remote.is_some() {
-                enqueue_upload(daemon, config, &request);
-            }
         }
         Err(error) => {
             event.store_error = crate::wrapper::store_error_for_event(&error);
@@ -488,33 +485,6 @@ fn publish_one(daemon: &Arc<Daemon>, config: &Config, store: &Store, job: Publis
 
 fn discard_handoff_files(request: &PublishCcRequest) {
     remove_handoff_files(&request.files);
-}
-
-/// Queue the entry for upload the way the wrapper would have: a durable
-/// intent first, then the daemon's own upload pipeline.
-fn enqueue_upload(daemon: &Arc<Daemon>, config: &Config, request: &PublishCcRequest) {
-    if config.remote_readonly {
-        daemon.warn_readonly_upload_skipped();
-        return;
-    }
-    let job = UploadJob {
-        key: request.cache_key.clone(),
-        entry_dir: config
-            .store_dir()
-            .join(&request.cache_key)
-            .to_string_lossy()
-            .into_owned(),
-        crate_name: request.crate_name.clone(),
-        client_epoch: 0,
-        client_version: Some(crate::VERSION.to_owned()),
-    };
-    let daemon = Arc::clone(daemon);
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        let response = handle.block_on(daemon.handle_upload(&job));
-        if let Some(error) = response.error {
-            tracing::debug!("upload of {} not queued: {error}", request.crate_name);
-        }
-    }
 }
 
 /// Bytes recorded on the publication thread. Remote imports may run on
@@ -1026,7 +996,6 @@ mod tests {
             stdout: String::new(),
             stderr: "warning: w\n".to_string(),
             compile_time_ms: 7,
-            publishes_to_remote: false,
             event: crate::events::BuildEvent::new_for_test("a.c", EventResult::Miss),
             memo: None,
         }
@@ -1034,46 +1003,6 @@ mod tests {
 
     fn key(label: &str) -> String {
         blake3::hash(label.as_bytes()).to_hex().to_string()
-    }
-
-    /// A read-only daemon stores every C/C++ compile handed to it and queues
-    /// none for upload. Only a writable client marks its compile for the
-    /// remote, so only that skip warns.
-    #[test]
-    fn a_read_only_daemon_warns_only_about_a_writable_clients_compile() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = crate::test_support::test_config(dir.path().join("cache"));
-        config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "prefix"));
-        config.remote_readonly = true;
-        config.auto_gc = false;
-        let store = Store::open(&config).unwrap();
-        for (label, writable_client) in [("read-only client", false), ("writable client", true)] {
-            let daemon = Arc::new(Daemon::new(config.clone()));
-            let mut request = handoff_request(&config, &key(label), dir.path());
-            request.publishes_to_remote = writable_client;
-            let cache_key = request.cache_key.clone();
-            let BuildClaim::Acquired(lock) = store.claim_build(&cache_key).unwrap() else {
-                panic!("fresh key");
-            };
-            publish_one(
-                &daemon,
-                &config,
-                &store,
-                PublishJob {
-                    request,
-                    owns_event: true,
-                    _lock: lock,
-                },
-            );
-            assert!(store.get(&cache_key).unwrap().is_some(), "{label}: stored");
-            assert_eq!(
-                daemon.readonly_skip_warned_at().is_some(),
-                writable_client,
-                "{label}"
-            );
-        }
-        let queued = std::fs::read_dir(config.upload_spool_dir()).map_or(0, Iterator::count);
-        assert_eq!(queued, 0, "nothing is queued for upload");
     }
 
     /// The worker stores what the handler accepted: the entry is committed
@@ -1248,54 +1177,6 @@ mod tests {
 
     /// Only an entry the wrapper marked for the remote is queued for upload,
     /// even when a remote is configured.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn only_an_entry_marked_for_the_remote_is_queued_for_upload() {
-        let Some(dir) = publish_fixture_child_root(
-            "daemon_publish::tests::only_an_entry_marked_for_the_remote_is_queued_for_upload",
-            "KACHE_TEST_REMOTE_PUBLISH_ROOT",
-        ) else {
-            return;
-        };
-        let mut config = crate::test_support::test_config(dir.join("cache"));
-        config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "artifacts"));
-        let daemon = Arc::new(Daemon::new(config.clone()));
-        let (upload_tx, mut uploads) = tokio::sync::mpsc::unbounded_channel();
-        daemon.set_upload_tx(upload_tx);
-        for (label, publishes_to_remote) in [("local-only", false), ("shared", true)] {
-            let mut request = handoff_request(&config, &key(label), &dir);
-            request.publishes_to_remote = publishes_to_remote;
-            let (daemon, config) = (Arc::clone(&daemon), config.clone());
-            tokio::task::spawn_blocking(move || {
-                let store = Store::open(&config).unwrap();
-                let BuildClaim::Acquired(lock) = store.claim_build(&request.cache_key).unwrap()
-                else {
-                    panic!("fresh key");
-                };
-                publish_one(
-                    &daemon,
-                    &config,
-                    &store,
-                    PublishJob {
-                        request,
-                        owns_event: true,
-                        _lock: lock,
-                    },
-                );
-            })
-            .await
-            .unwrap();
-        }
-        let queued = uploads.try_recv().expect("the shared entry is queued");
-        assert_eq!(queued.key, key("shared"));
-        assert!(uploads.try_recv().is_err(), "the local-only entry is not");
-        std::fs::write(dir.join("publisher-complete"), b"ok").unwrap();
-    }
-
-    /// The wrapper's side and the daemon's connection handler, over a real
-    /// socket: the request reaches the publish queue, the wrapper sees its
-    /// receipt accepted, and a wrapper built after the daemon starts its
-    /// restart like any other request would.
-    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_handoff_over_the_socket_reaches_the_publish_queue() {
         use interprocess::local_socket::traits::tokio::Listener as _;
@@ -1472,36 +1353,22 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 
-    /// A hand-off the shutdown drain stores is still queued for upload: the
-    /// upload queue closes only after the publish worker is done. The worker
-    /// here starts only once shutdown has closed the publish queue, as a busy
-    /// one reaches its last jobs only during the drain.
+    /// A hand-off the shutdown drain stores is committed locally even
+    /// though the publish worker starts only during the drain.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn the_shutdown_drain_queues_what_it_stores_for_upload() {
+    async fn the_shutdown_drain_stores_what_it_accepts() {
         let Some(dir) = publish_fixture_child_root(
-            "daemon_publish::tests::the_shutdown_drain_queues_what_it_stores_for_upload",
+            "daemon_publish::tests::the_shutdown_drain_stores_what_it_accepts",
             "KACHE_TEST_SHUTDOWN_PUBLISH_ROOT",
         ) else {
             return;
         };
         let mut config = crate::test_support::test_config(dir.join("cache"));
         config.auto_gc = false;
-        config.remote = Some(crate::config::RemoteConfig {
-            prefix: "artifacts".into(),
-            backend: crate::config::RemoteBackendConfig::Filesystem(
-                crate::config::FilesystemRemoteConfig {
-                    root: dir.join("remote"),
-                    atomic_write_dir: dir.join("remote-staging"),
-                },
-            ),
-        });
         let daemon = Arc::new(Daemon::new(config.clone()));
-        let (upload_tx, mut uploads) = tokio::sync::mpsc::unbounded_channel();
-        daemon.set_upload_tx(upload_tx);
         let (tx, rx) = tokio::sync::mpsc::channel(4);
         daemon.publish_queue().set_sender(tx);
-        let mut request = handoff_request(&config, &key("drained"), &dir);
-        request.publishes_to_remote = true;
+        let request = handoff_request(&config, &key("drained"), &dir);
         let _receipt = HandoffReceipt::new(&request).unwrap();
         assert!(daemon.handle_publish_cc(request.clone()).await.ok);
 
@@ -1515,7 +1382,7 @@ mod tests {
             run_publish_worker(worker_daemon, rx);
             let _ = done_tx.send(());
         });
-        let drain = crate::daemon::drain_publications_then_close_uploads(&daemon, done);
+        let drain = crate::daemon::drain_publish_queue(&daemon, done);
         tokio::pin!(drain);
         // Let shutdown close publication admission before the worker can
         // publish. Poll once so the fixture needs no scheduling delay.
@@ -1539,17 +1406,6 @@ mod tests {
 
         let store = Store::open(&config).unwrap();
         assert!(store.get(&request.cache_key).unwrap().is_some(), "stored");
-        let queued = uploads
-            .try_recv()
-            .expect("the entry the drain stored is queued for upload");
-        assert_eq!(queued.key, request.cache_key);
-        assert!(
-            matches!(
-                uploads.try_recv(),
-                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
-            ),
-            "the upload queue is closed after the drain"
-        );
         std::fs::write(dir.join("publisher-complete"), b"ok").unwrap();
     }
 
@@ -1891,7 +1747,6 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             compile_time_ms: 1,
-            publishes_to_remote: false,
             event: crate::events::BuildEvent::new_for_test("a.c", crate::events::EventResult::Miss),
             memo: None,
         };

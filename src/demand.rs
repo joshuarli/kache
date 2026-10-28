@@ -24,12 +24,6 @@ impl DemandLog {
         });
     }
 
-    fn wait(&mut self, key: &str, elapsed: Duration) {
-        if let Some(observation) = self.0.get_mut(key) {
-            observation.remote_wait = observation.remote_wait.saturating_add(elapsed);
-        }
-    }
-
     fn take(&mut self) -> Vec<KeyDemand> {
         std::mem::take(&mut self.0)
             .into_iter()
@@ -78,12 +72,6 @@ pub(crate) fn record(key: &str) {
     DEMANDS.with(|log| log.borrow_mut().record(key, at_ms));
 }
 
-/// Wrapper wall time blocked on its existing daemon remote-check request,
-/// including failures. This includes IPC and daemon admission, not only GET IO.
-pub(crate) fn remote_wait(key: &str, elapsed: Duration) {
-    DEMANDS.with(|log| log.borrow_mut().wait(key, elapsed));
-}
-
 pub(crate) fn take() -> Vec<KeyDemand> {
     DEMANDS.with(|log| log.borrow_mut().take())
 }
@@ -93,28 +81,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn retries_keep_first_demand_and_sum_submillisecond_waits() {
+    fn retries_keep_first_demand() {
         let mut log = DemandLog::default();
         log.record("key", 100);
-        log.wait("key", Duration::from_micros(750));
         log.record("key", 200);
-        log.wait("key", Duration::from_micros(750));
         assert_eq!(
             log.take(),
             vec![KeyDemand {
                 cache_key: "key".to_string(),
                 first_demand_at_ms: 100,
-                remote_wait_ms: 1,
+                remote_wait_ms: 0,
             }]
         );
         assert!(log.take().is_empty());
     }
 
     #[test]
-    fn prediction_and_rederived_key_do_not_share_demand_or_wait() {
+    fn prediction_and_rederived_key_do_not_share_demand() {
         let mut log = DemandLog::default();
         log.record("predicted", 100);
-        log.wait("predicted", Duration::from_millis(7));
         log.record("actual", 200);
         assert_eq!(
             log.take(),
@@ -127,24 +112,16 @@ mod tests {
                 KeyDemand {
                     cache_key: "predicted".to_string(),
                     first_demand_at_ms: 100,
-                    remote_wait_ms: 7
+                    remote_wait_ms: 0
                 },
             ]
         );
     }
 
     #[test]
-    fn an_unobserved_wait_does_not_invent_a_demand_timestamp() {
-        let mut log = DemandLog::default();
-        log.wait("missing", Duration::from_millis(5));
-        assert!(log.take().is_empty());
-    }
-
-    #[test]
     fn wrapper_threads_keep_their_demands_separate() {
         let _ = take();
         record("main");
-        remote_wait("main", Duration::from_millis(12));
         let other = std::thread::spawn(|| {
             record("other");
             take()
@@ -157,6 +134,6 @@ mod tests {
         assert_eq!(own.len(), 1);
         assert_eq!(own[0].cache_key, "main");
         assert!(own[0].first_demand_at_ms > 0);
-        assert_eq!(own[0].remote_wait_ms, 12);
+        assert_eq!(own[0].remote_wait_ms, 0);
     }
 }

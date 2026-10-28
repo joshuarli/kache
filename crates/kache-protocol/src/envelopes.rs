@@ -24,7 +24,6 @@ pub enum Request {
         client_version: String,
         trusted_pipeline: bool,
     },
-    Upload(UploadJob),
     /// Legacy GC wire command accepted from older clients.
     Gc(GcRequest),
     /// Policy-v2 GC command. Older daemons reject this unknown variant before
@@ -35,13 +34,9 @@ pub enum Request {
     /// meanwhile coalesce. Older daemons reject the unknown variant, and the
     /// wrapper then spawns its own worker.
     GcHint,
-    RemoteCheck(RemoteCheckRequest),
     Stats(StatsRequest),
     Health,
-    BatchRemoteCheck(BatchRemoteCheckRequest),
     HashFiles(HashFilesRequest),
-    Prefetch(PrefetchRequest),
-    BuildStarted(BuildStartedRequest),
     CompileStarted(CompileStartedRequest),
     CompileFinished(CompileFinishedRequest),
     /// A wrapper hands the daemon a finished cc compile to store.
@@ -49,13 +44,6 @@ pub enum Request {
     /// of allowing an ambiguous timeout to publish and log twice.
     #[serde(rename = "publish_cc_v2")]
     PublishCc(Box<PublishCcRequest>),
-    /// A wrapper with no local input prediction row asks for the remote's
-    /// (kunobi-ninja/kache#1011). Older daemons reject the unknown variant,
-    /// which the wrapper reads as no row.
-    PredictionFetch(PredictionFetchRequest),
-    /// A wrapper recorded a portable row; the daemon stores it on a writable
-    /// remote in the background.
-    PredictionPublish(PredictionPublishRequest),
     /// A build of a target directory started: copy its recorded large
     /// executables beside their destinations (see `prestage`).
     /// Fire-and-forget; older daemons reject the unknown variant and the
@@ -67,12 +55,6 @@ pub enum Request {
     /// daemons reject the unknown variant and nothing is copied.
     SeedTarget(SeedTargetRequest),
     Shutdown,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PredictionPublishRequest {
-    pub identity: String,
-    pub row: SharedPrediction,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -129,57 +111,6 @@ pub struct StatsResponse {
     /// mutating GC request.
     #[serde(default)]
     pub gc_policy_version: u32,
-    /// Number of keys queued or in-flight for upload.
-    #[serde(default)]
-    pub pending_uploads: usize,
-    /// Number of keys currently being downloaded from S3.
-    #[serde(default)]
-    pub active_downloads: usize,
-    #[serde(default)]
-    pub s3_concurrency_total: usize,
-    #[serde(default)]
-    pub s3_concurrency_used: usize,
-    #[serde(default)]
-    pub upload_queue_capacity: usize,
-    #[serde(default)]
-    pub uploads_completed: u64,
-    #[serde(default)]
-    pub uploads_failed: u64,
-    #[serde(default)]
-    pub uploads_skipped: u64,
-    /// Upload attempts deferred because the remote write breaker was degraded (#327).
-    #[serde(default)]
-    pub uploads_suppressed: u64,
-    #[serde(default)]
-    pub downloads_completed: u64,
-    #[serde(default)]
-    pub downloads_failed: u64,
-    /// Restores answered "miss" because the remote breaker was degraded (#327).
-    #[serde(default)]
-    pub downloads_suppressed: u64,
-    /// RemoteChecks that actually reached S3 (HEAD probes + GETs) — the
-    /// denominator for `negative_hits` (#564).
-    #[serde(default)]
-    pub remote_check_roundtrips: u64,
-    /// Checks answered from the negative-result cache without S3 (#564).
-    #[serde(default)]
-    pub negative_hits: u64,
-    /// Definitive misses currently remembered by the negative cache (#564).
-    #[serde(default)]
-    pub negative_entries: u64,
-    /// Whether the remote breaker is currently degraded (#327).
-    #[serde(default)]
-    pub remote_degraded: bool,
-    #[serde(default)]
-    pub bytes_uploaded: u64,
-    #[serde(default)]
-    pub bytes_downloaded: u64,
-    #[serde(default)]
-    pub recent_transfers: Vec<TransferEvent>,
-    /// Phase-0 prefetch/planning observability (#485). Defaulted so old
-    /// clients reading a new daemon (and vice versa) keep working.
-    #[serde(default)]
-    pub prefetch: PrefetchStatsSnapshot,
     /// In-flight miss compiles registered by wrapper heartbeat monitors
     /// (kunobi-ninja/kache#131). Defaulted for old-daemon/new-client mixes.
     #[serde(default)]
@@ -210,23 +141,13 @@ pub struct Response {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gc: Option<GcBreakdown>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub found: Option<bool>,
-    /// True when the artifact was downloaded during manifest/shard prefetch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prefetched: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub stats: Option<StatsResponse>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<DaemonHealth>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_status: Option<execution::ExecutionStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub batch_results: Option<Vec<Response>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub hash_results: Option<Vec<HashFileResult>>,
-    /// Reply payload for `Request::PredictionFetch` (kunobi-ninja/kache#1011).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prediction: Option<SharedPrediction>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -252,9 +173,7 @@ impl Request {
     pub fn client_version(&self) -> Option<&str> {
         match self {
             Request::ExecuteV1(req) => Some(&req.client_version),
-            Request::Upload(job) => job.client_version.as_deref(),
             Request::Stats(req) => req.client_version.as_deref(),
-            Request::BuildStarted(req) => req.client_version.as_deref(),
             Request::CompileStarted(req) => req.client_version.as_deref(),
             Request::PublishCc(req) => req.client_version.as_deref(),
             _ => None,
@@ -269,14 +188,10 @@ impl Response {
             evicted: None,
             skipped: false,
             gc: None,
-            found: None,
-            prefetched: None,
             stats: None,
             health: None,
             execution_status: None,
-            batch_results: None,
             hash_results: None,
-            prediction: None,
             error: None,
         }
     }
@@ -288,14 +203,10 @@ impl Response {
             evicted: Some(n),
             skipped: false,
             gc: None,
-            found: None,
-            prefetched: None,
             stats: None,
             health: None,
             execution_status: None,
-            batch_results: None,
             hash_results: None,
-            prediction: None,
             error: None,
         }
     }
@@ -314,14 +225,10 @@ impl Response {
             evicted: Some(0),
             skipped: true,
             gc: Some(breakdown),
-            found: None,
-            prefetched: None,
             stats: None,
             health: None,
             execution_status: None,
-            batch_results: None,
             hash_results: None,
-            prediction: None,
             error: None,
         }
     }
@@ -332,32 +239,10 @@ impl Response {
             evicted: None,
             skipped: false,
             gc: None,
-            found: None,
-            prefetched: None,
             stats: Some(stats),
             health: None,
             execution_status: None,
-            batch_results: None,
             hash_results: None,
-            prediction: None,
-            error: None,
-        }
-    }
-
-    pub fn ok_batch(results: Vec<Response>) -> Self {
-        Self {
-            ok: true,
-            evicted: None,
-            skipped: false,
-            gc: None,
-            found: None,
-            prefetched: None,
-            stats: None,
-            health: None,
-            execution_status: None,
-            batch_results: Some(results),
-            hash_results: None,
-            prediction: None,
             error: None,
         }
     }
@@ -368,50 +253,10 @@ impl Response {
             evicted: None,
             skipped: false,
             gc: None,
-            found: None,
-            prefetched: None,
             stats: None,
             health: None,
             execution_status: None,
-            batch_results: None,
             hash_results: Some(results),
-            prediction: None,
-            error: None,
-        }
-    }
-
-    pub fn found(val: bool) -> Self {
-        Self {
-            ok: true,
-            evicted: None,
-            skipped: false,
-            gc: None,
-            found: Some(val),
-            prefetched: None,
-            stats: None,
-            health: None,
-            execution_status: None,
-            batch_results: None,
-            hash_results: None,
-            prediction: None,
-            error: None,
-        }
-    }
-
-    pub fn found_prefetched(val: bool, prefetched: bool) -> Self {
-        Self {
-            ok: true,
-            evicted: None,
-            skipped: false,
-            gc: None,
-            found: Some(val),
-            prefetched: Some(prefetched),
-            stats: None,
-            health: None,
-            execution_status: None,
-            batch_results: None,
-            hash_results: None,
-            prediction: None,
             error: None,
         }
     }
@@ -422,14 +267,10 @@ impl Response {
             evicted: None,
             skipped: false,
             gc: None,
-            found: None,
-            prefetched: None,
             stats: None,
             health: None,
             execution_status: None,
-            batch_results: None,
             hash_results: None,
-            prediction: None,
             error: Some(msg.into()),
         }
     }

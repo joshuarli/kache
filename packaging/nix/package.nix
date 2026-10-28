@@ -36,14 +36,10 @@ rustPlatform.buildRustPackage {
   cargoBuildFlags = [
     "-p"
     "kache"
-    "--features"
-    "remote"
   ];
   cargoTestFlags = [
     "-p"
     "kache"
-    "--features"
-    "remote"
   ];
 
   nativeCheckInputs = [
@@ -71,7 +67,7 @@ rustPlatform.buildRustPackage {
     "--skip=daemon::execution::tests::execution_rejects_sandboxed_client_using_kernel_identity"
   ];
 
-  # planner_client / remote_backend tests bind 127.0.0.1. Darwin's Nix sandbox
+  # Some daemon tests bind 127.0.0.1. Darwin's Nix sandbox
   # denies that unless this is set.
   __darwinAllowLocalNetworking = true;
 

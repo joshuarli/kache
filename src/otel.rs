@@ -5,7 +5,7 @@
 //! `ExportMetricsServiceRequest` body. There is no collector POST from kache
 //! itself — CI uploads the files and Kartero imports them.
 //!
-//! Metric names live under `kache.cache.*` / `kache.prefetch.*` (scope
+//! Metric names live under `kache.cache.*` (scope
 //! `kache.cache`). Bench gauges stay in `kache.bench.*` and must not be mixed
 //! into this payload.
 //!
@@ -22,7 +22,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Major schema version in the sidecar file and as a resource attribute.
-pub(crate) const SCHEMA_VERSION: u32 = 1;
+pub(crate) const SCHEMA_VERSION: u32 = 2;
 
 pub(crate) const METRICS_FILE: &str = "metrics.otlp.json";
 pub(crate) const SCHEMA_VERSION_FILE: &str = "schema_version";
@@ -33,41 +33,9 @@ const DEFAULT_SERVICE_NAME: &str = "kache";
 /// Cheap snapshot of process-lifetime daemon counters plus store gauges.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct OtelSnapshot {
-    pub remote_kind: &'static str,
     pub store_max: u64,
     pub store_size: Option<u64>,
     pub store_entries: Option<u64>,
-    pub pending_uploads: Option<u64>,
-    pub active_downloads: Option<u64>,
-    pub s3_concurrency_total: u64,
-    pub s3_concurrency_used: u64,
-    pub uploads_completed: u64,
-    pub uploads_failed: u64,
-    pub uploads_skipped: u64,
-    pub uploads_suppressed: u64,
-    pub downloads_completed: u64,
-    pub downloads_failed: u64,
-    pub downloads_suppressed: u64,
-    pub bytes_uploaded: u64,
-    pub bytes_downloaded: u64,
-    pub remote_check_roundtrips: u64,
-    pub negative_hits: u64,
-    pub negative_entries: u64,
-    pub remote_degraded: bool,
-    pub prefetch_downloads: u64,
-    pub prefetch_bytes: u64,
-    pub prefetch_keys_used: u64,
-    pub prefetch_keys_cancelled: u64,
-    pub prefetch_keys_over_budget: u64,
-    pub prefetch_plans_advisory: u64,
-    pub prefetch_plans_fallback: u64,
-    pub prefetch_list_requests: u64,
-    pub prefetch_list_failures: u64,
-    pub prefetch_pack_requests: u64,
-    pub prefetch_v3_requests: u64,
-    pub prefetch_cancelled: bool,
-    pub prefetch_last_plan_candidates: u64,
-    pub prefetch_last_plan_wall_ms: u64,
 }
 
 pub(crate) fn write_otlp(
@@ -141,7 +109,6 @@ pub(crate) fn serialize_metrics_with(
             "kache.telemetry.schema_version",
             &SCHEMA_VERSION.to_string(),
         ),
-        str_attr("kache.cache.remote", snap.remote_kind),
     ];
     // Same string as `kache.bench.project` so a SigNoz query can join
     // daemon counters to the bench that produced them.
@@ -193,173 +160,7 @@ fn metrics_for(snap: &OtelSnapshot, now: &str) -> Vec<Value> {
         "By",
         vec![as_int(snap.store_max, now, &[])],
     ));
-    if let Some(pending) = snap.pending_uploads {
-        metrics.push(gauge(
-            "kache.cache.uploads.pending",
-            "{upload}",
-            vec![as_int(pending, now, &[])],
-        ));
-    }
-    if let Some(active) = snap.active_downloads {
-        metrics.push(gauge(
-            "kache.cache.downloads.active",
-            "{download}",
-            vec![as_int(active, now, &[])],
-        ));
-    }
-    metrics.push(gauge(
-        "kache.cache.s3.concurrency",
-        "{permit}",
-        vec![
-            as_int(
-                snap.s3_concurrency_used,
-                now,
-                &[str_attr("kache.cache.limit", "used")],
-            ),
-            as_int(
-                snap.s3_concurrency_total,
-                now,
-                &[str_attr("kache.cache.limit", "total")],
-            ),
-        ],
-    ));
-    metrics.push(gauge(
-        "kache.cache.remote.degraded",
-        "1",
-        vec![as_int(u64::from(snap.remote_degraded), now, &[])],
-    ));
-    metrics.push(gauge(
-        "kache.cache.negative_entries",
-        "{entry}",
-        vec![as_int(snap.negative_entries, now, &[])],
-    ));
-    metrics.push(gauge(
-        "kache.prefetch.cancelled",
-        "1",
-        vec![as_int(u64::from(snap.prefetch_cancelled), now, &[])],
-    ));
-    metrics.push(gauge(
-        "kache.prefetch.last_plan.candidates",
-        "{candidate}",
-        vec![as_int(snap.prefetch_last_plan_candidates, now, &[])],
-    ));
-    metrics.push(gauge(
-        "kache.prefetch.last_plan.wall",
-        "ms",
-        vec![as_int(snap.prefetch_last_plan_wall_ms, now, &[])],
-    ));
-
-    metrics.push(cum_sum(
-        "kache.cache.uploads",
-        "{upload}",
-        vec![
-            as_sum_int(snap.uploads_completed, now, &result_attr("completed")),
-            as_sum_int(snap.uploads_failed, now, &result_attr("failed")),
-            as_sum_int(snap.uploads_skipped, now, &result_attr("skipped")),
-            as_sum_int(snap.uploads_suppressed, now, &result_attr("suppressed")),
-        ],
-    ));
-    metrics.push(cum_sum(
-        "kache.cache.downloads",
-        "{download}",
-        vec![
-            as_sum_int(snap.downloads_completed, now, &result_attr("completed")),
-            as_sum_int(snap.downloads_failed, now, &result_attr("failed")),
-            as_sum_int(snap.downloads_suppressed, now, &result_attr("suppressed")),
-        ],
-    ));
-    metrics.push(cum_sum(
-        "kache.cache.bytes",
-        "By",
-        vec![
-            as_sum_int(
-                snap.bytes_uploaded,
-                now,
-                &[str_attr("kache.cache.direction", "upload")],
-            ),
-            as_sum_int(
-                snap.bytes_downloaded,
-                now,
-                &[str_attr("kache.cache.direction", "download")],
-            ),
-        ],
-    ));
-    metrics.push(cum_sum(
-        "kache.cache.remote_checks",
-        "{check}",
-        vec![as_sum_int(snap.remote_check_roundtrips, now, &[])],
-    ));
-    metrics.push(cum_sum(
-        "kache.cache.negative_hits",
-        "{hit}",
-        vec![as_sum_int(snap.negative_hits, now, &[])],
-    ));
-    metrics.push(cum_sum(
-        "kache.prefetch.downloads",
-        "{download}",
-        vec![as_sum_int(snap.prefetch_downloads, now, &[])],
-    ));
-    metrics.push(cum_sum(
-        "kache.prefetch.bytes",
-        "By",
-        vec![as_sum_int(snap.prefetch_bytes, now, &[])],
-    ));
-    metrics.push(cum_sum(
-        "kache.prefetch.keys_used",
-        "{key}",
-        vec![as_sum_int(snap.prefetch_keys_used, now, &[])],
-    ));
-    metrics.push(cum_sum(
-        "kache.prefetch.keys_cancelled",
-        "{key}",
-        vec![as_sum_int(snap.prefetch_keys_cancelled, now, &[])],
-    ));
-    metrics.push(cum_sum(
-        "kache.prefetch.keys_over_budget",
-        "{key}",
-        vec![as_sum_int(snap.prefetch_keys_over_budget, now, &[])],
-    ));
-    metrics.push(cum_sum(
-        "kache.prefetch.plans",
-        "{plan}",
-        vec![
-            as_sum_int(
-                snap.prefetch_plans_advisory,
-                now,
-                &[str_attr("kache.prefetch.kind", "advisory")],
-            ),
-            as_sum_int(
-                snap.prefetch_plans_fallback,
-                now,
-                &[str_attr("kache.prefetch.kind", "fallback")],
-            ),
-        ],
-    ));
-    metrics.push(cum_sum(
-        "kache.prefetch.list.requests",
-        "{request}",
-        vec![as_sum_int(snap.prefetch_list_requests, now, &[])],
-    ));
-    metrics.push(cum_sum(
-        "kache.prefetch.list.failures",
-        "{request}",
-        vec![as_sum_int(snap.prefetch_list_failures, now, &[])],
-    ));
-    metrics.push(cum_sum(
-        "kache.prefetch.pack.requests",
-        "{request}",
-        vec![as_sum_int(snap.prefetch_pack_requests, now, &[])],
-    ));
-    metrics.push(cum_sum(
-        "kache.prefetch.v3.requests",
-        "{request}",
-        vec![as_sum_int(snap.prefetch_v3_requests, now, &[])],
-    ));
     metrics
-}
-
-fn result_attr(result: &str) -> Vec<Value> {
-    vec![str_attr("kache.cache.result", result)]
 }
 
 fn unix_nano_now() -> String {
@@ -382,23 +183,6 @@ fn as_int(value: u64, time_unix_nano: &str, attributes: &[Value]) -> Value {
     })
 }
 
-/// Fixed for the life of the process, which is exactly what a cumulative
-/// sum's start time has to be: every point in this process shares one window.
-fn process_start_unix_nano() -> &'static str {
-    use std::sync::OnceLock;
-    static START: OnceLock<String> = OnceLock::new();
-    START.get_or_init(unix_nano_now).as_str()
-}
-
-fn as_sum_int(value: u64, time_unix_nano: &str, attributes: &[Value]) -> Value {
-    json!({
-        "asInt": value.to_string(),
-        "timeUnixNano": time_unix_nano,
-        "startTimeUnixNano": process_start_unix_nano(),
-        "attributes": attributes,
-    })
-}
-
 fn gauge(name: &str, unit: &str, data_points: Vec<Value>) -> Value {
     json!({
         "name": name,
@@ -407,17 +191,7 @@ fn gauge(name: &str, unit: &str, data_points: Vec<Value>) -> Value {
     })
 }
 
-fn cum_sum(name: &str, unit: &str, data_points: Vec<Value>) -> Value {
-    json!({
-        "name": name,
-        "unit": unit,
-        "sum": {
-            "aggregationTemporality": "AGGREGATION_TEMPORALITY_CUMULATIVE",
-            "isMonotonic": true,
-            "dataPoints": data_points
-        }
-    })
-}
+
 
 // ── Machine snapshot ────────────────────────────────────────────────────────
 
@@ -626,41 +400,9 @@ mod tests {
 
     fn sample_snap() -> OtelSnapshot {
         OtelSnapshot {
-            remote_kind: "s3",
             store_max: 50 * 1024 * 1024 * 1024,
             store_size: Some(1234),
             store_entries: Some(9),
-            pending_uploads: Some(2),
-            active_downloads: Some(1),
-            s3_concurrency_total: 16,
-            s3_concurrency_used: 3,
-            uploads_completed: 10,
-            uploads_failed: 1,
-            uploads_skipped: 2,
-            uploads_suppressed: 0,
-            downloads_completed: 8,
-            downloads_failed: 0,
-            downloads_suppressed: 1,
-            bytes_uploaded: 100,
-            bytes_downloaded: 200,
-            remote_check_roundtrips: 5,
-            negative_hits: 4,
-            negative_entries: 3,
-            remote_degraded: false,
-            prefetch_downloads: 7,
-            prefetch_bytes: 70,
-            prefetch_keys_used: 6,
-            prefetch_keys_cancelled: 1,
-            prefetch_keys_over_budget: 0,
-            prefetch_plans_advisory: 2,
-            prefetch_plans_fallback: 1,
-            prefetch_list_requests: 3,
-            prefetch_list_failures: 0,
-            prefetch_pack_requests: 1,
-            prefetch_v3_requests: 4,
-            prefetch_cancelled: false,
-            prefetch_last_plan_candidates: 12,
-            prefetch_last_plan_wall_ms: 40,
         }
     }
 
@@ -712,11 +454,6 @@ mod tests {
             "service.name",
             "service.version",
             "kache.telemetry.schema_version",
-            "kache.cache.remote",
-            "kache.cache.result",
-            "kache.cache.direction",
-            "kache.cache.limit",
-            "kache.prefetch.kind",
         ]
         .into_iter()
         .map(str::to_string)
@@ -810,7 +547,7 @@ mod tests {
         let body = with_machine(&machine_snap());
         let names = metric_names(&body);
         assert!(
-            names.contains("kache.cache.uploads"),
+            names.contains("kache.cache.store.size"),
             "daemon counters stay"
         );
         assert!(
@@ -862,7 +599,6 @@ mod tests {
             assert!(
                 [
                     "kache.cache.",
-                    "kache.prefetch.",
                     "kache.telemetry.",
                     "service."
                 ]
@@ -1006,49 +742,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn counters_are_cumulative_sums() {
-        let body = serialize_metrics(
-            &sample_snap(),
-            "kache",
-            "0.16.0",
-            "1700000000000000000",
-            None,
-            None,
-        );
-        let uploads = metric(&body, "kache.cache.uploads");
-        assert!(uploads.get("gauge").is_none());
-        assert_eq!(
-            uploads["sum"]["aggregationTemporality"],
-            "AGGREGATION_TEMPORALITY_CUMULATIVE"
-        );
-        assert_eq!(uploads["sum"]["isMonotonic"], true);
-        let point = &uploads["sum"]["dataPoints"][0];
-        assert_eq!(point["asInt"], "10");
-        assert_eq!(point["attributes"][0]["value"]["stringValue"], "completed");
-        // Without a usable start time a cumulative point has no window, and a
-        // restart is indistinguishable from a real drop. Assert it is a
-        // parseable nanosecond count rather than merely a string: an empty or
-        // non-numeric one satisfies "is a string" and describes nothing.
-        let start = point["startTimeUnixNano"]
-            .as_str()
-            .expect("cumulative points carry a start time");
-        let start: u64 = start
-            .parse()
-            .unwrap_or_else(|_| panic!("start time must be decimal nanoseconds, got {start:?}"));
-        assert!(start > 0, "start time must be a real instant");
-
-        // Every point in one process shares one window, so a reader can
-        // compare them without checking each start individually.
-        let starts: BTreeSet<&str> = uploads["sum"]["dataPoints"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|p| p["startTimeUnixNano"].as_str().unwrap())
-            .collect();
-        assert_eq!(starts.len(), 1, "all points must share one start time");
-    }
-
     /// Numbers read at an instant must not become counters: summing two
     /// readings of a store size produces something that means nothing.
     #[test]
@@ -1065,14 +758,6 @@ mod tests {
             "kache.cache.store.size",
             "kache.cache.store.entries",
             "kache.cache.store.max",
-            "kache.cache.uploads.pending",
-            "kache.cache.downloads.active",
-            "kache.cache.s3.concurrency",
-            "kache.cache.remote.degraded",
-            "kache.cache.negative_entries",
-            "kache.prefetch.cancelled",
-            "kache.prefetch.last_plan.candidates",
-            "kache.prefetch.last_plan.wall",
         ] {
             assert!(
                 metric(&body, name).get("sum").is_none(),
@@ -1096,7 +781,7 @@ mod tests {
         let metrics = dir.path().join(METRICS_FILE);
         let version = dir.path().join(SCHEMA_VERSION_FILE);
         assert!(metrics.is_file());
-        assert_eq!(std::fs::read_to_string(version).unwrap().trim(), "1");
+        assert_eq!(std::fs::read_to_string(version).unwrap().trim(), "2");
         let body: Value = serde_json::from_str(&std::fs::read_to_string(metrics).unwrap()).unwrap();
         assert_eq!(
             body["resourceMetrics"][0]["scopeMetrics"][0]["scope"]["name"],

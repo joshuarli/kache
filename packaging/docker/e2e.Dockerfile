@@ -11,7 +11,7 @@
 # copied back to the host. (`just e2e-docker` wires this up; `rsync` syncs
 # the source in, excluding .git/target/tmp.)
 #
-# The Rust tag matches rust-toolchain.toml (and docker/service.Dockerfile), so
+# The Rust tag matches rust-toolchain.toml, so
 # the toolchain the copied tree asks for is already in the image and rustup does
 # not download it on every run. build-essential gives
 # cc/c++/make for the gnu C fixtures; clang adds the clang / clang-cl

@@ -23,12 +23,6 @@ use crate::maintenance::unix_now_secs;
 use crate::scheduler::{self, FlightIdentity, MissGuard};
 use crate::store::{BuildClaim, EntryMeta, KeyLock, Store, StorePutResult};
 
-mod remote;
-use remote::{
-    NegativeReply, acquire_entry, compiler_remote_enabled, compiler_upload_enabled,
-    maybe_enqueue_upload,
-};
-
 mod hit;
 use hit::HitCompletion;
 
@@ -867,21 +861,10 @@ fn event_result_for_store_admission(
     }
 }
 
-/// Apply the local admission threshold without suppressing remote publication.
-/// A publish-capable path with a writable remote needs the local canonical
-/// entry as its upload source. Callers without remote publication must pass
-/// `false` so a configured threshold remains effective.
-fn store_admits_compile(config: &Config, compile_time_ms: u64, publishes_to_remote: bool) -> bool {
-    let writable_remote = config.remote.is_some() && !config.remote_readonly;
-    (publishes_to_remote && writable_remote)
-        || config.min_store_compile_ms == 0
-        || compile_time_ms >= config.min_store_compile_ms
-}
-
-/// GCC/Clang objects (and clang-cl without CodeView debug) use the rustc
-/// remote pipeline. clang-cl debug objects embed un-remapped paths.
-fn cc_publishes_to_remote(parsed: &crate::compiler::cc::CcArgs) -> bool {
-    !parsed.embeds_codeview_debug()
+/// Apply the local admission threshold: skip storing compiles faster
+/// than `min_store_compile_ms` (0 disables the threshold).
+fn store_admits_compile(config: &Config, compile_time_ms: u64) -> bool {
+    config.min_store_compile_ms == 0 || compile_time_ms >= config.min_store_compile_ms
 }
 
 fn should_store_cc_result(exit_code: i32, has_artifacts: bool) -> bool {
@@ -1479,7 +1462,6 @@ fn run_cc_with_store(
         // entry, and no fallback wrapper is waiting to be asked.
         None if precompiled.is_none()
             && config.deferred_discovery
-            && config.remote.is_none()
             && config.fallback.is_none()
             && config.readonly_store.is_none()
             && crate::compiler::cc::cc_direct_key_eligible(parsed) =>
@@ -1628,24 +1610,6 @@ fn run_cc_with_store(
                 return Ok(0);
             }
         }
-    }
-
-    if precompiled.is_none()
-        && let Some(exit) = cc_try_remote_hit(
-            config,
-            store,
-            compiler,
-            parsed,
-            &file_hasher,
-            &cache_key,
-            crate_name,
-            event_root,
-            start,
-            key_ms,
-            lookup_ms,
-        )?
-    {
-        return Ok(exit);
     }
 
     // ── Cache miss — compile, then store ─────────────────────────
@@ -1829,8 +1793,7 @@ fn run_cc_with_store(
     if memo_publishable && handoff_memo.is_none() {
         compiler.commit_preprocess_memo(&file_hasher);
     }
-    let publishes_to_remote = cc_publishes_to_remote(parsed);
-    let admitted = store_admits_compile(config, compile_time_ms, publishes_to_remote);
+    let admitted = store_admits_compile(config, compile_time_ms);
     let store_decision = cc_store_decision(store_candidate, admitted);
     if store_decision.admission_skipped {
         tracing::debug!(
@@ -1879,7 +1842,6 @@ fn run_cc_with_store(
                         stdout: &stdout,
                         stderr: &stderr,
                         compile_time_ms,
-                        publishes_to_remote,
                         event_root,
                         start,
                         size: result.artifacts.total_size(),
@@ -1930,13 +1892,6 @@ fn run_cc_with_store(
                     Ok(result) => {
                         store_put = result;
                         flush_or_hand_off_durability(config, store, &cache_key);
-                        maybe_enqueue_upload(
-                            config,
-                            store,
-                            &cache_key,
-                            crate_name,
-                            publishes_to_remote,
-                        );
                     }
                     Err(e) => {
                         store_error = store_error_for_event(&e);
@@ -2702,74 +2657,6 @@ fn restore_cc_from_cache(
     finalize_cc_restore(&published_kinds, parsed)
 }
 
-/// After a local miss, ask the daemon for an exact remote entry.
-/// Returns `Some(exit)` when the hit was restored (or the restore fell through
-/// to passthrough). `None` means continue to compile.
-fn cc_try_remote_hit(
-    config: &Config,
-    store: &Store,
-    compiler: &CcCompiler,
-    parsed: &crate::compiler::cc::CcArgs,
-    file_hasher: &crate::cache_key::FileHasher<'_>,
-    cache_key: &str,
-    crate_name: &str,
-    event_root: &str,
-    start: std::time::Instant,
-    key_ms: u64,
-    lookup_ms: u64,
-) -> Result<Option<i32>> {
-    if !compiler_remote_enabled(config, cc_publishes_to_remote(parsed)) {
-        return Ok(None);
-    }
-    let Some((meta, event_result)) = acquire_entry(
-        config,
-        store,
-        cache_key,
-        crate_name,
-        NegativeReply::ContinueCompile,
-    ) else {
-        return Ok(None);
-    };
-    let restore_start = std::time::Instant::now();
-    let restored = restore_cc_hit(store, parsed, meta);
-    if let Err(e) = restored {
-        if e.downcast_ref::<PartialCcRestore>().is_some() {
-            return Err(e);
-        }
-        tracing::warn!(
-            "restoring cc remote cache hit for {} failed: {} — recompiling",
-            crate_name,
-            e
-        );
-        return Ok(Some(cc_passthrough_with_event(
-            config,
-            parsed,
-            crate_name,
-            event_root,
-            start,
-            format!("restore failed: {e}"),
-        )?));
-    }
-    let meta = restored?;
-    let restore_ms = restore_start.elapsed().as_millis() as u64;
-    HitCompletion {
-        event_root,
-        crate_name,
-        result: event_result,
-        cache_key,
-        start,
-        key_ms,
-        key_hash_stats: FileHashStats::default(),
-        lookup_ms,
-        restore_ms,
-        key_record: KeyEventRecord::default(),
-        object_output: recorded_object_output(parsed.object_output_path()),
-    }
-    .report(config, &meta);
-    compiler.commit_preprocess_memo(file_hasher);
-    Ok(Some(0))
-}
-
 /// Run kache in RUSTC_WRAPPER mode.
 ///
 /// This is the hot path — called once per crate by cargo.
@@ -3221,9 +3108,6 @@ fn run_parsed_rustc(
         heartbeat_lines_enabled(progress_level()),
     );
     maybe_notice_unknown_layout(config, args, &event_root, now_epoch_secs());
-    // A fresh machine has no prediction rows; let the key ask the remote for
-    // a portable one before paying the pre-pass (kunobi-ninja/kache#1011).
-    crate::cache_key::set_remote_rows(remote_prediction_rows(config));
     // Mutation testing repeatedly changes a local crate while keeping its
     // dependencies stable. Exact artifact keys necessarily miss for each new
     // mutant, while rustc's incremental state is designed for this workload.
@@ -3804,46 +3688,6 @@ fn run_parsed_rustc(
             }
         }
 
-        // Build-session detection: send prefetch hint before remote work.
-        // Placed after local-hit check so warm-cache invocations skip this entirely.
-        maybe_trigger_prefetch(config, args);
-
-        // 2. Check remote cache via daemon (if configured)
-        if let Some(restored) = try_rustc_remote_hit(
-            &hit_context,
-            &store,
-            &cache_key,
-            key_ms,
-            key_hash_stats,
-            lookup_ms,
-            record_closure,
-            &key_outputs,
-            &key_record,
-        ) {
-            if let Err(e) = restored {
-                tracing::warn!(
-                    "restoring cache hit for {} failed: {} — recompiling",
-                    crate_name,
-                    e
-                );
-                return passthrough_with_event(
-                    config,
-                    args,
-                    crate_name,
-                    &event_root,
-                    start,
-                    format!("restore failed: {e}"),
-                    key_record,
-                );
-            }
-            observe_adaptive_hit(
-                adaptive_unit.as_ref(),
-                adaptive_key_fields.as_ref(),
-                &cache_key,
-            );
-            return Ok(0);
-        }
-
         // Both lookups missed. Incremental compilation needs no artifact key
         // re-derivation: rustc reads the current inputs and this result is never
         // stored. Keep the ordinary lookup first so a hit still restores.
@@ -4248,9 +4092,8 @@ fn run_parsed_rustc(
     }
 
     // Put-side admission control: the compile already ran and its outputs are
-    // in place; a configured threshold may decline local retention. A writable
-    // remote always reaches the store-and-upload path below.
-    if !store_admits_compile(config, compile_time_ms, true) {
+    // in place; a configured threshold may decline local retention.
+    if !store_admits_compile(config, compile_time_ms) {
         tracing::debug!(
             crate_name = %crate_name,
             compile_time_ms,
@@ -4474,9 +4317,6 @@ fn run_parsed_rustc(
     drop(trace_store);
     let store_ms = store_start.elapsed().as_millis() as u64;
 
-    // 6. Queue remote publication through the shared durable upload path.
-    maybe_enqueue_upload(config, &store, &cache_key, crate_name, true);
-
     record_input_prediction(config, Some(&store), args, record_closure, &key_outputs);
 
     // 7. Remove Cargo's own incremental directory; see `clean_incremental_dir`.
@@ -4526,7 +4366,6 @@ struct CcHandoff<'a> {
     stdout: &'a str,
     stderr: &'a str,
     compile_time_ms: u64,
-    publishes_to_remote: bool,
     event_root: &'a str,
     start: std::time::Instant,
     size: u64,
@@ -4603,7 +4442,6 @@ fn hand_off_cc_store(
         stdout: handoff.stdout.to_string(),
         stderr: handoff.stderr.to_string(),
         compile_time_ms: handoff.compile_time_ms,
-        publishes_to_remote: compiler_upload_enabled(config, handoff.publishes_to_remote),
         event,
         memo: handoff.memo,
     };
@@ -4684,19 +4522,7 @@ fn prepare_cc_store_files(
     artifacts: &ArtifactSet,
     depinfo_anchor: Option<&Path>,
 ) -> Result<PreparedCcStoreFiles> {
-    prepare_cc_store_files_for(
-        artifacts,
-        depinfo_anchor,
-        &crate::invocation::InvocationEnv::capture(),
-    )
-}
-
-#[cfg(test)]
-fn prepare_cc_store_files_for(
-    artifacts: &ArtifactSet,
-    depinfo_anchor: Option<&Path>,
-    env: &crate::invocation::InvocationEnv,
-) -> Result<PreparedCcStoreFiles> {
+    let env = crate::invocation::InvocationEnv::capture();
     prepare_cc_store_files_in(artifacts, depinfo_anchor, None, &[], env.temp_dir())
 }
 
@@ -5769,6 +5595,14 @@ fn adaptive_compile_before_key(
     let mut compiler_args = prepare_worktree_compiler_args(ctx.config, ctx.args, &mut lease);
     let bootstrap = std::cell::Cell::new(lease.worktree_bootstrap());
     let bootstrap_observed = std::cell::Cell::new(false);
+    let caller_left_bootstrap_unset = ctx
+        .args
+        .invocation_env()
+        .var_os("RUSTC_BOOTSTRAP")
+        .is_none();
+    let observe_bootstrap = std::cell::Cell::new(
+        caller_left_bootstrap_unset && (bootstrap.get() || lease.worktree_portable()),
+    );
     let ready = !bootstrap.get()
         || clear_incremental_bootstrap_dep_info(ctx.args)
         || if lease.decline_worktree_bootstrap() {
@@ -5786,7 +5620,7 @@ fn adaptive_compile_before_key(
         let Some(dep_info) = emitted_dep_info(ctx.args) else {
             return true;
         };
-        if bootstrap.get()
+        if observe_bootstrap.get()
             && dep_info
                 .env_deps
                 .iter()
@@ -5839,7 +5673,7 @@ fn adaptive_compile_before_key(
             &mut on_dep_info,
         )
     };
-    if bootstrap.get()
+    if observe_bootstrap.get()
         && (bootstrap_observed.get()
             || emitted_dep_info(ctx.args).is_some_and(|info| {
                 info.env_deps
@@ -5852,6 +5686,7 @@ fn adaptive_compile_before_key(
             .is_ok_and(|result| discard_bootstrap_outputs(&result.artifacts));
         if cleared && lease.decline_worktree_bootstrap() {
             bootstrap.set(false);
+            observe_bootstrap.set(false);
             compiler_args = lease.compiler_args(ctx.args);
             executed = ctx.compiler.execute_preserving_incremental_until_dep_info(
                 ctx.args,
@@ -6158,28 +5993,10 @@ fn deferral_allowed(
     // (Cargo always asks for it; a bare rustc invocation may not).
     args.dep_info_path().is_some()
         && config.deferred_discovery
-        && config.remote.is_none()
         && config.fallback.is_none()
         && config.readonly_store.is_none()
         && !keys_first
         && extra_inputs.is_none()
-}
-
-/// Where the key may fetch a portable prediction row this machine lacks: the
-/// daemon's remote, when predictions are on and a remote is configured.
-fn remote_prediction_rows(config: &Config) -> Option<crate::cache_key::RemoteRows> {
-    if !fetches_remote_predictions(config) {
-        return None;
-    }
-    let config = config.clone();
-    Some(Box::new(move |identity: &str| {
-        crate::daemon::send_prediction_fetch(&config, identity)
-    }))
-}
-
-/// A row is asked of the remote only with predictions on and a remote set.
-fn fetches_remote_predictions(config: &Config) -> bool {
-    config.input_predictions && config.remote.is_some()
 }
 
 /// Remember the input closure this invocation discovered, so a later build of
@@ -6229,8 +6046,6 @@ fn record_input_prediction(
         .as_ref()
         .filter(|guard| guard.held())
         .map(|guard| guard.digest.clone());
-    let registry =
-        crate::cache_key::registry_src_of(&args.invocation_env().vars_os().collect::<Vec<_>>());
     // A workspace or path unit gets a row another checkout of the workspace
     // can use, when the guard was taken before rustc ran (kunobi-ninja/kache#1005).
     let workspace = crate::cache_key::workspace_record(args, dep_info, tree.as_deref());
@@ -6244,11 +6059,6 @@ fn record_input_prediction(
     );
     if let Some((identity, record)) = workspace {
         file_hasher.record_portable_prediction(&identity, args.crate_name.as_deref(), &record);
-        publish_prediction(
-            config,
-            &identity,
-            crate::prediction_share::for_remote_portable(&record, registry.as_deref()),
-        );
     }
     // A source under target keeps the shared row out. A registry unit whose
     // only such sources are its own OUT_DIR gets a relocated row instead.
@@ -6260,37 +6070,11 @@ fn record_input_prediction(
                 dep_info,
                 guard.clone(),
             );
-            // A registry unit's row serves any machine whose Cargo home has
-            // the same path.
-            if let Some(registry) = &registry {
-                let row = crate::cache_key::InputPrediction::from_dep_info(dep_info, guard);
-                publish_prediction(
-                    config,
-                    &identity,
-                    crate::prediction_share::for_remote_plain(&row, registry),
-                );
-            }
         }
     } else if let Some((identity, record)) =
         crate::cache_key::relocatable_record(args, dep_info, tree.as_deref())
     {
         file_hasher.record_portable_prediction(&identity, args.crate_name.as_deref(), &record);
-        publish_prediction(
-            config,
-            &identity,
-            crate::prediction_share::for_remote_portable(&record, registry.as_deref()),
-        );
-    }
-}
-
-/// Hand a row to the daemon for the remote, when it can travel at all.
-fn publish_prediction(
-    config: &Config,
-    identity: &str,
-    row: Option<crate::prediction_share::SharedPrediction>,
-) {
-    if let Some(row) = row {
-        crate::daemon::send_prediction_publish(config, identity, row);
     }
 }
 
@@ -6737,41 +6521,6 @@ fn recompute_key_without_prediction(
         KeyDiscovery::Rederived,
         key_record,
     )
-}
-
-/// Complete an entry made available by a remote check. `None` means no entry;
-/// a restore error stays distinct so the caller recompiles without reporting a hit.
-#[allow(clippy::too_many_arguments)]
-fn try_rustc_remote_hit(
-    hit: &RustcHitContext<'_>,
-    store: &Store,
-    cache_key: &str,
-    key_ms: u64,
-    key_hash_stats: FileHashStats,
-    lookup_ms: u64,
-    record_closure: bool,
-    key: &crate::cache_key::KeyOutputs,
-    key_record: &KeyEventRecord,
-) -> Option<Result<()>> {
-    let (meta, result) = acquire_entry(
-        hit.config,
-        store,
-        cache_key,
-        hit.crate_name,
-        NegativeReply::CheckConcurrentEntry,
-    )?;
-    Some(hit.restore_and_finish(
-        store,
-        &meta,
-        result,
-        cache_key,
-        key_ms,
-        key_hash_stats,
-        lookup_ms,
-        record_closure.then_some(store),
-        key,
-        key_record,
-    ))
 }
 
 /// Tell the file-hash memo what these just-restored artifacts hash to
@@ -7298,7 +7047,7 @@ fn restore_from_cache_with_memo_store(
         // is absolute or contains `..` would escape `--out-dir` on join
         // (`dir.join("/abs") == "/abs"`), overwriting files outside `target/`.
         // Refuse to restore such an entry — the caller recompiles.
-        if !crate::remote_layout::is_safe_artifact_name(&cached_file.name) {
+        if !kache_format::is_safe_artifact_name(&cached_file.name) {
             anyhow::bail!(
                 "refusing to restore cache entry with unsafe artifact name {:?}",
                 cached_file.name
@@ -7781,7 +7530,8 @@ fn adaptive_incremental_with_event<R: Into<String>>(
             compiler.execute_preserving_incremental(args, &compiler_args)
         };
     if compile.is_ok()
-        && lease.worktree_bootstrap()
+        && args.invocation_env().var_os("RUSTC_BOOTSTRAP").is_none()
+        && (lease.worktree_bootstrap() || lease.worktree_portable())
         && emitted_dep_info(args).is_some_and(|info| {
             info.env_deps
                 .iter()
@@ -8864,106 +8614,6 @@ fn explain_miss_diff(
 }
 
 /// Send the daemon a prefetch hint once per build session.
-///
-/// The session itself comes from [`session_id_for_event`], so it exists with
-/// or without a remote. A separate `.prefetch` marker records which session
-/// the hint went out for, and a flock on it keeps N parallel rustc
-/// invocations from all sending one. A failed discovery (cargo metadata
-/// hanging on a git dependency, say) is recorded too, and later compiles wait
-/// out a backoff before trying again, since the wrapper that tries holds up
-/// its own compile (kunobi-ninja/kache#698).
-fn maybe_trigger_prefetch(config: &Config, args: &RustcArgs) {
-    maybe_trigger_prefetch_with(config, args, now_epoch_secs(), || {
-        crate::build_intent::discover(Some(args))
-    });
-}
-
-/// What [`maybe_trigger_prefetch_with`] did, so a test can tell which of its
-/// early returns it took.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PrefetchTrigger {
-    NoRemote,
-    NoSession,
-    NotDue,
-    /// The marker cannot be opened as a regular file.
-    NoMarker,
-    /// Another process holds the marker's lock: it is sending the hint.
-    Busy,
-    DiscoveryFailed,
-    Sent,
-}
-
-/// [`maybe_trigger_prefetch`] with the clock and the discovery supplied.
-fn maybe_trigger_prefetch_with(
-    config: &Config,
-    args: &RustcArgs,
-    now: u64,
-    discover: impl FnOnce() -> Option<kache_core::BuildIntent>,
-) -> PrefetchTrigger {
-    if config.remote.is_none() {
-        return PrefetchTrigger::NoRemote;
-    }
-    let root = rustc_event_root(args);
-    let session_id = session_id_for_event(config, &root, now);
-    if session_id.is_empty() {
-        return PrefetchTrigger::NoSession;
-    }
-    let marker = prefetch_marker_path(config, &root);
-    if !prefetch_due(
-        &parse_prefetch_marker(&std::fs::read_to_string(&marker).unwrap_or_default()),
-        &session_id,
-        now,
-    ) {
-        return PrefetchTrigger::NotDue;
-    }
-    let Some(lock_file) = open_marker_for_lock(&marker) else {
-        return PrefetchTrigger::NoMarker;
-    };
-    // std::fs::File::try_lock (1.89+) is cross-platform: flock(2) on Unix,
-    // LockFileEx on Windows. Lock auto-releases when `lock_file` is dropped.
-    if lock_file.try_lock().is_err() {
-        return PrefetchTrigger::Busy; // Another wrapper is already sending the prefetch hint
-    }
-    // Re-check through the locked handle: another process may have sent the
-    // hint between our first read and acquiring the lock, and on Windows the
-    // lock blocks reads from any other handle (#348).
-    let locked = read_locked_marker(&lock_file);
-    let state = parse_prefetch_marker(&locked);
-    if !prefetch_due(&state, &session_id, now) {
-        return PrefetchTrigger::NotDue;
-    }
-
-    // Gather ALL dependency crate names in compilation order (leaves first).
-    // This gives the daemon a comprehensive prefetch list that works even on
-    // cold CI runners where the local SQLite store is empty.
-    let Some(build_intent) = discover() else {
-        let record = failed_prefetch_marker(&session_id, now, &state);
-        tracing::debug!("prefetch hint skipped, discovery failed; marker now {record}");
-        write_locked_marker(&lock_file, &record);
-        return PrefetchTrigger::DiscoveryFailed;
-    };
-
-    let shard_prefetch_enabled =
-        build_intent.namespace.is_some() && !build_intent.cargo_lock_deps.is_empty();
-
-    tracing::info!(
-        "build session detected, sending prefetch hint for {} crates (shard context: {})",
-        build_intent.crate_names.len(),
-        if shard_prefetch_enabled {
-            "available"
-        } else {
-            "fallback"
-        }
-    );
-
-    crate::daemon::send_build_started(
-        config,
-        crate::build_intent::into_build_started_request(build_intent, session_id.clone()),
-    );
-    write_locked_marker(&lock_file, &session_id);
-    PrefetchTrigger::Sent
-}
-
 /// The output directory of a compile Cargo drove into a directory no layout
 /// in [`crate::cargo_layout`] knows, or `None`.
 ///
@@ -9020,75 +8670,6 @@ fn maybe_notice_unknown_layout(config: &Config, args: &RustcArgs, root: &str, no
         out_dir.display()
     ));
     true
-}
-
-/// Where [`maybe_trigger_prefetch`] records the session it sent a hint for.
-fn prefetch_marker_path(config: &Config, root: &str) -> PathBuf {
-    session_marker_path(config, root).with_extension("prefetch")
-}
-
-/// First wait after a failed discovery; each further failure doubles it.
-const PREFETCH_RETRY_MIN_SECS: u64 = 30;
-/// Longest wait between discovery attempts.
-const PREFETCH_RETRY_MAX_SECS: u64 = 600;
-
-/// What the `.prefetch` marker records for a build root.
-#[derive(Debug, PartialEq, Eq)]
-enum PrefetchMarker<'a> {
-    /// Nothing usable: never written, or unreadable.
-    Unset,
-    /// The hint went out for this session.
-    Sent(&'a str),
-    /// Discovery failed `attempts` times in a row; wait until `until`.
-    Failed { until: u64, attempts: u32 },
-}
-
-/// Read a marker: a session id after a hint, or
-/// `fail:<session>:<until>:<attempts>` after failed discoveries.
-fn parse_prefetch_marker(content: &str) -> PrefetchMarker<'_> {
-    let content = content.trim();
-    if content.is_empty() {
-        return PrefetchMarker::Unset;
-    }
-    let Some(record) = content.strip_prefix("fail:") else {
-        return PrefetchMarker::Sent(content);
-    };
-    // The session id comes first, so split from the right.
-    let mut fields = record.rsplitn(3, ':');
-    let attempts = fields.next().and_then(|field| field.parse().ok());
-    let until = fields.next().and_then(|field| field.parse().ok());
-    match (until, attempts) {
-        (Some(until), Some(attempts)) => PrefetchMarker::Failed { until, attempts },
-        _ => PrefetchMarker::Unset,
-    }
-}
-
-/// Whether this compile should try to send the hint.
-fn prefetch_due(marker: &PrefetchMarker<'_>, session_id: &str, now: u64) -> bool {
-    match marker {
-        PrefetchMarker::Unset => true,
-        PrefetchMarker::Sent(sent) => *sent != session_id,
-        PrefetchMarker::Failed { until, .. } => now >= *until,
-    }
-}
-
-/// Wait after the `attempts`-th failure in a row: 30 s, 60 s, 120 s, ...,
-/// never more than ten minutes.
-fn prefetch_retry_secs(attempts: u32) -> u64 {
-    let doublings = attempts.saturating_sub(1).min(16);
-    (PREFETCH_RETRY_MIN_SECS << doublings).min(PREFETCH_RETRY_MAX_SECS)
-}
-
-/// The marker to write after a discovery that failed at `now`, following
-/// `previous`. A failure run carries across sessions: a workspace whose
-/// discovery hangs does not stop hanging when the next build starts.
-fn failed_prefetch_marker(session_id: &str, now: u64, previous: &PrefetchMarker<'_>) -> String {
-    let attempts = match previous {
-        PrefetchMarker::Failed { attempts, .. } => attempts.saturating_add(1),
-        _ => 1,
-    };
-    let until = now.saturating_add(prefetch_retry_secs(attempts));
-    format!("fail:{session_id}:{until}:{attempts}")
 }
 
 fn read_locked_marker(mut file: &std::fs::File) -> String {

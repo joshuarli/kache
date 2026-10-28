@@ -77,6 +77,7 @@ pub(crate) fn host_output(
     child.wait_with_output()
 }
 
+#[cfg(test)]
 pub(crate) async fn host_output_async(
     command: &mut tokio::process::Command,
 ) -> std::io::Result<std::process::Output> {

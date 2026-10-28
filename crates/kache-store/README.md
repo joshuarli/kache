@@ -13,7 +13,7 @@ Local artifact storage for [Kache](https://github.com/kunobi-ninja/kache), a com
 - `file_hash`: fingerprints of input files, kept across builds.
 - A durable upload spool that records what should be published. The caller does the transfer.
 
-Compiler parsing, daemon communication and remote transport live outside this crate. Disk formats and the cache-key version come from [`kache-format`](https://crates.io/crates/kache-format).
+Compiler parsing and daemon communication live outside this crate. Disk formats and the cache-key version come from [`kache-format`](https://crates.io/crates/kache-format).
 
 ## Features
 

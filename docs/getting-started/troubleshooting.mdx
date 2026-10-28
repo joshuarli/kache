@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Find why a build has no hits, unexpected misses, or no remote activity
+description: Find why a build has no hits or unexpected misses
 ---
 
 Start at the root of the affected workspace:
@@ -19,8 +19,8 @@ Kache recorded, from any project.
 
 For a functional check of the installed Rust cache pipeline, run `kache doctor --probe`.
 It compiles a temporary library twice in an isolated local cache and checks the
-second invocation restores it without compiling. It does not test your remote
-cache or the flags and policy of the affected project.
+second invocation restores it without compiling. It does not test the flags
+and policy of the affected project.
 
 ## A build shows no hits
 
@@ -101,32 +101,6 @@ after the managed state format changes to version 2. Older state expires through
 cleanup. Finish builds using the older Kache before upgrading so those processes
 cannot keep sharing incremental files with each other.
 
-## The remote is quiet
-
-```bash
-kache daemon status
-kache doctor
-kache stats
-```
-
-Compiler-driven remote reads and uploads need the daemon. Without it, local
-caching and compilation continue. `doctor` tests the remote with this shell's
-configuration and credentials, which can differ from the daemon's. `kache stats`
-shows what the daemon uses: the remote it loaded or why it is misconfigured, and
-a warning when it read a different config file than this shell. Its Resilience
-row shows `DEGRADED` after three timeouts or transient remote errors in a row.
-Builds then compile locally and uploads wait in the queue; the daemon tries the
-remote again every 45 seconds until it answers.
-
-Follow the [remote setup guide](/docs/remote-cache/overview) for your backend,
-then check [daemon lifecycle](/docs/daemon/lifecycle) for service environment
-and configuration changes.
-
-A read-only CI job can restore entries but cannot publish new work. Review
-[CI write policy](/docs/remote-cache/ci#who-may-write) before treating absent
-uploads as a failure. `kache sync --pull --dry-run` can inspect explicit pull
-discovery, but it needs listing permissions in addition to read access.
-
 ## The cache uses more disk than expected
 
 `kache stats` reports registered blob bytes and the configured store budget.
@@ -144,8 +118,7 @@ then preview `kache clean --units target --dry-run`. See
 [Recorded-command cleanup](/docs/getting-started/configuration#recorded-command-cleanup).
 
 Read [Deduplication](/docs/deduplication) before comparing logical sizes with
-allocated disk space, and [Bounding storage](/docs/remote-cache/bounding)
-for remote retention.
+allocated disk space.
 
 ## Share a useful report
 

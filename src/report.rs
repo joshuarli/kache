@@ -1193,12 +1193,7 @@ pub fn generate_report_with_filter(
     let network = if transfers.is_empty() {
         None
     } else {
-        let mut analysis = build_network_analysis(&transfers, top);
-        analysis.configured_backend = config
-            .remote
-            .as_ref()
-            .map(|remote| remote.backend_kind().to_string())
-            .unwrap_or_default();
+        let analysis = build_network_analysis(&transfers, top);
         Some(analysis)
     };
 
@@ -1218,8 +1213,6 @@ pub fn generate_report_with_filter(
         &stats,
         &prefetch,
         &network,
-        root_filter.is_some(),
-        config.remote.is_some(),
         &misses,
         total_cacheable,
         total_hits,
@@ -2406,8 +2399,6 @@ fn generate_suggestions(
     stats: &events::EventStats,
     prefetch: &PrefetchAnalysis,
     network: &Option<NetworkAnalysis>,
-    root_filtered: bool,
-    remote_configured: bool,
     top_misses: &[CrateDetail],
     total_cacheable: usize,
     total_hits: usize,
@@ -2539,16 +2530,6 @@ fn generate_suggestions(
                 crate::term::duration_ms(net.total_body_ms)
             ));
         }
-    }
-
-    // Without a remote there is no transfer data to miss.
-    if remote_configured && root_filtered {
-        suggestions.push(
-            "Remote transfer data omitted because transfer events are not root-scoped yet"
-                .to_string(),
-        );
-    } else if remote_configured && network.is_none() {
-        suggestions.push("No remote transfer data available for this session".to_string());
     }
 
     suggestions

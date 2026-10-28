@@ -13,7 +13,7 @@ readme = "README.md"
 test-support = ["kache-fs/testing"]
 
 [dependencies]
-kache-core = { version = "2.0.0-rc.2", path = "../kache-core", default-features = false }
+kache-core = { version = "2.0.0-rc.2", path = "../kache-core" }
 kache-fs = { version = "2.0.0-rc.2", path = "../kache-fs" }
 kache-shims = { version = "2.0.0-rc.2", path = "../kache-shims" }
 anyhow = "1"
@@ -21,7 +21,6 @@ blake3 = "1"
 bytesize = "2"
 dirs = "7"
 glob = "0.3"
-oci-spec = { version = "0.10", default-features = false, features = ["distribution"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 toml_edit = "0.25"

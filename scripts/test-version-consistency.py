@@ -28,10 +28,6 @@ class VersionConsistencyTests(unittest.TestCase):
             "crates/kache-tests/Cargo.toml",
             '[package]\nname = "kache-tests"\nversion = "0.1.0"\npublish = false\n',
         )
-        self.write(
-            "packaging/charts/kache-service/Chart.yaml",
-            'version: 0.16.1\nappVersion: "0.16.1"\n',
-        )
 
     def write(self, name, text):
         path = self.root / name
@@ -74,16 +70,6 @@ class VersionConsistencyTests(unittest.TestCase):
         result = self.run_gate()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unpublished local crate kache-format", result.stderr)
-
-    def test_chart_and_release_tag_must_match(self):
-        result = self.run_gate("v0.16.2")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("tag version", result.stderr)
-        self.write("packaging/charts/kache-service/Chart.yaml", "version: 0.16.0\nappVersion: 0.16.1\n")
-        result = self.run_gate()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Chart.yaml version", result.stderr)
-
 
 if __name__ == "__main__":
     unittest.main()

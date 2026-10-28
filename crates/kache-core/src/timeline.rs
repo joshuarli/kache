@@ -348,6 +348,20 @@ pub struct PackedEntryTransfer {
     pub prefetch: PrefetchOrigin,
 }
 
+/// Which planner source produced a historical prefetch candidate.
+/// `Unknown` accepts a source name this record does not recognize.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateSource {
+    Manifest,
+    Shard,
+    History,
+    KeyCache,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
 /// The plan that scheduled one speculative download. Kept with the task,
 /// so a later build cannot claim a download that was already in flight.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -367,7 +381,7 @@ pub struct PrefetchOrigin {
     #[serde(default)]
     pub candidate_rank: Option<u64>,
     #[serde(default)]
-    pub candidate_source: crate::CandidateSource,
+    pub candidate_source: CandidateSource,
 }
 
 /// How the client tied a transfer to this session.

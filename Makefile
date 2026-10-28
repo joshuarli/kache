@@ -22,12 +22,11 @@ check:
 test-ci:
 	@test -x "target/$(TARGET)/dist/$(NAME)"
 	$(TEST_BINARY_ENV)="$(CURDIR)/target/$(TARGET)/dist/$(NAME)" \
-	$(call cargo,test) test --quiet --release --features remote $(TEST_TARGETS)
+	$(call cargo,test) test --quiet --release $(TEST_TARGETS)
 
-# Prereleases ship remote backends; the default build stays local-only.
 release:
 	$(call cargo,release-static) clean -p $(NAME) --profile dist --target $(TARGET)
-	$(call cargo,release-static) build --profile dist -p $(NAME) --bin kache --bin kache-engine --features remote \
+	$(call cargo,release-static) build --profile dist -p $(NAME) --bin kache --bin kache-engine \
 	  -Z build-std=std \
 	  -Z build-std-features= \
 	  --target $(TARGET)

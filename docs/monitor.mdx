@@ -1,6 +1,6 @@
 ---
 title: Monitor
-description: Read live cache, build, storage, and transfer state
+description: Read live cache, build, and storage state
 ---
 
 Open the terminal dashboard:
@@ -10,7 +10,7 @@ kache monitor
 kache monitor --since 1h
 ```
 
-Without `--since`, the monitor lists the last hour of builds. The figures on the first screen are the daemon's last 24 hours, the same window as `kache stats`. The monitor attempts to start the daemon for transfer statistics. It still reads the local store and event log if the daemon is unavailable.
+Without `--since`, the monitor lists the last hour of builds. The figures on the first screen are the daemon's last 24 hours, the same window as `kache stats`. It still reads the local store and event log if the daemon is unavailable.
 
 <video src="https://raw.githubusercontent.com/kunobi-ninja/kache/main/assets/monitor-9dd7cee8.webm" aria-label="kache monitor following a build, then the Why, Projects, and Store tabs" autoPlay loop muted playsInline controls />
 
@@ -27,7 +27,7 @@ The monitor opens on Now.
 
 The Now size counts logical output bytes. The Store tab shows deduplicated blob bytes, and `kache stats` uses those registered blob bytes for its Cache and Store rows. The cap applies to registered blob bytes.
 
-Under the figures: the share of compile time that came back from the cache, and the share of lookup time that was a miss. Remote is one line. When the daemon reports `not configured` or `local-only`, that line reads `remote is off`.
+Under the figures: the share of compile time that came back from the cache, and the share of lookup time that was a miss.
 
 Select a build with Up, Down, or a click to see its summary and compiler events on the same screen. On a wide terminal, the build selector sits beside the detail and uses at most 48 columns. On a narrow terminal, it sits above the detail and shows up to five builds. With fewer builds it shrinks further. Page Up and Page Down move by the number of visible rows.
 
@@ -42,7 +42,6 @@ When there is room, the detail includes a preview of the miss causes and passthr
 3. `Why` explains the selected build. It leads with the verdict: how many lookups hit, compile time spent on misses, and Kache's overhead as a share of lookup time. Misses are collapsed to their causes, most frequent first. Three are caching failures to fix, shown in red: a failed store, a rejected lookup, and a key that was stored or restored earlier in the loaded history but whose entry is now gone, for example because GC evicted it. The others are a dependency cascade named by the crate that actually changed, the crate's own changed inputs, inputs that differ from the same crate's build in another checkout, no earlier compile in the loaded history, and unexplained. Each bar is that cause's share of the misses. Passthroughs are grouped by reason, with queries such as `--print` kept apart from compiles. Crates that keep missing across builds of the same tree are listed as chronic. The tab ends with every passthrough in the build, newest first: time, crate, kind and reason, plus the route (`direct` or `fallback`) and exit code when the panel is at least 96 columns wide. On Why, `f` filters that list by crate name or reason. PgUp and PgDn scroll the whole tab.
 4. `Projects` lists the `target` directories under the directory you started the monitor in: each `target` beside a `Cargo.toml`, including worktrees under `.worktrees/` and `.claude/`. Other hidden directories and `node_modules` are skipped. On macOS it never looks inside `~/Desktop`, `~/Documents`, `~/Downloads`, `~/Library` and the other standard folders in your home directory, or under `/Volumes` and `/private` (which holds `/tmp`), even when you start the monitor there. Each tree shows its size, a bar for local dependencies, and how much of the tree is already cached. Enter shows the other columns: incremental output, build scripts, binaries, fingerprints, and profiles. The tab rescans every 10 seconds while it is open; press `r` to rescan now. A `target` directory is labeled with the project above it. During a rescan, a tree that has not been measured again yet is marked `~`.
 5. `Store` lists cache entries. The title includes physical blob bytes and the share of logical size that sharing saved. A muted line under the table names the client version, the daemon, the wrapper, and rustc. Press `s` to change sort order.
-6. `Transfer` shows pending uploads, downloads in progress, the remote concurrency slots in use, transfer speed, upload and download counts and byte totals since the daemon started, and whether the daemon is connected. Below that are the daemon's last 50 transfers, newest first. Each is `ok`, `MISS` (not on the remote), `SKIP`, `STOP` (cancelled) or `FAIL`; rows marked `L` are key listings.
 
 A build is every event sharing one session id. The wrapper records one per workspace, and it covers the crates, build scripts, and C/C++ compiles of that workspace until it sits idle for five minutes, so Cargo commands run back to back count as one build. Events from older wrappers have no id and are grouped by build root with the same five-minute rule. Those builds carry a `~` after their name.
 
@@ -56,7 +55,7 @@ Cascade causes need per-dependency digests on the events, which `[cache] explain
 q, Ctrl+C         quit
 p                 pause and resume (the log keeps its place; nothing is lost)
 Tab, Shift+Tab    next and previous tab
-1 2 3 4 5 6       Now, Build, Why, Projects, Store, Transfer
+1 2 3 4 5         Now, Build, Why, Projects, Store
 Up / Down, j / k  on Now, Build, and Why: pick a build
                   on Projects: pick a tree
                   elsewhere: scroll one row
@@ -84,5 +83,4 @@ Narrow terminals drop the least important columns first instead of clipping ever
 
 - Daemon offline: run `kache daemon status` and inspect `kache daemon log`.
 - Store near its limit: the daemon evicts entries on its own. If cloned outputs keep entries in place, preview stale targets with `kache clean --stale 14d --dry-run`.
-- No remote activity: check daemon state, credentials, and `kache doctor`.
 - Unexpected misses: run `kache explain`, or `kache explain <crate>`.

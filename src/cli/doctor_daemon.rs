@@ -87,11 +87,7 @@ mod tests {
             "runtime_dir": config.runtime_dir,
             "config_path": provenance.path,
             "config_fingerprint": provenance.fingerprint,
-            "prefetch_enabled": config.prefetch_enabled,
-            "remote_key_listing": config.remote_key_listing,
-            "remote_key_cache_refresh_secs": config.remote_key_cache_refresh_secs,
             "socket_path": config.socket_path(),
-            "local_only": config.local_only,
         }))
         .unwrap();
         assert!(
@@ -112,13 +108,6 @@ mod tests {
                 .contains("different snapshots")
         );
         daemon.config_fingerprint = Some(provenance.fingerprint.clone());
-        daemon.remote_description = Some("s3://fixture/daemon-prefix".into());
-        assert!(
-            checks(&config, &provenance, Some(&daemon))[0]
-                .detail
-                .contains("s3://fixture/daemon-prefix")
-        );
-        daemon.remote_description = None;
         daemon.auto_recover_min_free_bytes = Some(config.auto_recover_min_free_bytes + 1);
         assert!(
             checks(&config, &provenance, Some(&daemon))[0]

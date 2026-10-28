@@ -699,7 +699,6 @@ printf '%s\n' "$1" >> driver-runs
 case "$1" in
   --version) printf 'driver %s %s %s\n' "$CLIENT_VALUE" "$flavor" "$PWD" ;;
   '-###') printf '"mock-cc" "-cc1" "-triple" "%s" "unit.c"\n' "$CLIENT_VALUE" >&2 ;;
-  --dryrun) printf '%s\n' '#$ gcc -c unit.c' >&2 ;;
   -E)
     [ "$KACHE_FAMILY_PROBE_ACTIVE" = 1 ] || exit 73
     case "$5" in "$TMPDIR"/*) ;; *) exit 74 ;; esac
@@ -707,16 +706,6 @@ case "$1" in
     if [ "$flavor" = clang ]; then printf '%s\n' KACHE_PROBE_CLANG; else printf '%s\n' KACHE_PROBE_GNU; fi ;;
   *) exit 76 ;;
 esac
-"#,
-        );
-        let host = root.path().join("shared-host");
-        kache_fs::testutil::write_executable(
-            &host,
-            r#"#!/bin/sh
-[ "$LC_ALL" = C ] || exit 71
-IFS= read -r flavor < compiler-flavor || exit 72
-printf '%s\n' "$1" >> host-runs
-printf 'host %s %s %s\n' "$CLIENT_VALUE" "$flavor" "$PWD"
 "#,
         );
         let cache_dir = root.path().join("shared-cache");
@@ -781,7 +770,7 @@ printf 'host %s %s %s\n' "$CLIENT_VALUE" "$flavor" "$PWD"
                             .unwrap()
                             .lines()
                             .count(),
-                        5
+                        3
                     );
                     assert!(
                         std::fs::read_dir(cwd.join("tmp")).unwrap().next().is_none(),
@@ -792,7 +781,7 @@ printf 'host %s %s %s\n' "$CLIENT_VALUE" "$flavor" "$PWD"
         });
         assert_eq!(
             std::fs::read_dir(cache_dir.join("probes")).unwrap().count(),
-            6
+            4
         );
     }
 

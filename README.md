@@ -111,7 +111,6 @@ Install your Rust toolchain, then add the official action before your build:
 ```
 
 The action can persist the local store through GitHub's cache service.
-For remote storage, credentials, and pull-request policy, follow the [CI guide][nav-ci].
 
 ## Star History
 
@@ -147,7 +146,6 @@ Licensed under [Apache 2.0](LICENSE).
 [kunobi-brand]: https://kunobi.ninja/?utm_source=github&utm_medium=readme&utm_campaign=kache&utm_content=brand
 [nav-benchmarks]: https://kunobi.ninja/docs/kache/benchmarks?utm_source=github&utm_medium=readme&utm_campaign=kache&utm_content=nav_benchmarks
 [nav-comparison]: https://kunobi.ninja/docs/kache/getting-started/comparison?utm_source=github&utm_medium=readme&utm_campaign=kache&utm_content=nav_comparison
-[nav-ci]: https://kunobi.ninja/docs/kache/remote-cache/ci?utm_source=github&utm_medium=readme&utm_campaign=kache&utm_content=nav_ci
 [hero-image]: https://kunobi.ninja/product/kache?utm_source=github&utm_medium=readme&utm_campaign=kache&utm_content=hero_image
 [storage-chart]: https://kunobi.ninja/blog/kache-storage-worktrees?utm_source=github&utm_medium=readme&utm_campaign=kache&utm_content=storage_chart
 [storage-report]: https://kunobi.ninja/blog/kache-storage-worktrees?utm_source=github&utm_medium=readme&utm_campaign=kache&utm_content=storage_report

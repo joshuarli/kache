@@ -30,7 +30,7 @@ pr BASE="origin/main": check
 
 # Mirror the repo CI verification flow.
 [group('dev')]
-ci: fmt-check lint client-crates-check image-service-print helm-lint test-resource-guard-check coverage
+ci: fmt-check lint client-crates-check test-resource-guard-check coverage
 
 # Workspace builds enable the daemon's async feature. Check the client-only
 # dependency graph separately so feature unification cannot hide a dependency.
@@ -56,26 +56,6 @@ install:
 [group('build')]
 build:
   cargo build --release
-
-# Build the remote service binary.
-[group('build')]
-build-service:
-  cargo build --release -p kache-service
-
-# Build the service container image locally.
-[group('docker')]
-image-service:
-  docker buildx bake -f packaging/docker-bake.hcl service
-
-# Print the resolved service image bake plan.
-[group('docker')]
-image-service-print:
-  docker buildx bake -f packaging/docker-bake.hcl --print service
-
-# Build and push the release service image.
-[group('docker')]
-image-service-release:
-  docker buildx bake -f packaging/docker-bake.hcl release
 
 # Run the full workspace test suite.
 [group('dev')]
@@ -120,26 +100,17 @@ fuzz-native-archive SECONDS="600":
 mutants-core *ARGS:
   cargo mutants --package kache-core --all-features --baseline run --timeout 300 --build-timeout 600 --output tmp/mutants/core {{ARGS}}
 
-# Mutation-test the complete remote service crate.
-[group('dev')]
-mutants-service *ARGS:
-  cargo mutants --package kache-service --all-features --baseline run --caught --timeout 300 --build-timeout 600 --output tmp/mutants/service {{ARGS}}
-
 # Mutation-test changed Rust lines outside the crates covered completely by
-# mutants-core and mutants-service. The proof-only crate runs under Kani, not
+# mutants-core. The proof-only crate runs under Kani, not
 # ordinary tests, so it is deliberately outside mutation discovery. DIFF must
 # describe the current working tree.
 [group('dev')]
 mutants-diff DIFF *ARGS:
-  ./scripts/with-test-resources.sh cargo mutants --workspace --all-features --in-diff "{{DIFF}}" --exclude 'crates/kache-core/**' --exclude 'crates/kache-service/**' --exclude 'crates/kache-proofs/**' --baseline run --timeout 300 --build-timeout 600 --output tmp/mutants/diff {{ARGS}}
+  ./scripts/with-test-resources.sh cargo mutants --workspace --all-features --in-diff "{{DIFF}}" --exclude 'crates/kache-core/**' --exclude 'crates/kache-proofs/**' --baseline run --timeout 300 --build-timeout 600 --output tmp/mutants/diff {{ARGS}}
 
 # Audit dependencies with cargo-deny (advisories + licenses + bans +
 # sources; config and documented exceptions in `deny.toml`). Runs once
 # per workspace MEMBER on purpose: cargo-deny graphs from the current
-# package, so a root-only run would cover only the `kache` bin (+
-# kache-core) and silently skip everything reachable solely through
-# `kache-service` — e.g. the rsa RUSTSEC-2023-0071 advisory and
-# surrealdb's BUSL-1.1 license.
 [group('dev')]
 audit:
   #!/usr/bin/env bash
@@ -401,17 +372,6 @@ fmt-nix:
 fmt-nix-check:
   nix build --no-link ".#checks.$(nix eval --impure --raw --expr builtins.currentSystem).formatting"
 
-# Lint the deployable Helm chart, then render it with every optional pod
-# metadata value set and parse the result strictly. `helm lint` accepts a
-# manifest with a duplicated key; Kubernetes and Flux reject it.
-[group('deploy')]
-helm-lint:
-  helm lint packaging/charts/kache-service
-  helm template kache packaging/charts/kache-service \
-    --set podAnnotations.example/annotation=set \
-    --set podLabels.example/label=set \
-    | kubeconform -strict -ignore-missing-schemas -summary
-
 # Run cargo-llvm-cov and emit JSON + HTML reports under tmp/llvm-cov/.
 # JSON drives the CI threshold check; HTML is uploaded as a CI artifact
 # (and opened locally by `coverage-open`). `--no-report` collects
@@ -492,12 +452,6 @@ bump VERSION:
     fi
   fi
   cargo set-version --workspace {{VERSION}}
-  # Mirror into the chart. Both fields track the release tag: `appVersion` names
-  # the app the chart deploys, `version` is the chart's own identity in the OCI
-  # registry, and publish-chart ships it from the same `v*` tag. A chart-only
-  # fix is therefore a patch release of the whole thing.
-  perl -i -pe 's/^version:.*$/version: {{VERSION}}/' packaging/charts/kache-service/Chart.yaml
-  perl -i -pe 's/^appVersion:.*$/appVersion: "{{VERSION}}"/' packaging/charts/kache-service/Chart.yaml
   # NO --locked: set-version rewrites the lock's version entries, so --locked
   # would error "lock file needs updating". Plain check settles the lock for the
   # local crates only (it does not advance kunobi-* / registry deps).

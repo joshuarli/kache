@@ -231,12 +231,14 @@ impl AdaptiveUnit {
     /// Eligible invocations must have a stable Cargo unit id and exactly:
     /// `<profile>/deps` (or the unit's own `out` in Cargo's per-unit layout)
     /// plus `<profile>/incremental`, both absolute. A build script is not:
-    /// Cargo gives it no extra filename, so it has no unit id.
+    /// Cargo gives it no extra filename and its crate name is
+    /// `build_script_build`, so it stays unmanaged. A binary in the per-unit
+    /// layout also omits `-C extra-filename`; its directory hash is the id.
     pub(crate) fn eligible(args: &RustcArgs, policy_guard: &[u8]) -> Option<Self> {
         if !args.is_primary {
             return None;
         }
-        let unit_id = args.unit_id()?;
+        let unit_id = managed_unit_id(args)?;
         if !(8..=64).contains(&unit_id.len())
             || !unit_id.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
@@ -1010,6 +1012,23 @@ fn valid_state(state: &DiskState, unit_key: &str) -> bool {
         Phase::Seed => state.observation.is_some() && state.in_flight,
         Phase::Active => state.observation.is_some() && state.active_leases <= MAX_ACTIVE_LEASES,
     }
+}
+
+/// `-C extra-filename` when Cargo passed one. Otherwise the per-unit
+/// directory hash, which Cargo 1.100 uses for binaries instead.
+fn managed_unit_id(args: &RustcArgs) -> Option<String> {
+    if let Some(id) = args.unit_id() {
+        return Some(id);
+    }
+    if args
+        .crate_name
+        .as_deref()
+        .is_some_and(|name| name.starts_with("build_script_"))
+    {
+        return None;
+    }
+    let out_dir = args.out_dir.as_deref()?;
+    crate::cargo_layout::per_unit_out_dir(out_dir).map(|unit| unit.hash.to_string())
 }
 
 fn unit_key(args: &RustcArgs, original_incremental: &Path, policy_guard: &[u8]) -> String {
@@ -1926,6 +1945,14 @@ mod tests {
                 .starts_with(profile.join("incremental.kache-auto")),
             "{}",
             unit.unit_dir.display()
+        );
+        let bare_bin = AdaptiveUnit::eligible(&argv("sample", &[]), b"").unwrap();
+        assert!(
+            bare_bin
+                .unit_dir
+                .starts_with(profile.join("incremental.kache-auto")),
+            "{}",
+            bare_bin.unit_dir.display()
         );
         assert!(
             AdaptiveUnit::eligible(&argv("build_script_build", &[]), b"").is_none(),

@@ -1079,47 +1079,6 @@ pub fn rotate_events_if_needed(
 
 // ── Summary log ─────────────────────────────────────────────────────────────
 
-/// Append a per-session build summary to the summary log (`summaries.jsonl`).
-/// Own file rather than `events.jsonl` so `read_events` never has to skip
-/// foreign lines; same locking discipline as the other logs.
-pub fn log_summary(summary_log_path: &Path, event: &BuildSummaryEvent) -> Result<()> {
-    append_summary(summary_log_path, event, false)
-}
-
-pub(crate) fn log_summary_durable(
-    summary_log_path: &Path,
-    event: &BuildSummaryEvent,
-) -> Result<()> {
-    append_summary(summary_log_path, event, true)
-}
-
-fn append_summary(summary_log_path: &Path, event: &BuildSummaryEvent, durable: bool) -> Result<()> {
-    if let Some(parent) = summary_log_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let lock = open_log_lock(summary_log_path).context("opening summary log lock")?;
-    lock.lock().context("locking summary log")?;
-
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(summary_log_path)
-        .context("opening summary log")?;
-    let line = serde_json::to_string(event).context("serializing summary event")?;
-    let mut bytes = line.into_bytes();
-    bytes.push(b'\n');
-    file.write_all(&bytes)
-        .context("writing summary event to log")?;
-    if durable {
-        file.sync_all().context("flushing summary event to disk")?;
-        if let Some(parent) = summary_log_path.parent() {
-            crate::atomic::fsync_dir(parent).context("flushing summary directory")?;
-        }
-    }
-    lock.unlock().context("unlocking summary log")?;
-    Ok(())
-}
-
 /// Read all build summaries from the summary log. Invalid lines are skipped
 /// (schema evolution / partial writes must not poison reporting).
 pub fn read_summaries(summary_log_path: &Path) -> Result<Vec<BuildSummaryEvent>> {
@@ -1152,28 +1111,6 @@ pub fn read_summaries(summary_log_path: &Path) -> Result<Vec<BuildSummaryEvent>>
 // ── Transfer log ────────────────────────────────────────────────────────────
 
 use crate::daemon::TransferEvent;
-
-/// Append a transfer event to the transfer log file.
-pub fn log_transfer(transfer_log_path: &Path, event: &TransferEvent) -> Result<()> {
-    if let Some(parent) = transfer_log_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let lock = open_log_lock(transfer_log_path).context("opening transfer log lock")?;
-    lock.lock().context("locking transfer log")?;
-
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(transfer_log_path)
-        .context("opening transfer log")?;
-    let line = serde_json::to_string(event).context("serializing transfer event")?;
-    let mut bytes = line.into_bytes();
-    bytes.push(b'\n');
-    file.write_all(&bytes)
-        .context("writing transfer event to log")?;
-    lock.unlock().context("unlocking transfer log")?;
-    Ok(())
-}
 
 /// Read all transfer events from the transfer log.
 pub fn read_transfers(transfer_log_path: &Path) -> Result<Vec<TransferEvent>> {

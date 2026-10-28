@@ -3,61 +3,6 @@ pub(crate) use kache_fs::process_state_test::{
 };
 use std::path::PathBuf;
 
-/// kunobi-auth keeps the TOFU cross-process lock in
-/// `dirs::config_dir()/kunobi/locks`. That directory follows `XDG_CONFIG_HOME`
-/// on Linux and `HOME` on macOS, and the Nix sandbox sets `HOME` to a
-/// directory the build cannot write. Hold one of these for any test that
-/// calls `TofuStore::trust` or `check_and_pin`.
-#[cfg(feature = "remote")]
-pub(crate) struct KunobiConfigGuard {
-    _lock: ProcessStateTestGuard,
-    /// Kept so the directory outlives the tests that pin a service into it.
-    /// Read on Unix, where `dirs::config_dir` follows this process's `HOME`.
-    #[cfg_attr(not(unix), allow(dead_code))]
-    dir: tempfile::TempDir,
-    saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
-}
-
-#[cfg(feature = "remote")]
-impl KunobiConfigGuard {
-    pub(crate) fn new() -> Self {
-        let lock = process_state_test_lock();
-        let dir = tempfile::tempdir().unwrap();
-        let saved = ["HOME", "XDG_CONFIG_HOME"]
-            .into_iter()
-            .map(|key| {
-                let previous = std::env::var_os(key);
-                unsafe { std::env::set_var(key, dir.path()) };
-                (key, previous)
-            })
-            .collect();
-        Self {
-            _lock: lock,
-            dir,
-            saved,
-        }
-    }
-
-    #[cfg(unix)]
-    pub(crate) fn path(&self) -> &std::path::Path {
-        self.dir.path()
-    }
-}
-
-#[cfg(feature = "remote")]
-impl Drop for KunobiConfigGuard {
-    fn drop(&mut self) {
-        for (key, value) in self.saved.drain(..) {
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
-                }
-            }
-        }
-    }
-}
-
 /// A `Config` rooted in `cache_dir` with every optional feature off, for
 /// tests that need a store without reading the developer's configuration.
 /// Start `command` without a controlling terminal, so a child that shows
@@ -84,10 +29,7 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
         readonly_store: None,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -125,8 +67,6 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
         runtime_dir: cache_dir.clone(),
         cache_dir,
         max_size: 1024 * 1024,
-        remote: None,
-        remote_error: None,
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
@@ -142,19 +82,9 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: crate::config::DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: crate::config::DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: crate::config::DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: crate::config::DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: crate::config::DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: crate::config::DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: crate::config::DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: crate::config::DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     }
 }
 

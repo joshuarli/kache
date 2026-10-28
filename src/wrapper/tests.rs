@@ -577,33 +577,6 @@ fn a_package_keyed_without_its_files_is_reported_once_a_session() {
     assert!(marked);
 }
 
-#[test]
-#[cfg(unix)]
-fn maybe_trigger_prefetch_refuses_symlinked_build_session() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let target = temp.path().join("target_file");
-    std::fs::write(&target, "target content").unwrap();
-
-    let marker = temp.path().join(".build-session");
-    std::os::unix::fs::symlink(&target, &marker).unwrap();
-
-    let mut config = test_config(temp.path().to_path_buf());
-    // Enable remote so prefetch actually triggers its path
-    config.remote = Some(crate::config::RemoteConfig::test_s3(
-        "test-bucket",
-        "kache/",
-    ));
-
-    // Use dummy args
-    let args = rustc_args(&["rustc", "foo.rs"]);
-
-    // This must NOT modify the target file
-    super::maybe_trigger_prefetch(&config, &args);
-
-    // Verify target file remains completely untouched
-    let content = std::fs::read_to_string(&target).unwrap();
-    assert_eq!(content, "target content");
-}
 
 // ── Opportunistic size-pressure GC (kunobi-ninja/kache#497) ─────────────
 
@@ -1357,7 +1330,7 @@ fn auto_gc_check_hints_a_reachable_daemon_and_spawns_no_worker() {
     let store = Store::open(&cfg).unwrap();
     put_test_entry(&store, dir.path(), "over-budget");
     let daemon =
-        RemoteCheckReplyDaemon::with_reply(cfg.socket_path(), serde_json::json!({ "ok": true }));
+        FakeDaemon::with_reply(cfg.socket_path(), serde_json::json!({ "ok": true }));
     wait_until_reachable(&cfg.socket_path());
 
     let spawned = AtomicUsize::new(0);
@@ -1401,7 +1374,7 @@ fn auto_gc_check_spawns_the_worker_when_the_daemon_rejects_the_hint() {
     cfg.max_size = 1024;
     let store = Store::open(&cfg).unwrap();
     put_test_entry(&store, dir.path(), "over-budget");
-    let daemon = RemoteCheckReplyDaemon::with_reply(
+    let daemon = FakeDaemon::with_reply(
         cfg.socket_path(),
         serde_json::json!({ "ok": false, "error": "invalid request: unknown variant" }),
     );
@@ -2233,37 +2206,12 @@ fn compile_before_key_needs_a_local_store() {
         "a read-only store may hold the entry: key before compiling"
     );
     config.readonly_store = None;
-    config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "artifacts"));
-    assert!(
-        !deferral_allowed(&config, &cargo_like, false, None),
-        "remote configured"
-    );
 }
 
 fn test_config(cache_dir: PathBuf) -> Config {
     crate::test_support::test_config(cache_dir)
 }
 
-#[test]
-fn rows_are_asked_of_the_remote_only_with_predictions_and_a_remote() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().to_path_buf());
-    config.remote = None;
-    config.input_predictions = true;
-    assert!(!fetches_remote_predictions(&config));
-    config.remote = Some(crate::config::RemoteConfig {
-        prefix: "artifacts".to_string(),
-        backend: crate::config::RemoteBackendConfig::Filesystem(
-            crate::config::FilesystemRemoteConfig {
-                root: dir.path().join("remote"),
-                atomic_write_dir: dir.path().join("staging"),
-            },
-        ),
-    });
-    assert!(fetches_remote_predictions(&config));
-    config.input_predictions = false;
-    assert!(!fetches_remote_predictions(&config));
-}
 
 #[test]
 fn configured_rustc_depinfo_roots_cover_every_restorable_anchor() {
@@ -6201,30 +6149,12 @@ fn event_result_for_store_put_maps_dup_vs_miss() {
     ));
 }
 
-#[test]
-fn store_admission_preserves_writable_remote_publication() {
-    let mut config = test_config(PathBuf::from("cache"));
-    config.min_store_compile_ms = 1_000;
-
-    assert!(!store_admits_compile(&config, 999, true));
-    assert!(store_admits_compile(&config, 1_000, true));
-
-    config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "artifacts"));
-    assert!(store_admits_compile(&config, 1, true));
-    assert!(
-        !store_admits_compile(&config, 1, false),
-        "a path without remote publication must still apply local admission"
-    );
-
-    config.remote_readonly = true;
-    assert!(!store_admits_compile(&config, 1, true));
-}
 
 #[test]
 fn disabled_store_admission_accepts_every_compile() {
     let config = test_config(PathBuf::from("cache"));
-    assert!(store_admits_compile(&config, 0, false));
-    assert!(store_admits_compile(&config, 5, true));
+    assert!(store_admits_compile(&config, 0));
+    assert!(store_admits_compile(&config, 5));
 }
 
 #[test]
@@ -6299,14 +6229,6 @@ fn cc_event_root_honors_override() {
     );
 }
 
-fn spool_intent_count(config: &Config) -> usize {
-    let dir = config.upload_spool_dir();
-    match std::fs::read_dir(&dir) {
-        Ok(entries) => entries.filter_map(Result::ok).count(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
-        Err(error) => panic!("reading upload spool {}: {error}", dir.display()),
-    }
-}
 
 fn seed_cc_object_entry(store: &Store, cache_key: &str, dir: &Path) {
     let object = dir.join("foo.o");
@@ -6327,42 +6249,8 @@ fn seed_cc_object_entry(store: &Store, cache_key: &str, dir: &Path) {
         .unwrap();
 }
 
-/// Keep auto-start from `send_upload_job` off the developer's daemon.
-/// Persist uses the test `Config`; daemon spawn reloads `KACHE_CONFIG`.
-fn isolate_daemon_autostart(dir: &Path) -> (TestEnvGuard, TestEnvGuard) {
-    let config_path = dir.join("isolated-kache.toml");
-    let cache_dir = dir.join("isolated-cache");
-    std::fs::create_dir_all(&cache_dir).unwrap();
-    let store = toml::Value::String(cache_dir.to_string_lossy().into_owned());
-    std::fs::write(
-        &config_path,
-        format!(
-            "[cache]\n\
-                 local_only = true\n\
-                 ignore_env = true\n\
-                 local_store = {store}\n\
-                 runtime_dir = {store}\n\
-                 daemon_idle_timeout_secs = 1\n"
-        ),
-    )
-    .unwrap();
-    (
-        TestEnvGuard::set(
-            "KACHE_CONFIG",
-            config_path.to_str().expect("utf-8 isolated config path"),
-        ),
-        TestEnvGuard::set(
-            "KACHE_CACHE_DIR",
-            cache_dir.to_str().expect("utf-8 isolated cache path"),
-        ),
-    )
-}
 
-/// Answers `RemoteCheck` with a fixed `found` flag. `send_remote_check`
-/// probes reachability before the real request, so the accept loop must
-/// survive empty connections. Local-only tests also use this listener to
-/// intercept accidental uploads without starting a real daemon.
-struct RemoteCheckReplyDaemon {
+struct FakeDaemon {
     stop: Arc<AtomicBool>,
     requests: Arc<AtomicUsize>,
     #[cfg(unix)]
@@ -6371,14 +6259,7 @@ struct RemoteCheckReplyDaemon {
     socket_path: PathBuf,
 }
 
-impl RemoteCheckReplyDaemon {
-    fn spawn(socket_path: PathBuf, found: bool) -> Self {
-        Self::with_reply(
-            socket_path,
-            serde_json::json!({ "ok": true, "found": found }),
-        )
-    }
-
+impl FakeDaemon {
     fn with_reply(socket_path: PathBuf, reply: serde_json::Value) -> Self {
         Self::with_delayed_reply(socket_path, reply, std::time::Duration::ZERO)
     }
@@ -6392,11 +6273,11 @@ impl RemoteCheckReplyDaemon {
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
-        let name = socket_name(&socket_path).expect("fake remote-check socket name");
+        let name = socket_name(&socket_path).expect("fake daemon socket name");
         let listener = ListenerOptions::new()
             .name(name)
             .create_sync()
-            .expect("bind fake remote-check daemon");
+            .expect("bind fake daemon");
         let stop = Arc::new(AtomicBool::new(false));
         let requests = Arc::new(AtomicUsize::new(0));
         #[cfg(unix)]
@@ -6456,7 +6337,7 @@ impl RemoteCheckReplyDaemon {
     }
 }
 
-impl Drop for RemoteCheckReplyDaemon {
+impl Drop for FakeDaemon {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         let _ = crate::transport::is_reachable(&self.socket_path);
@@ -6471,310 +6352,11 @@ fn wait_until_reachable(path: &Path) {
     while !crate::transport::is_reachable(path) {
         assert!(
             start.elapsed() < std::time::Duration::from_secs(2),
-            "fake remote-check daemon did not become reachable at {}",
+            "fake daemon did not become reachable at {}",
             path.display()
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-}
-
-fn try_cc_remote_hit(
-    config: &Config,
-    store: &Store,
-    parsed: &crate::compiler::cc::CcArgs,
-    cache_key: &str,
-) -> Option<i32> {
-    cc_try_remote_hit(
-        config,
-        store,
-        &CcCompiler::new(),
-        parsed,
-        &FileHasher::new(),
-        cache_key,
-        "foo.c",
-        "foo.c",
-        std::time::Instant::now(),
-        0,
-        0,
-    )
-    .unwrap()
-}
-
-#[test]
-fn remote_demand_wait_includes_success_and_failed_reply() {
-    for ok in [true, false] {
-        let _ = crate::demand::take();
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = test_config(dir.path().join("cache"));
-        config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "artifacts"));
-        let store = Store::open(&config).unwrap();
-        let key = blake3::hash(b"remote-demand-wait").to_hex().to_string();
-        seed_cc_object_entry(&store, &key, dir.path());
-        let daemon = RemoteCheckReplyDaemon::with_delayed_reply(
-            config.socket_path(),
-            serde_json::json!({ "ok": ok, "found": true }),
-            std::time::Duration::from_millis(25),
-        );
-        wait_until_reachable(&config.socket_path());
-        let result = acquire_entry(
-            &config,
-            &store,
-            &key,
-            "foo.c",
-            NegativeReply::ContinueCompile,
-        );
-        assert_eq!(result.is_some(), ok);
-        let demands = crate::demand::take();
-        assert_eq!(demands.len(), 1);
-        assert_eq!(demands[0].cache_key, key);
-        assert!(demands[0].first_demand_at_ms > 0);
-        assert!(demands[0].remote_wait_ms >= 25);
-        assert_eq!(daemon.request_count(), 1);
-    }
-}
-
-#[test]
-fn remote_disabled_does_not_create_a_demand_or_wait() {
-    let _ = crate::demand::take();
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path().join("cache"));
-    let store = Store::open(&config).unwrap();
-    assert!(
-        acquire_entry(
-            &config,
-            &store,
-            "key",
-            "foo.c",
-            NegativeReply::ContinueCompile
-        )
-        .is_none()
-    );
-    assert!(crate::demand::take().is_empty());
-}
-
-#[test]
-fn remote_acquisition_preserves_negative_reply_policy_and_provenance() {
-    for (found, prefetched, policy, expected) in [
-        (false, false, NegativeReply::ContinueCompile, None),
-        (false, true, NegativeReply::ContinueCompile, None),
-        (
-            false,
-            false,
-            NegativeReply::CheckConcurrentEntry,
-            Some(EventResult::LocalHit),
-        ),
-        (
-            false,
-            true,
-            NegativeReply::CheckConcurrentEntry,
-            Some(EventResult::LocalHit),
-        ),
-        (
-            true,
-            false,
-            NegativeReply::ContinueCompile,
-            Some(EventResult::RemoteHit),
-        ),
-        (
-            true,
-            true,
-            NegativeReply::ContinueCompile,
-            Some(EventResult::PrefetchHit),
-        ),
-        (
-            true,
-            false,
-            NegativeReply::CheckConcurrentEntry,
-            Some(EventResult::RemoteHit),
-        ),
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = test_config(dir.path().join("cache"));
-        config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "artifacts"));
-        let store = Store::open(&config).unwrap();
-        let key = blake3::hash(b"remote-entry-provenance")
-            .to_hex()
-            .to_string();
-        seed_cc_object_entry(&store, &key, dir.path());
-        let daemon = RemoteCheckReplyDaemon::with_reply(
-            config.socket_path(),
-            serde_json::json!({ "ok": true, "found": found, "prefetched": prefetched }),
-        );
-        wait_until_reachable(&config.socket_path());
-        let result = acquire_entry(&config, &store, &key, "foo.c", policy);
-        assert_eq!(result.as_ref().map(|(_, origin)| *origin), expected);
-        if let Some((meta, _)) = result {
-            assert_eq!(meta.cache_key, key);
-            assert_eq!(meta.crate_name, "foo.c");
-        }
-        assert!(daemon.request_count() >= 1);
-    }
-}
-
-#[test]
-fn remote_acquisition_requires_a_reply_and_readable_entry() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().join("cache"));
-    config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "artifacts"));
-    let store = Store::open(&config).unwrap();
-    let key = blake3::hash(b"remote-entry-validation")
-        .to_hex()
-        .to_string();
-    seed_cc_object_entry(&store, &key, dir.path());
-    assert!(
-        acquire_entry(
-            &config,
-            &store,
-            &key,
-            "foo.c",
-            NegativeReply::CheckConcurrentEntry
-        )
-        .is_none()
-    );
-    let daemon = RemoteCheckReplyDaemon::spawn(config.socket_path(), true);
-    wait_until_reachable(&config.socket_path());
-    let missing = blake3::hash(b"missing-entry").to_hex().to_string();
-    assert!(
-        acquire_entry(
-            &config,
-            &store,
-            &missing,
-            "foo.c",
-            NegativeReply::ContinueCompile
-        )
-        .is_none()
-    );
-    std::fs::write(store.entry_dir(&key).join("meta.json"), b"invalid json").unwrap();
-    assert!(
-        acquire_entry(
-            &config,
-            &store,
-            &key,
-            "foo.c",
-            NegativeReply::ContinueCompile
-        )
-        .is_none()
-    );
-    assert!(daemon.request_count() >= 2);
-}
-
-#[test]
-fn clang_cl_debug_does_not_bypass_local_admission() {
-    let mut config = test_config(PathBuf::from("cache"));
-    config.min_store_compile_ms = 1_000;
-    config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "artifacts"));
-
-    let cl_debug = parse_cc(&["clang-cl", "-c", "foo.c", "-Fofoo.obj", "/Z7"]);
-    assert!(
-        !store_admits_compile(&config, 1, cc_publishes_to_remote(&cl_debug)),
-        "clang-cl debug must keep the local cheap-compile threshold"
-    );
-
-    let gnu = parse_cc(&["gcc", "-c", "foo.c", "-o", "foo.o"]);
-    assert!(
-        store_admits_compile(&config, 1, cc_publishes_to_remote(&gnu)),
-        "publishable cc compiles must store so they can upload"
-    );
-}
-
-#[test]
-fn cc_remote_publication_skips_clang_cl_debug_only() {
-    let gnu = parse_cc(&["gcc", "-c", "foo.c", "-o", "foo.o"]);
-    let gnu_debug = parse_cc(&["gcc", "-c", "foo.c", "-o", "foo.o", "-g2"]);
-    let cl = parse_cc(&["clang-cl", "-c", "foo.c", "-Fofoo.obj"]);
-    let cl_debug = parse_cc(&["clang-cl", "-c", "foo.c", "-Fofoo.obj", "/Z7"]);
-    let cl_g = parse_cc(&["clang-cl", "-c", "foo.c", "-Fofoo.obj", "-g"]);
-
-    assert!(cc_publishes_to_remote(&gnu));
-    assert!(cc_publishes_to_remote(&gnu_debug));
-    assert!(cc_publishes_to_remote(&cl));
-    assert!(!cc_publishes_to_remote(&cl_debug));
-    assert!(!cc_publishes_to_remote(&cl_g));
-}
-
-#[test]
-fn cc_upload_enqueue_requires_a_configured_remote_and_publication() {
-    let mut config = test_config(PathBuf::from("cache"));
-    assert!(!compiler_remote_enabled(&config, true));
-    assert!(!compiler_remote_enabled(&config, false));
-
-    config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "artifacts"));
-    assert!(compiler_remote_enabled(&config, true));
-    assert!(!compiler_remote_enabled(&config, false));
-
-    config.remote_readonly = true;
-    assert!(
-        compiler_remote_enabled(&config, true),
-        "readonly is enforced inside send_upload_job, matching rustc"
-    );
-}
-
-#[test]
-fn daemon_handoff_preserves_the_wrappers_upload_policy() {
-    let mut config = test_config(PathBuf::from("cache"));
-    assert!(!compiler_upload_enabled(&config, true));
-    config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "artifacts"));
-    assert!(compiler_upload_enabled(&config, true));
-    assert!(!compiler_upload_enabled(&config, false));
-    config.remote_readonly = true;
-    assert!(!compiler_upload_enabled(&config, true));
-}
-
-#[test]
-fn cc_try_remote_hit_skips_the_daemon_when_enqueue_is_false() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path().join("cache"));
-    let store = Store::open(&config).unwrap();
-    let key = blake3::hash(b"cc-remote-skip-enqueue").to_hex().to_string();
-    seed_cc_object_entry(&store, &key, dir.path());
-
-    let output = dir.path().join("restored.o");
-    let output_arg = output.to_string_lossy().into_owned();
-    let parsed = parse_cc(&["gcc", "-c", "foo.c", "-o", &output_arg]);
-
-    let daemon = RemoteCheckReplyDaemon::spawn(config.socket_path(), true);
-    wait_until_reachable(&config.socket_path());
-    let requests_before = daemon.request_count();
-
-    assert!(try_cc_remote_hit(&config, &store, &parsed, &key).is_none());
-    assert_eq!(
-        daemon.request_count(),
-        requests_before,
-        "enqueue=false must not send RemoteCheck"
-    );
-    assert!(
-        !output.exists(),
-        "skipping the daemon must not restore a local store entry"
-    );
-}
-
-#[test]
-fn cc_try_remote_hit_does_not_restore_on_a_remote_miss() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().join("cache"));
-    config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "artifacts"));
-    let store = Store::open(&config).unwrap();
-    let key = blake3::hash(b"cc-remote-miss-no-restore")
-        .to_hex()
-        .to_string();
-    seed_cc_object_entry(&store, &key, dir.path());
-
-    let output = dir.path().join("restored.o");
-    let output_arg = output.to_string_lossy().into_owned();
-    let parsed = parse_cc(&["gcc", "-c", "foo.c", "-o", &output_arg]);
-
-    let daemon = RemoteCheckReplyDaemon::spawn(config.socket_path(), false);
-    wait_until_reachable(&config.socket_path());
-
-    assert!(try_cc_remote_hit(&config, &store, &parsed, &key).is_none());
-    assert!(
-        daemon.request_count() >= 1,
-        "a configured remote must still ask the daemon"
-    );
-    assert!(
-        !output.exists(),
-        "found=false must not restore even when the local store already has the entry"
-    );
 }
 
 fn cc_handoff<'a>(
@@ -6790,7 +6372,6 @@ fn cc_handoff<'a>(
         stdout: "",
         stderr: "",
         compile_time_ms: 5,
-        publishes_to_remote: false,
         event_root: "",
         start: now,
         size: 12,
@@ -6925,7 +6506,7 @@ fn cc_hand_off_carries_the_executable_mtime_and_release() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path().join("cache"));
     let store = Store::open(&config).unwrap();
-    let daemon = RemoteCheckReplyDaemon::with_reply(
+    let daemon = FakeDaemon::with_reply(
         config.socket_path(),
         serde_json::json!({"ok": false, "error": "test daemon declines publication"}),
     );
@@ -6988,70 +6569,8 @@ fn reclaim_after_a_declined_hand_off_takes_a_free_key_at_once() {
     assert!(matches!(claim, BuildClaim::Acquired(_)));
 }
 
-#[test]
-fn cc_store_enqueues_an_upload_intent_when_a_writable_remote_is_configured() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().join("cache"));
-    config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "artifacts"));
-    let store = Store::open(&config).unwrap();
-    let key = blake3::hash(b"cc-upload-intent").to_hex().to_string();
-    seed_cc_object_entry(&store, &key, dir.path());
 
-    let _lock = crate::config::config_path_lock();
-    let _isolated = isolate_daemon_autostart(dir.path());
-    maybe_enqueue_upload(&config, &store, &key, "foo.c", true);
 
-    assert_eq!(spool_intent_count(&config), 1);
-    assert!(
-        config
-            .upload_spool_dir()
-            .join(format!("{key}.json"))
-            .is_file()
-    );
-}
-
-#[test]
-fn clang_cl_debug_store_does_not_enqueue_an_upload_intent() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().join("cache"));
-    config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "artifacts"));
-    let store = Store::open(&config).unwrap();
-    let key = blake3::hash(b"cc-cl-debug-no-upload").to_hex().to_string();
-    seed_cc_object_entry(&store, &key, dir.path());
-
-    let _daemon = RemoteCheckReplyDaemon::spawn(config.socket_path(), false);
-    let _lock = crate::config::config_path_lock();
-    let _isolated = isolate_daemon_autostart(dir.path());
-    maybe_enqueue_upload(&config, &store, &key, "foo.c", false);
-
-    assert_eq!(spool_intent_count(&config), 0);
-}
-
-#[test]
-fn cc_store_does_not_enqueue_when_remote_is_readonly_or_absent() {
-    let dir = tempfile::tempdir().unwrap();
-    let key = blake3::hash(b"cc-no-upload-gates").to_hex().to_string();
-
-    let mut readonly = test_config(dir.path().join("readonly"));
-    readonly.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "artifacts"));
-    readonly.remote_readonly = true;
-    let readonly_store = Store::open(&readonly).unwrap();
-    seed_cc_object_entry(&readonly_store, &key, dir.path());
-
-    let local = test_config(dir.path().join("local"));
-    let local_store = Store::open(&local).unwrap();
-    seed_cc_object_entry(&local_store, &key, dir.path());
-
-    let _readonly_daemon = RemoteCheckReplyDaemon::spawn(readonly.socket_path(), false);
-    let _local_daemon = RemoteCheckReplyDaemon::spawn(local.socket_path(), false);
-    let _lock = crate::config::config_path_lock();
-    let _isolated = isolate_daemon_autostart(dir.path());
-    maybe_enqueue_upload(&readonly, &readonly_store, &key, "foo.c", true);
-    maybe_enqueue_upload(&local, &local_store, &key, "foo.c", true);
-
-    assert_eq!(spool_intent_count(&readonly), 0);
-    assert_eq!(spool_intent_count(&local), 0);
-}
 
 #[test]
 fn cc_output_path_passthrough_allows_plain_files_but_refuses_symlinks() {
@@ -9084,51 +8603,6 @@ fn session_markers_are_job_scoped_when_store_is_shared() {
     assert!(session_marker_path(&b, "/repo").starts_with(&b.runtime_dir));
 }
 
-#[test]
-fn remote_prefetch_creates_a_fresh_marker_in_the_job_runtime() {
-    let _lock = crate::test_support::process_state_test_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = dir.path().join("workspace");
-    let source = workspace.join("src/lib.rs");
-    let out_dir = workspace.join("target/debug/deps");
-    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-    std::fs::create_dir_all(&out_dir).unwrap();
-    std::fs::write(
-        workspace.join("Cargo.toml"),
-        "[package]\nname = 'runtime-prefetch-test'\nversion = '0.1.0'\n",
-    )
-    .unwrap();
-    std::fs::write(&source, "pub fn value() -> u8 { 1 }\n").unwrap();
-
-    let mut config = test_config(dir.path().join("shared-cache"));
-    config.runtime_dir = dir.path().join("job-runtime");
-    config.remote = Some(crate::config::RemoteConfig::test_s3(
-        "test-bucket",
-        "artifacts",
-    ));
-    let args = rustc_args(&[
-        "rustc",
-        source.to_str().unwrap(),
-        "--crate-name",
-        "runtime_prefetch_test",
-        "--out-dir",
-        out_dir.to_str().unwrap(),
-    ]);
-
-    maybe_trigger_prefetch(&config, &args);
-
-    let root = std::fs::canonicalize(&workspace).unwrap();
-    let marker = session_marker_path(&config, root.to_str().unwrap());
-    assert!(marker.starts_with(&config.runtime_dir));
-    let content = std::fs::read_to_string(&marker).expect("session marker created");
-    let (_, session_id) = parse_session_marker(&content).expect("valid v1 marker");
-    assert!(!session_id.is_empty());
-    assert!(timestamp_is_fresh(&content, BUILD_SESSION_SECS));
-    assert!(!config.cache_dir.join(".build-sessions").exists());
-    // The hint is recorded against the session it was sent for.
-    let sent = prefetch_marker_path(&config, root.to_str().unwrap());
-    assert_eq!(std::fs::read_to_string(sent).unwrap(), session_id);
-}
 
 #[test]
 fn only_a_cargo_compile_outside_every_layout_is_unrecognized() {
@@ -9336,193 +8810,11 @@ fn locked_marker_helpers_replace_and_read_the_whole_content() {
     assert_eq!(std::fs::read_to_string(&marker).unwrap(), "short");
 }
 
-#[test]
-fn prefetch_markers_parse_and_reject_malformed_failure_records() {
-    assert_eq!(parse_prefetch_marker("  \n"), PrefetchMarker::Unset);
-    assert_eq!(
-        parse_prefetch_marker("abcd\n"),
-        PrefetchMarker::Sent("abcd")
-    );
-    assert_eq!(
-        parse_prefetch_marker("fail:abcd:100:2\n"),
-        PrefetchMarker::Failed {
-            until: 100,
-            attempts: 2
-        }
-    );
-    for malformed in [
-        "fail:",
-        "fail:abcd:100",
-        "fail:abcd:soon:2",
-        "fail:abcd:100:x",
-    ] {
-        assert_eq!(
-            parse_prefetch_marker(malformed),
-            PrefetchMarker::Unset,
-            "{malformed}"
-        );
-    }
-}
 
-#[test]
-fn a_failed_discovery_is_retried_only_once_its_wait_is_over() {
-    let failed = PrefetchMarker::Failed {
-        until: 100,
-        attempts: 1,
-    };
-    assert!(!prefetch_due(&failed, "abcd", 99));
-    assert!(prefetch_due(&failed, "abcd", 100));
-    assert!(!prefetch_due(&PrefetchMarker::Sent("abcd"), "abcd", 100));
-    assert!(prefetch_due(&PrefetchMarker::Sent("abcd"), "efgh", 100));
-    assert!(prefetch_due(&PrefetchMarker::Unset, "abcd", 0));
-}
 
-#[test]
-fn the_retry_wait_doubles_from_thirty_seconds_to_ten_minutes() {
-    let waits: Vec<u64> = (0..=7).map(prefetch_retry_secs).collect();
-    assert_eq!(waits, [30, 30, 60, 120, 240, 480, 600, 600]);
-    assert_eq!(prefetch_retry_secs(u32::MAX), 600);
-}
 
-#[test]
-fn a_failure_run_carries_across_sessions() {
-    assert_eq!(
-        failed_prefetch_marker("abcd", 1000, &PrefetchMarker::Unset),
-        "fail:abcd:1030:1"
-    );
-    assert_eq!(
-        failed_prefetch_marker("abcd", 1000, &PrefetchMarker::Sent("abcd")),
-        "fail:abcd:1030:1"
-    );
-    assert_eq!(
-        failed_prefetch_marker(
-            "efgh",
-            1000,
-            &PrefetchMarker::Failed {
-                until: 900,
-                attempts: 3
-            }
-        ),
-        "fail:efgh:1240:4"
-    );
-}
 
-#[test]
-fn a_failed_discovery_backs_off_and_a_success_clears_it() {
-    // `KACHE_EVENT_ROOT` would move the event root, and with it the
-    // marker, between calls.
-    let _lock = crate::test_support::process_state_test_lock();
-    let dir = tempfile::TempDir::new().unwrap();
-    let mut config = test_config(dir.path().to_path_buf());
-    let mut args = rustc_args(&["rustc", "foo.rs"]);
-    args.out_dir = Some(dir.path().join("target/debug/deps"));
-    assert_eq!(
-        maybe_trigger_prefetch_with(&config, &args, 0, || unreachable!()),
-        PrefetchTrigger::NoRemote
-    );
-    config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "kache/"));
-    let root = rustc_event_root(&args);
-    let marker = prefetch_marker_path(&config, &root);
-    let intent = || kache_core::BuildIntent {
-        crate_names: vec!["serde".to_string()],
-        namespace: None,
-        cargo_lock_deps: Vec::new(),
-        identity_key: None,
-        lock_path: None,
-    };
-    // The marker's lock is shared with every process that inherited its
-    // descriptor, and a test elsewhere in this binary can spawn a child
-    // while one of these calls holds it. That is another wrapper sending
-    // the hint as far as the code can tell, so wait it out.
-    let trigger = |now: u64, discover: &dyn Fn() -> Option<kache_core::BuildIntent>| {
-        for _ in 0..200 {
-            let outcome = maybe_trigger_prefetch_with(&config, &args, now, discover);
-            if outcome != PrefetchTrigger::Busy {
-                return outcome;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        PrefetchTrigger::Busy
-    };
 
-    let attempts = std::cell::Cell::new(0);
-    let failing = || {
-        attempts.set(attempts.get() + 1);
-        None
-    };
-    let start = now_epoch_secs();
-    assert_eq!(trigger(start, &failing), PrefetchTrigger::DiscoveryFailed);
-    assert_eq!(attempts.get(), 1);
-    assert!(std::fs::read_to_string(&marker).unwrap().ends_with(":1"));
-
-    // Inside the 30 s wait: no second attempt.
-    assert_eq!(trigger(start + 29, &failing), PrefetchTrigger::NotDue);
-    assert_eq!(attempts.get(), 1);
-
-    // After it: a second failure doubles the wait.
-    assert_eq!(
-        trigger(start + 30, &failing),
-        PrefetchTrigger::DiscoveryFailed
-    );
-    assert_eq!(attempts.get(), 2);
-    assert!(prefetch_due(
-        &parse_prefetch_marker(&std::fs::read_to_string(&marker).unwrap()),
-        "any",
-        start + 90
-    ));
-    assert_eq!(trigger(start + 89, &failing), PrefetchTrigger::NotDue);
-    assert_eq!(attempts.get(), 2);
-
-    // While another process holds the marker's lock, nothing is sent.
-    // Taking it here can itself find it busy, for the same reason as
-    // `trigger`: a child spawned meanwhile shares the descriptor.
-    let held = open_marker_for_lock(&marker).unwrap();
-    let mut waited = 0;
-    while held.try_lock().is_err() {
-        assert!(waited < 200, "the marker lock stayed busy for 2 s");
-        waited += 1;
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    assert_eq!(
-        maybe_trigger_prefetch_with(&config, &args, start + 90, || unreachable!()),
-        PrefetchTrigger::Busy
-    );
-    drop(held);
-
-    // A success replaces the failure record with the session it sent for,
-    // and later compiles of that session do not discover again.
-    let sent = std::cell::Cell::new(0);
-    let working = || {
-        sent.set(sent.get() + 1);
-        Some(intent())
-    };
-    assert_eq!(trigger(start + 90, &working), PrefetchTrigger::Sent);
-    assert_eq!(sent.get(), 1);
-    let recorded = std::fs::read_to_string(&marker).unwrap();
-    assert!(matches!(
-        parse_prefetch_marker(&recorded),
-        PrefetchMarker::Sent(_)
-    ));
-    assert_eq!(trigger(start + 91, &working), PrefetchTrigger::NotDue);
-    assert_eq!(sent.get(), 1);
-}
-
-#[test]
-fn prefetch_marker_is_per_root_and_names_one_session() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let config = test_config(dir.path().to_path_buf());
-    let path = prefetch_marker_path(&config, "/repo");
-    assert_eq!(
-        path.parent(),
-        session_marker_path(&config, "/repo").parent()
-    );
-    assert_ne!(path, session_marker_path(&config, "/repo"));
-    assert_ne!(path, prefetch_marker_path(&config, "/other"));
-
-    assert!(!prefetch_due(&parse_prefetch_marker("abc\n"), "abc", 0));
-    assert!(prefetch_due(&parse_prefetch_marker("abd"), "abc", 0));
-    assert!(prefetch_due(&parse_prefetch_marker(""), "abc", 0));
-}
 
 /// Cargo's target directory, tagged the way Cargo tags it.
 fn tagged_target(workspace: &Path) -> PathBuf {
@@ -9664,20 +8956,6 @@ fn mint_session_id_is_opaque_and_distinct() {
     );
 }
 
-/// With no remote configured there is no hint to send, so prefetch
-/// detection touches nothing; sessions come from event logging instead.
-#[test]
-fn maybe_trigger_prefetch_returns_immediately_without_remote() {
-    let dir = tempfile::tempdir().unwrap();
-    let cache_dir = dir.path().join("cache");
-    let config = test_config(cache_dir.clone());
-    let args = rustc_args(&["rustc", "src/lib.rs", "--crate-name", "foo"]);
-
-    maybe_trigger_prefetch(&config, &args);
-
-    assert!(!cache_dir.join(".build-session").exists());
-    assert!(!config.runtime_dir.join(".build-sessions").exists());
-}
 
 /// Incremental cleanup only removes a real directory when the config flag
 /// is enabled; absent paths and disabled cleanup are silent no-ops.
@@ -11124,7 +10402,7 @@ fn cc_successful_compile_and_handoff_preserve_actual_rebuilt_outputs() {
         .open(config.socket_path().with_extension("run.lock"))
         .unwrap();
     run_lock.lock().unwrap();
-    let daemon = RemoteCheckReplyDaemon::with_reply(
+    let daemon = FakeDaemon::with_reply(
         config.socket_path(),
         serde_json::json!({"ok":false,"error":"test daemon declines publication"}),
     );

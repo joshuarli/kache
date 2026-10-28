@@ -190,7 +190,7 @@ fn test_rust_restored_outputs_allow_build_without_wrapper() {
     assert!(!blobs.is_empty());
 
     // Keep the restored artifacts while forcing Cargo to invoke rustc again.
-    fs::remove_dir_all(target.join("debug/.fingerprint")).unwrap();
+    common::clear_package_fingerprints(&target.join("debug"), "permission_probe");
     let unwrapped = hermetic_command(
         "cargo",
         cache.path(),

@@ -111,8 +111,6 @@ class ChangeTests(unittest.TestCase):
         self.assertEqual(
             self.groups(
                 "packaging/nix/package.nix",
-                "packaging/charts/kache-service/values.yaml",
-                "packaging/docker-bake.hcl",
                 "flake.lock",
                 "scripts/apt/publish.sh",
                 "scripts/aur/vcs-pkgver.sh",
@@ -124,7 +122,6 @@ class ChangeTests(unittest.TestCase):
                 "scripts/crates-io.py",
                 ".github/workflows/package-publish.yml",
                 ".github/workflows/publish-crates.yaml",
-                ".github/workflows/service-image.yml",
             ),
             {"check": True, "tests": False, "e2e": False, "nix": True},
         )

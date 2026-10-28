@@ -306,11 +306,10 @@ fn events(cache: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// The `*.kache-alias` markers in a tree's `deps`.
+/// The `*.kache-alias` markers Cargo's profile holds for this tree.
 fn alias_markers(tree: &Path) -> Vec<PathBuf> {
-    std::fs::read_dir(tree.join("target/debug/deps"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
+    common::profile_artifacts(&tree.join("target/debug"))
+        .into_iter()
         .filter(|path| path.extension().is_some_and(|ext| ext == "kache-alias"))
         .collect()
 }
@@ -371,9 +370,8 @@ fn proc_macro_bytes_and_dependent_keys_match_across_stores() {
         let paths = printed_paths(&tree.join("target/debug/app"));
         assert_eq!(paths.len(), 1);
         assert!(paths[0].starts_with(&shared), "{paths:?}");
-        let dylib = std::fs::read_dir(tree.join("target/debug/deps"))
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
+        let dylib = common::profile_artifacts(&tree.join("target/debug"))
+            .into_iter()
             .find(|path| {
                 path.file_name()
                     .unwrap()

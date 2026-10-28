@@ -175,61 +175,9 @@ enum Commands {
         #[arg(long)]
         repair: bool,
 
-        /// Compile a temporary Rust library and verify a local cache hit (no remote access)
+        /// Compile a temporary Rust library and verify a local cache hit
         #[arg(long)]
         probe: bool,
-    },
-
-    /// Pull from and push to the configured remote
-    #[command(display_order = 30)]
-    Sync {
-        /// Path to Cargo.toml (default: current directory)
-        #[arg(long)]
-        manifest_path: Option<String>,
-        /// Only download from the remote (skip uploads)
-        #[arg(long, conflicts_with = "push")]
-        pull: bool,
-        /// Only upload to the remote (skip downloads)
-        #[arg(long)]
-        push: bool,
-        /// Show what would be synced without transferring
-        #[arg(long, short = 'n')]
-        dry_run: bool,
-        /// Pull all remote artifacts (ignore workspace filtering)
-        #[arg(long)]
-        all: bool,
-        /// Scope the pull listing to workspace members (one LIST per member)
-        /// instead of one LIST per Cargo.lock dependency crate.
-        ///
-        /// This only narrows the up-front batch pull. Dependency artifacts are
-        /// still resolved on demand during the build — the rustc wrapper fetches
-        /// any local miss from the remote via the daemon (a remote hit) and the daemon
-        /// prefetches by build intent — so deps are not recompiled. Most useful
-        /// when the dependency artifacts are already present locally (e.g. a
-        /// prebuilt `cargo chef` deps image whose compiled deps sit in target/),
-        /// where they're local hits and never need a remote round-trip; in a plain
-        /// setup deps are fetched lazily during the build rather than pre-warmed.
-        ///
-        /// Errors out if the workspace set can't be resolved (cargo metadata
-        /// failed or this isn't a Cargo workspace) rather than silently falling
-        /// back to a full remote scan.
-        #[arg(long, conflicts_with = "all")]
-        workspace: bool,
-        /// Allow partial synchronization and exit successfully (code 0) even if some transfers or imports fail
-        #[arg(long)]
-        allow_partial: bool,
-    },
-
-    /// Save a build manifest for future prefetch warming
-    #[command(hide = true)]
-    SaveManifest {
-        /// Override manifest key (default: identity key plus host triple)
-        #[arg(long)]
-        manifest_key: Option<String>,
-        /// Shard namespace: target/rustc_hash/profile. If set and Cargo.lock exists,
-        /// uploads content-addressed shards alongside the monolithic build manifest.
-        #[arg(long)]
-        namespace: Option<String>,
     },
 
     /// Show the background daemon's status, or start, stop or install it
@@ -294,8 +242,7 @@ enum Commands {
         redact: bool,
     },
 
-    /// Write cache counters as OTLP JSON, or send build timelines to the
-    /// planner
+    /// Write cache counters as OTLP JSON
     #[command(hide = true)]
     Telemetry {
         #[command(subcommand)]
@@ -375,22 +322,6 @@ enum Commands {
         #[command(subcommand)]
         command: Option<config_cli::Command>,
     },
-
-    /// Log in to the planner with your Kunobi account
-    #[command(display_order = 31)]
-    Login {
-        /// Sign in on another device (prints a URL and a code)
-        #[arg(long)]
-        device: bool,
-        /// Accept and re-pin the planner's current login issuer when it no
-        /// longer matches the one first trusted
-        #[arg(long)]
-        retrust: bool,
-    },
-
-    /// Log out of the planner and revoke the stored Kunobi session
-    #[command(display_order = 32)]
-    Logout,
 
     /// Create compiler-name links to kache in a directory you put first on
     /// PATH. Kept for scripts and packages; `kache init --shims` does the

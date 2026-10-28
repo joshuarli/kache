@@ -6,6 +6,20 @@ use std::{fs, path::Path, process::Output};
 #[allow(dead_code)]
 mod common;
 
+fn worktree_dep_info(root: &Path) -> std::path::PathBuf {
+    common::profile_artifacts(&root.join("target/debug"))
+        .into_iter()
+        .find(|path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            path.extension().is_some_and(|extension| extension == "d")
+                && (name.starts_with("worktree_probe-")
+                    || name.starts_with("libworktree_probe-")
+                    || name == "worktree_probe.d"
+                    || name == "libworktree_probe.d")
+        })
+        .expect("worktree_probe dep-info")
+}
+
 fn project(root: &Path, answer: u64) {
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(
@@ -385,14 +399,11 @@ fn automatic_bootstrap_retry_preserves_source_observations_and_discards_false_er
         "discarded bootstrap binary must not survive the failed native retry"
     );
     assert!(
-        !fs::read_dir(failing.join("target/debug/deps"))
-            .unwrap()
-            .any(|entry| {
-                let path = entry.unwrap().path();
-                path.file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .starts_with("worktree_probe-")
+        !common::profile_artifacts(&failing.join("target/debug"))
+            .iter()
+            .any(|path| {
+                let name = path.file_name().unwrap().to_string_lossy();
+                (name == "worktree_probe" || name.starts_with("worktree_probe-"))
                     && path.extension().is_none()
             }),
         "discarded rustc executable must not survive in deps either"
@@ -446,17 +457,7 @@ fn failed_bootstrap_dep_info_cleanup_keeps_the_native_compile_accounted() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let dep_info = fs::read_dir(root.join("target/debug/deps"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| {
-            path.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("worktree_probe-")
-                && path.extension().is_some_and(|extension| extension == "d")
-        })
-        .unwrap();
+    let dep_info = worktree_dep_info(&root);
     fs::remove_file(&dep_info).unwrap();
     fs::create_dir(&dep_info).unwrap();
     edited_project(&root, 1);
@@ -519,17 +520,7 @@ fn deferred_compiler_error_does_not_retry_a_stale_bootstrap_observation() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let dep_info = fs::read_dir(root.join("target/debug/deps"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| {
-            path.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("worktree_probe-")
-                && path.extension().is_some_and(|extension| extension == "d")
-        })
-        .unwrap();
+    let dep_info = worktree_dep_info(&root);
     fs::write(&dep_info, "# env-dep:RUSTC_BOOTSTRAP=stale\n").unwrap();
     fs::write(&stop, b"stop before touching dep-info").unwrap();
     fs::write(
@@ -629,10 +620,8 @@ fn deferred_library_seed_retries_bootstrap_before_any_artifact_lookup() {
                 .file_name()
                 .is_some_and(|name| name == "bootstrap-env-dep"))
     );
-    let deps = root.join("target/debug/deps");
-    let rlib = fs::read_dir(&deps)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
+    let rlib = common::profile_artifacts(&root.join("target/debug"))
+        .into_iter()
         .find(|path| {
             path.file_name()
                 .unwrap()
@@ -650,12 +639,20 @@ fn deferred_library_seed_retries_bootstrap_before_any_artifact_lookup() {
         "fn main() { println!(\"{}\", worktree_probe::answer()); }\n",
     )
     .unwrap();
-    let output = std::process::Command::new("rustc")
+    let mut compile = std::process::Command::new("rustc");
+    compile
         .arg(&source)
         .args(["--edition", "2024", "--extern"])
-        .arg(format!("worktree_probe={}", rlib.display()))
+        .arg(format!("worktree_probe={}", rlib.display()));
+    let rmeta = rlib.with_extension("rmeta");
+    if rmeta.is_file() {
+        compile
+            .arg("--extern")
+            .arg(format!("worktree_probe={}", rmeta.display()));
+    }
+    let output = compile
         .arg("-L")
-        .arg(&deps)
+        .arg(rlib.parent().expect("rlib has a directory"))
         .arg("-o")
         .arg(&binary)
         .output()
@@ -695,7 +692,7 @@ fn deferred_retry_reads_dep_info_when_the_compiler_omits_its_notification() {
 import json, os, subprocess, sys
 real = os.environ['WORKTREE_PROBE_RUSTC']
 args = sys.argv[1:]
-if 'src/lib.rs' in args and os.environ.get('RUSTC_BOOTSTRAP') == '1':
+if 'src/lib.rs' in args and (os.environ.get('RUSTC_BOOTSTRAP') == '1' or '-Zremap-cwd-prefix=/src' in args):
     result = subprocess.run([real, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     sys.stdout.buffer.write(result.stdout)
     for line in result.stderr.splitlines(keepends=True):

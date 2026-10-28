@@ -20,7 +20,7 @@ name = "bench-cc-memos"
 required-features = ["test-support"]
 
 [dependencies]
-kache-core = { version = "2.0.0-rc.2", path = "../kache-core", default-features = false }
+kache-core = { version = "2.0.0-rc.2", path = "../kache-core" }
 kache-format = { version = "2.0.0-rc.2", path = "../kache-format" }
 kache-fs = { version = "2.0.0-rc.2", path = "../kache-fs", features = ["staging"] }
 anyhow = "1"
@@ -30,10 +30,10 @@ serde_json = "1"
 blake3 = "1"
 libc = "0.2"
 tracing = "0.1"
-filetime = "0.2"
 tempfile = "3"
 
 [dev-dependencies]
+filetime = "0.2"
 proptest = { version = "1.12.0", default-features = false, features = ["std", "handle-panics"] }
 tempfile = "3"
 serde_json = "1"

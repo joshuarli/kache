@@ -6,23 +6,17 @@ use std::io::IsTerminal;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
-use std::sync::Arc;
-
-use crate::cache_remote::V3Prefetch;
 use crate::config::Config;
 use crate::daemon;
 use crate::events;
 use crate::machine::{PathIdentity, directory_identity};
 use crate::since::SinceWindow;
-use crate::store::{STAGING_SWEEP_GRACE, Store, StoreLock};
+use crate::store::{STAGING_SWEEP_GRACE, Store};
 
 mod doctor_daemon;
 mod doctor_probe;
 mod doctor_storage;
-#[cfg(feature = "remote")]
-pub mod login;
 mod miss_diagnosis;
-mod sync_scope;
 use miss_diagnosis::{Cause, MissDiagnosis};
 
 // ── Stats snapshot (daemon-first, fallback to direct) ──────────────────────
@@ -39,34 +33,10 @@ pub(crate) struct StatsSnapshot {
     pub daemon_connected: bool,
     pub daemon_version: String,
     pub daemon_build_epoch: u64,
-    pub pending_uploads: usize,
-    pub active_downloads: usize,
-    pub s3_concurrency_total: usize,
-    pub s3_concurrency_used: usize,
-    pub uploads_completed: u64,
-    pub uploads_failed: u64,
-    pub uploads_skipped: u64,
-    pub uploads_suppressed: u64,
-    pub downloads_completed: u64,
-    pub downloads_failed: u64,
-    pub downloads_suppressed: u64,
-    /// RemoteChecks that reached S3 vs. answers from the negative cache
-    /// (kunobi-ninja/kache#564), plus the breaker state (#327). Zeroed when
-    /// the daemon is unreachable.
-    pub remote_check_roundtrips: u64,
-    pub negative_hits: u64,
-    pub negative_entries: u64,
-    pub remote_degraded: bool,
-    pub bytes_uploaded: u64,
-    pub bytes_downloaded: u64,
-    pub recent_transfers: Vec<daemon::TransferEvent>,
     pub blob_stats: Option<crate::store::BlobStats>,
     /// Recent daemon-owned session summaries, or direct-store summaries when
     /// no daemon was reachable.
     pub recent_summaries: Vec<crate::events::BuildSummaryEvent>,
-    /// Phase-0 prefetch/planning observability (#485); zeroed when the daemon
-    /// is unreachable.
-    pub prefetch: daemon::PrefetchStatsSnapshot,
     /// In-flight miss compiles (kunobi-ninja/kache#131); empty when the
     /// daemon is unreachable (the TUI then falls back to tailed heartbeats).
     pub in_flight: Vec<daemon::InFlightEntry>,
@@ -103,27 +73,8 @@ impl Default for StatsSnapshot {
             daemon_connected: false,
             daemon_version: String::new(),
             daemon_build_epoch: 0,
-            pending_uploads: 0,
-            active_downloads: 0,
-            s3_concurrency_total: 0,
-            s3_concurrency_used: 0,
-            uploads_completed: 0,
-            uploads_failed: 0,
-            uploads_skipped: 0,
-            uploads_suppressed: 0,
-            downloads_completed: 0,
-            downloads_failed: 0,
-            downloads_suppressed: 0,
-            remote_check_roundtrips: 0,
-            negative_hits: 0,
-            negative_entries: 0,
-            remote_degraded: false,
-            bytes_uploaded: 0,
-            bytes_downloaded: 0,
-            recent_transfers: Vec::new(),
             blob_stats: None,
             recent_summaries: Vec::new(),
-            prefetch: daemon::PrefetchStatsSnapshot::default(),
             in_flight: Vec::new(),
             daemon_effective_config: None,
         }
@@ -182,27 +133,8 @@ pub(crate) fn fetch_stats_snapshot(
             daemon_connected: true,
             daemon_version: resp.version,
             daemon_build_epoch: resp.build_epoch,
-            pending_uploads: resp.pending_uploads,
-            active_downloads: resp.active_downloads,
-            s3_concurrency_total: resp.s3_concurrency_total,
-            s3_concurrency_used: resp.s3_concurrency_used,
-            uploads_completed: resp.uploads_completed,
-            uploads_failed: resp.uploads_failed,
-            uploads_skipped: resp.uploads_skipped,
-            uploads_suppressed: resp.uploads_suppressed,
-            downloads_completed: resp.downloads_completed,
-            downloads_failed: resp.downloads_failed,
-            downloads_suppressed: resp.downloads_suppressed,
-            remote_check_roundtrips: resp.remote_check_roundtrips,
-            negative_hits: resp.negative_hits,
-            negative_entries: resp.negative_entries,
-            remote_degraded: resp.remote_degraded,
-            bytes_uploaded: resp.bytes_uploaded,
-            bytes_downloaded: resp.bytes_downloaded,
-            recent_transfers: resp.recent_transfers,
             blob_stats: resp.blob_stats,
             recent_summaries: resp.recent_summaries,
-            prefetch: resp.prefetch,
             in_flight: resp.in_flight,
             daemon_effective_config: resp.effective_config,
         };
@@ -235,27 +167,8 @@ pub(crate) fn fetch_stats_snapshot(
             daemon_connected: true,
             daemon_version: resp.version,
             daemon_build_epoch: resp.build_epoch,
-            pending_uploads: resp.pending_uploads,
-            active_downloads: resp.active_downloads,
-            s3_concurrency_total: resp.s3_concurrency_total,
-            s3_concurrency_used: resp.s3_concurrency_used,
-            uploads_completed: resp.uploads_completed,
-            uploads_failed: resp.uploads_failed,
-            uploads_skipped: resp.uploads_skipped,
-            uploads_suppressed: resp.uploads_suppressed,
-            downloads_completed: resp.downloads_completed,
-            downloads_failed: resp.downloads_failed,
-            downloads_suppressed: resp.downloads_suppressed,
-            remote_check_roundtrips: resp.remote_check_roundtrips,
-            negative_hits: resp.negative_hits,
-            negative_entries: resp.negative_entries,
-            remote_degraded: resp.remote_degraded,
-            bytes_uploaded: resp.bytes_uploaded,
-            bytes_downloaded: resp.bytes_downloaded,
-            recent_transfers: resp.recent_transfers,
             blob_stats: resp.blob_stats,
             recent_summaries: resp.recent_summaries,
-            prefetch: resp.prefetch,
             in_flight: resp.in_flight,
             daemon_effective_config: resp.effective_config,
         };
@@ -315,27 +228,8 @@ pub(crate) fn snapshot_from_direct_reads(
         daemon_connected: false,
         daemon_version: String::new(),
         daemon_build_epoch: 0,
-        pending_uploads: 0,
-        active_downloads: 0,
-        s3_concurrency_total: 0,
-        s3_concurrency_used: 0,
-        uploads_completed: 0,
-        uploads_failed: 0,
-        uploads_skipped: 0,
-        uploads_suppressed: 0,
-        downloads_completed: 0,
-        downloads_failed: 0,
-        downloads_suppressed: 0,
-        remote_check_roundtrips: 0,
-        negative_hits: 0,
-        negative_entries: 0,
-        remote_degraded: false,
-        bytes_uploaded: 0,
-        bytes_downloaded: 0,
-        recent_transfers: Vec::new(),
         blob_stats: Some(inventory.blob_stats),
         recent_summaries,
-        prefetch: daemon::PrefetchStatsSnapshot::default(),
         in_flight: Vec::new(),
         daemon_effective_config: None,
     }
@@ -470,174 +364,6 @@ pub(crate) fn record_session(config: &Config, report: &crate::report::BuildRepor
 /// `schema_version`). Uses the running daemon when reachable; otherwise the
 /// local store. Does not auto-start a daemon, so a finished bench dumps what
 /// is already on disk instead of an empty new process.
-/// Which sessions `kache telemetry push` sends.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TimelineSelection {
-    /// The session that finished last: what a CI post-step wants.
-    Latest,
-    /// Every session still in the logs.
-    All,
-    /// One session by id.
-    Session(String),
-}
-
-/// Send build timeline records to the configured planner.
-///
-/// Records are advisory, so this reports problems and returns `Ok`: a CI
-/// post-step must not fail a green job because a record did not land.
-pub fn telemetry_push(
-    config: &Config,
-    selection: &TimelineSelection,
-    labels: &[String],
-    dry_run: bool,
-) -> Result<()> {
-    let labels = parse_labels(labels)?;
-    let (records, events_seen, versions) = collect_timelines(config, selection, labels)?;
-    if records.is_empty() {
-        println!("{}", nothing_to_send(events_seen, &versions));
-        return Ok(());
-    }
-
-    if dry_run {
-        println!("{}", serde_json::to_string_pretty(&records)?);
-        return Ok(());
-    }
-
-    let Some(planner) = crate::config::Config::load_planner_config() else {
-        println!(
-            "no planner configured; set KACHE_PLANNER_ENDPOINT to send {}",
-            term::counted(records.len() as u64, "record", "records")
-        );
-        return Ok(());
-    };
-
-    #[cfg(feature = "remote")]
-    {
-        push_timelines(&planner, &records)?;
-        Ok(())
-    }
-    #[cfg(not(feature = "remote"))]
-    {
-        let _ = (planner, records);
-        Err(anyhow::anyhow!(
-            "telemetry push needs remote support; rebuild with --features remote"
-        ))
-    }
-}
-
-/// Send collected timeline records to the planner.
-#[cfg(feature = "remote")]
-fn push_timelines(
-    planner: &crate::config::PlannerConfig,
-    records: &[kache_core::timeline::BuildTimeline],
-) -> Result<()> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("building tokio runtime")?;
-    for record in records {
-        match rt.block_on(crate::timeline_client::push_timeline(planner, record)) {
-            Ok(answer) => println!(
-                "sent session {} ({}): {}",
-                record.session_id,
-                term::counted(record.units.len() as u64, "unit", "units"),
-                answer.stored
-            ),
-            Err(error) => eprintln!("warning: session {} not sent: {error:#}", record.session_id),
-        }
-    }
-    Ok(())
-}
-
-/// Why there was nothing to send.
-///
-/// Wrappers before kache 0.24 do not stamp a build session on their events, so
-/// their logs cannot be grouped into builds. Saying that beats reporting an
-/// empty log directory.
-fn nothing_to_send(events_seen: usize, versions: &std::collections::BTreeSet<String>) -> String {
-    if events_seen == 0 {
-        return "no builds in the event log".to_string();
-    }
-    let versions: Vec<&str> = versions.iter().map(String::as_str).collect();
-    format!(
-        "{} in the log, none stamped with a build session: \
-         the wrapper that wrote them ({}) predates session ids. Upgrade kache on the builder.",
-        term::counted(events_seen as u64, "compile", "compiles"),
-        if versions.is_empty() {
-            "unknown version".to_string()
-        } else {
-            versions.join(", ")
-        }
-    )
-}
-
-/// Read the logs and build the records `selection` asks for, with what the log
-/// held in case it produced nothing.
-fn collect_timelines(
-    config: &Config,
-    selection: &TimelineSelection,
-    labels: std::collections::BTreeMap<String, String>,
-) -> Result<(
-    Vec<kache_core::timeline::BuildTimeline>,
-    usize,
-    std::collections::BTreeSet<String>,
-)> {
-    let events = events::read_events(&config.event_log_path())?;
-    let transfers = events::read_transfers(&config.transfer_log_path())?;
-    let summaries = events::read_summaries(&config.summary_log_path())?;
-    let env = crate::timeline::EnvSnapshot::from_env();
-    let records = crate::timeline::build_timelines(&crate::timeline::TimelineInputs {
-        events: &events,
-        transfers: &transfers,
-        summaries: &summaries,
-        env: &env,
-        labels,
-        log: kache_core::timeline::LogLimits {
-            event_log_max_size: config.event_log_max_size,
-            event_log_keep_lines: config.event_log_keep_lines as u64,
-        },
-        kache_version: crate::VERSION.to_string(),
-    });
-    let versions = events
-        .iter()
-        .filter(|event| !event.version.is_empty())
-        .map(|event| event.version.clone())
-        .collect();
-    Ok((select_timelines(records, selection), events.len(), versions))
-}
-
-/// Apply the selection to records the builder returned oldest first.
-fn select_timelines(
-    records: Vec<kache_core::timeline::BuildTimeline>,
-    selection: &TimelineSelection,
-) -> Vec<kache_core::timeline::BuildTimeline> {
-    match selection {
-        TimelineSelection::All => records,
-        TimelineSelection::Latest => records.into_iter().next_back().into_iter().collect(),
-        TimelineSelection::Session(wanted) => records
-            .into_iter()
-            .filter(|record| &record.session_id == wanted)
-            .collect(),
-    }
-}
-
-/// `--label key=value`, repeatable.
-fn parse_labels(labels: &[String]) -> Result<std::collections::BTreeMap<String, String>> {
-    labels
-        .iter()
-        .map(|label| {
-            let (key, value) = label
-                .split_once('=')
-                .with_context(|| format!("label `{label}` is not key=value"))?;
-            let key = key.trim();
-            if key.is_empty() {
-                anyhow::bail!("label `{label}` has an empty key");
-            }
-            Ok((key.to_string(), value.trim().to_string()))
-        })
-        .collect()
-}
-
 pub fn telemetry_write(
     config: &Config,
     dir: &std::path::Path,
@@ -661,27 +387,8 @@ pub fn telemetry_write(
             daemon_connected: true,
             daemon_version: resp.version,
             daemon_build_epoch: resp.build_epoch,
-            pending_uploads: resp.pending_uploads,
-            active_downloads: resp.active_downloads,
-            s3_concurrency_total: resp.s3_concurrency_total,
-            s3_concurrency_used: resp.s3_concurrency_used,
-            uploads_completed: resp.uploads_completed,
-            uploads_failed: resp.uploads_failed,
-            uploads_skipped: resp.uploads_skipped,
-            uploads_suppressed: resp.uploads_suppressed,
-            downloads_completed: resp.downloads_completed,
-            downloads_failed: resp.downloads_failed,
-            downloads_suppressed: resp.downloads_suppressed,
-            remote_check_roundtrips: resp.remote_check_roundtrips,
-            negative_hits: resp.negative_hits,
-            negative_entries: resp.negative_entries,
-            remote_degraded: resp.remote_degraded,
-            bytes_uploaded: resp.bytes_uploaded,
-            bytes_downloaded: resp.bytes_downloaded,
-            recent_transfers: resp.recent_transfers,
             blob_stats: resp.blob_stats,
             recent_summaries: resp.recent_summaries,
-            prefetch: resp.prefetch,
             in_flight: resp.in_flight,
             daemon_effective_config: resp.effective_config,
         },
@@ -704,46 +411,11 @@ pub fn telemetry_write(
 }
 
 fn otel_snapshot_from_stats(config: &Config, snap: &StatsSnapshot) -> crate::otel::OtelSnapshot {
+    let _ = config;
     crate::otel::OtelSnapshot {
-        remote_kind: config
-            .remote
-            .as_ref()
-            .map(|remote| remote.backend_kind())
-            .unwrap_or("none"),
         store_max: snap.max_size,
         store_size: Some(snap.total_size),
         store_entries: Some(snap.entry_count as u64),
-        pending_uploads: Some(snap.pending_uploads as u64),
-        active_downloads: Some(snap.active_downloads as u64),
-        s3_concurrency_total: snap.s3_concurrency_total as u64,
-        s3_concurrency_used: snap.s3_concurrency_used as u64,
-        uploads_completed: snap.uploads_completed,
-        uploads_failed: snap.uploads_failed,
-        uploads_skipped: snap.uploads_skipped,
-        uploads_suppressed: snap.uploads_suppressed,
-        downloads_completed: snap.downloads_completed,
-        downloads_failed: snap.downloads_failed,
-        downloads_suppressed: snap.downloads_suppressed,
-        bytes_uploaded: snap.bytes_uploaded,
-        bytes_downloaded: snap.bytes_downloaded,
-        remote_check_roundtrips: snap.remote_check_roundtrips,
-        negative_hits: snap.negative_hits,
-        negative_entries: snap.negative_entries,
-        remote_degraded: snap.remote_degraded,
-        prefetch_downloads: snap.prefetch.downloads_completed,
-        prefetch_bytes: snap.prefetch.bytes_downloaded,
-        prefetch_keys_used: snap.prefetch.keys_used,
-        prefetch_keys_cancelled: snap.prefetch.keys_cancelled,
-        prefetch_keys_over_budget: snap.prefetch.keys_over_budget,
-        prefetch_plans_advisory: snap.prefetch.plans_advisory,
-        prefetch_plans_fallback: snap.prefetch.plans_fallback,
-        prefetch_list_requests: snap.prefetch.list_requests_total,
-        prefetch_list_failures: snap.prefetch.list_failures_total,
-        prefetch_pack_requests: snap.prefetch.pack_requests_total,
-        prefetch_v3_requests: snap.prefetch.v3_requests_total,
-        prefetch_cancelled: snap.prefetch.cancelled,
-        prefetch_last_plan_candidates: snap.prefetch.last_plan_candidates,
-        prefetch_last_plan_wall_ms: snap.prefetch.last_plan_wall_ms,
     }
 }
 
@@ -938,25 +610,18 @@ pub fn stats(
             daemon_connected: bool,
             daemon_version: String,
             daemon_epoch: u64,
-            /// Whether the daemon skips remote uploads. Absent when no daemon
-            /// answered or it predates the field.
-            #[serde(skip_serializing_if = "Option::is_none")]
-            daemon_remote_readonly: Option<bool>,
             /// Whole hours, rounded down (0 for a sub-hour window). Kept for
             /// consumers that predate `since_secs`.
             hours: u64,
             since_secs: u64,
             /// The window as requested: `15m`, `2h`, `24h`.
             since: String,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            remote: Option<&'a str>,
             /// The host config file merged under the chosen one, when there is
             /// one in effect.
             #[serde(skip_serializing_if = "Option::is_none")]
             host_config: Option<&'a str>,
         }
         let hit_rate = count_hit_rate(&snap.event_stats);
-        let remote = config.remote.as_ref().map(|r| r.describe());
         return crate::machine::emit(
             "stats",
             Body {
@@ -983,14 +648,9 @@ pub fn stats(
                 daemon_connected: snap.daemon_connected,
                 daemon_version: snap.daemon_version.clone(),
                 daemon_epoch: snap.daemon_build_epoch,
-                daemon_remote_readonly: snap
-                    .daemon_effective_config
-                    .as_ref()
-                    .and_then(|eff| eff.remote_readonly),
                 hours: window.hours(),
                 since_secs: window.secs(),
                 since: window.label(),
-                remote: remote.as_deref(),
                 host_config: host_config.as_deref(),
             },
             crate::machine::next_for_clones(&disk),
@@ -1169,7 +829,7 @@ pub(crate) fn render_stats_with(
 ) -> Vec<String> {
     let mut cache = cache_rows(snap, config);
     cache.extend(extras.cache.iter().cloned());
-    let mut service = service_rows(snap, config);
+    let mut service = service_rows(snap);
     service.extend(extras.service.iter().cloned());
     let mut lines = vec![
         term::heading(format!("kache · last {window}")),
@@ -1405,7 +1065,7 @@ fn cache_rows(snap: &StatsSnapshot, config: &Config) -> Vec<StatsRow> {
 }
 
 /// The daemon, the remote, and remote traffic when there is any.
-fn service_rows(snap: &StatsSnapshot, config: &Config) -> Vec<StatsRow> {
+fn service_rows(snap: &StatsSnapshot) -> Vec<StatsRow> {
     let mut rows: Vec<StatsRow> = Vec::new();
     // Daemon status
     if snap.daemon_connected {
@@ -1441,238 +1101,7 @@ fn service_rows(snap: &StatsSnapshot, config: &Config) -> Vec<StatsRow> {
         rows.push(("Daemon", "offline".to_string(), String::new()));
     }
 
-    // Remote state belongs to the daemon just like the counters above it.
-    // Fall back to this process only for an older daemon, and label the guess.
-    let (remote_status, daemon_has_remote, remote_source) = match &snap.daemon_effective_config {
-        Some(eff) => (
-            remote_status(
-                eff.remote_description.as_deref(),
-                eff.local_only,
-                eff.remote_error.as_deref(),
-            ),
-            eff.remote_description.is_some(),
-            "",
-        ),
-        None => (
-            remote_status(
-                config
-                    .remote
-                    .as_ref()
-                    .map(|remote| remote.describe())
-                    .as_deref(),
-                config.local_only,
-                config.remote_error.as_deref(),
-            ),
-            config.remote.is_some(),
-            if snap.daemon_connected {
-                " [client config — daemon did not report its remote state]"
-            } else {
-                ""
-            },
-        ),
-    };
-    // A daemon keeps the read-only setting it started with, so its mode can
-    // differ from this process's.
-    let remote_readonly = match &snap.daemon_effective_config {
-        Some(eff) => eff.remote_readonly == Some(true),
-        None => config.remote_readonly,
-    };
-    // The Remote row stays the bare description: kache-action compares the
-    // rest of that line with the remote it configured.
-    rows.push((
-        "Remote",
-        format!("{remote_status}{remote_source}"),
-        String::new(),
-    ));
-    if daemon_has_remote && remote_readonly {
-        rows.push((
-            "Uploads",
-            "off".to_string(),
-            "the daemon is read-only and skips remote writes".to_string(),
-        ));
-    }
-
-    // Remote resilience (kunobi-ninja/kache#327, #564): breaker state and
-    // negative-cache effectiveness (hits avoided vs. round trips paid). Shown
-    // only once the daemon has remote-check traffic to report, so existing
-    // output stays unchanged for quiet or local-only setups.
-    if snap.daemon_connected && config.remote.is_some() && has_remote_resilience_activity(snap) {
-        let degraded = if snap.remote_degraded {
-            ", DEGRADED: reads suppressed, uploads deferred"
-        } else {
-            ""
-        };
-        rows.push((
-            "Resilience",
-            format!("{} round trips", term::count(snap.remote_check_roundtrips)),
-            format!(
-                "{} negative-cache hits ({} remembered), {} restores suppressed, {} uploads deferred{degraded}",
-                term::count(snap.negative_hits),
-                term::count(snap.negative_entries),
-                term::count(snap.downloads_suppressed),
-                term::count(snap.uploads_suppressed),
-            ),
-        ));
-    }
-
-    // Prefetch/planning baseline (#485 Phase 0). Shown only when the daemon
-    // has something to report, so local-only output stays unchanged.
-    let pf = &snap.prefetch;
-    // The policy line states what the DAEMON is doing, so it renders the
-    // daemon's effective policy (#652/#689) — this process's config may say
-    // "disabled" while a long-lived daemon is still LISTing and planning.
-    // Only a daemon too old to report a policy falls back to client config,
-    // labeled, because then the line is a guess rather than a daemon fact.
-    let (prefetch_enabled, prefetch_source) = match &snap.daemon_effective_config {
-        Some(eff) => (eff.prefetch_enabled, ""),
-        None => (
-            config.prefetch_enabled,
-            " [client config — daemon did not report its policy]",
-        ),
-    };
-    let key_listing = match &snap.daemon_effective_config {
-        Some(eff) => eff.remote_key_listing,
-        None => config.remote_key_listing,
-    };
-    if snap.daemon_connected && daemon_has_remote && !key_listing {
-        rows.push((
-            "Listing",
-            "off".to_string(),
-            "reads need only GetObject; `remote_key_listing = true` lists keys".to_string(),
-        ));
-    }
-    if snap.daemon_connected && daemon_has_remote && !prefetch_enabled {
-        rows.push((
-            "Prefetch",
-            "disabled".to_string(),
-            format!("exact remote lookup and uploads stay on{prefetch_source}"),
-        ));
-    } else if snap.daemon_connected
-        && (pf.downloads_completed > 0
-            || pf.plans_advisory + pf.plans_fallback > 0
-            || pf.last_list_key_count > 0)
-    {
-        let used_pct = if pf.downloads_completed > 0 {
-            (pf.keys_used as f64 / pf.downloads_completed as f64) * 100.0
-        } else {
-            0.0
-        };
-        let cancelled = if pf.cancelled { ", CANCELLED" } else { "" };
-        rows.push((
-            "Prefetch",
-            format!("{} downloads", term::count(pf.downloads_completed)),
-            format!(
-                "{}, {} used ({used_pct:.0}%), {} cancelled{cancelled}",
-                term::bytes(pf.bytes_downloaded),
-                term::count(pf.keys_used),
-                term::count(pf.keys_cancelled),
-            ),
-        ));
-        rows.push((
-            "Planning",
-            format!("{} advisory", term::count(pf.plans_advisory)),
-            format!(
-                "{} fallback plans, last had {} candidates",
-                term::count(pf.plans_fallback),
-                term::count(pf.last_plan_candidates)
-            ),
-        ));
-        if pf.pack_requests_total + pf.v3_requests_total > 0 {
-            rows.push((
-                "Transport",
-                format!("{} pack requests", term::count(pf.pack_requests_total)),
-                format!(
-                    "{}; v3 {} requests, {}; {} validation failures, {} v3 fallbacks",
-                    term::bytes(pf.pack_bytes_downloaded),
-                    term::count(pf.v3_requests_total),
-                    term::bytes(pf.v3_bytes_downloaded),
-                    term::count(pf.pack_validation_failures),
-                    term::count(pf.pack_fallback_entries),
-                ),
-            ));
-        }
-        if pf.last_plan_wall_ms > 0 {
-            rows.push((
-                "Plan time",
-                format!("{} ms", pf.last_plan_wall_ms),
-                format!("last plan; {} ms in all", pf.plan_wall_ms_total),
-            ));
-        }
-        if pf.last_list_key_count > 0 {
-            let (refresh_secs, refresh_source) = match &snap.daemon_effective_config {
-                Some(eff) => (eff.remote_key_cache_refresh_secs, ""),
-                None => (
-                    config.remote_key_cache_refresh_secs,
-                    "; client config — daemon did not report its cadence",
-                ),
-            };
-            let refresh = if refresh_secs == 0 {
-                "one initial population; periodic refresh disabled".to_string()
-            } else {
-                format!("refreshes every {refresh_secs}s")
-            };
-            rows.push((
-                "Key LIST",
-                term::counted(pf.last_list_key_count, "key", "keys"),
-                format!(
-                    "in {} ms ({refresh}{refresh_source})",
-                    pf.last_list_duration_ms
-                ),
-            ));
-        }
-        // Cumulative LIST cost (#583 P0.5): the totals the P3 decision gate
-        // reads. Rendered only once refreshes have happened.
-        if pf.list_requests_total > 0 {
-            rows.push((
-                "LIST total",
-                term::counted(pf.list_requests_total, "request", "requests"),
-                format!(
-                    "{} failed, {} ms, {} returned",
-                    term::count(pf.list_failures_total),
-                    pf.list_duration_ms_total,
-                    term::counted(pf.list_keys_total, "key", "keys"),
-                ),
-            ));
-        }
-        if pf.dedup_join_waits > 0 {
-            rows.push((
-                "Join wait",
-                format!("{} waits", term::count(pf.dedup_join_waits)),
-                format!(
-                    "{} ms in all, waiting on a download already in flight",
-                    pf.dedup_join_wait_ms
-                ),
-            ));
-        }
-    }
-
     rows
-}
-
-fn has_remote_resilience_activity(snap: &StatsSnapshot) -> bool {
-    snap.remote_check_roundtrips > 0
-        || snap.negative_hits > 0
-        || snap.downloads_suppressed > 0
-        || snap.uploads_suppressed > 0
-        || snap.remote_degraded
-}
-
-/// Credential-free remote state rendered by both the client config fallback
-/// and the daemon's effective-config snapshot.
-fn remote_status(
-    remote_description: Option<&str>,
-    local_only: bool,
-    remote_error: Option<&str>,
-) -> String {
-    if let Some(remote) = remote_description {
-        remote.to_string()
-    } else if local_only {
-        "local-only mode (remote + planner ignored)".to_string()
-    } else if let Some(reason) = remote_error {
-        format!("MISCONFIGURED — {reason}")
-    } else {
-        "not configured".to_string()
-    }
 }
 
 /// One warning line per rendered stats field where this process's resolved
@@ -1739,55 +1168,6 @@ pub(crate) fn config_mismatch_warnings(
             "warning: {daemon_side} has runtime_dir={}; {client_side} says {} — {remedy}",
             eff.runtime_dir,
             config.runtime_dir.display(),
-        ));
-    }
-    if eff.prefetch_enabled != config.prefetch_enabled {
-        warnings.push(format!(
-            "warning: {daemon_side} has prefetch_enabled={}; {client_side} says {} — {remedy}",
-            eff.prefetch_enabled, config.prefetch_enabled,
-        ));
-    }
-    if eff.remote_key_listing != config.remote_key_listing {
-        warnings.push(format!(
-            "warning: {daemon_side} has remote_key_listing={}; {client_side} says {} — {remedy}",
-            eff.remote_key_listing, config.remote_key_listing,
-        ));
-    }
-    let daemon_remote = remote_status(
-        eff.remote_description.as_deref(),
-        eff.local_only,
-        eff.remote_error.as_deref(),
-    );
-    let client_remote = remote_status(
-        config
-            .remote
-            .as_ref()
-            .map(|remote| remote.describe())
-            .as_deref(),
-        config.local_only,
-        config.remote_error.as_deref(),
-    );
-    if daemon_remote != client_remote {
-        warnings.push(format!(
-            "warning: {daemon_side} has remote={daemon_remote}; {client_side} says \
-             {client_remote} — {remedy}"
-        ));
-    }
-    if (eff.remote_description.is_some() || config.remote.is_some())
-        && eff.remote_key_cache_refresh_secs != config.remote_key_cache_refresh_secs
-    {
-        warnings.push(format!(
-            "warning: {daemon_side} has remote_key_cache_refresh_secs={}; {client_side} says {} \
-             — {remedy}",
-            eff.remote_key_cache_refresh_secs, config.remote_key_cache_refresh_secs,
-        ));
-    }
-    // Only this direction loses uploads: read-only clients never send any.
-    if eff.remote_readonly == Some(true) && config.remote.is_some() && !config.remote_readonly {
-        warnings.push(format!(
-            "warning: {daemon_side} is read-only; {client_side} is writable, so the daemon skips \
-             this process's uploads. Run `kache daemon restart` from this environment; an \
-             installed service takes the setting from its own environment and config"
         ));
     }
     if let Some(floor) = eff.auto_recover_min_free_bytes
@@ -3877,17 +3257,6 @@ pub fn list(
 
 fn crate_name_matches(requested: &str, actual: &str) -> bool {
     requested == actual
-}
-
-/// The `kache sync --dry-run` plan, one line per artifact.
-fn sync_plan_lines(to_pull: &[(String, String)], to_push: &[(String, String)]) -> Vec<String> {
-    let pulls = to_pull
-        .iter()
-        .map(|(key, name)| format!("  pull  {} ({name})", term::short_key(key)));
-    let pushes = to_push
-        .iter()
-        .map(|(key, name)| format!("  push  {} ({name})", term::short_key(key)));
-    pulls.chain(pushes).collect()
 }
 
 /// The head of `kache list <crate>` for one entry, times in local time.
@@ -7100,15 +6469,6 @@ fn active_sccache_migration_line(line: &str) -> bool {
 }
 
 /// Check environment for sccache and configuration issues.
-/// When `fix` is true, also run the sccache→kache migration after diagnostics.
-/// The daemon is only needed when remote work happens: async uploads, remote
-/// checks, or planner prefetch. When neither a remote cache nor a planner is
-/// configured (including strict local-only mode, which suppresses both), the
-/// daemon is optional and `kache doctor` should not flag its absence as a problem.
-fn daemon_needed(remote_configured: bool, planner_configured: bool) -> bool {
-    remote_configured || planner_configured
-}
-
 fn daemon_service_check(
     installed: bool,
     healthy_daemon_reachable: bool,
@@ -7336,7 +6696,7 @@ fn doctor_host_config_check(
 }
 
 /// Whether a failing doctor check is informational rather than an issue:
-/// daemon checks when no remote/planner needs a daemon (#443), the
+/// daemon checks (the daemon is optional, #443), the
 /// compiler probe when there is no `cc` at all to diagnose (#626),
 /// C/C++ shims (PATH masquerade is opt-in), and an install path that an
 /// upgrade may break, which only matters once something records it.
@@ -7580,35 +6940,6 @@ pub(crate) struct Check {
     fix: Option<String>,
 }
 
-/// Doctor's "Remote writes" check. A daemon keeps the write mode it started
-/// with, so it can skip the uploads of a writable process; the daemon is asked
-/// only when this process could upload.
-fn remote_writes_check(
-    forced_reason: Option<String>,
-    remote_readonly: bool,
-    daemon_readonly: impl FnOnce() -> Option<bool>,
-) -> Check {
-    let daemon_skips_uploads = !remote_readonly && daemon_readonly() == Some(true);
-    let detail = if let Some(reason) = forced_reason {
-        format!("read-only — {reason}")
-    } else if remote_readonly {
-        "read-only (KACHE_REMOTE_READONLY or cache.remote_readonly)".to_string()
-    } else if daemon_skips_uploads {
-        "read-write here, but the daemon is read-only and skips uploads".to_string()
-    } else {
-        "read-write".to_string()
-    };
-    Check {
-        label: "Remote writes",
-        pass: !daemon_skips_uploads,
-        detail,
-        fix: daemon_skips_uploads.then(|| {
-            "run `kache daemon restart` from this environment; an installed service takes the \
-             setting from its own environment and config"
-                .to_string()
-        }),
-    }
-}
 
 pub(crate) fn doctor_shards(config: &Config) -> Vec<Check> {
     crate::store_view::shard_configs(config)
@@ -7879,14 +7210,9 @@ pub fn doctor(
         });
     let sccache_is_fallback = fallback_is_sccache(config.as_ref());
 
-    // The daemon only matters when remote work is configured (cache remote or a
-    // planner endpoint). When neither is set — including strict local-only mode,
-    // which suppresses both — the daemon is optional (see README), so its checks
-    // are shown for diagnostics but never counted as issues. See #443.
-    let daemon_optional = !daemon_needed(
-        config.as_ref().is_some_and(|c| c.remote.is_some()),
-        crate::config::Config::load_planner_config().is_some(),
-    );
+    // The daemon is optional (see README): `kache doctor` shows its checks
+    // for diagnostics but never counts them as issues. See #443.
+    let daemon_optional = true;
 
     // Live compiler probe (#626): a toolchain whose `cc -###` resolves no
     // compile line makes every probe-keyed C/C++ flag refuse to cache —
@@ -8022,8 +7348,7 @@ pub fn doctor(
                 fix: Some(
                     "the cache index is a WAL SQLite database and can be corrupted on a \
                      shared or network mount: set `cache.local_store`/`KACHE_CACHE_DIR` to a \
-                     local, single-machine path. To share artifacts between machines, \
-                     configure a remote cache instead of a shared cache directory"
+                     local, single-machine path"
                         .to_string(),
                 ),
             },
@@ -8101,54 +7426,7 @@ pub fn doctor(
         });
     }
 
-    // 5. Remote cache
-    if let Some(ref cfg) = config
-        && let Some(ref remote) = cfg.remote
-    {
-        checks.push(Check {
-            label: "Remote",
-            pass: true,
-            detail: remote.describe(),
-            fix: None,
-        });
-        checks.push(remote_writes_check(
-            crate::policy::forced_remote_readonly().map(|forced| forced.reason),
-            cfg.remote_readonly,
-            || crate::daemon::daemon_remote_readonly(cfg),
-        ));
-        let access = remote_access_check(remote, cfg.s3_pool_idle_secs);
-        checks.push(Check {
-            label: "Remote access",
-            pass: access.pass,
-            detail: access.detail,
-            fix: access.fix,
-        });
-        #[cfg(feature = "remote")]
-        if let crate::config::RemoteBackendConfig::S3(s3) = &remote.backend
-            && let Some(endpoint) = crate::remote_backend::s3_endpoint(s3)
-            && crate::remote_backend::plain_http_remote_endpoint(&endpoint)
-        {
-            checks.push(Check {
-                label: "Remote endpoint",
-                pass: false,
-                detail: format!("{endpoint} uses plain http"),
-                fix: Some(crate::remote_backend::PLAIN_HTTP_ENDPOINT.to_string()),
-            });
-        }
-    } else if let Some(ref cfg) = config
-        && cfg.local_only
-    {
-        // Strict local-only mode (#221): make the hermetic state explicit so a
-        // suppressed remote/planner doesn't read as a misconfiguration.
-        checks.push(Check {
-            label: "Remote",
-            pass: true,
-            detail: "local-only mode — remote + planner ignored (KACHE_LOCAL_ONLY)".to_string(),
-            fix: None,
-        });
-    }
-
-    // 6. Shell rc sccache remnants
+    // 5. Shell rc sccache remnants
     let mut rc_issues = Vec::new();
     for rc in [".zshrc", ".bashrc", ".bash_profile", ".profile"] {
         let rc_path = home.join(rc);
@@ -8170,7 +7448,7 @@ pub fn doctor(
         });
     }
 
-    // 7. sccache daemon running
+    // 6. sccache daemon running
     if let Ok(output) = std::process::Command::new("pgrep")
         .args(["-x", "sccache"])
         .output()
@@ -8194,7 +7472,7 @@ pub fn doctor(
         }
     }
 
-    // 8. Daemon version match
+    // 7. Daemon version match
     //
     // `send_stats_request_without_restart` skips the client-side stale-daemon
     // restart that `send_stats_request` performs, so an upgrade left half-applied
@@ -8506,8 +7784,7 @@ pub fn doctor(
     }
     if downgraded_daemon {
         println!(
-            "  \x1b[2mDaemon checks are informational: no remote cache or planner \
-             configured (the daemon is optional for local-only use).\x1b[0m"
+            "  \x1b[2mDaemon checks are informational: the daemon is optional.\x1b[0m"
         );
     }
     println!();
@@ -8550,87 +7827,6 @@ pub fn doctor(
     Ok(())
 }
 
-/// Outcome of probing the remote from `kache doctor`.
-#[derive(Debug, PartialEq)]
-struct RemoteAccess {
-    pass: bool,
-    detail: String,
-    fix: Option<String>,
-}
-
-/// How long `kache doctor` waits for the remote to answer.
-const REMOTE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// Probe the remote with a GET for a key that is never written. A miss means
-/// the store answered and the credentials were accepted; unlike a HEAD, a
-/// refused GET carries the store's reason.
-fn remote_access_check(remote: &crate::config::RemoteConfig, pool_idle_secs: u64) -> RemoteAccess {
-    let region = match &remote.backend {
-        crate::config::RemoteBackendConfig::S3(s3) => Some(s3.region.clone()),
-        crate::config::RemoteBackendConfig::Filesystem(_)
-        | crate::config::RemoteBackendConfig::Oci(_)
-        | crate::config::RemoteBackendConfig::Gcs(_) => None,
-    };
-    let key = crate::config::join_remote_key(&remote.prefix, "kache-doctor-probe");
-    let mut credentials = None;
-    let result = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("building tokio runtime")
-        .and_then(|runtime| {
-            runtime.block_on(async {
-                let backend = crate::remote_backend::create_backend(remote, pool_idle_secs).await?;
-                let probe = probe_remote(backend.as_ref(), &key, REMOTE_PROBE_TIMEOUT).await;
-                credentials = backend.credential_source();
-                probe
-            })
-        });
-    remote_access_from(result, region.as_deref(), credentials.as_deref())
-}
-
-async fn probe_remote(
-    backend: &dyn crate::remote_backend::RemoteBackend,
-    key: &str,
-    timeout: std::time::Duration,
-) -> Result<()> {
-    tokio::time::timeout(timeout, backend.get(key, Some(1024)))
-        .await
-        .map_err(|_| anyhow::anyhow!("no answer within {} s", timeout.as_secs()))?
-        .map(drop)
-}
-
-/// `credentials` names where the probe's credentials came from, when the
-/// backend knows.
-fn remote_access_from(
-    result: Result<()>,
-    region: Option<&str>,
-    credentials: Option<&str>,
-) -> RemoteAccess {
-    match result {
-        Ok(()) => RemoteAccess {
-            pass: true,
-            detail: match credentials {
-                Some(source) => format!("reachable; credentials from {source} accepted"),
-                None => "reachable; credentials accepted".to_string(),
-            },
-            fix: None,
-        },
-        Err(error) => RemoteAccess {
-            pass: false,
-            // The chain stopped before the probe was sent, so the transport's
-            // part of the error adds nothing.
-            detail: match error.downcast_ref::<crate::remote_backend::CredentialFailure>() {
-                Some(failure) => failure.to_string(),
-                None => format!("{error:#}"),
-            },
-            fix: Some(
-                crate::remote_backend::explain_remote_failure(&error, region).unwrap_or_else(
-                    || "check the endpoint, bucket, region and credentials".to_string(),
-                ),
-            ),
-        },
-    }
-}
 
 fn doctor_has_issues(issues: usize) -> bool {
     issues > 0
@@ -8807,831 +8003,6 @@ fn migration_summary(
 
     out.push_str("\n  Then verify with `kache doctor`.\n");
     out
-}
-
-/// Synchronize the local cache with its remote: pull missing artifacts, push new ones.
-///
-/// Works directly against the remote (no daemon required). Safe to run alongside the daemon —
-/// downloads use atomic extraction, imports use INSERT OR REPLACE, and uploads are idempotent.
-pub fn sync(
-    config: &Config,
-    manifest_path: Option<&str>,
-    pull_only: bool,
-    push_only: bool,
-    dry_run: bool,
-    pull_all: bool,
-    pull_workspace: bool,
-    allow_partial: bool,
-) -> Result<()> {
-    let remote = config.require_remote()?;
-
-    // Another bulk sync must not replace extracted files before this one imports them.
-    let sync_lock_path = config.cache_dir.join("sync.lock");
-    let _sync_lock = StoreLock::acquire(&sync_lock_path).context("locking cache sync")?;
-    let store = Store::open(config)?;
-    let scope = if pull_only && pull_all {
-        sync_scope::Scope {
-            workspace: None,
-            pull: None,
-        }
-    } else {
-        sync_scope::resolve(manifest_path, !pull_all && !pull_workspace && !push_only)?
-    };
-
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("building tokio runtime")?;
-
-    rt.block_on(sync_inner(
-        config,
-        &store,
-        remote,
-        scope.workspace.as_ref(),
-        pull_only,
-        push_only,
-        dry_run,
-        pull_all,
-        scope.pull.as_ref(),
-        pull_workspace,
-        allow_partial,
-    ))
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn sync_inner(
-    config: &Config,
-    store: &Store,
-    remote: &crate::config::RemoteConfig,
-    workspace_crates: Option<&std::collections::HashSet<String>>,
-    pull_only: bool,
-    push_only: bool,
-    dry_run: bool,
-    pull_all: bool,
-    lock_crates: Option<&std::collections::HashSet<String>>,
-    pull_workspace: bool,
-    allow_partial: bool,
-) -> Result<()> {
-    // Validate `--workspace` BEFORE connecting: `create_backend` resolves
-    // credentials, which can launch a `credential_process` or block on an SSO
-    // prompt. Failing after that for a reason knowable up front wastes the user's
-    // time and can leave an interactive prompt hanging.
-    if pull_workspace && workspace_crates.is_none_or(|crates| crates.is_empty()) {
-        anyhow::bail!(
-            "--workspace: no workspace members resolved (cargo metadata failed or this is not a \
-             Cargo workspace); refusing to fall back to a full remote scan"
-        );
-    }
-
-    let backend = crate::remote_backend::create_backend_for(
-        remote,
-        config.pull_request_prefix.as_deref(),
-        config.s3_pool_idle_secs,
-    )
-    .await
-    .context("connecting to the remote — check its configuration and access")?;
-    let remote_cache: Arc<dyn crate::cache_remote::CacheRemote> =
-        Arc::new(crate::cache_remote::V3Remote::new(backend, remote.clone()));
-    sync_with_client(
-        remote_cache.as_ref(),
-        config,
-        store,
-        workspace_crates,
-        pull_only,
-        push_only,
-        dry_run,
-        pull_all,
-        lock_crates,
-        pull_workspace,
-        allow_partial,
-    )
-    .await
-}
-
-/// List the requested crate prefixes within the same limit as sync transfers.
-async fn list_remote_crates(
-    remote: &dyn crate::cache_remote::CacheRemote,
-    crates: &std::collections::HashSet<String>,
-    concurrency: u32,
-) -> Result<std::collections::HashMap<String, String>> {
-    use futures::{StreamExt, TryStreamExt};
-
-    futures::stream::iter(crates.iter().map(|crate_name| async move {
-        remote
-            .list_keys_for_crates(&std::collections::HashSet::from([crate_name.clone()]))
-            .await
-    }))
-    .buffer_unordered((concurrency as usize).max(1))
-    .try_fold(std::collections::HashMap::new(), |mut keys, listed| async {
-        keys.extend(listed);
-        Ok(keys)
-    })
-    .await
-}
-
-fn flush_standalone_sync(config: &Config, store: &Store) {
-    if crate::transport::is_reachable(&config.socket_path()) {
-        return;
-    }
-    let flushed = (|| -> Result<usize> {
-        let Some(_lock) = store.try_durability_flush_lock()? else {
-            return Ok(0);
-        };
-        store.flush_durability(usize::MAX)
-    })();
-    if let Err(error) = flushed {
-        tracing::debug!("durability flush after sync failed: {error:#}");
-    }
-}
-
-/// The remote-driven body of `sync`, with the backend injected so tests can
-/// drive it against a mock. Lists remote keys, diffs against the local store,
-/// then (unless `dry_run`) pulls missing artifacts and pushes local-only ones.
-#[allow(clippy::too_many_arguments)]
-async fn sync_with_client(
-    remote_cache: &dyn crate::cache_remote::CacheRemote,
-    config: &Config,
-    store: &Store,
-    workspace_crates: Option<&std::collections::HashSet<String>>,
-    pull_only: bool,
-    push_only: bool,
-    dry_run: bool,
-    pull_all: bool,
-    lock_crates: Option<&std::collections::HashSet<String>>,
-    pull_workspace: bool,
-    allow_partial: bool,
-) -> Result<()> {
-    // For pull: scope the remote key listing to crate prefixes when possible (one
-    // LIST per crate). `--workspace` narrows that to workspace members only;
-    // otherwise it's the Cargo.lock dep set; `--all` (or no filter) lists the
-    // whole bucket.
-    let s3_keys = if !push_only {
-        if pull_workspace {
-            // `--workspace` must resolve to a non-empty workspace set. If cargo
-            // metadata failed or this isn't a Cargo workspace, refuse to fall
-            // back to a full-remote scan — that's the exact opposite of what the
-            // flag asks for (and `lock_crates` is None here, so the dep path
-            // can't catch it either).
-            let crates = workspace_crates.filter(|c| !c.is_empty()).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "--workspace: no workspace members resolved (cargo metadata failed or this is not a \
-             Cargo workspace); refusing to fall back to a full remote scan"
-                )
-            })?;
-            eprint!(
-                "Listing remote keys for {}...",
-                term::counted(crates.len() as u64, "workspace crate", "workspace crates")
-            );
-            let keys = list_remote_crates(remote_cache, crates, config.s3_concurrency)
-                .await
-                .context("listing remote keys for workspace crates")?;
-            eprintln!(" {}", term::counted(keys.len() as u64, "key", "keys"));
-            keys
-        } else if !pull_all
-            && let Some(crates) = lock_crates
-            && !crates.is_empty()
-        {
-            eprint!(
-                "Listing remote keys for {}...",
-                term::counted(crates.len() as u64, "crate", "crates")
-            );
-            let keys = list_remote_crates(remote_cache, crates, config.s3_concurrency)
-                .await
-                .context("listing remote keys for dependency crates")?;
-            eprintln!(" {}", term::counted(keys.len() as u64, "key", "keys"));
-            keys
-        } else {
-            eprint!("Listing remote keys...");
-            let keys = remote_cache
-                .list_keys()
-                .await
-                .context("listing remote keys")?;
-            eprintln!(" {}", term::counted(keys.len() as u64, "key", "keys"));
-            keys
-        }
-    } else {
-        // Push-only mode still lists remote keys to find what's already uploaded.
-        eprint!("Listing remote keys...");
-        let keys = remote_cache
-            .list_keys()
-            .await
-            .context("listing remote keys")?;
-        eprintln!(" {}", term::counted(keys.len() as u64, "key", "keys"));
-        keys
-    };
-
-    let local_entries = store.list_entries("name")?;
-
-    // to_pull: remote keys not committed locally — (cache_key, crate_name).
-    let to_pull: Vec<(String, String)> = if !push_only {
-        s3_keys
-            .iter()
-            .filter(|(k, _)| !store.contains(k))
-            .map(|(k, cn)| (k.clone(), cn.clone()))
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    // to_push: local entries on disk but not in the remote, filtered by workspace.
-    // Includes (cache_key, crate_name) for crate-prefixed uploads.
-    let to_push: Vec<(String, String)> = if !pull_only && !config.remote_readonly {
-        local_entries
-            .iter()
-            // Build-script runs describe one host's probes; they never leave it.
-            .filter(|e| e.crate_name != crate::build_script::CRATE_NAME)
-            .filter(|e| {
-                if let Some(ws) = workspace_crates {
-                    ws.contains(&e.crate_name)
-                } else {
-                    true
-                }
-            })
-            .filter(|e| {
-                let entry_dir = config.store_dir().join(&e.cache_key);
-                entry_dir.exists() && !s3_keys.contains_key(&e.cache_key)
-            })
-            .map(|e| (e.cache_key.clone(), e.crate_name.clone()))
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    if to_pull.is_empty() && to_push.is_empty() {
-        if !dry_run {
-            flush_standalone_sync(config, store);
-        }
-        println!("Nothing to sync.");
-        return Ok(());
-    }
-
-    println!(
-        "Plan: pull {} artifact{}, push {} artifact{}",
-        to_pull.len(),
-        if to_pull.len() == 1 { "" } else { "s" },
-        to_push.len(),
-        if to_push.len() == 1 { "" } else { "s" },
-    );
-
-    if dry_run {
-        for line in sync_plan_lines(&to_pull, &to_push) {
-            println!("{line}");
-        }
-        return Ok(());
-    }
-
-    let max_concurrent = (config.s3_concurrency as usize).max(1);
-    let mut total_failed = 0;
-
-    // ── Pull phase ──────────────────────────────────────────────
-    if !to_pull.is_empty() {
-        let total = to_pull.len();
-        let ok = std::sync::atomic::AtomicUsize::new(0);
-        let fail = std::sync::atomic::AtomicUsize::new(0);
-        let mut in_flight = futures::stream::FuturesUnordered::new();
-
-        for (key, crate_name) in to_pull {
-            // Bounded concurrency: wait for a slot
-            while in_flight.len() >= max_concurrent {
-                use futures::StreamExt;
-                in_flight.next().await;
-                eprint!(
-                    "\r  Downloading: {}/{}",
-                    ok.load(std::sync::atomic::Ordering::Relaxed)
-                        + fail.load(std::sync::atomic::Ordering::Relaxed),
-                    total,
-                );
-            }
-
-            let cfg = config.clone();
-            let ok_ref = &ok;
-            let fail_ref = &fail;
-
-            // We do NOT tokio::spawn — FuturesUnordered polls futures cooperatively
-            // on the current thread. This avoids Send requirements for Store.
-            in_flight.push(async move {
-                // Extraction alone does not commit an entry for local consumers.
-                if store.contains(&key) {
-                    ok_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    return;
-                }
-
-                let entry_dir = cfg.store_dir().join(&key);
-                let blobs_dir = cfg.store_dir().join("blobs");
-                let result = remote_cache
-                    .download_entry(&key, &crate_name, &entry_dir, &blobs_dir, None)
-                    .await;
-                match result {
-                    Ok(_bytes) => {
-                        // Import into index — opens a fresh Store (cheap with WAL).
-                        // INSERT OR REPLACE is idempotent if daemon also imported.
-                        let mut imported = false;
-                        match Store::open(&cfg) {
-                            Ok(s) => match s.import_restored_entry(&key) {
-                                Ok(_) => {
-                                    imported = true;
-                                }
-                                Err(e) => {
-                                    eprintln!("\n  error: import {}: {e}", term::short_key(&key));
-                                }
-                            },
-                            Err(e) => {
-                                eprintln!(
-                                    "\n  error: open store for import {}: {e}",
-                                    term::short_key(&key)
-                                );
-                            }
-                        }
-                        if imported {
-                            ok_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        } else {
-                            fail_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("\n  error: pull {}: {e}", term::short_key(&key));
-                        fail_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                }
-            });
-        }
-
-        // Drain remaining
-        use futures::StreamExt;
-        while in_flight.next().await.is_some() {
-            eprint!(
-                "\r  Downloading: {}/{}",
-                ok.load(std::sync::atomic::Ordering::Relaxed)
-                    + fail.load(std::sync::atomic::Ordering::Relaxed),
-                total,
-            );
-        }
-        let ok_count = ok.load(std::sync::atomic::Ordering::Relaxed);
-        let fail_count = fail.load(std::sync::atomic::Ordering::Relaxed);
-        total_failed += fail_count;
-        eprintln!(
-            "\r  Downloaded:  {ok_count}/{total}{}",
-            if fail_count > 0 {
-                format!(" ({fail_count} failed)")
-            } else {
-                String::new()
-            },
-        );
-    }
-    // Retry earlier pending work even when this sync did not pull anything.
-    flush_standalone_sync(config, store);
-
-    // ── Push phase ──────────────────────────────────────────────
-    if !to_push.is_empty() {
-        let total = to_push.len();
-        let ok = std::sync::atomic::AtomicUsize::new(0);
-        let fail = std::sync::atomic::AtomicUsize::new(0);
-        let mut in_flight = futures::stream::FuturesUnordered::new();
-
-        for (key, crate_name) in to_push {
-            while in_flight.len() >= max_concurrent {
-                use futures::StreamExt;
-                in_flight.next().await;
-                eprint!(
-                    "\r  Uploading: {}/{}",
-                    ok.load(std::sync::atomic::Ordering::Relaxed)
-                        + fail.load(std::sync::atomic::Ordering::Relaxed),
-                    total,
-                );
-            }
-
-            let cfg = config.clone();
-            let ok_ref = &ok;
-            let fail_ref = &fail;
-
-            in_flight.push(async move {
-                let entry_dir = cfg.store_dir().join(&key);
-                if !entry_dir.exists() {
-                    // Entry disappeared (GC or purge) — record failure
-                    eprintln!(
-                        "\n  error: push {}: local entry disappeared before upload",
-                        term::short_key(&key)
-                    );
-                    fail_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    return;
-                }
-
-                let blobs_dir = cfg.store_dir().join("blobs");
-                match remote_cache
-                    .upload_entry(
-                        &key,
-                        &crate_name,
-                        &entry_dir,
-                        &blobs_dir,
-                        cfg.compression_level,
-                        None,
-                    )
-                    .await
-                {
-                    Ok(_bytes) => {
-                        ok_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    Err(e) => {
-                        eprintln!("\n  error: push {}: {e}", term::short_key(&key));
-                        fail_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                }
-            });
-        }
-
-        use futures::StreamExt;
-        while in_flight.next().await.is_some() {
-            eprint!(
-                "\r  Uploading: {}/{}",
-                ok.load(std::sync::atomic::Ordering::Relaxed)
-                    + fail.load(std::sync::atomic::Ordering::Relaxed),
-                total,
-            );
-        }
-        let ok_count = ok.load(std::sync::atomic::Ordering::Relaxed);
-        let fail_count = fail.load(std::sync::atomic::Ordering::Relaxed);
-        total_failed += fail_count;
-        eprintln!(
-            "\r  Uploaded:  {ok_count}/{total}{}",
-            if fail_count > 0 {
-                format!(" ({fail_count} failed)")
-            } else {
-                String::new()
-            },
-        );
-    }
-
-    if total_failed > 0 && !allow_partial {
-        anyhow::bail!("{total_failed} transfer(s) or import(s) failed during sync");
-    }
-
-    Ok(())
-}
-
-/// Save a build manifest recording which cache keys were used with their cost data.
-///
-/// Reads events.jsonl to collect cache keys, compile times, and artifact sizes,
-/// then uploads to `{prefix}/_manifests/{manifest_key}.json`.
-///
-/// When `namespace` is provided and Cargo.lock exists, also computes and uploads
-/// content-addressed shards to `{prefix}/_manifests/v3/{namespace}/shards/{hash}.json`.
-pub fn save_manifest(
-    config: &Config,
-    manifest_key: Option<&str>,
-    namespace: Option<&str>,
-) -> Result<()> {
-    let published = save_manifest_impl(config, manifest_key, namespace, None, true, true)?;
-    if let Some(warning) = readonly_daemon_warning(config, published, || {
-        crate::daemon::daemon_remote_readonly(config)
-    }) {
-        eprintln!("{warning}");
-    }
-    Ok(())
-}
-
-/// The end-of-job warning for a writable job that published a manifest while
-/// its daemon is read-only: the daemon skipped the job's uploads, so the
-/// manifest can list artifacts the remote lacks. Only then is the daemon asked.
-fn readonly_daemon_warning(
-    config: &Config,
-    published: bool,
-    daemon_readonly: impl FnOnce() -> Option<bool>,
-) -> Option<&'static str> {
-    (published
-        && config.remote.is_some()
-        && !config.remote_readonly
-        && daemon_readonly() == Some(true))
-    .then_some(
-        "warning: the kache daemon is read-only and skips this job's uploads, so the remote \
-             may lack artifacts this manifest lists. Run `kache daemon restart` from this \
-             environment; an installed service takes the setting from its own environment and \
-             config.",
-    )
-}
-
-pub(crate) fn save_manifest_auto_for_session(
-    config: &Config,
-    manifest_key: &str,
-    session_id: &str,
-) -> Result<()> {
-    // The daemon does not own the calling workspace's Cargo.lock or namespace.
-    // Publish the exact session manifest only; explicit save-manifest calls own
-    // shard publication because they run from the workspace.
-    save_manifest_impl(
-        config,
-        Some(manifest_key),
-        None,
-        Some(session_id),
-        false,
-        false,
-    )
-    .map(|_| ())
-}
-
-/// Shards are content-addressed under the first published key only. Later
-/// keys (legacy host triple, extra aliases) get the JSON manifest without
-/// duplicating shard objects.
-fn shard_namespace_for_publish_key(index: usize, namespace: Option<&str>) -> Option<&str> {
-    if index == 0 { namespace } else { None }
-}
-
-/// `true` when a manifest was published.
-fn save_manifest_impl(
-    config: &Config,
-    manifest_key: Option<&str>,
-    namespace: Option<&str>,
-    session_id: Option<&str>,
-    announce: bool,
-    allow_env_namespace: bool,
-) -> Result<bool> {
-    if config.remote_readonly {
-        tracing::debug!("skipping manifest save (read-only mode)");
-        return Ok(false);
-    }
-
-    let remote = config
-        .remote
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("no remote configured"))?;
-
-    let events = crate::events::read_events(&config.event_log_path())?;
-    let entries = manifest_entries_from_events(&events, session_id);
-
-    if entries.is_empty() {
-        if announce {
-            eprintln!("No build events found, skipping manifest save");
-        }
-        return Ok(false);
-    }
-
-    let keys = match manifest_key {
-        Some(key) => vec![key.to_string()],
-        None => {
-            crate::identity::manifest_publish_keys(std::path::Path::new("Cargo.lock"), None, None)
-        }
-    };
-    let env_namespace = allow_env_namespace
-        .then(|| std::env::var("KACHE_NAMESPACE").ok())
-        .flatten()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let effective_namespace = namespace
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(String::from)
-        .or(env_namespace);
-
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("building tokio runtime")?;
-
-    // The daemon's auto-publish runs in the daemon's environment, which may
-    // belong to an earlier job, so only a publish from the job itself names
-    // the commit.
-    let commit = manifest_commit(session_id, |name| std::env::var(name).ok());
-
-    let pool_idle_secs = config.s3_pool_idle_secs;
-    let entry_count = entries.len();
-    let published = keys.clone();
-    rt.block_on(async {
-        let backend = crate::remote_backend::create_backend_for(
-            remote,
-            config.pull_request_prefix.as_deref(),
-            pool_idle_secs,
-        )
-        .await?;
-        let remote_cache = Arc::new(crate::cache_remote::V3Remote::new(backend, remote.clone()));
-        for (index, key) in keys.iter().enumerate() {
-            let shard_namespace =
-                shard_namespace_for_publish_key(index, effective_namespace.as_deref());
-            upload_manifest_and_shards(
-                &remote_cache,
-                key,
-                shard_namespace,
-                std::path::Path::new("Cargo.lock"),
-                entries.clone(),
-                commit.as_deref(),
-            )
-            .await?;
-        }
-        Ok::<(), anyhow::Error>(())
-    })?;
-
-    if announce {
-        eprintln!(
-            "Saved manifest: {} for '{}'",
-            term::counted(entry_count as u64, "entry", "entries"),
-            published.join("', '")
-        );
-    }
-    Ok(true)
-}
-
-/// Collapse build events into deduplicated manifest entries.
-///
-/// Only cacheable outcomes (hits/dup/miss with a non-empty key) contribute, and
-/// when a crate appears under one cache_key multiple times the entry with the
-/// largest compile time wins (cargo may invoke rustc repeatedly with differing
-/// flags). Pure — extracted so the dedup logic is unit-testable without S3.
-/// The commit to record with a published manifest: GitHub Actions'
-/// `GITHUB_SHA`, else GitLab's `CI_COMMIT_SHA`, blank values counting as
-/// unset. `None` for the daemon's per-session publish (`session_id` set),
-/// whose environment may belong to an earlier job.
-fn manifest_commit(
-    session_id: Option<&str>,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> Option<String> {
-    if session_id.is_some() {
-        return None;
-    }
-    ["GITHUB_SHA", "CI_COMMIT_SHA"]
-        .into_iter()
-        .filter_map(lookup)
-        .map(|value| value.trim().to_string())
-        .find(|value| !value.is_empty())
-}
-
-fn manifest_entries_from_events(
-    events: &[crate::events::BuildEvent],
-    session_id: Option<&str>,
-) -> Vec<crate::remote::ManifestEntry> {
-    let mut by_key = std::collections::HashMap::<String, crate::remote::ManifestEntry>::new();
-    let mut order = Vec::new();
-    for e in events {
-        if session_id.is_some_and(|session_id| e.session_id != session_id) {
-            continue;
-        }
-        // Build-script runs stay in the local store (see `sync`), so a plan
-        // that names one asks the remote for a key it cannot have.
-        if e.cache_key.is_empty() || e.crate_name == crate::build_script::CRATE_NAME {
-            continue;
-        }
-        match e.result {
-            crate::events::EventResult::LocalHit
-            | crate::events::EventResult::PrefetchHit
-            | crate::events::EventResult::RemoteHit
-            | crate::events::EventResult::Dup
-            | crate::events::EventResult::Miss => {}
-            _ => continue,
-        }
-        let entry = crate::remote::ManifestEntry {
-            cache_key: e.cache_key.clone(),
-            crate_name: e.crate_name.clone(),
-            compile_time_ms: if e.compile_time_ms > 0 {
-                e.compile_time_ms
-            } else {
-                e.elapsed_ms
-            },
-            artifact_size: e.size,
-        };
-        if let Some(existing) = by_key.get_mut(&e.cache_key) {
-            if entry.compile_time_ms > existing.compile_time_ms {
-                *existing = entry;
-            }
-        } else {
-            order.push(e.cache_key.clone());
-            by_key.insert(e.cache_key.clone(), entry);
-        }
-    }
-    order
-        .into_iter()
-        .filter_map(|key| by_key.remove(&key))
-        .collect()
-}
-
-/// Upload the monolithic build manifest and, when a namespace is given and a
-/// `Cargo.lock` exists at `lock_path`, the content-addressed shard indexes.
-///
-/// Takes the remote cache by reference so tests can drive it against a mock
-/// (the production caller injects a real one from `create_backend`).
-async fn upload_manifest_and_shards(
-    remote_cache: &Arc<crate::cache_remote::V3Remote>,
-    key: &str,
-    namespace: Option<&str>,
-    lock_path: &std::path::Path,
-    entries: Vec<crate::remote::ManifestEntry>,
-    commit: Option<&str>,
-) -> Result<()> {
-    let manifest = crate::remote::BuildManifest {
-        version: 3,
-        created: chrono::Utc::now().to_rfc3339(),
-        manifest_key: key.to_string(),
-        entries: entries.clone(),
-    };
-
-    // Always upload the monolithic build manifest.
-    remote_cache
-        .put_build_manifest(key, &manifest, commit)
-        .await?;
-
-    // Upload sharded build-manifest indexes if a namespace is provided and Cargo.lock exists.
-    if let Some(ns) = namespace {
-        if lock_path.exists() {
-            let shard_count = upload_shards(remote_cache, ns, lock_path, &entries, commit).await?;
-            eprintln!("Uploaded {shard_count} shards for namespace '{ns}'");
-        } else {
-            eprintln!("No Cargo.lock found, skipping shard upload");
-        }
-    } else {
-        eprintln!("No namespace provided, skipping shard upload");
-    }
-
-    Ok(())
-}
-
-/// Compute and upload content-addressed shards from Cargo.lock deps + build events.
-///
-/// Returns the number of shards uploaded.
-async fn upload_shards(
-    remote_cache: &Arc<crate::cache_remote::V3Remote>,
-    namespace: &str,
-    lock_path: &std::path::Path,
-    entries: &[crate::remote::ManifestEntry],
-    commit: Option<&str>,
-) -> Result<usize> {
-    let deps = crate::shards::parse_cargo_lock(lock_path)?;
-    let shard_set = crate::shards::compute_shards(&deps);
-
-    // crate_name -> its manifest entry (keep the first match per crate). The
-    // whole entry, not just the cache key: shards now persist compile cost and
-    // artifact size so the planner can rank by them (kunobi-ninja/kache#617).
-    let mut crate_to_entry =
-        std::collections::HashMap::<&str, &crate::remote::ManifestEntry>::new();
-    for e in entries {
-        crate_to_entry.entry(&e.crate_name).or_insert(e);
-    }
-
-    // Build Shard objects, skipping crates that have no build event
-    let mut uploads = Vec::new();
-    for (shard_hash, shard_deps) in &shard_set.shards {
-        let shard_entries: Vec<crate::remote::ShardEntry> = shard_deps
-            .iter()
-            .filter_map(|(name, _version)| {
-                crate_to_entry
-                    .get(name.as_str())
-                    .map(|&entry| crate::remote::ShardEntry {
-                        cache_key: entry.cache_key.clone(),
-                        crate_name: name.clone(),
-                        compile_time_ms: Some(entry.compile_time_ms),
-                        artifact_size: Some(entry.artifact_size),
-                    })
-            })
-            .collect();
-
-        if shard_entries.is_empty() {
-            continue;
-        }
-
-        let shard = crate::remote::Shard {
-            version: 3,
-            entries: shard_entries,
-        };
-        uploads.push((shard_hash.clone(), shard));
-    }
-
-    // Upload shards in parallel (up to 16 concurrent)
-    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(16));
-    let mut handles = Vec::new();
-    for (hash, shard) in uploads {
-        let remote_cache = Arc::clone(remote_cache);
-        let namespace = namespace.to_string();
-        let commit = commit.map(str::to_string);
-        let permit = sem.clone().acquire_owned().await?;
-        handles.push(tokio::spawn(async move {
-            let result = remote_cache
-                .put_shard(&namespace, &hash, &shard, commit.as_deref())
-                .await;
-            drop(permit);
-            result
-        }));
-    }
-
-    let mut uploaded = 0;
-    for handle in handles {
-        handle.await.context("shard upload task panicked")??;
-        uploaded += 1;
-    }
-
-    Ok(uploaded)
-}
-
-/// Build a workspace crate name filter from Cargo.toml metadata.
-/// Returns None if no manifest is found (= no filtering, include everything).
-fn parse_cargo_lock_crate_names_from(
-    lock_path: &std::path::Path,
-) -> Option<std::collections::HashSet<String>> {
-    if !lock_path.exists() {
-        return None;
-    }
-    let content = std::fs::read_to_string(lock_path).ok()?;
-    let lock: toml::Value = toml::from_str(&content).ok()?;
-    let packages = lock.get("package")?.as_array()?;
-    let names: std::collections::HashSet<String> = packages
-        .iter()
-        .filter_map(|p| p.get("name")?.as_str().map(|name| name.replace('-', "_")))
-        .collect();
-    Some(names)
 }
 
 fn dir_size(path: &std::path::Path) -> u64 {

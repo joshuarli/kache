@@ -5,7 +5,7 @@ opening the cache, loading application configuration, or starting a runtime.
 
 | Crate | Owns |
 | --- | --- |
-| `kache-core` | Planner data and algorithms; `planning` enables the async planner interfaces. |
+| `kache-core` | Local store options and build-timeline records. |
 | `kache-format` | Cache-entry metadata and format validation. |
 | `kache-fs` | Filesystem operations, identities, and allocation measurements. |
 | `kache-store` | Local artifact storage and its database. |
@@ -13,9 +13,9 @@ opening the cache, loading application configuration, or starting a runtime.
 | `kache-protocol` | Shared local-daemon request payloads and reporting records. |
 | `kache-ipc` | Local endpoint naming, transport, listener ownership, and peer checks. |
 
-`kache-protocol` uses `kache-core` with its default features disabled. It has no
-storage or runtime dependency. JSON compatibility defaults belong here and must
-continue to describe the messages older clients and daemons sent.
+`kache-protocol` depends on `kache-core` and has no storage or runtime
+dependency. JSON compatibility defaults belong here and must continue to
+describe the messages older clients and daemons sent.
 
 `kache-ipc` supports synchronous clients by default. Its `async` feature enables
 the daemon listener and Tokio streams. It delegates socket ownership to
@@ -23,8 +23,8 @@ the daemon listener and Tokio streams. It delegates socket ownership to
 `kunobi-daemon`, through the application's existing lifecycle adapters.
 
 Application policy stays outside these crates: configuration resolution,
-selection of cache directories, admission of planner candidates, and formatting
-of CLI output. Adapters turn runtime state into protocol records.
+selection of cache directories, and formatting of CLI output. Adapters turn
+runtime state into protocol records.
 
 ## Remaining dependencies
 

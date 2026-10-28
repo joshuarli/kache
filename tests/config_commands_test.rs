@@ -39,18 +39,18 @@ fn config_commands_edit_only_the_requested_file_without_starting_the_daemon() {
         root.join("selected.toml").to_str().unwrap()
     );
     assert!(!root.join("selected.toml").exists());
-    success(root, &["config", "set", "cache.local_only", "true"]);
+    success(root, &["config", "set", "cache.explain_miss", "true"]);
     assert_eq!(
-        success(root, &["config", "get", "cache.local_only"]),
+        success(root, &["config", "get", "cache.explain_miss"]),
         "true\n"
     );
     success(
         root,
-        &["config", "set", "--project", "cache.local_only", "false"],
+        &["config", "set", "--project", "cache.explain_miss", "false"],
     );
     success(
         root,
-        &["config", "set", "--global", "cache.local_only", "false"],
+        &["config", "set", "--global", "cache.explain_miss", "false"],
     );
     success(
         root,
@@ -59,7 +59,7 @@ fn config_commands_edit_only_the_requested_file_without_starting_the_daemon() {
             "set",
             "--file",
             "custom.toml",
-            "cache.local_only",
+            "cache.explain_miss",
             "false",
         ],
     );
@@ -67,20 +67,20 @@ fn config_commands_edit_only_the_requested_file_without_starting_the_daemon() {
     assert!(root.join("user/kache/config.toml").exists());
     assert!(root.join("custom.toml").exists());
     assert_eq!(
-        success(root, &["config", "get", "cache.local_only"]),
+        success(root, &["config", "get", "cache.explain_miss"]),
         "true\n"
     );
     assert_eq!(
-        success(root, &["config", "get", "--project", "cache.local_only"]),
+        success(root, &["config", "get", "--project", "cache.explain_miss"]),
         "false\n"
     );
     let output = success(root, &["config", "list", "--json"]);
     let json: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(json["success"], true);
     assert_eq!(json["command"], "config");
-    assert_eq!(json["values"]["cache"]["local_only"], true);
-    success(root, &["config", "unset", "cache.local_only"]);
-    let out = run(root, &["config", "get", "cache.local_only", "--json"]);
+    assert_eq!(json["values"]["cache"]["explain_miss"], true);
+    success(root, &["config", "unset", "cache.explain_miss"]);
+    let out = run(root, &["config", "get", "cache.explain_miss", "--json"]);
     assert!(!out.status.success());
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(json["success"], false);
@@ -92,13 +92,13 @@ fn project_scope_finds_the_nearest_existing_project_file() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(
         root.path().join(".kache.toml"),
-        "[cache]\nlocal_only = true\n",
+        "[cache]\nexplain_miss = true\n",
     )
     .unwrap();
     let nested = root.path().join("src/nested");
     std::fs::create_dir_all(&nested).unwrap();
     assert_eq!(
-        success(&nested, &["config", "get", "--project", "cache.local_only"]),
+        success(&nested, &["config", "get", "--project", "cache.explain_miss"]),
         "true\n"
     );
     assert!(
@@ -111,18 +111,18 @@ fn project_scope_finds_the_nearest_existing_project_file() {
 #[test]
 fn get_and_list_report_file_values_without_applying_environment_overrides() {
     let root = tempfile::tempdir().unwrap();
-    success(root.path(), &["config", "set", "cache.local_only", "false"]);
+    success(root.path(), &["config", "set", "cache.explain_miss", "false"]);
     let output = Command::new(env!("CARGO_BIN_EXE_kache"))
-        .args(["config", "get", "cache.local_only"])
+        .args(["config", "get", "cache.explain_miss"])
         .env("KACHE_CONFIG", root.path().join("selected.toml"))
-        .env("KACHE_LOCAL_ONLY", "1")
+        .env("KACHE_EXPLAIN_MISS", "1")
         .output()
         .unwrap();
     assert!(output.status.success());
     assert_eq!(output.stdout, b"false\n");
     assert_eq!(
         success(root.path(), &["config", "list"]),
-        "cache.local_only = false\n"
+        "cache.explain_miss = false\n"
     );
 }
 
@@ -132,9 +132,9 @@ fn every_config_subcommand_emits_one_json_document() {
     for args in [
         vec!["config", "path", "--json"],
         vec!["config", "list", "--json"],
-        vec!["config", "set", "cache.local_only", "true", "--json"],
-        vec!["config", "get", "cache.local_only", "--json"],
-        vec!["config", "unset", "cache.local_only", "--json"],
+        vec!["config", "set", "cache.explain_miss", "true", "--json"],
+        vec!["config", "get", "cache.explain_miss", "--json"],
+        vec!["config", "unset", "cache.explain_miss", "--json"],
     ] {
         let text = success(root.path(), &args);
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -186,7 +186,7 @@ fn malformed_keys_report_a_key_error_and_legacy_keys_remain_accessible() {
         "cache..local_only",
         "cache.é",
         "cache.[local_only]",
-        "cache.local_only\n",
+        "cache.explain_miss\n",
     ] {
         let out = run(root.path(), &["config", "get", key, "--json"]);
         assert!(!out.status.success());

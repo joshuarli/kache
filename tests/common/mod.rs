@@ -23,15 +23,182 @@ use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-/// `<target>/kache-test-bootstrap`, derived from the running test binary at
-/// `<target>/<profile>/deps/<test-bin>` so it follows `CARGO_TARGET_DIR`
-/// (including `cargo llvm-cov`'s).
+/// `<target>/kache-test-bootstrap`, derived from the running test binary.
+///
+/// Cargo 1.99 and earlier place it at `<target>/<profile>/deps/<test-bin>`.
+/// Cargo 1.100 places it at `<target>/<profile>/build/<pkg>/<hash>/out/<test-bin>`.
+/// The profile directory is the nearest ancestor that holds `deps` or `build`.
 fn bootstrap_target_dir() -> PathBuf {
-    let mut dir = std::env::current_exe().expect("test binary path");
-    dir.pop(); // test binary
-    dir.pop(); // deps/
-    dir.pop(); // <profile>/
-    dir.join("kache-test-bootstrap")
+    let exe = std::env::current_exe().expect("test binary path");
+    let profile = exe
+        .ancestors()
+        .skip(1)
+        .find(|dir| dir.join("deps").is_dir() || dir.join("build").is_dir())
+        .expect("test binary is not under a Cargo profile directory");
+    profile
+        .parent()
+        .expect("Cargo profile directory has a parent")
+        .join("kache-test-bootstrap")
+}
+
+#[allow(dead_code)]
+/// Files and `.dSYM` bundles Cargo wrote for units in `profile`
+/// (`<target>/debug`): legacy `deps` and `examples`, each per-unit `out`,
+/// and bundles sitting next to an uplifted binary.
+pub fn profile_artifacts(profile: &Path) -> Vec<PathBuf> {
+    let mut artifacts = Vec::new();
+    push_artifacts(profile, &mut artifacts);
+    for name in ["deps", "examples"] {
+        push_artifacts(&profile.join(name), &mut artifacts);
+    }
+    let Ok(packages) = std::fs::read_dir(profile.join("build")) else {
+        return artifacts;
+    };
+    for package in packages.flatten() {
+        let path = package.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Ok(children) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for child in children.flatten() {
+            let name = child.file_name();
+            let name = name.to_string_lossy();
+            if is_cargo_unit_hash(&name) {
+                push_artifacts(&child.path().join("out"), &mut artifacts);
+            }
+        }
+    }
+    artifacts
+}
+
+#[allow(dead_code)]
+fn is_cargo_unit_hash(hash: &str) -> bool {
+    hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Whether `profile` holds Cargo fingerprints in either layout.
+#[allow(dead_code)]
+pub fn profile_has_fingerprints(profile: &Path) -> bool {
+    !fingerprint_dirs(profile).is_empty()
+}
+
+/// Drop `package`'s fingerprints so the next build cannot be Fresh.
+#[allow(dead_code)]
+pub fn clear_package_fingerprints(profile: &Path, package: &str) {
+    let legacy = profile.join(".fingerprint");
+    if let Ok(entries) = std::fs::read_dir(&legacy) {
+        for entry in entries.flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{package}-"))
+            {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    let package_dir = profile.join("build").join(package);
+    let Ok(units) = std::fs::read_dir(&package_dir) else {
+        return;
+    };
+    for unit in units.flatten() {
+        let _ = std::fs::remove_dir_all(unit.path().join("fingerprint"));
+    }
+}
+
+/// Every file inside a fingerprint directory under `profile`.
+#[allow(dead_code)]
+pub fn fingerprint_files(profile: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for dir in fingerprint_dirs(profile) {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.path().is_file() {
+                files.push(entry.path());
+            }
+        }
+    }
+    files
+}
+
+#[allow(dead_code)]
+fn fingerprint_dirs(profile: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(profile.join(".fingerprint")) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                dirs.push(entry.path());
+            }
+        }
+    }
+    let Ok(packages) = std::fs::read_dir(profile.join("build")) else {
+        return dirs;
+    };
+    for package in packages.flatten() {
+        if !package.path().is_dir() {
+            continue;
+        }
+        let Ok(units) = std::fs::read_dir(package.path()) else {
+            continue;
+        };
+        for unit in units.flatten() {
+            let fingerprint = unit.path().join("fingerprint");
+            if fingerprint.is_dir() {
+                dirs.push(fingerprint);
+            }
+        }
+    }
+    dirs
+}
+
+/// Every unit `out` directory under `profile`, legacy `<pkg>-<hash>/out` and
+/// per-unit `<pkg>/<hash>/out`.
+#[allow(dead_code)]
+pub fn unit_out_dirs(profile: &Path) -> Vec<PathBuf> {
+    let mut outs = Vec::new();
+    let Ok(entries) = std::fs::read_dir(profile.join("build")) else {
+        return outs;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let direct = path.join("out");
+        if direct.is_dir() {
+            outs.push(direct);
+        }
+        let Ok(children) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for child in children.flatten() {
+            if is_cargo_unit_hash(&child.file_name().to_string_lossy()) {
+                let nested = child.path().join("out");
+                if nested.is_dir() {
+                    outs.push(nested);
+                }
+            }
+        }
+    }
+    outs
+}
+
+#[allow(dead_code)]
+fn push_artifacts(dir: &Path, artifacts: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let bundle = path.extension().is_some_and(|ext| ext == "dSYM");
+        if path.is_file() || bundle {
+            artifacts.push(path);
+        }
+    }
 }
 
 /// `KACHE_TEST_USE_CARGO_BIN_EXE=1` skips the bootstrap build and uses the
@@ -174,13 +341,6 @@ pub fn hermetic_command(
         .env_remove("KACHE_UNSTABLE")
         .env_remove("KACHE_OUT_DIR_ALIAS_ROOT")
         .env_remove("KACHE_INCREMENTAL_SEED_FROM")
-        .env_remove("KACHE_S3_BUCKET")
-        .env_remove("KACHE_S3_ENDPOINT")
-        .env_remove("KACHE_S3_REGION")
-        .env_remove("KACHE_S3_PREFIX")
-        .env_remove("KACHE_S3_PROFILE")
-        .env_remove("KACHE_S3_USER_AGENT")
-        .env_remove("KACHE_LOCAL_ONLY")
         .env_remove("RUSTC_WRAPPER")
         .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
         // Cargo sets kache's own OUT_DIR on the test process (kache has a

@@ -280,6 +280,12 @@ fn cargo_dependency_hits_between_terminal_widths_and_pipes() {
         assert!(output.status.success(), "{output:?}");
         let argv = fs::read_to_string(&log).unwrap();
         assert!(argv.contains("--cap-lints\nallow\n"), "{argv}");
+        // Cargo forces this lint on every rustc, so a dependency can still
+        // emit a warning under `--cap-lints allow` and the width stays keyed.
+        assert!(
+            argv.contains("--force-warn=unused_crate_dependencies\n"),
+            "{argv}"
+        );
         match columns {
             Some(columns) => assert!(
                 argv.contains(&format!("--diagnostic-width={columns}\n")),
@@ -289,11 +295,25 @@ fn cargo_dependency_hits_between_terminal_widths_and_pipes() {
         }
         let recorded = events(&cache, "capped_dep");
         assert_eq!(recorded.len(), index + 1);
-        assert_eq!(
-            recorded[index]["result"],
-            if index == 0 { "miss" } else { "local_hit" },
-            "{recorded:?}"
-        );
-        assert_eq!(recorded[0]["cache_key"], recorded[index]["cache_key"]);
+        let key = recorded[index]["cache_key"].clone();
+        let diagnostics = recorded[index]["key_fields"]["diagnostics"].clone();
+        let same_width = recorded[..index]
+            .iter()
+            .position(|event| event["cache_key"] == key);
+        if let Some(previous) = same_width {
+            assert_eq!(recorded[index]["result"], "local_hit", "{recorded:?}");
+            assert_eq!(recorded[previous]["key_fields"]["diagnostics"], diagnostics);
+        } else {
+            assert_eq!(
+                recorded[index]["result"],
+                if index == 0 { "miss" } else { "dup" },
+                "{recorded:?}"
+            );
+            assert!(
+                recorded[..index]
+                    .iter()
+                    .all(|event| event["key_fields"]["diagnostics"] != diagnostics)
+            );
+        }
     }
 }

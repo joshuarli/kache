@@ -712,10 +712,8 @@ edition = "2021"
         "restored dep-info must leave the next unchanged build Cargo-fresh"
     );
 
-    let restored_dep_info = std::fs::read_dir(restored_target.path().join("debug/deps"))
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
+    let restored_dep_info = common::profile_artifacts(&restored_target.path().join("debug"))
+        .into_iter()
         .filter(|path| path.extension().is_some_and(|extension| extension == "d"))
         .find_map(|path| {
             let content = std::fs::read_to_string(path).ok()?;

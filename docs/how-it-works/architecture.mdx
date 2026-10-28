@@ -80,13 +80,11 @@ For an eligible compiler invocation, the pipeline:
 1. parses the compiler arguments and discovers inputs
 2. computes a BLAKE3 cache key
 3. checks the local store: the `[cache.volumes]` shard that holds the output directory, if one does, then the main store, then a configured [read-only store](/docs/getting-started/configuration#read-only-store)
-4. asks the daemon for an exact remote result after a local miss
-5. on a miss, joins a machine-wide flight, takes a memory-weighted permit and a per-key lock, and checks locally again
-6. runs the compiler if the entry is still absent
-7. stores outputs as content-addressed blobs
-8. queues a remote upload when a writable remote is configured
+4. on a miss, joins a machine-wide flight, takes a memory-weighted permit and a per-key lock, and checks locally again
+5. runs the compiler if the entry is still absent
+6. stores outputs as content-addressed blobs
 
-On a machine with no remote, fallback wrapper or read-only store, a unit with no usable input record can start compiling before its key is known. Kache then keys it from the dependency file the compile writes. See [Misses without a record](/docs/how-it-works/cache-key#misses-without-a-record).
+On a machine with no fallback wrapper or read-only store, a unit with no usable input record can start compiling before its key is known. Kache then keys it from the dependency file the compile writes. See [Misses without a record](/docs/how-it-works/cache-key#misses-without-a-record).
 
 The second local check prevents duplicate work when another process fills the same key while this process waits for the lock. Hits and passthroughs never join a compile flight. A unit with no usable input record can still wait while another process discovers the same unit's inputs, and a compile that starts before its key is known holds a permit while it runs; either can end as a hit. See [Limits](/docs/how-it-works/limits).
 
@@ -117,21 +115,18 @@ Identical output bytes share one blob. Restores first try copy-on-write cloning.
 
 See [Deduplication](/docs/deduplication) for platform details.
 
-A miss or a remotely downloaded entry can be stored without waiting for an fsync. The daemon verifies and flushes pending entries on a two-second sweep, up to 64 entries in the main store and in each indexed volume shard. A GC run also flushes pending entries.
+A miss can be stored without waiting for an fsync. The daemon verifies and flushes pending entries on a two-second sweep, up to 64 entries in the main store and in each indexed volume shard. A GC run also flushes pending entries.
 
-Without a reachable daemon, the wrapper attempts to flush the entry it stored. A non-dry-run `kache sync` also retries pending entries, even when there is nothing to transfer. IO failures or concurrent changes can leave entries pending for the next attempt. While an entry is pending, a hit verifies its blobs against their content hashes; the flush also verifies the bytes before marking that publication durable. Missing or damaged pending artifacts cause a cache miss. Set `[cache] deferred_durability = false` to flush inside the compile or download instead.
+Without a reachable daemon, the wrapper attempts to flush the entry it stored. IO failures or concurrent changes can leave entries pending for the next attempt. While an entry is pending, a hit verifies its blobs against their content hashes; the flush also verifies the bytes before marking that publication durable. Missing or damaged pending artifacts cause a cache miss. Set `[cache] deferred_durability = false` to flush inside the compile or download instead.
 
 Strict stores validate and flush shared blobs too, before a store or import operation succeeds. This adds a validation read to strict writes. Entries with more than 64 artifact records verify sequentially while holding the store's writer lock to bound open files, so a large flush can delay other writers. Already-durable hits keep the configured restore-verification policy.
 
 ## Daemon
 
-The daemon owns delegated compilation, remote work and periodic maintenance:
+The daemon owns delegated compilation and periodic maintenance:
 
 - concurrent cache pipelines for delegated compiler invocations
-- exact remote checks and downloads
 - storing finished C/C++ compiles that wrappers hand over (`cache.daemon_publish`)
-- background uploads and durable upload replay
-- speculative prefetch, and fetching and publishing input records on the remote
 - seeding a new checkout's target directory with registry units another checkout built (`cache.seed_new_targets`)
 - copying large executables beside their destinations while the rest of a build runs
 - flushing entries stored without an fsync, every two seconds
@@ -141,8 +136,7 @@ The daemon owns delegated compilation, remote work and periodic maintenance:
 
 The client connects through `<runtime_dir>/daemon.sock` on Unix or a named pipe
 on Windows. Before Commit, an unavailable daemon leaves the local engine
-responsible for compilation and local caching. Remote work is skipped or
-deferred on that path.
+responsible for compilation and local caching.
 
 See [Daemon overview](/docs/daemon/overview) and [Lifecycle](/docs/daemon/lifecycle).
 

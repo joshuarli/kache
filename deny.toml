@@ -26,8 +26,7 @@ ignore = [
 # graph this size (aws-sdk + kube pull wide trees).
 multiple-versions = "warn"
 wildcards = "deny"
-# kache-service's unpublished path dependency on kache-core omits a version.
-# Permit that workspace dependency; registry wildcards stay denied.
+# Permit unpublished path dependencies; registry wildcards stay denied.
 allow-wildcard-paths = true
 deny = []
 skip = []

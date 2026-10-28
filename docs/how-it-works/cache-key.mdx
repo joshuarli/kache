@@ -44,7 +44,7 @@ On Windows, executable caching remains opt-in. A cached PE executable and the si
 
 The PE's mapped CodeView address and raw file pointer must identify the same bytes. File-only CodeView records with no mapped address are left uncached, even though PE permits that layout. FASTLINK PDBs are also left uncached: a matching GUID and age do not make their original object and library files portable. Kache reads the PDB Info feature tail to identify that mode, with a 1 MiB admission limit for the Info stream. Larger streams and unsupported features cause a cache miss.
 
-Windows executable keys use a separate pairing-admission field, so older EXE-only entries cannot win local, remote or concurrent lookups. Linked executables for custom targets, or an explicit target with `RUST_TARGET_PATH` set, use that field conservatively because their file format is not inferred from the target name. Those entries miss once after upgrading; libraries and known non-Windows executable targets without that custom-target ambiguity retain their keys. Cached pairs are checked again before any output is restored.
+Windows executable keys use a separate pairing-admission field, so older EXE-only entries cannot win local or concurrent lookups. Linked executables for custom targets, or an explicit target with `RUST_TARGET_PATH` set, use that field conservatively because their file format is not inferred from the target name. Those entries miss once after upgrading; libraries and known non-Windows executable targets without that custom-target ambiguity retain their keys. Cached pairs are checked again before any output is restored.
 
 `-C split-debuginfo=off` skips Kache's `.dSYM` generation and restoration, including bundles in older cache entries. `-C debuginfo=0` and `-C debuginfo=none` also skip bundling. Without a bundle, source-level debugging of a cached binary can depend on the producing build's object files.
 
@@ -120,12 +120,6 @@ does under `third_party/rust`) is checked against its own package, its
 `OUT_DIR`, and the files and dot-directories at the top of each directory
 between it and the workspace root, so it shares records at any tree size.
 
-With a remote configured, records travel with the entries. A machine with no
-record for a unit asks the remote for one before running the pre-pass, and
-records made here go to a writable remote. A record that names a machine-local
-path outside the Cargo registry is not published, and registry paths travel
-relative to it. A record from the remote is checked like a local one.
-
 ### Clippy
 
 `cargo clippy` runs workspace crates through `clippy-driver`, which Cargo
@@ -150,7 +144,7 @@ build.
 ### Misses without a record
 
 The first time a unit is built on a machine, Kache has no recorded closure to
-derive a key from. When no remote, fallback wrapper or read-only store is
+derive a key from. When no fallback wrapper or read-only store is
 configured and the store holds no entry for the unit, the miss is certain.
 Kache then compiles first and keys from the dep-info the compile emitted,
 instead of spawning `rustc --emit=dep-info` to discover the closure before

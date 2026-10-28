@@ -168,23 +168,6 @@ fn cc_available() -> bool {
 
 // ── version / help / dispatch ───────────────────────────────────────────────
 
-/// `kache login` / `kache logout` are dispatched before the config is loaded;
-/// without a planner they stop with a pointer to the setting instead of
-/// trying to reach an identity provider.
-#[cfg(feature = "remote")]
-#[test]
-fn login_and_logout_need_a_planner() {
-    let e = env();
-    for command in ["login", "logout"] {
-        kache(&e.home, &e.cache)
-            .arg(command)
-            .env_remove("KACHE_PLANNER_ENDPOINT")
-            .assert()
-            .failure()
-            .stderr(predicates::str::contains("no planner is configured"));
-    }
-}
-
 #[test]
 fn version_prints_package_version() {
     let e = env();
@@ -321,13 +304,6 @@ fn json_rejects_interactive_or_mutating_commands() {
         .code(2)
         .stderr(predicates::str::contains("kache purge"));
     e.cmd()
-        .args(["--json", "sync"])
-        .assert()
-        .code(2)
-        .stderr(predicates::str::contains("is supported on"))
-        .stderr(predicates::str::contains("report").not())
-        .stderr(predicates::str::contains("targets").not());
-    e.cmd()
         .args(["--json", "doctor", "--fix"])
         .assert()
         .code(2)
@@ -340,7 +316,6 @@ fn json_rejects_interactive_or_mutating_commands() {
 fn argument_errors_exit_two() {
     let e = env();
     for args in [
-        vec!["sync", "--pull", "--push"],
         vec!["stats", "--format", "jsno"],
         vec!["report", "--format", "html"],
         vec!["list", "--sort", "sise"],
@@ -472,7 +447,6 @@ fn subcommand_help_is_available() {
         "purge",
         "doctor",
         "stats",
-        "sync",
         "completions",
     ] {
         let e = env();
@@ -730,27 +704,6 @@ fn stats_announces_auto_start_and_warns_on_daemon_config_mismatch() {
         .stderr(predicates::str::contains("local_store="));
 
     // A probe session must not leave its daemon behind.
-    e.cmd().args(["daemon", "stop"]).assert().success();
-}
-
-/// #652 stats slice: the prefetch policy line may not disagree with the
-/// daemon. The daemon here inherited prefetch enabled, so a later
-/// `KACHE_PREFETCH_ENABLED=0` invocation gets a mismatch warning instead of
-/// a wrong "disabled" line computed from its own environment.
-#[test]
-fn stats_warns_when_daemon_prefetch_policy_differs() {
-    let e = env();
-    e.cmd().arg("stats").assert().success();
-    e.cmd()
-        .env("KACHE_PREFETCH_ENABLED", "0")
-        .arg("stats")
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("Prefetch:   disabled").not())
-        .stderr(
-            predicates::str::contains("prefetch_enabled=true")
-                .and(predicates::str::contains("says false")),
-        );
     e.cmd().args(["daemon", "stop"]).assert().success();
 }
 
@@ -1915,7 +1868,6 @@ fn json_failures_emit_one_document_and_nonzero_exit() {
         (vec!["init", "--json"], 2, "invalid_arguments"),
         (vec!["monitor", "--json"], 2, "invalid_arguments"),
         (vec!["config", "--json"], 2, "invalid_arguments"),
-        (vec!["sync", "--json"], 2, "invalid_arguments"),
         (
             vec!["stats", "--json", "--format", "github"],
             2,
@@ -2500,30 +2452,6 @@ fn doctor_reports_wrapper_configured_via_cargo_config() {
         .assert()
         .success()
         .stdout(predicates::str::contains("RUSTC_WRAPPER"));
-}
-
-#[test]
-fn doctor_reports_local_only_mode() {
-    // KACHE_LOCAL_ONLY hits doctor's local-only Remote-check branch.
-    let e = env();
-    e.cmd()
-        .env("KACHE_LOCAL_ONLY", "1")
-        .arg("doctor")
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("local-only"));
-}
-
-#[test]
-fn doctor_reports_configured_remote() {
-    // A configured S3 bucket hits doctor's "Remote s3://..." check branch.
-    let e = env();
-    e.cmd()
-        .env("KACHE_S3_BUCKET", "my-remote-bucket")
-        .arg("doctor")
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("my-remote-bucket"));
 }
 
 #[test]
@@ -4811,16 +4739,6 @@ fn workspace_wrapper_via_cargo_config_and_path() {
 }
 
 #[test]
-fn sync_help_includes_allow_partial() {
-    let e = env();
-    e.cmd()
-        .args(["sync", "--help"])
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("--allow-partial"));
-}
-
-#[test]
 fn why_miss_json_preserves_legacy_repeat_uncertainty() {
     let e = env();
     write_legacy_miss_events(&e, "legacy-cc", &["same-key", "same-key"]);
@@ -5573,51 +5491,32 @@ fn doctor_probe_reports_a_missing_compiler_without_polluting_json() {
 #[test]
 fn doctor_compares_the_running_daemons_context_with_this_invocation() {
     let e = env();
-    e.cmd()
-        .env("KACHE_PREFETCH_ENABLED", "1")
-        .args(["daemon", "start"])
-        .assert()
-        .success();
-    for enabled in ["1", "0"] {
-        let output = e
-            .cmd()
-            .env("KACHE_PREFETCH_ENABLED", enabled)
-            .args(["--json", "doctor"])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        let checks = body["checks"].as_array().unwrap();
-        let config = checks
-            .iter()
-            .find(|check| check["label"] == "Daemon config")
-            .unwrap();
-        assert_eq!(config["pass"], enabled == "1", "{config}");
-        if enabled == "0" {
-            assert!(
-                config["detail"]
-                    .as_str()
-                    .unwrap()
-                    .contains("prefetch_enabled")
-            );
-        }
-        let process = checks
-            .iter()
-            .find(|check| check["label"] == "Daemon process")
-            .unwrap();
-        assert!(
-            process["detail"].as_str().unwrap().contains("pid "),
-            "{process}"
-        );
-        #[cfg(unix)]
-        assert!(
-            process["detail"]
-                .as_str()
-                .unwrap()
-                .contains("open-file limits at startup: soft"),
-            "{process}"
-        );
-    }
+    e.cmd().args(["daemon", "start"]).assert().success();
+    let output = e.cmd().args(["--json", "doctor"]).output().unwrap();
+    assert!(output.status.success());
+    let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let checks = body["checks"].as_array().unwrap();
+    let config = checks
+        .iter()
+        .find(|check| check["label"] == "Daemon config")
+        .unwrap();
+    assert_eq!(config["pass"], true, "{config}");
+    let process = checks
+        .iter()
+        .find(|check| check["label"] == "Daemon process")
+        .unwrap();
+    assert!(
+        process["detail"].as_str().unwrap().contains("pid "),
+        "{process}"
+    );
+    #[cfg(unix)]
+    assert!(
+        process["detail"]
+            .as_str()
+            .unwrap()
+            .contains("open-file limits at startup: soft"),
+        "{process}"
+    );
 }
 
 #[test]

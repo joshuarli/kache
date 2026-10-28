@@ -5,18 +5,18 @@ description: Choose a compiler cache based on the workflow you need
 
 Kache and [sccache](https://github.com/mozilla/sccache#readme) both avoid repeated compiler work. This page explains the differences for teams moving to Kache or deciding whether it covers their build today.
 
-It describes both projects as they are today and does not rank their speed. Test the same repository, toolchain, runner, and remote before deciding.
+It describes both projects as they are today and does not rank their speed. Test the same repository, toolchain, and runner before deciding.
 
 ## Main differences
 
 | Question | Kache | sccache |
 | --- | --- | --- |
-| Primary workflow | Local-first cache; an optional remote is read after a local miss and written in the background | Client-server compiler cache with local and remote storage |
+| Primary workflow | Local-first cache shared across worktrees on one machine | Client-server compiler cache with local and remote storage |
 | Rust setup | `kache init` | `RUSTC_WRAPPER=sccache` |
 | C/C++ setup | `kache init` (PATH compiler-name shims on Unix) or `CC="kache cc"` | Prefix wrapper (`sccache gcc`); no ccache-style PATH farm |
-| Remote backends | S3-compatible storage, GCS, filesystem paths, and OCI registries | S3, Redis, Memcached, GCS, Azure, GitHub Actions, WebDAV, and others listed by sccache |
+| Network sharing | None: the store stays on the machine | S3, Redis, Memcached, GCS, Azure, GitHub Actions, WebDAV, and others listed by sccache |
 | Inspection | `monitor`, `stats`, `explain`, `list`, and `doctor` | `--show-stats`, logs, and server commands |
-| Remote transfer | On-demand restore plus `sync`, manifests, and prefetch | Remote access is part of normal server operation |
+| Transfers | None: restores read the local store | Remote access is part of normal server operation |
 | Rust executables | Cacheable by default on Linux and macOS | Rust crates that invoke the system linker are not cached, according to the sccache README |
 | Incremental Rust builds | Kache disables or isolates incremental state according to its configured policy | Incrementally compiled Rust crates are not cached, according to the sccache README |
 | Fallback | Passes invocations it does not cache to another wrapper, such as sccache | No Kache-specific handoff needed |
@@ -25,7 +25,7 @@ It describes both projects as they are today and does not rank their speed. Test
 
 - You want cache entries shared across local worktrees without a remote.
 - You want to inspect individual events and ask why a compile missed.
-- You want explicit pull and push steps in CI (`kache sync --pull`, `kache sync --push`) and prefetch you can tune or turn off.
+- You want a local-only cache with no network dependencies.
 - Caching eligible Rust executable and linker outputs matters to your workload.
 - You want one `PATH` change to cache Make/CMake/PKGBUILD object compiles without wrapping `CC` in a shell.
 
@@ -37,13 +37,12 @@ If a missing compiler, backend, or workflow still blocks you, [open a feature re
 
 ## Measure your own build
 
-Compare cold, local-hit, and remote-hit cases separately. Keep these fixed:
+Compare cold and warm cases separately. Keep these fixed:
 
 - repository revision and lockfile
 - compiler and linker versions
 - target triple and build profile
 - machine or CI runner class
-- remote region and credentials
 
 Run several samples after one warm-up and compare medians. A count-based hit rate does not show how much compile time was avoided, so record wall time as well.
 

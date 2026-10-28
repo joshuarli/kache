@@ -3,7 +3,6 @@ mod blob_heal;
 mod build_script;
 mod build_script_inputs;
 use kache_store::atomic;
-mod build_intent;
 mod cache_fs;
 mod cache_key;
 mod cargo_env;
@@ -24,9 +23,7 @@ mod events;
 mod explain;
 mod extra_inputs;
 mod fallback;
-mod fallback_planner;
 mod heartbeat;
-mod identity;
 mod incremental_policy;
 mod index_compact;
 #[cfg(unix)]
@@ -36,7 +33,6 @@ mod init_shell;
 mod invocation;
 mod key_env;
 use kache_store::link;
-mod cache_remote;
 mod link_probe;
 mod machine;
 mod maintenance;
@@ -49,28 +45,16 @@ mod out_dir_alias;
 mod path_normalizer;
 mod pe_pdb;
 mod phase_trace;
-#[cfg(feature = "remote")]
-mod planner_auth;
-#[cfg(feature = "remote")]
-mod planner_client;
 mod platform;
 mod policy;
-mod prediction_share;
 mod prestage;
 mod probe;
 mod probe_memo;
-mod remote;
-mod remote_backend;
-mod remote_layout;
-mod remote_pack;
-mod remote_plan;
-mod remote_resilience;
 mod report;
 mod run_diff;
 mod savings;
 mod scheduler;
 mod service;
-mod shards;
 mod since;
 // Both callers (`clean`'s classifier and `compute_link_stats`) are `cfg(unix)`,
 // because `nlink` is the signal they combine with. Windows ReFS block-cloning
@@ -91,9 +75,6 @@ mod term;
 mod test_runner;
 #[cfg(test)]
 mod test_support;
-mod timeline;
-#[cfg(feature = "remote")]
-mod timeline_client;
 mod toolchain_dylib;
 use kache_ipc as transport;
 mod tree_stamp;
@@ -230,21 +211,6 @@ enum TelemetryCommands {
         #[arg(long, value_enum)]
         phase: Option<BenchPhase>,
     },
-    /// Send build timeline records for finished builds to the planner
-    Push {
-        /// Send every session still in the logs, not just the last build
-        #[arg(long, conflicts_with = "session")]
-        all: bool,
-        /// Send one session by id
-        #[arg(long)]
-        session: Option<String>,
-        /// Extra `key=value` label recorded with the build, repeatable
-        #[arg(long = "label", value_name = "KEY=VALUE")]
-        labels: Vec<String>,
-        /// Print the records instead of sending them
-        #[arg(long, short = 'n')]
-        dry_run: bool,
-    },
 }
 
 /// Whether `command` has a JSON form. Every command is named, with no
@@ -281,14 +247,10 @@ fn command_supports_json(command: &Option<Commands>) -> bool {
         // Interactive, or Cargo's own output.
         Commands::Cargo { .. }
         | Commands::Monitor { .. }
-        | Commands::Login { .. }
         | Commands::Completions { .. } => false,
         // No JSON form yet.
         Commands::Purge { .. }
-        | Commands::Sync { .. }
-        | Commands::SaveManifest { .. }
         | Commands::Telemetry { .. }
-        | Commands::Logout
         | Commands::InstallShims { .. } => false,
     }
 }
@@ -344,7 +306,6 @@ fn json_refusal(command: &Option<Commands>) -> Option<&'static str> {
         Some(Commands::Config { command: None }) => {
             "`kache config` is interactive; use a config subcommand with --json."
         }
-        Some(Commands::Login { .. }) => "`kache login` is interactive and has no JSON form.",
         Some(Commands::Monitor { .. }) => {
             "`kache monitor` is interactive; use `kache stats --json`."
         }
@@ -777,25 +738,6 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
             }
             return config_tui::run_config_editor();
         }
-        Some(Commands::Login { device, retrust }) => {
-            #[cfg(feature = "remote")]
-            return cli::login::login(*device, *retrust);
-            #[cfg(not(feature = "remote"))]
-            {
-                let _ = (device, retrust);
-                return Err(anyhow::anyhow!(
-                    "kache login needs remote support; rebuild with --features remote"
-                ));
-            }
-        }
-        #[cfg(feature = "remote")]
-        Some(Commands::Logout) => return cli::login::logout(),
-        #[cfg(not(feature = "remote"))]
-        Some(Commands::Logout) => {
-            return Err(anyhow::anyhow!(
-                "kache logout needs remote support; rebuild with --features remote"
-            ));
-        }
         Some(Commands::Cargo { args }) => return cargo_proxy::run(args.clone()),
         Some(Commands::Completions { shell }) => {
             generate_completions(*shell, &mut std::io::stdout());
@@ -924,28 +866,6 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
                 json,
             )
         }
-        Some(Commands::Sync {
-            manifest_path,
-            pull,
-            push,
-            dry_run,
-            all,
-            workspace,
-            allow_partial,
-        }) => cli::sync(
-            &config,
-            manifest_path.as_deref(),
-            pull,
-            push,
-            dry_run,
-            all,
-            workspace,
-            allow_partial,
-        ),
-        Some(Commands::SaveManifest {
-            manifest_key,
-            namespace,
-        }) => cli::save_manifest(&config, manifest_key.as_deref(), namespace.as_deref()),
         Some(Commands::Daemon { command: None }) => service::status(json),
         Some(Commands::Daemon {
             command: Some(DaemonCommands::Status),
@@ -1070,22 +990,6 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
             scenario.as_deref(),
             phase.map(BenchPhase::as_str),
         ),
-        Some(Commands::Telemetry {
-            command:
-                TelemetryCommands::Push {
-                    all,
-                    session,
-                    labels,
-                    dry_run,
-                },
-        }) => {
-            let selection = match (all, session) {
-                (true, _) => cli::TimelineSelection::All,
-                (false, Some(session)) => cli::TimelineSelection::Session(session),
-                (false, None) => cli::TimelineSelection::Latest,
-            };
-            cli::telemetry_push(&config, &selection, &labels, dry_run)
-        }
         Some(Commands::Explain {
             all: true, root, ..
         }) => explain::run_all(&config, root.as_deref(), json),
@@ -1124,7 +1028,6 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
         Some(Commands::InstallShims { .. }) => Err(anyhow::anyhow!(UNIX_ONLY_SHIMS)),
         Some(Commands::Cargo { .. }) => unreachable!(),
         Some(Commands::Config { .. }) => unreachable!(),
-        Some(Commands::Login { .. } | Commands::Logout) => unreachable!(),
         Some(Commands::Completions { .. }) => unreachable!(),
         None => {
             // No subcommand — print help. New users often find an unexpected TUI
@@ -2576,16 +2479,6 @@ mod tests {
     }
 
     #[test]
-    fn sync_pull_and_push_conflict() {
-        let error = Cli::try_parse_from(["kache", "sync", "--pull", "--push"])
-            .err()
-            .unwrap();
-        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
-        assert!(Cli::try_parse_from(["kache", "sync", "--pull"]).is_ok());
-        assert!(Cli::try_parse_from(["kache", "sync", "--push"]).is_ok());
-    }
-
-    #[test]
     fn parse_since_window_accepts_minutes_and_rejects_garbage() {
         assert_eq!(parse_since_window("15m").unwrap().secs(), 900);
         assert_eq!(parse_since_window("2h").unwrap().secs(), 7200);
@@ -2651,14 +2544,12 @@ mod tests {
             assert!(!general.contains(hidden), "{hidden} is hidden: {general}");
         }
         assert_eq!(
-            json_refusal(&Some(Commands::Sync {
-                manifest_path: None,
-                pull: false,
-                push: false,
-                dry_run: false,
-                all: false,
-                workspace: false,
-                allow_partial: false,
+            json_refusal(&Some(Commands::Telemetry {
+                command: TelemetryCommands::Write {
+                    dir: std::path::PathBuf::new(),
+                    scenario: None,
+                    phase: None,
+                }
             })),
             Some(general)
         );
@@ -2666,14 +2557,6 @@ mod tests {
             json_refusal(&Some(Commands::Config { command: None }))
                 .unwrap()
                 .contains("kache config")
-        );
-        assert!(
-            json_refusal(&Some(Commands::Login {
-                device: false,
-                retrust: false
-            }))
-            .unwrap()
-            .contains("kache login")
         );
         assert!(
             json_refusal(&Some(Commands::Monitor { since: None }))
@@ -2945,18 +2828,11 @@ mod tests {
             Some(Commands::Init { check: false, .. })
         ));
         for spelling in ["--dry-run", "-n"] {
-            let parsed = Cli::try_parse_from(["kache", "sync", spelling]).unwrap();
-            assert!(
-                matches!(parsed.command, Some(Commands::Sync { dry_run: true, .. })),
-                "{spelling}"
-            );
-            let parsed = Cli::try_parse_from(["kache", "telemetry", "push", spelling]).unwrap();
+            let parsed = Cli::try_parse_from(["kache", "clean", spelling]).unwrap();
             assert!(
                 matches!(
                     parsed.command,
-                    Some(Commands::Telemetry {
-                        command: TelemetryCommands::Push { dry_run: true, .. }
-                    })
+                    Some(Commands::Clean { dry_run: true, .. })
                 ),
                 "{spelling}"
             );
@@ -2980,7 +2856,6 @@ mod tests {
         }
         for hidden in [
             "install-shims",
-            "save-manifest",
             "--tracked",
             "--stale-schema",
         ] {
@@ -3040,9 +2915,6 @@ mod tests {
                 "monitor",
                 "explain",
                 "list",
-                "sync",
-                "login",
-                "logout",
                 "daemon",
                 "completions",
                 "help",

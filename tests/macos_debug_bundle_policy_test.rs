@@ -67,10 +67,8 @@ fn check_debug_bundle_policy(split: &str, expected_bundle: bool) {
             expected_result,
             "{events:?}"
         );
-        let deps = target.join("debug/deps");
-        let bundles: Vec<_> = fs::read_dir(&deps)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
+        let bundles: Vec<_> = common::profile_artifacts(&target.join("debug"))
+            .into_iter()
             .filter(|path| path.extension().is_some_and(|ext| ext == "dSYM"))
             .collect();
         assert_eq!(!bundles.is_empty(), expected_bundle, "{split}: {bundles:?}");

@@ -3,28 +3,21 @@ title: Daemon overview
 description: What the background daemon owns and what still works without it
 ---
 
-The daemon keeps compiler cache pipelines, network connections and maintenance
+The daemon keeps compiler cache pipelines and maintenance
 state warm across invocations. The local engine can still use the cache when
 compiler delegation is unavailable.
 
 ## Responsibilities
 
 - Run concurrent cache pipelines for delegated compiler invocations.
-- Download an exact entry after a local miss.
 - Store completed C/C++ compiles handed over by wrappers.
-- Upload newly stored entries in the background.
-- Replay durable upload intents after a restart.
-- Prefetch likely entries at the start of a build session.
-- Refresh the remote key index used by fallback planning.
-- Run garbage collection at startup and every six hours, including `[cache.volumes]` shards. When the store is over its size limit, also sweep after an upload or when a wrapper reports it.
+- Run garbage collection at startup and every six hours, including `[cache.volumes]` shards. When the store is over its size limit, also sweep after a wrapper reports it.
 - Flush entries that were stored without an fsync, every two seconds.
 - At the start of a build, copy large executables next to the paths their restore will write, so the restore only renames the copy into place.
 - When the machine is quiet, heal the blob index and compact `index.db`.
 - When the machine is quiet, at most once an hour, remove tracked target directories whose workspace was deleted, and build units no build has used for 30 days. See [Target directory cleanup](/docs/getting-started/configuration#target-directory-cleanup).
 - While the machine is idle, replace target files that are full copies of stored blobs with clones of those blobs.
 - Copy another checkout's registry and git dependency units into a new target directory before Cargo checks it. See [New checkouts](/docs/getting-started/configuration#new-checkouts).
-- Fetch input-prediction rows from the remote, and publish them to a writable one.
-- When a build session that used a writable remote has been idle for five minutes, publish its build manifest.
 - Track running compiles for `kache monitor`.
 - On macOS, exclude the cache directory from Spotlight and Time Machine.
 - Exit when its config file changes, so the next start loads the new settings.
@@ -41,15 +34,10 @@ publication records its background time in `daemon_store_ms`, separately from
 time. A daemon crash can lose queued cache entries; the compiler outputs remain
 available to the build.
 
-Set `cache.prefetch_enabled = false` or `KACHE_PREFETCH_ENABLED=0` to disable speculative prefetch while retaining exact remote checks and uploads.
-
-The daemon lists the remote's keys only when `cache.remote_key_listing` is on. It is on by default for a filesystem remote and off for S3, GCS and OCI; on S3 it needs `s3:ListBucket`. Nothing is listed while `cache.prefetch_enabled` is off. The planner uses this key index for crates that no build manifest, shard or local history covers, and the daemon refreshes it every `cache.remote_key_cache_refresh_secs` (60 by default; `0` lists once). If S3 refuses the listing for lack of `s3:ListBucket`, the daemon stops listing and logs one warning.
-
 ## When it is required
 
-Local-only caching works with no daemon. Compiler-driven remote reads, writes,
-and prefetch need the daemon. `kache sync` can transfer entries directly without
-it. If delegation is unavailable before Commit, the engine continues with the
+Caching works with no daemon. Delegated compilation and background maintenance
+need it. If delegation is unavailable before Commit, the engine continues with the
 local store. After Commit, a lost daemon connection fails the invocation; see
 [Architecture](/docs/how-it-works/architecture).
 

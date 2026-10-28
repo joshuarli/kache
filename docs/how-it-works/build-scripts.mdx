@@ -118,7 +118,7 @@ still excluded. Relative links confined to `OUT_DIR` keep their original
 text, including ordinary dangling links. These rules apply to the regular
 build-script cache. Hermetic runs still refuse links that leave `OUT_DIR`
 and fall back to the regular path.
-Entries stay in the local store: `kache sync` never uploads them.
+Entries stay in the local store.
 
 Runs appear in build reports (`kache stats --full`) as `build_script_run`, with
 the package name. A restored run is a `local_hit` and a recorded one a `miss`.

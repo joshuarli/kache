@@ -1094,6 +1094,7 @@ impl CcArgs {
 
     /// True when this clang-cl compile requests debug info that CodeView
     /// records with un-remapped paths. Those objects stay in the local store.
+    #[cfg(test)]
     pub fn embeds_codeview_debug(&self) -> bool {
         cl_debug_present(self)
     }

@@ -107,17 +107,15 @@ enum Tab {
     Why,
     Projects,
     Store,
-    Transfer,
 }
 
 impl Tab {
-    const ORDER: [Tab; 6] = [
+    const ORDER: [Tab; 5] = [
         Tab::Now,
         Tab::Build,
         Tab::Why,
         Tab::Projects,
         Tab::Store,
-        Tab::Transfer,
     ];
 
     fn index(self) -> usize {
@@ -293,7 +291,7 @@ fn reset_filtered_viewports(state: &mut AppState) {
         Tab::Build => state.build_scroll.reset(),
         Tab::Store => state.store_scroll.reset(),
         Tab::Why => state.why_scroll.reset(),
-        Tab::Now | Tab::Projects | Tab::Transfer => {}
+        Tab::Now | Tab::Projects => {}
     }
 }
 
@@ -342,30 +340,6 @@ fn shorten_home(path: &std::path::Path) -> String {
     path.display().to_string()
 }
 
-fn effective_remote_status(config: &Config, snap: &StatsSnapshot) -> String {
-    if let Some(effective) = snap.daemon_effective_config.as_ref() {
-        if let Some(remote) = effective.remote_description.as_ref() {
-            return remote.clone();
-        }
-        if effective.local_only {
-            return "local-only".to_string();
-        }
-        if effective.remote_error.is_some() {
-            return "misconfigured".to_string();
-        }
-        return "not configured".to_string();
-    }
-
-    let client = config
-        .remote
-        .as_ref()
-        .map_or_else(|| "not configured".to_string(), |remote| remote.describe());
-    if snap.daemon_connected {
-        format!("{client} (client config; daemon did not report)")
-    } else {
-        format!("{client} (client config)")
-    }
-}
 
 // ── App state ──────────────────────────────────────────────────────────────
 
@@ -452,14 +426,8 @@ struct AppState {
     /// miss and not free.
     why_cache: Option<(String, usize, Analysis)>,
 
-    // Transfer tab
-    transfer_scroll: Viewport,
     /// Why tab: the whole explanation is one scrollable body.
     why_scroll: Viewport,
-    prev_bytes_uploaded: u64,
-    prev_bytes_downloaded: u64,
-    upload_speed_bps: f64,
-    download_speed_bps: f64,
 
     // Background result slots
     rustc_version_slot: Arc<Mutex<Option<String>>>,
@@ -489,7 +457,6 @@ impl AppState {
             Tab::Now | Tab::Build => &mut self.build_scroll,
             Tab::Projects => &mut self.project_scroll,
             Tab::Store => &mut self.store_scroll,
-            Tab::Transfer => &mut self.transfer_scroll,
             Tab::Why => &mut self.why_scroll,
         }
     }
@@ -685,7 +652,7 @@ impl AppState {
             Tab::Build => &self.build_filter,
             Tab::Store => &self.store_filter,
             Tab::Why => &self.why_filter,
-            Tab::Now | Tab::Projects | Tab::Transfer => "",
+            Tab::Now | Tab::Projects => "",
         }
     }
 
@@ -696,7 +663,7 @@ impl AppState {
             Tab::Build => Some(&mut self.build_filter),
             Tab::Store => Some(&mut self.store_filter),
             Tab::Why => Some(&mut self.why_filter),
-            Tab::Now | Tab::Projects | Tab::Transfer => None,
+            Tab::Now | Tab::Projects => None,
         }
     }
 
@@ -801,12 +768,7 @@ pub fn run_monitor(config: &Config, since: Option<SinceWindow>) -> Result<()> {
         now_page_size: 1,
         shown: None,
         why_cache: None,
-        transfer_scroll: Viewport::new(ScrollAnchor::Top),
         why_scroll: Viewport::new(ScrollAnchor::Top),
-        prev_bytes_uploaded: 0,
-        prev_bytes_downloaded: 0,
-        upload_speed_bps: 0.0,
-        download_speed_bps: 0.0,
         rustc_version_slot: Arc::clone(&rustc_version_slot),
         stats_result_slot: Arc::clone(&stats_result_slot),
         stats_fetch_in_flight: false,
@@ -852,15 +814,6 @@ pub fn run_monitor(config: &Config, since: Option<SinceWindow>) -> Result<()> {
             if !state.stats_fetch_requested_entries {
                 new_snap.entries = previous_entries;
             }
-            let old_up = state.stats_snapshot.bytes_uploaded;
-            let old_down = state.stats_snapshot.bytes_downloaded;
-            let interval = SNAPSHOT_REFRESH_INTERVAL.as_secs_f64();
-            state.upload_speed_bps =
-                (new_snap.bytes_uploaded.saturating_sub(old_up)) as f64 / interval;
-            state.download_speed_bps =
-                (new_snap.bytes_downloaded.saturating_sub(old_down)) as f64 / interval;
-            state.prev_bytes_uploaded = new_snap.bytes_uploaded;
-            state.prev_bytes_downloaded = new_snap.bytes_downloaded;
             state.stats_snapshot = new_snap;
             state.stats_loaded = true;
             state.stats_fetch_in_flight = false;
@@ -973,7 +926,7 @@ fn switch_tab(state: &mut AppState, tab: Tab) {
     match tab {
         Tab::Projects => state.last_project_refresh = Instant::now() - PROJECT_REFRESH_INTERVAL,
         Tab::Store => state.last_stats_fetch = Instant::now() - SNAPSHOT_REFRESH_INTERVAL,
-        Tab::Now | Tab::Build | Tab::Transfer | Tab::Why => {}
+        Tab::Now | Tab::Build | Tab::Why => {}
     }
 }
 
@@ -1073,7 +1026,6 @@ fn handle_key(state: &mut AppState, key: KeyCode) {
         KeyCode::Char('3') => switch_tab(state, Tab::Why),
         KeyCode::Char('4') => switch_tab(state, Tab::Projects),
         KeyCode::Char('5') => switch_tab(state, Tab::Store),
-        KeyCode::Char('6') => switch_tab(state, Tab::Transfer),
         KeyCode::Tab => switch_tab(state, state.active_tab.next()),
         // Shift+Tab used to share an arm with Tab and cycle forward too, so
         // there was no way back except by number.
@@ -1201,7 +1153,6 @@ fn draw_ui(frame: &mut Frame, state: &mut AppState) {
         Tab::Build => draw_build_tab(frame, state, chunks[1]),
         Tab::Projects => draw_projects_tab(frame, state, chunks[1]),
         Tab::Store => draw_store_tab(frame, state, chunks[1]),
-        Tab::Transfer => draw_transfer_tab(frame, state, chunks[1]),
         Tab::Why => draw_why_tab(frame, state, chunks[1]),
     }
 }
@@ -1236,14 +1187,13 @@ fn draw_tab_bar(frame: &mut Frame, state: &AppState, area: Rect) {
 
 /// Every tab's label and the column it starts at in the tab bar. One place
 /// for the geometry so the drawing and the mouse hit-test cannot disagree.
-fn tab_titles(width: u16) -> [(Tab, &'static str, u16); 6] {
-    const LABELS: [(Tab, &str); 6] = [
+fn tab_titles(width: u16) -> [(Tab, &'static str, u16); 5] {
+    const LABELS: [(Tab, &str); 5] = [
         (Tab::Now, " [1] Now "),
         (Tab::Build, "[2] Build "),
         (Tab::Why, "[3] Why "),
         (Tab::Projects, "[4] Projects "),
         (Tab::Store, "[5] Store "),
-        (Tab::Transfer, "[6] Transfer "),
     ];
     let labels = if width < 76 {
         [
@@ -1252,7 +1202,6 @@ fn tab_titles(width: u16) -> [(Tab, &'static str, u16); 6] {
             (Tab::Why, "[3]Why"),
             (Tab::Projects, "[4]Projects"),
             (Tab::Store, "[5]Store"),
-            (Tab::Transfer, "[6]Transfer"),
         ]
     } else {
         LABELS
@@ -1310,13 +1259,6 @@ fn miss_clock_sentence(share: Option<f64>) -> String {
     match share {
         Some(share) => format!("{share:.0}% of the clock was a miss"),
         None => "no lookup time recorded yet".to_string(),
-    }
-}
-
-fn remote_sentence(status: &str) -> String {
-    match status {
-        "not configured" | "local-only" => "remote is off".to_string(),
-        other => format!("remote: {other}"),
     }
 }
 
@@ -1614,9 +1556,8 @@ fn draw_now_figures(frame: &mut Frame, state: &AppState, area: Rect) {
             Line::styled(
                 clip(
                     &format!(
-                        "  cache {store} / {} · {}",
+                        "  cache {store} / {}",
                         cap.trim_start_matches("cap "),
-                        remote_sentence(&effective_remote_status(&state.config, snap))
                     ),
                     area.width as usize,
                 ),
@@ -1655,10 +1596,6 @@ fn draw_now_figures(frame: &mut Frame, state: &AppState, area: Rect) {
         lines.push(Line::styled("  stats are still loading", muted));
         lines.push(Line::from(""));
     }
-    lines.push(Line::from(format!(
-        "  {}",
-        remote_sentence(&effective_remote_status(&state.config, snap))
-    )));
     frame.render_widget(Paragraph::new(lines), area);
 }
 
@@ -2643,246 +2580,6 @@ fn draw_projects_help(frame: &mut Frame, state: &AppState, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-// ── Transfer tab ──────────────────────────────────────────────────────────
-
-fn draw_transfer_tab(frame: &mut Frame, state: &mut AppState, area: Rect) {
-    let chunks = Layout::vertical([
-        Constraint::Length(3), // Upload queue gauge
-        Constraint::Length(9), // Transfer activity summary
-        Constraint::Min(5),    // Recent transfers table
-        Constraint::Length(1), // Help bar
-    ])
-    .split(area);
-
-    draw_transfer_pending(frame, state, chunks[0]);
-    draw_transfer_activity(frame, state, chunks[1]);
-    draw_recent_transfers(frame, state, chunks[2]);
-    draw_transfer_help(frame, state, chunks[3]);
-}
-
-fn draw_transfer_pending(frame: &mut Frame, state: &AppState, area: Rect) {
-    let snap = &state.stats_snapshot;
-    let pending = snap.pending_uploads;
-
-    let color = if pending == 0 {
-        Color::Green
-    } else if pending < 100 {
-        Color::Yellow
-    } else {
-        Color::Red
-    };
-
-    let label = format!("  {} pending uploads", pending);
-    let paragraph = Paragraph::new(Span::styled(label, Style::default().fg(color)))
-        .block(Block::bordered().title(" Upload Queue "));
-
-    frame.render_widget(paragraph, area);
-}
-
-fn format_speed(bps: f64) -> String {
-    if bps >= 1_000_000.0 {
-        format!("{:.1} MB/s", bps / 1_000_000.0)
-    } else if bps >= 1_000.0 {
-        format!("{:.0} KB/s", bps / 1_000.0)
-    } else if bps > 0.0 {
-        format!("{:.0} B/s", bps)
-    } else {
-        "0 B/s".to_string()
-    }
-}
-
-fn draw_transfer_activity(frame: &mut Frame, state: &AppState, area: Rect) {
-    let snap = &state.stats_snapshot;
-    let block = Block::bordered()
-        .title(" Transfer Activity ")
-        .border_style(Style::default().fg(Color::Cyan));
-
-    let s3_slots = format!(
-        "{} / {}",
-        snap.s3_concurrency_used, snap.s3_concurrency_total
-    );
-    let up_speed = format_speed(state.upload_speed_bps);
-    let down_speed = format_speed(state.download_speed_bps);
-
-    let text = vec![
-        Line::from(vec![
-            Span::styled("  Active: ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                format!("↑ {} uploading", snap.pending_uploads),
-                if snap.pending_uploads > 0 {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                },
-            ),
-            Span::raw("    "),
-            Span::styled(
-                format!("↓ {} downloading", snap.active_downloads),
-                if snap.active_downloads > 0 {
-                    Style::default().fg(Color::Blue)
-                } else {
-                    Style::default()
-                },
-            ),
-            Span::raw(format!("    Remote slots: {s3_slots}")),
-        ]),
-        Line::from(vec![
-            Span::styled("  Speed:  ", Style::default().fg(Color::Cyan)),
-            Span::styled(format!("↑ {up_speed}"), Style::default().fg(Color::Yellow)),
-            Span::raw("    "),
-            Span::styled(format!("↓ {down_speed}"), Style::default().fg(Color::Blue)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Uploads: ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                format!("{} ok", snap.uploads_completed),
-                Style::default().fg(Color::Green),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                format!("{} failed", snap.uploads_failed),
-                if snap.uploads_failed > 0 {
-                    Style::default().fg(Color::Red)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                },
-            ),
-            Span::raw("  "),
-            Span::styled(
-                format!("{} skipped", snap.uploads_skipped),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::raw(format!("    total: {}", ByteSize(snap.bytes_uploaded))),
-        ]),
-        Line::from(vec![
-            Span::styled("  Downloads: ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                format!("{} ok", snap.downloads_completed),
-                Style::default().fg(Color::Green),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                format!("{} failed", snap.downloads_failed),
-                if snap.downloads_failed > 0 {
-                    Style::default().fg(Color::Red)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                },
-            ),
-            Span::raw(format!("    total: {}", ByteSize(snap.bytes_downloaded))),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Daemon: ", Style::default().fg(Color::Cyan)),
-            if snap.daemon_connected {
-                Span::styled("connected", Style::default().fg(Color::Green))
-            } else {
-                Span::styled("offline", Style::default().fg(Color::Red))
-            },
-        ]),
-    ];
-
-    let paragraph = Paragraph::new(text).block(block);
-    frame.render_widget(paragraph, area);
-}
-
-fn draw_recent_transfers(frame: &mut Frame, state: &mut AppState, area: Rect) {
-    let transfers = &state.stats_snapshot.recent_transfers;
-
-    let block = Block::bordered()
-        .title(format!(" Recent Transfers ({}) ", transfers.len()))
-        .border_style(Style::default().fg(Color::Cyan));
-
-    if transfers.is_empty() {
-        let msg = if !state.stats_snapshot.daemon_connected {
-            "  Daemon offline — no transfer data available"
-        } else {
-            "  No transfers yet"
-        };
-        frame.render_widget(Paragraph::new(msg).block(block), area);
-        return;
-    }
-
-    let header = Row::new(vec!["Dir", "Crate", "Size", "Time", "Status"])
-        .style(Style::default().add_modifier(Modifier::BOLD));
-
-    let visible_rows = (area.height as usize).saturating_sub(3);
-    let range = state
-        .transfer_scroll
-        .visible_range(transfers.len(), visible_rows);
-
-    // Show in reverse chronological order
-    let rows: Vec<Row> = transfers
-        .iter()
-        .rev()
-        .skip(range.start)
-        .take(range.len())
-        .map(|evt| {
-            let (arrow, dir_style) = if evt.accounting.as_ref().is_some_and(|accounting| {
-                accounting.operation == kache_core::timeline::PrefetchOperation::List
-            }) {
-                ("L", Style::default().fg(Color::Blue))
-            } else {
-                match evt.direction {
-                    daemon::TransferDirection::Upload => ("↑", Style::default().fg(Color::Yellow)),
-                    daemon::TransferDirection::Download => ("↓", Style::default().fg(Color::Blue)),
-                }
-            };
-
-            let elapsed = if evt.elapsed_ms > 1000 {
-                format!("{:.1}s", evt.elapsed_ms as f64 / 1000.0)
-            } else {
-                format!("{}ms", evt.elapsed_ms)
-            };
-
-            let (status, status_style) = if evt.ok {
-                ("ok", Style::default().fg(Color::Green))
-            } else if evt.outcome == "cancelled" {
-                ("STOP", Style::default().fg(Color::Yellow))
-            } else if evt.outcome == "skipped" {
-                ("SKIP", Style::default().fg(Color::Yellow))
-            } else if evt.outcome == "not_found"
-                && evt.direction == daemon::TransferDirection::Download
-            {
-                ("MISS", Style::default().fg(Color::Yellow))
-            } else {
-                ("FAIL", Style::default().fg(Color::Red))
-            };
-
-            Row::new(vec![
-                Cell::from(arrow).style(dir_style),
-                Cell::from(evt.crate_name.clone()),
-                Cell::from(ByteSize(evt.compressed_bytes).to_string()),
-                Cell::from(elapsed),
-                Cell::from(status).style(status_style),
-            ])
-        })
-        .collect();
-
-    let widths = [
-        Constraint::Length(3),  // Dir arrow
-        Constraint::Min(20),    // Crate name
-        Constraint::Length(10), // Size
-        Constraint::Length(8),  // Time
-        Constraint::Length(6),  // Status
-    ];
-
-    let table = Table::new(rows, widths).header(header).block(block);
-    frame.render_widget(table, area);
-}
-
-fn draw_transfer_help(frame: &mut Frame, state: &AppState, area: Rect) {
-    let help = help_line(state, "q: quit  p: pause  ↑↓ PgUp PgDn: scroll  ⇥/⇧⇥: tabs");
-    let paragraph = Paragraph::new(help).style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(paragraph, area);
-}
-
-// ── Why tab ───────────────────────────────────────────────────────────────
-
-/// Why the selected build missed: the misses collapsed to the few causes
-/// behind them, the passthroughs by reason, the crates that keep missing,
-/// and every passthrough in the build. One body, scrolled as a whole, so
-/// nothing is ever clipped out of reach.
 fn draw_why_tab(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let chunks = Layout::vertical([
         Constraint::Min(3),    // Body

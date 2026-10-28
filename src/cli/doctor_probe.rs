@@ -14,7 +14,7 @@ pub(super) fn check() -> Check {
         label: "Cache probe",
         pass,
         detail: match result {
-            Ok(()) => "Rust compile, store and restore produced a local hit with identical bytes (isolated temporary cache; no remote access)".into(),
+            Ok(()) => "Rust compile, store and restore produced a local hit with identical bytes (isolated temporary cache)".into(),
             Err(error) => format!("{error:#}"),
         },
         fix: (!pass).then(|| "check the Rust toolchain on PATH and the failure above; this probe uses an isolated configuration, so inspect the other checks for problems with the configured store".into()),
@@ -32,7 +32,6 @@ fn probe() -> Result<()> {
         &config,
         toml::to_string(&serde_json::json!({"cache": {
             "ignore_env": true,
-            "local_only": true,
             "local_store": cache.to_str().context("temporary cache path is not UTF-8")?,
             "runtime_dir": cache.to_str().context("temporary runtime path is not UTF-8")?,
             "min_store_compile_ms": 0,

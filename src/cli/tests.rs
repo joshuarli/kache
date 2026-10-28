@@ -53,107 +53,6 @@ fn shutdown_summary_status_distinguishes_partial_totals_from_cancellation() {
     );
 }
 
-// ── Build timeline push ─────────────────────────────────────────────────
-
-fn timeline_record(session_id: &str, started_at_ms: u64) -> kache_core::timeline::BuildTimeline {
-    kache_core::timeline::BuildTimeline {
-        schema: kache_core::timeline::BUILD_TIMELINE_SCHEMA,
-        client_record_id: format!("r-{session_id}"),
-        session_id: session_id.to_string(),
-        started_at_ms,
-        ..Default::default()
-    }
-}
-
-#[test]
-fn the_default_selection_is_the_last_build() {
-    let records = vec![timeline_record("old", 1), timeline_record("new", 2)];
-    let selected = select_timelines(records.clone(), &TimelineSelection::Latest);
-    assert_eq!(
-        selected
-            .iter()
-            .map(|r| r.session_id.as_str())
-            .collect::<Vec<_>>(),
-        ["new"]
-    );
-
-    assert_eq!(
-        select_timelines(records.clone(), &TimelineSelection::All).len(),
-        2
-    );
-    assert_eq!(
-        select_timelines(records, &TimelineSelection::Session("old".to_string()))
-            .iter()
-            .map(|r| r.session_id.as_str())
-            .collect::<Vec<_>>(),
-        ["old"]
-    );
-}
-
-#[test]
-fn selecting_from_no_records_sends_nothing() {
-    for selection in [
-        TimelineSelection::Latest,
-        TimelineSelection::All,
-        TimelineSelection::Session("s".to_string()),
-    ] {
-        assert!(select_timelines(Vec::new(), &selection).is_empty());
-    }
-    assert!(
-        select_timelines(
-            vec![timeline_record("s1", 1)],
-            &TimelineSelection::Session("other".to_string())
-        )
-        .is_empty()
-    );
-}
-
-#[test]
-fn labels_are_key_value_pairs() {
-    let parsed = parse_labels(&[
-        "phase=cold".to_string(),
-        " scenario = firefox ".to_string(),
-        "empty=".to_string(),
-    ])
-    .unwrap();
-    assert_eq!(parsed["phase"], "cold");
-    assert_eq!(parsed["scenario"], "firefox");
-    assert_eq!(parsed["empty"], "");
-
-    for bad in ["nope", "=value"] {
-        assert!(parse_labels(&[bad.to_string()]).is_err(), "{bad}");
-    }
-}
-
-#[test]
-fn an_unstamped_log_says_the_wrapper_is_too_old() {
-    let versions = std::collections::BTreeSet::from(["0.23.1".to_string()]);
-    let message = nothing_to_send(12, &versions);
-    assert!(message.contains("12 compiles in the log"), "{message}");
-    assert!(message.contains("0.23.1"), "{message}");
-    assert!(message.contains("Upgrade kache"), "{message}");
-    assert!(nothing_to_send(1, &versions).starts_with("1 compile in the log"));
-
-    assert_eq!(
-        nothing_to_send(0, &Default::default()),
-        "no builds in the event log"
-    );
-    assert!(
-        nothing_to_send(3, &Default::default()).contains("unknown version"),
-        "a log with no version still explains itself"
-    );
-}
-
-#[test]
-fn a_push_without_logs_reports_that_and_succeeds() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
-    telemetry_push(&config, &TimelineSelection::Latest, &[], true)
-        .expect("an empty log directory is not an error");
-}
-
-// ── List pager resolution ───────────────────────────────────────────────
-
 #[test]
 fn detail_fields_render_only_nonempty_values() {
     let mut lines = Vec::new();
@@ -311,118 +210,6 @@ fn stats_names_the_host_config_only_when_in_effect() {
         None
     );
 }
-
-/// Each host-config state reads the way `kache doctor` should say it: an
-/// unusable file is the only failure, and an overridden key names what
-/// wins over it.
-#[cfg(feature = "remote")]
-#[test]
-fn remote_access_reports_the_explained_cause() {
-    let ok = remote_access_from(Ok(()), None, None);
-    assert!(ok.pass);
-    assert_eq!(ok.detail, "reachable; credentials accepted");
-    assert_eq!(ok.fix, None);
-
-    let expired: anyhow::Error = opendal::Error::new(
-        opendal::ErrorKind::PermissionDenied,
-        r#"S3Error { code: "ExpiredToken" }"#,
-    )
-    .into();
-    let failed = remote_access_from(Err(expired), Some("us-east-1"), None);
-    assert!(!failed.pass);
-    assert!(failed.fix.unwrap().contains("expired"));
-
-    let unknown = remote_access_from(Err(anyhow::anyhow!("connection refused")), None, None);
-    assert!(!unknown.pass);
-    assert!(unknown.detail.contains("connection refused"));
-    assert_eq!(
-        unknown.fix.as_deref(),
-        Some("check the endpoint, bucket, region and credentials")
-    );
-}
-
-/// The remote line says whose credentials the store accepted, so an
-/// instance role in use is visible. A chain that stopped is reported by its
-/// reason alone.
-#[cfg(feature = "remote")]
-#[test]
-fn remote_access_names_the_credential_source_and_a_stopped_chain() {
-    let ok = remote_access_from(Ok(()), None, Some("EC2 instance metadata"));
-    assert!(ok.pass);
-    assert_eq!(
-        ok.detail,
-        "reachable; credentials from EC2 instance metadata accepted"
-    );
-
-    let failure = crate::remote_backend::CredentialFailure::Profile {
-        name: "build-cache".to_string(),
-        selected_by: "AWS_PROFILE",
-        problem: "it is not defined in /aws/config or /aws/credentials".to_string(),
-    };
-    let stopped = anyhow::Error::new(opendal::Error::new(
-        opendal::ErrorKind::Unexpected,
-        "signing http request",
-    ))
-    .context("GET s3://bucket/kache-doctor-probe")
-    .context(failure.clone());
-    let failed = remote_access_from(Err(stopped), Some("us-east-1"), None);
-    assert!(!failed.pass);
-    assert_eq!(failed.detail, failure.to_string());
-    assert_eq!(
-        failed.fix.as_deref(),
-        Some(
-            "fix the profile, or unset AWS_PROFILE so kache can use web identity, ECS or EC2 \
-             instance credentials"
-        )
-    );
-}
-
-/// A transport whose GET never answers.
-#[cfg(feature = "remote")]
-struct Silent;
-
-#[cfg(feature = "remote")]
-#[async_trait::async_trait]
-impl crate::remote_backend::RemoteBackend for Silent {
-    async fn head(&self, _key: &str) -> Result<bool> {
-        std::future::pending().await
-    }
-
-    async fn get(
-        &self,
-        _key: &str,
-        _max_bytes: Option<u64>,
-    ) -> Result<Option<crate::remote_backend::GetObject>> {
-        std::future::pending().await
-    }
-
-    async fn put(&self, _key: &str, _body: Vec<u8>, _content_type: Option<&str>) -> Result<()> {
-        std::future::pending().await
-    }
-
-    async fn list(&self, _prefix: &str) -> Result<Vec<String>> {
-        std::future::pending().await
-    }
-
-    fn describe(&self, key: &str) -> String {
-        key.to_string()
-    }
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn a_remote_that_never_answers_fails_the_probe() {
-    assert_eq!(REMOTE_PROBE_TIMEOUT, std::time::Duration::from_secs(10));
-    let error = probe_remote(&Silent, "probe", std::time::Duration::from_millis(20))
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("no answer within"), "{error:#}");
-    let backend = crate::remote_backend::memory_backend();
-    probe_remote(&backend, "probe", std::time::Duration::from_secs(1))
-        .await
-        .unwrap();
-}
-
 #[test]
 fn doctor_host_config_check_wording() {
     use crate::config::{HostConfigKey, HostConfigStatus, HostKeySource};
@@ -459,8 +246,8 @@ fn doctor_host_config_check_wording() {
                 source: HostKeySource::ChosenFile("/job/kache-action.toml".into()),
             },
             HostConfigKey {
-                key: "cache.local_only".to_string(),
-                source: HostKeySource::Env("KACHE_LOCAL_ONLY"),
+                key: "cache.explain_miss".to_string(),
+                source: HostKeySource::Env("KACHE_EXPLAIN_MISS"),
             },
         ],
     });
@@ -471,7 +258,7 @@ fn doctor_host_config_check_wording() {
         "{detail}"
     );
     assert!(
-        detail.contains("cache.local_only (overridden by KACHE_LOCAL_ONLY)"),
+        detail.contains("cache.explain_miss (overridden by KACHE_EXPLAIN_MISS)"),
         "{detail}"
     );
 }
@@ -878,7 +665,7 @@ fn daemon_gc_breakdown_sums_every_policy_field() {
 #[test]
 fn local_gc_records_its_run_with_the_driver_that_ran_it() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), None);
+    let config = save_manifest_config(dir.path().to_path_buf());
 
     run_gc_local(&config, GcMode::Background).unwrap();
     let stats = crate::report::read_gc_stats(&config.cache_dir).expect("worker run recorded");
@@ -893,7 +680,7 @@ fn local_gc_records_its_run_with_the_driver_that_ran_it() {
 #[test]
 fn local_gc_sweeps_hermetic_build_script_runs() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), None);
+    let config = save_manifest_config(dir.path().to_path_buf());
     let leftover = config.cache_dir.join("out-dirs/v2").join("ab".repeat(16));
     std::fs::create_dir_all(leftover.join("debug/build/z-1/out")).unwrap();
     run_gc_local(&config, GcMode::Background).unwrap();
@@ -906,7 +693,7 @@ fn local_gc_sweeps_hermetic_build_script_runs() {
 #[test]
 fn purge_keeps_only_linked_build_script_runs() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let v2 = config.cache_dir.join("out-dirs/v2");
     let run = |key: &str| {
         let root = v2.join(key.repeat(16));
@@ -931,7 +718,7 @@ fn purge_keeps_only_linked_build_script_runs() {
 #[test]
 fn local_gc_appends_to_the_gc_history_only_when_record_sessions_is_on() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(dir.path().to_path_buf(), None);
+    let mut config = save_manifest_config(dir.path().to_path_buf());
 
     run_gc_local(&config, GcMode::Cli).unwrap();
     assert!(!config.cache_dir.join("telemetry").exists());
@@ -952,7 +739,7 @@ fn local_gc_appends_to_the_gc_history_only_when_record_sessions_is_on() {
 #[test]
 fn local_gc_runs_store_housekeeping_and_records_it() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), None);
+    let config = save_manifest_config(dir.path().to_path_buf());
 
     // Two stale key locks with no entry, one claimed just now.
     std::fs::create_dir_all(config.store_dir()).unwrap();
@@ -996,7 +783,7 @@ fn local_gc_runs_store_housekeeping_and_records_it() {
 #[test]
 fn stale_schema_gc_records_its_run() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), None);
+    let config = save_manifest_config(dir.path().to_path_buf());
 
     gc(&config, None, true, true).unwrap();
 
@@ -1009,7 +796,7 @@ fn stale_schema_gc_records_its_run() {
 #[test]
 fn age_gc_without_a_daemon_records_its_run() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), None);
+    let config = save_manifest_config(dir.path().to_path_buf());
     let store = Store::open(&config).unwrap();
     let _gc_lock = store.try_gc_lock().unwrap().expect("gc lock");
 
@@ -1044,7 +831,7 @@ fn put_idle_entry(store: &Store, dir: &std::path::Path, key: &str, size: usize) 
 /// store holds two idle 600-byte entries, and one mapped shard that does
 /// not exist.
 fn config_with_an_over_budget_shard(dir: &std::path::Path, budget: u64) -> (Config, Config, Store) {
-    let mut config = save_manifest_config(dir.join("main"), None);
+    let mut config = save_manifest_config(dir.join("main"));
     let shard = crate::config::VolumeStore {
         volume: "/mnt/shard/".into(),
         store: dir.join("shard"),
@@ -1186,7 +973,7 @@ fn the_gc_summary_has_a_line_per_shard_it_swept() {
 #[test]
 fn gc_summary_compares_deduplicated_blob_bytes_with_the_limit() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let store = Store::open(&config).unwrap();
     let artifact = dir.path().join("shared.o");
     fs::write(&artifact, [42; 60]).unwrap();
@@ -1220,7 +1007,7 @@ fn gc_summary_compares_deduplicated_blob_bytes_with_the_limit() {
 #[test]
 fn machine_snapshot_reads_a_store_without_creating_one() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), None);
+    let config = save_manifest_config(dir.path().to_path_buf());
 
     let empty = machine_snapshot(&config);
     assert!(empty.index_bytes.is_none());
@@ -1305,7 +1092,7 @@ fn machine_snapshot_reads_a_store_without_creating_one() {
 #[test]
 fn machine_snapshot_never_checkpoints_the_wal() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), None);
+    let config = save_manifest_config(dir.path().to_path_buf());
     drop(Store::open(&config).unwrap());
     let db_path = config.index_db_path();
     let mut wal_path = db_path.clone().into_os_string();
@@ -1650,7 +1437,7 @@ fn index_row_figures_seek_instead_of_scanning() {
 #[test]
 fn machine_snapshot_skips_row_figures_on_a_locked_index() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), None);
+    let config = save_manifest_config(dir.path().to_path_buf());
     drop(Store::open(&config).unwrap());
     let holder = rusqlite::Connection::open(config.index_db_path()).unwrap();
     holder
@@ -1719,7 +1506,7 @@ fn tree_contents(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
 #[test]
 fn stats_last_build_records_when_record_sessions_is_on() {
     let cache = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(cache.path().to_path_buf(), None);
+    let mut config = save_manifest_config(cache.path().to_path_buf());
     config.record_sessions = true;
     plant_last_build(&config);
     stats_last_build(&config, None, false).unwrap();
@@ -1728,7 +1515,7 @@ fn stats_last_build_records_when_record_sessions_is_on() {
     assert_eq!(log.lines().count(), 2, "{log}");
 
     let quiet = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(quiet.path().to_path_buf(), None);
+    let config = save_manifest_config(quiet.path().to_path_buf());
     plant_last_build(&config);
     stats_last_build(&config, None, true).unwrap();
     assert!(
@@ -1757,7 +1544,7 @@ fn plant_last_build(config: &Config) {
 fn report_records_without_the_flag_when_record_sessions_is_on() {
     let cache = tempfile::tempdir().unwrap();
     let out = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(cache.path().to_path_buf(), None);
+    let mut config = save_manifest_config(cache.path().to_path_buf());
     config.record_sessions = true;
 
     report_run(&config, out.path(), false);
@@ -1775,7 +1562,7 @@ fn report_records_without_the_flag_when_record_sessions_is_on() {
 fn report_without_record_leaves_the_cache_dir_unchanged() {
     let cache = tempfile::tempdir().unwrap();
     let out = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(cache.path().to_path_buf(), None);
+    let config = save_manifest_config(cache.path().to_path_buf());
     drop(Store::open(&config).unwrap());
     let before = tree_contents(cache.path());
 
@@ -1794,7 +1581,7 @@ fn report_record_appends_one_line_to_the_cache_dir_not_the_runtime_dir() {
     let cache = tempfile::tempdir().unwrap();
     let runtime = tempfile::tempdir().unwrap();
     let out = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(cache.path().to_path_buf(), None);
+    let mut config = save_manifest_config(cache.path().to_path_buf());
     config.runtime_dir = runtime.path().to_path_buf();
     let line_count = || {
         std::fs::read_to_string(session_log_path(&config))
@@ -1828,7 +1615,7 @@ fn report_record_appends_one_line_to_the_cache_dir_not_the_runtime_dir() {
 fn report_record_that_cannot_write_still_delivers_the_report() {
     let cache = tempfile::tempdir().unwrap();
     let out = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(cache.path().to_path_buf(), None);
+    let config = save_manifest_config(cache.path().to_path_buf());
     // A file where the telemetry dir goes fails create_dir_all the way a
     // read-only mount does, and root cannot write past it.
     std::fs::write(cache.path().join("telemetry"), b"").unwrap();
@@ -2046,25 +1833,9 @@ fn zero_event_stats() -> daemon::EventStatsResponse {
     }
 }
 
-#[test]
-fn test_daemon_needed_when_remote_configured() {
-    assert!(daemon_needed(true, false));
-}
 
-#[test]
-fn test_daemon_needed_when_planner_configured() {
-    assert!(daemon_needed(false, true));
-}
 
-#[test]
-fn test_daemon_needed_when_both_configured() {
-    assert!(daemon_needed(true, true));
-}
 
-#[test]
-fn test_daemon_not_needed_when_local_only_or_unconfigured() {
-    assert!(!daemon_needed(false, false));
-}
 
 #[test]
 fn test_optional_failing_check_is_not_an_issue() {
@@ -2291,7 +2062,7 @@ fn test_sccache_rc_detection_ignores_fallback_setting() {
 #[test]
 fn test_fallback_is_sccache() {
     let dir = tempfile::tempdir().unwrap();
-    let mut cfg = save_manifest_config(dir.path().to_path_buf(), None);
+    let mut cfg = save_manifest_config(dir.path().to_path_buf());
 
     // No config / no fallback -> false.
     assert!(!fallback_is_sccache(None));
@@ -2733,28 +2504,6 @@ fn test_compute_project_stats_classifies_remaining_buckets() {
     );
 }
 
-#[test]
-fn test_parse_cargo_lock_crate_names_from_valid_missing_and_bad_files() {
-    // Cargo.lock parser -> valid names, missing file, and malformed TOML.
-    let dir = tempfile::tempdir().unwrap();
-    let lock = dir.path().join("Cargo.lock");
-    std::fs::write(
-        &lock,
-        "version = 3\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.0\"\n\n\
-             [[package]]\nname = \"tokio\"\nversion = \"1.0.0\"\n",
-    )
-    .unwrap();
-
-    let names = parse_cargo_lock_crate_names_from(&lock).unwrap();
-    assert!(names.contains("serde"));
-    assert!(names.contains("tokio"));
-    assert_eq!(
-        parse_cargo_lock_crate_names_from(&dir.path().join("missing.lock")),
-        None
-    );
-    std::fs::write(&lock, "not valid toml [[[[").unwrap();
-    assert_eq!(parse_cargo_lock_crate_names_from(&lock), None);
-}
 
 #[test]
 fn test_is_macos_protected() {
@@ -3339,448 +3088,35 @@ fn test_plan_cargo_wrapper_edit_rejects_malformed_toml() {
     );
 }
 
-#[test]
-fn test_get_workspace_crate_names_lists_members() {
-    // A two-member workspace; `cargo metadata --no-deps` should report both.
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    std::fs::write(
-        root.join("Cargo.toml"),
-        "[workspace]\nmembers = [\"a\", \"b\"]\nresolver = \"2\"\n",
-    )
-    .unwrap();
-    for m in ["a", "b"] {
-        std::fs::create_dir_all(root.join(m).join("src")).unwrap();
-        std::fs::write(
-            root.join(m).join("Cargo.toml"),
-            format!("[package]\nname = \"{m}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
-        )
-        .unwrap();
-        std::fs::write(root.join(m).join("src/lib.rs"), "").unwrap();
-    }
 
-    let names = sync_scope::resolve(Some(root.join("Cargo.toml").to_str().unwrap()), false)
-        .unwrap()
-        .workspace
-        .unwrap();
-    assert!(names.contains("a"), "got {names:?}");
-    assert!(names.contains("b"), "got {names:?}");
-}
-
-#[test]
-fn test_get_workspace_crate_names_errors_on_bad_manifest() {
-    let dir = tempfile::tempdir().unwrap();
-    let bad = dir.path().join("Cargo.toml");
-    std::fs::write(&bad, "this is not valid toml [[[").unwrap();
-    assert!(sync_scope::resolve(Some(bad.to_str().unwrap()), false).is_err());
-}
 
 // ── backend-neutral remote tests ──────────────────────────────────────────
 
-#[cfg(feature = "remote")]
-#[derive(Default)]
-struct BackendCalls {
-    gets: Vec<String>,
-    puts: Vec<String>,
-    lists: Vec<String>,
-}
 
-#[cfg(feature = "remote")]
-struct TestBackend {
-    inner: crate::remote_backend::OpenDalBackend,
-    calls: std::sync::Mutex<BackendCalls>,
-    fail_put: bool,
-    listing: Option<Arc<ControlledListing>>,
-}
 
-#[cfg(feature = "remote")]
-impl TestBackend {
-    fn memory() -> Arc<Self> {
-        Arc::new(Self {
-            inner: crate::remote_backend::memory_backend(),
-            calls: std::sync::Mutex::new(BackendCalls::default()),
-            fail_put: false,
-            listing: None,
-        })
-    }
 
-    fn failing_put() -> Arc<Self> {
-        Arc::new(Self {
-            inner: crate::remote_backend::memory_backend(),
-            calls: std::sync::Mutex::new(BackendCalls::default()),
-            fail_put: true,
-            listing: None,
-        })
-    }
 
-    async fn seed(&self, key: &str, body: impl Into<Vec<u8>>) {
-        crate::remote_backend::RemoteBackend::put(&self.inner, key, body.into(), None)
-            .await
-            .expect("seed remote object");
-    }
 
-    fn get_calls(&self) -> Vec<String> {
-        self.calls.lock().unwrap().gets.clone()
-    }
 
-    fn put_calls(&self) -> Vec<String> {
-        self.calls.lock().unwrap().puts.clone()
-    }
 
-    fn list_calls(&self) -> Vec<String> {
-        self.calls.lock().unwrap().lists.clone()
-    }
-}
 
-#[cfg(feature = "remote")]
-fn as_remote_backend(backend: &Arc<TestBackend>) -> Arc<dyn crate::remote_backend::RemoteBackend> {
-    backend.clone()
-}
 
-#[cfg(feature = "remote")]
-fn as_cache_remote(
-    backend: Arc<dyn crate::remote_backend::RemoteBackend>,
-    remote: &crate::config::RemoteConfig,
-) -> crate::cache_remote::V3Remote {
-    crate::cache_remote::V3Remote::new(backend, remote.clone())
-}
 
-#[cfg(feature = "remote")]
-#[async_trait::async_trait]
-impl crate::remote_backend::RemoteBackend for TestBackend {
-    async fn head(&self, key: &str) -> Result<bool> {
-        crate::remote_backend::RemoteBackend::head(&self.inner, key).await
-    }
 
-    async fn get(
-        &self,
-        key: &str,
-        max_bytes: Option<u64>,
-    ) -> Result<Option<crate::remote_backend::GetObject>> {
-        self.calls.lock().unwrap().gets.push(key.to_string());
-        crate::remote_backend::RemoteBackend::get(&self.inner, key, max_bytes).await
-    }
 
-    async fn put(&self, key: &str, body: Vec<u8>, content_type: Option<&str>) -> Result<()> {
-        self.calls.lock().unwrap().puts.push(key.to_string());
-        if self.fail_put {
-            anyhow::bail!("injected PUT failure for {key}");
-        }
-        crate::remote_backend::RemoteBackend::put(&self.inner, key, body, content_type).await
-    }
 
-    async fn list(&self, prefix: &str) -> Result<Vec<String>> {
-        self.calls.lock().unwrap().lists.push(prefix.to_string());
-        let _active = if let Some(listing) = &self.listing {
-            listing
-                .active
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let active = ActiveListing(listing);
-            listing.started.add_permits(1);
-            listing.release.acquire().await.unwrap().forget();
-            if listing.fail {
-                anyhow::bail!("injected LIST failure for {prefix}");
-            }
-            Some(active)
-        } else {
-            None
-        };
-        crate::remote_backend::RemoteBackend::list(&self.inner, prefix).await
-    }
 
-    fn describe(&self, key: &str) -> String {
-        crate::remote_backend::RemoteBackend::describe(&self.inner, key)
-    }
-}
-
-#[cfg(feature = "remote")]
-struct ControlledListing {
-    active: std::sync::atomic::AtomicUsize,
-    started: tokio::sync::Semaphore,
-    release: tokio::sync::Semaphore,
-    fail: bool,
-}
-
-#[cfg(feature = "remote")]
-struct ActiveListing<'a>(&'a ControlledListing);
-
-#[cfg(feature = "remote")]
-impl Drop for ActiveListing<'_> {
-    fn drop(&mut self) {
-        self.0
-            .active
-            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
-#[cfg(feature = "remote")]
-fn controlled_listing(fail: bool) -> (Arc<TestBackend>, Arc<ControlledListing>) {
-    let listing = Arc::new(ControlledListing {
-        active: std::sync::atomic::AtomicUsize::new(0),
-        started: tokio::sync::Semaphore::new(0),
-        release: tokio::sync::Semaphore::new(0),
-        fail,
-    });
-    let mut backend = TestBackend::memory();
-    Arc::get_mut(&mut backend).unwrap().listing = Some(listing.clone());
-    (backend, listing)
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn scoped_sync_lists_overlap_within_the_configured_limit() {
-    use std::sync::atomic::Ordering::SeqCst;
-    for (concurrency, batches) in [
-        (0, vec![1, 1, 1]),
-        (1, vec![1, 1, 1]),
-        (2, vec![2, 1]),
-        (8, vec![3]),
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-        config.s3_concurrency = concurrency;
-        let store = Store::open(&config).unwrap();
-        let remote = test_remote_cfg();
-        let crates = std::collections::HashSet::from(["foo".into(), "bar".into(), "baz".into()]);
-        let (backend, listing) = controlled_listing(false);
-        let cache_remote = as_cache_remote(as_remote_backend(&backend), &remote);
-        for (name, key) in [
-            ("foo", "a".repeat(64)),
-            ("bar", "b".repeat(64)),
-            ("baz", "c".repeat(64)),
-            ("unrelated", "d".repeat(64)),
-        ] {
-            backend
-                .seed(
-                    &format!("prefix/v3/manifests/{name}/{key}.json"),
-                    b"{}".to_vec(),
-                )
-                .await;
-        }
-        // Exercise both Cargo.lock and workspace filtering through the CLI path.
-        for workspace in [false, true] {
-            backend.calls.lock().unwrap().lists.clear();
-            tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                let (result, ()) = tokio::join!(
-                    sync_with_client(
-                        &cache_remote,
-                        &config,
-                        &store,
-                        Some(&crates),
-                        true,
-                        false,
-                        true,
-                        false,
-                        Some(&crates),
-                        workspace,
-                        false
-                    ),
-                    async {
-                        for &batch in &batches {
-                            listing.started.acquire_many(batch).await.unwrap().forget();
-                            assert_eq!(listing.active.load(SeqCst), batch as usize);
-                            listing.release.add_permits(batch as usize);
-                        }
-                    }
-                );
-                result.unwrap();
-            })
-            .await
-            .expect("scoped listing must fill and release each configured batch");
-            let calls = backend.list_calls();
-            assert_eq!(calls.len(), 3);
-            for name in &crates {
-                assert!(calls.contains(&format!("prefix/v3/manifests/{name}/")));
-            }
-            assert_eq!(listing.active.load(SeqCst), 0);
-        }
-        let keys = list_remote_crates(
-            &cache_remote,
-            &std::collections::HashSet::new(),
-            concurrency,
-        )
-        .await
-        .unwrap();
-        assert!(keys.is_empty());
-        assert_eq!(backend.list_calls().len(), 3);
-    }
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn scoped_listing_propagates_failures_and_drops_cancelled_requests() {
-    use std::sync::atomic::Ordering::SeqCst;
-    let remote = test_remote_cfg();
-    let crates = std::collections::HashSet::from(["foo".into(), "bar".into(), "baz".into()]);
-    let (backend, listing) = controlled_listing(true);
-    let cache_remote = as_cache_remote(as_remote_backend(&backend), &remote);
-    let result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        let (result, ()) = tokio::join!(list_remote_crates(&cache_remote, &crates, 2), async {
-            listing.started.acquire_many(2).await.unwrap().forget();
-            assert_eq!(listing.active.load(SeqCst), 2);
-            // Only one request completes: returning its error must cancel the other.
-            listing.release.add_permits(1);
-        });
-        result
-    })
-    .await
-    .expect("a failed LIST must not wait for the other requests");
-    assert!(format!("{:#}", result.unwrap_err()).contains("injected LIST failure"));
-    assert_eq!(listing.active.load(SeqCst), 0);
-    assert_eq!(backend.list_calls().len(), 2);
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn scoped_listing_merges_every_requested_crates_keys() {
-    let remote = test_remote_cfg();
-    let backend = TestBackend::memory();
-    let expected = std::collections::HashMap::from([
-        ("a".repeat(64), "foo".to_string()),
-        ("b".repeat(64), "foo".to_string()),
-        ("c".repeat(64), "bar".to_string()),
-    ]);
-    for (key, name) in &expected {
-        backend
-            .seed(
-                &format!("prefix/v3/manifests/{name}/{key}.json"),
-                b"{}".to_vec(),
-            )
-            .await;
-    }
-    backend
-        .seed(
-            &format!("prefix/v3/manifests/unrelated/{}.json", "d".repeat(64)),
-            b"{}".to_vec(),
-        )
-        .await;
-    let cache_remote = as_cache_remote(as_remote_backend(&backend), &remote);
-    let crates = std::collections::HashSet::from(["foo".into(), "bar".into()]);
-    assert_eq!(
-        list_remote_crates(&cache_remote, &crates, 2).await.unwrap(),
-        expected
-    );
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn upload_shards_uploads_one_shard_per_nonempty_bucket() {
-    // Two deps that both have build events -> they land in (likely) two
-    // shards; assert the upload count equals the shards that had entries.
-    let dir = tempfile::tempdir().unwrap();
-    let lock = dir.path().join("Cargo.lock");
-    std::fs::write(
-        &lock,
-        "version = 3\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.0\"\n\n\
-             [[package]]\nname = \"tokio\"\nversion = \"1.0.0\"\n",
-    )
-    .unwrap();
-
-    let entries = vec![
-        crate::remote::ManifestEntry {
-            cache_key: "k-serde".to_string(),
-            crate_name: "serde".to_string(),
-            compile_time_ms: 1,
-            artifact_size: 1,
-        },
-        crate::remote::ManifestEntry {
-            cache_key: "k-tokio".to_string(),
-            crate_name: "tokio".to_string(),
-            compile_time_ms: 1,
-            artifact_size: 1,
-        },
-    ];
-
-    // Compute how many shards actually carry entries, so the test is robust
-    // to the bucket assignment.
-    let deps = crate::shards::parse_cargo_lock(&lock).unwrap();
-    let shard_set = crate::shards::compute_shards(&deps);
-    let expected = shard_set.shards.len();
-
-    let backend = TestBackend::memory();
-    let client = as_remote_backend(&backend);
-    let remote = test_remote_cfg();
-    let remote_cache: Arc<crate::cache_remote::V3Remote> =
-        Arc::new(crate::cache_remote::V3Remote::new(client, remote));
-
-    let uploaded = upload_shards(&remote_cache, "ns", &lock, &entries, None)
-        .await
-        .expect("upload_shards should succeed");
-    assert_eq!(uploaded, expected);
-    let puts = backend.put_calls();
-    assert_eq!(puts.len(), expected);
-    assert!(
-        puts.iter()
-            .all(|key| key.starts_with("prefix/_manifests/v3/ns/shards/"))
-    );
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn upload_shards_skips_when_no_entries_match() {
-    // Deps present but no matching build events -> no shards uploaded, so
-    // no S3 requests are made.
-    let dir = tempfile::tempdir().unwrap();
-    let lock = dir.path().join("Cargo.lock");
-    std::fs::write(
-        &lock,
-        "version = 3\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.0\"\n",
-    )
-    .unwrap();
-
-    let backend = TestBackend::memory();
-    let client = as_remote_backend(&backend);
-    let remote = test_remote_cfg();
-    let remote_cache: Arc<crate::cache_remote::V3Remote> =
-        Arc::new(crate::cache_remote::V3Remote::new(client, remote));
-    let uploaded = upload_shards(&remote_cache, "ns", &lock, &[], None)
-        .await
-        .expect("should succeed with nothing to upload");
-    assert_eq!(uploaded, 0);
-    assert!(backend.put_calls().is_empty());
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn upload_shards_errors_on_malformed_lockfile() {
-    // Bad Cargo.lock -> parse error before any shard upload.
-    let dir = tempfile::tempdir().unwrap();
-    let lock = dir.path().join("Cargo.lock");
-    std::fs::write(&lock, "not valid toml [[[[").unwrap();
-    let backend = TestBackend::memory();
-    let client = as_remote_backend(&backend);
-    let remote = test_remote_cfg();
-    let remote_cache: Arc<crate::cache_remote::V3Remote> =
-        Arc::new(crate::cache_remote::V3Remote::new(client, remote));
-
-    let err = upload_shards(&remote_cache, "ns", &lock, &[], None)
-        .await
-        .expect_err("bad lockfile should error");
-    assert!(
-        err.to_string().contains("TOML") || err.to_string().contains("parse"),
-        "got {err}"
-    );
-    assert!(backend.put_calls().is_empty());
-}
 
 fn save_manifest_config(
     cache_dir: std::path::PathBuf,
-    remote: Option<crate::config::RemoteConfig>,
 ) -> Config {
-    use crate::config::{
-        DEFAULT_DAEMON_IDLE_TIMEOUT_SECS, DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
-        DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS, DEFAULT_S3_POOL_IDLE_SECS,
-    };
+    use crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS;
     Config {
-        remote_error: None,
         socket_path_override: None,
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
         readonly_store: None,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -3819,7 +3155,6 @@ fn save_manifest_config(
         runtime_dir: cache_dir.clone(),
         cache_dir,
         max_size: 1024 * 1024,
-        remote,
         disabled: false,
         cache_executables: false,
         cache_cc_links: false,
@@ -3833,19 +3168,9 @@ fn save_manifest_config(
         event_log_max_size: 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: crate::config::DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: crate::config::DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: crate::config::DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: crate::config::DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: crate::config::DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     }
 }
 
@@ -3887,7 +3212,7 @@ fn overwrite_entry_meta(
 fn why_miss_no_events_prints_tip() {
     // No events for the crate -> the "build it first" tip path.
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     why_miss(&config, "ghost", false).expect("why_miss with no events should succeed");
 }
 
@@ -3897,7 +3222,7 @@ fn why_miss_shows_stored_metadata_for_a_missed_key() {
     // miss-metadata display (target/profile) + the stored-entries listing.
     // Covers why_miss's metadata branch (cli.rs ~471-490+).
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     // Seed a store entry for "serde" so meta.json (with target/profile) exists.
     put_entry(&config, "serdemisskey", "serde", dir.path());
     // Log a Miss event for that crate + key.
@@ -3993,7 +3318,7 @@ fn why_miss_legacy_same_key_repeat_does_not_claim_key_mismatch() {
 fn why_miss_all_hits_reports_no_misses() {
     // Events exist but none are Miss/Dup -> the "all events are hits" path.
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     crate::events::log_event(
         &config.event_log_path(),
         &build_event(
@@ -4014,7 +3339,7 @@ fn why_miss_all_hits_reports_no_misses() {
 fn why_miss_reports_many_stored_diffs() {
     // Stored miss + many other entries -> diff printer cap branch.
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     put_entry(&config, "misskeymanydiffs", "serde", dir.path());
     overwrite_entry_meta(
         &config,
@@ -4440,59 +3765,12 @@ fn checkout_comparison_lines_separate_path_only_from_input_changes() {
     assert!(lines[0].contains("key salt or extra inputs"));
 }
 
-#[test]
-fn telemetry_push_refuses_a_malformed_label_before_reading_logs() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
-    let err = telemetry_push(
-        &config,
-        &TimelineSelection::Latest,
-        &["no-equals-sign".to_string()],
-        true,
-    )
-    .unwrap_err();
-    assert!(
-        err.to_string().contains("not key=value"),
-        "the label parse error must reach the caller: {err}"
-    );
-}
 
-#[test]
-fn collect_timelines_reports_only_stamped_wrapper_versions() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
-    std::fs::create_dir_all(&config.runtime_dir).unwrap();
-    // Neither event carries a session id, so no record is built and the
-    // version list is what `nothing_to_send` will name. An unstamped
-    // version must not appear as an empty entry.
-    let mut unstamped =
-        crate::events::BuildEvent::new_for_test("serde", crate::events::EventResult::LocalHit);
-    unstamped.version = String::new();
-    let mut stamped =
-        crate::events::BuildEvent::new_for_test("syn", crate::events::EventResult::LocalHit);
-    stamped.version = "0.23.0".to_string();
-    let log = config.event_log_path();
-    crate::events::log_event(&log, &unstamped).unwrap();
-    crate::events::log_event(&log, &stamped).unwrap();
-
-    let (records, seen, versions) = collect_timelines(
-        &config,
-        &TimelineSelection::All,
-        std::collections::BTreeMap::new(),
-    )
-    .unwrap();
-    assert!(records.is_empty());
-    assert_eq!(seen, 2);
-    assert_eq!(
-        versions.into_iter().collect::<Vec<_>>(),
-        vec!["0.23.0".to_string()]
-    );
-}
 
 #[test]
 fn telemetry_write_emits_cache_scope_not_bench() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let out = dir.path().join("otlp");
     telemetry_write(&config, &out, Some("bench-firefox"), Some("warm")).expect("telemetry write");
     let body = std::fs::read_to_string(out.join("metrics.otlp.json")).unwrap();
@@ -4520,15 +3798,11 @@ fn telemetry_write_emits_cache_scope_not_bench() {
         !body.contains("kache.bench."),
         "cache dump must not mix bench gauges"
     );
-    assert!(
-        body.contains("AGGREGATION_TEMPORALITY_CUMULATIVE"),
-        "daemon counters must ride as cumulative sums, not gauges"
-    );
     assert_eq!(
         std::fs::read_to_string(out.join("schema_version"))
             .unwrap()
             .trim(),
-        "1"
+        "2"
     );
 }
 
@@ -4536,7 +3810,7 @@ fn telemetry_write_emits_cache_scope_not_bench() {
 fn purge_skips_corrupt_filtered_entry() {
     // purge(crate) -> corrupt meta removal error is skipped, not fatal.
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     put_entry(&config, "badpurgekey", "bad", dir.path());
     std::fs::write(
         config.store_dir().join("badpurgekey").join("meta.json"),
@@ -4562,7 +3836,7 @@ fn purge_skips_corrupt_filtered_entry() {
 #[test]
 fn purge_waits_for_the_gc_lock() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     put_entry(&config, "purgelockkey", "locked", dir.path());
 
     let store = crate::store::Store::open(&config).unwrap();
@@ -4597,7 +3871,7 @@ fn purge_waits_for_the_gc_lock() {
 #[test]
 fn verify_reports_valid_entries_on_a_clean_store() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     put_entry(&config, "validkey1", "serde", dir.path());
 
     // A clean store verifies with checksums and no repair needed.
@@ -4647,69 +3921,11 @@ fn stats_row(lines: &[String], label: &str) -> Option<String> {
     Some(format!("{label} | {value} | {note}"))
 }
 
-#[test]
-#[allow(clippy::field_reassign_with_default)] // incremental snapshot setup reads clearer
-fn render_stats_rich_snapshot_covers_all_lines() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(dir.path().join("cache"), Some(test_remote_cfg()));
-    config.remote.as_mut().unwrap().prefix = "artifacts".to_string();
-
-    let mut snap = StatsSnapshot::default();
-    snap.total_size = 5000;
-    snap.max_size = 10000;
-    snap.entry_count = 3;
-    snap.daemon_connected = true;
-    snap.daemon_version = "9.9.9".to_string();
-    snap.daemon_build_epoch = crate::daemon::build_epoch(); // timestamps do not determine release order
-    snap.event_stats.local_hits = 8;
-    snap.event_stats.misses = 2;
-    snap.event_stats.total_elapsed_ms = 1000;
-    snap.event_stats.miss_elapsed_ms = 300;
-    snap.event_stats.hit_compile_time_ms = 5000;
-    snap.event_stats.miss_compile_time_ms = 2000;
-
-    snap.blob_stats = Some(crate::store::BlobStats {
-        total_blobs: 4,
-        total_blob_size: 2048,
-        total_logical_size: 4096,
-        savings: 2048,
-    });
-    let lines = render_stats(&snap, &config, SinceWindow::DEFAULT);
-    let row = |label| stats_row(&lines, label).unwrap_or_else(|| panic!("{label}: {lines:#?}"));
-    assert_eq!(row("Cache"), "Cache | 2.0 KiB | blob bytes · 3 entries");
-    assert!(row("Limit").starts_with("Limit | 9.8 KiB | registered blob budget"));
-    assert_eq!(
-        row("Dedup"),
-        "Dedup | 4 blobs | 4.0 KiB logical, 50.0% saved"
-    );
-    assert_eq!(
-        row("Hit rate"),
-        "Hit rate | 80.0% | 8 of 10 crates from cache"
-    );
-    assert_eq!(
-        row("By time"),
-        "By time | 71.4% | compile time served from cache"
-    );
-    assert_eq!(
-        row("Miss time"),
-        "Miss time | 300 ms | 30.0% of wrapper time"
-    );
-    assert_eq!(
-        row("Time saved"),
-        "Time saved | 5.0 s | compile work avoided"
-    );
-    assert!(row("Daemon").starts_with("Daemon | v9.9.9 | "));
-    assert!(
-        !row("Daemon").contains("restart pending"),
-        "matching epoch -> no mismatch note"
-    );
-    assert!(row("Remote").starts_with("Remote | s3://"));
-}
 
 #[test]
 fn render_stats_cache_fallback_labels_logical_bytes() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let snap = StatsSnapshot {
         total_size: 8192,
         blob_stats: None,
@@ -4725,7 +3941,7 @@ fn render_stats_cache_fallback_labels_logical_bytes() {
 #[test]
 fn render_stats_cache_preserves_logical_size_without_registered_blobs() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let snap = StatsSnapshot {
         total_size: 8192,
         blob_stats: Some(crate::store::BlobStats {
@@ -4748,7 +3964,7 @@ fn render_stats_cache_preserves_logical_size_without_registered_blobs() {
 #[test]
 fn render_stats_cache_shards_use_blob_bytes_and_label_missing_metadata() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let snap = StatsSnapshot {
         stores: vec![
             crate::store_view::StoreSummary {
@@ -4793,117 +4009,7 @@ fn render_stats_cache_shards_use_blob_bytes_and_label_missing_metadata() {
     );
 }
 
-#[test]
-#[allow(clippy::field_reassign_with_default)]
-fn render_stats_resilience_requires_both_sources_and_any_single_signal() {
-    let dir = tempfile::tempdir().unwrap();
-    let remote_config =
-        save_manifest_config(dir.path().join("remote-cache"), Some(test_remote_cfg()));
-    let local_config = save_manifest_config(dir.path().join("local-cache"), None);
 
-    let mut quiet = StatsSnapshot::default();
-    quiet.daemon_connected = true;
-    assert!(
-        render_stats(&quiet, &remote_config, SinceWindow::DEFAULT)
-            .iter()
-            .all(|line| !line.starts_with("  Resilience "))
-    );
-
-    let signals = [
-        (
-            "round trips",
-            StatsSnapshot {
-                remote_check_roundtrips: 1,
-                ..Default::default()
-            },
-        ),
-        (
-            "negative hits",
-            StatsSnapshot {
-                negative_hits: 1,
-                ..Default::default()
-            },
-        ),
-        (
-            "download suppression",
-            StatsSnapshot {
-                downloads_suppressed: 1,
-                ..Default::default()
-            },
-        ),
-        (
-            "upload suppression",
-            StatsSnapshot {
-                uploads_suppressed: 1,
-                ..Default::default()
-            },
-        ),
-        (
-            "degraded state",
-            StatsSnapshot {
-                remote_degraded: true,
-                ..Default::default()
-            },
-        ),
-    ];
-    for (signal, mut snap) in signals {
-        snap.daemon_connected = true;
-        assert!(
-            render_stats(&snap, &remote_config, SinceWindow::DEFAULT)
-                .iter()
-                .any(|line| line.starts_with("  Resilience ")),
-            "{signal} must independently render the resilience section"
-        );
-    }
-
-    let disconnected = StatsSnapshot {
-        negative_hits: 1,
-        ..Default::default()
-    };
-    assert!(
-        render_stats(&disconnected, &remote_config, SinceWindow::DEFAULT)
-            .iter()
-            .all(|line| !line.starts_with("  Resilience "))
-    );
-    let connected_without_remote = StatsSnapshot {
-        daemon_connected: true,
-        negative_hits: 1,
-        ..Default::default()
-    };
-    assert!(
-        render_stats(
-            &connected_without_remote,
-            &local_config,
-            SinceWindow::DEFAULT
-        )
-        .iter()
-        .all(|line| !line.starts_with("  Resilience "))
-    );
-}
-
-/// The #485 Phase-0 prefetch section renders when the daemon reports
-/// activity and stays absent for a quiet/offline daemon, so local-only
-/// `kache stats` output is unchanged.
-#[test]
-fn render_stats_says_when_the_daemon_does_not_list_the_remote() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), Some(test_remote_cfg()));
-    let render = |listing: bool| {
-        let mut eff = effective_config_like(&config);
-        eff.remote_key_listing = listing;
-        let snap = StatsSnapshot {
-            daemon_connected: true,
-            daemon_effective_config: Some(eff),
-            ..Default::default()
-        };
-        stats_row(
-            &render_stats(&snap, &config, SinceWindow::DEFAULT),
-            "Listing",
-        )
-    };
-    assert!(render(false).unwrap().starts_with("Listing | off | "));
-    assert_eq!(render(true), None);
-}
 
 #[test]
 fn prefetch_session_lines_follow_the_summaries() {
@@ -4920,7 +4026,7 @@ fn prefetch_session_lines_follow_the_summaries() {
 #[test]
 fn stats_summary_shows_every_source_even_when_zero() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     for (counts, expected) in [
         (
             [30, 1, 7, 2, 86],
@@ -4955,7 +4061,7 @@ fn stats_summary_shows_every_source_even_when_zero() {
 fn hit_rate_row_adds_every_outcome() {
     let row = |local, prefetch, remote, dups, misses| {
         let dir = tempfile::tempdir().unwrap();
-        let config = save_manifest_config(dir.path().join("cache"), None);
+        let config = save_manifest_config(dir.path().join("cache"));
         let mut snap = StatsSnapshot::default();
         snap.event_stats.local_hits = local;
         snap.event_stats.prefetch_hits = prefetch;
@@ -4982,540 +4088,21 @@ fn hit_rate_row_adds_every_outcome() {
     );
 }
 
-#[test]
-#[allow(clippy::field_reassign_with_default)]
-fn render_stats_prefetch_section_gated_on_activity() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), Some(test_remote_cfg()));
-    // Quiet daemon: no prefetch lines at all.
-    let mut quiet = StatsSnapshot::default();
-    quiet.daemon_connected = true;
-    let out = render_stats(&quiet, &config, SinceWindow::DEFAULT);
-    assert_eq!(stats_row(&out, "Prefetch"), None);
-    assert_eq!(stats_row(&out, "Planning"), None);
 
-    // Active daemon: all lines present with the right arithmetic.
-    let mut snap = StatsSnapshot::default();
-    snap.daemon_connected = true;
-    snap.prefetch = crate::daemon::PrefetchStatsSnapshot {
-        downloads_completed: 4,
-        bytes_downloaded: 2048,
-        keys_used: 2,
-        keys_cancelled: 3,
-        keys_over_budget: 0,
-        cancelled: true,
-        plans_advisory: 1,
-        plans_fallback: 2,
-        last_plan_candidates: 7,
-        dedup_join_waits: 5,
-        dedup_join_wait_ms: 1234,
-        last_list_duration_ms: 88,
-        last_list_key_count: 250_000,
-        list_requests_total: 0,
-        list_failures_total: 0,
-        list_duration_ms_total: 0,
-        list_keys_total: 0,
-        pack_requests_total: 3,
-        pack_bytes_downloaded: 4096,
-        v3_requests_total: 1,
-        v3_bytes_downloaded: 1024,
-        pack_validation_failures: 1,
-        pack_fallback_entries: 1,
-        last_plan_wall_ms: 250,
-        plan_wall_ms_total: 500,
-    };
-    let mut eff = effective_config_like(&config);
-    eff.remote_key_cache_refresh_secs = 7;
-    snap.daemon_effective_config = Some(eff);
-    let out = render_stats(&snap, &config, SinceWindow::DEFAULT);
-    let row = |out: &[String], label| stats_row(out, label).unwrap_or_default();
-    let prefetch = row(&out, "Prefetch");
-    assert!(
-        prefetch.starts_with("Prefetch | 4 downloads | "),
-        "{prefetch}"
-    );
-    assert!(prefetch.contains("2 used (50%)"), "{prefetch}");
-    assert!(prefetch.ends_with(", CANCELLED"), "{prefetch}");
-    assert_eq!(
-        row(&out, "Planning"),
-        "Planning | 1 advisory | 2 fallback plans, last had 7 candidates"
-    );
-    let transport = row(&out, "Transport");
-    assert!(
-        transport.starts_with("Transport | 3 pack requests | "),
-        "{transport}"
-    );
-    assert!(transport.contains("v3 1 requests"), "{transport}");
-    assert_eq!(
-        row(&out, "Plan time"),
-        "Plan time | 250 ms | last plan; 500 ms in all"
-    );
-    assert_eq!(
-        row(&out, "Key LIST"),
-        "Key LIST | 250,000 keys | in 88 ms (refreshes every 7s)"
-    );
-    assert_eq!(
-        row(&out, "Join wait"),
-        "Join wait | 5 waits | 1234 ms in all, waiting on a download already in flight"
-    );
-    assert_eq!(stats_row(&out, "LIST total"), None);
-    snap.prefetch.list_requests_total = 2;
-    snap.prefetch.list_failures_total = 1;
-    snap.prefetch.list_duration_ms_total = 40;
-    snap.prefetch.list_keys_total = 9;
-    let out = render_stats(&snap, &config, SinceWindow::DEFAULT);
-    assert_eq!(
-        row(&out, "LIST total"),
-        "LIST total | 2 requests | 1 failed, 40 ms, 9 keys returned"
-    );
-    snap.prefetch.list_requests_total = 0;
-    let out = render_stats(&snap, &config, SinceWindow::DEFAULT);
-    assert_eq!(stats_row(&out, "LIST total"), None);
-    snap.prefetch.dedup_join_waits = 0;
-    let out = render_stats(&snap, &config, SinceWindow::DEFAULT);
-    assert_eq!(stats_row(&out, "Join wait"), None);
-    snap.prefetch.dedup_join_waits = 5;
 
-    let mut initial_only = config.clone();
-    initial_only.remote_key_cache_refresh_secs = 0;
-    let mut eff = effective_config_like(&initial_only);
-    eff.remote_key_cache_refresh_secs = 0;
-    snap.daemon_effective_config = Some(eff);
-    let out = render_stats(&snap, &initial_only, SinceWindow::DEFAULT);
-    assert_eq!(
-        row(&out, "Key LIST"),
-        "Key LIST | 250,000 keys | in 88 ms (one initial population; periodic refresh disabled)"
-    );
 
-    let mut disabled = config.clone();
-    disabled.prefetch_enabled = false;
-    let out = render_stats(&quiet, &disabled, SinceWindow::DEFAULT);
-    assert!(
-        row(&out, "Prefetch")
-            .starts_with("Prefetch | disabled | exact remote lookup and uploads stay on")
-    );
-    assert_eq!(stats_row(&out, "Planning"), None);
-    assert_eq!(stats_row(&out, "Key LIST"), None);
 
-    snap.prefetch.last_list_key_count = 0;
-    let out = render_stats(&snap, &config, SinceWindow::DEFAULT);
-    assert!(row(&out, "Prefetch").starts_with("Prefetch | 4 downloads | "));
-    assert_eq!(
-        stats_row(&out, "Key LIST"),
-        None,
-        "zero listed keys must not render a LIST status row"
-    );
-    snap.prefetch.last_list_key_count = 250_000;
 
-    // Transport activity is the sum of two independent counters.  Neither
-    // a zero total nor a zero wall clock sample should render a line.
-    snap.prefetch.pack_requests_total = 0;
-    snap.prefetch.v3_requests_total = 0;
-    snap.prefetch.last_plan_wall_ms = 0;
-    let out = render_stats(&snap, &config, SinceWindow::DEFAULT);
-    assert_eq!(stats_row(&out, "Transport"), None);
-    assert_eq!(stats_row(&out, "Plan time"), None);
 
-    snap.prefetch.pack_requests_total = 1;
-    let out = render_stats(&snap, &config, SinceWindow::DEFAULT);
-    assert!(row(&out, "Transport").starts_with("Transport | 1 pack requests | "));
-    snap.prefetch.pack_requests_total = 0;
-    snap.prefetch.v3_requests_total = 1;
-    let out = render_stats(&snap, &config, SinceWindow::DEFAULT);
-    assert!(row(&out, "Transport").contains("v3 1 requests"));
-}
 
-/// A daemon-shaped [`crate::daemon::EffectiveConfig`] mirroring `config`,
-/// with a distinct config path so tests can tell daemon-side rendering
-/// from client-side rendering.
-fn effective_config_like(config: &Config) -> crate::daemon::EffectiveConfig {
-    crate::daemon::EffectiveConfig {
-        process: None,
-        max_size: config.max_size,
-        cache_dir: config.cache_dir.display().to_string(),
-        runtime_dir: config.runtime_dir.display().to_string(),
-        config_path: "/daemon-home/.config/kache/config.toml".to_string(),
-        config_fingerprint: Some("daemon-fingerprint".to_string()),
-        prefetch_enabled: config.prefetch_enabled,
-        remote_key_listing: config.remote_key_listing,
-        remote_description: config.remote.as_ref().map(|remote| remote.describe()),
-        local_only: config.local_only,
-        remote_readonly: Some(config.remote_readonly),
-        remote_error: config.remote_error.clone(),
-        remote_key_cache_refresh_secs: config.remote_key_cache_refresh_secs,
-        socket_path: config.socket_path().display().to_string(),
-        started_at_ms: 1_700_000_000_000,
-        auto_recover_min_free_bytes: None,
-        auto_recover_targets: None,
-    }
-}
-
-/// #652/#689: the prefetch policy line renders the DAEMON's effective
-/// policy. A client config saying "disabled" must not produce a disabled
-/// line while the daemon reports prefetch enabled — and the daemon's
-/// config path is surfaced on the Daemon line.
-#[test]
-#[allow(clippy::field_reassign_with_default)]
-fn render_stats_prefetch_policy_prefers_daemon_effective() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(dir.path().join("cache"), Some(test_remote_cfg()));
-    config.prefetch_enabled = false; // client says disabled…
-
-    let mut snap = StatsSnapshot::default();
-    snap.daemon_connected = true;
-    let mut eff = effective_config_like(&config);
-    eff.prefetch_enabled = true; // …but the daemon is still planning
-    snap.daemon_effective_config = Some(eff);
-
-    let out = render_stats(&snap, &config, SinceWindow::DEFAULT);
-    assert!(
-        !stats_row(&out, "Prefetch").is_some_and(|row| row.starts_with("Prefetch | disabled")),
-        "must not claim disabled while the daemon reports enabled: {out:#?}"
-    );
-    assert!(
-        stats_row(&out, "Daemon")
-            .unwrap()
-            .contains(" · /daemon-home/.config/kache/config.toml"),
-        "{out:#?}"
-    );
-
-    // And the inverse: the daemon reports disabled, so the line shows it
-    // even though this process's config says enabled — unlabeled, because
-    // it is a daemon fact.
-    config.prefetch_enabled = true;
-    let mut eff = effective_config_like(&config);
-    eff.prefetch_enabled = false;
-    snap.daemon_effective_config = Some(eff);
-    let out = render_stats(&snap, &config, SinceWindow::DEFAULT);
-    assert_eq!(
-        stats_row(&out, "Prefetch").unwrap(),
-        "Prefetch | disabled | exact remote lookup and uploads stay on"
-    );
-    assert!(!out.join("\n").contains("client config"));
-}
-
-/// Old-daemon fallback (#689): a daemon that predates effective-config
-/// reporting leaves `daemon_effective_config` empty, so the policy line
-/// falls back to this process's config — labeled as such, because it can
-/// disagree with what the daemon is actually doing.
-#[test]
-#[allow(clippy::field_reassign_with_default)]
-fn render_stats_prefetch_policy_labels_client_fallback_for_old_daemon() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(dir.path().join("cache"), Some(test_remote_cfg()));
-    config.prefetch_enabled = false;
-
-    let mut snap = StatsSnapshot::default();
-    snap.daemon_connected = true; // reachable, but reported no config
-    snap.daemon_build_epoch = crate::daemon::build_epoch();
-
-    let out = render_stats(&snap, &config, SinceWindow::DEFAULT);
-    assert_eq!(
-        stats_row(&out, "Prefetch").unwrap(),
-        "Prefetch | disabled | exact remote lookup and uploads stay on \
-         [client config — daemon did not report its policy]"
-    );
-    assert_eq!(
-        stats_row(&out, "Daemon").unwrap(),
-        "Daemon | release unknown | running",
-        "no daemon config path to show without a report"
-    );
-}
-
-/// #689: each rendered field that differs between the daemon's effective
-/// config and this process's resolved config produces one warning naming
-/// both values and both sources; agreement produces none.
-#[test]
-fn config_mismatch_warnings_name_both_sides_per_field() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
-    let same = crate::config::ConfigFileProvenance {
-        path: "/daemon-home/.config/kache/config.toml".into(),
-        fingerprint: "daemon-fingerprint".to_string(),
-    };
-    let other_path = crate::config::ConfigFileProvenance {
-        path: "/cli-home/kache-repro.toml".into(),
-        fingerprint: "client-fingerprint".to_string(),
-    };
-
-    // Full agreement is silent.
-    let eff = effective_config_like(&config);
-    assert!(config_mismatch_warnings(&config, &same, &eff).is_empty());
-
-    // LIST cadence is irrelevant when neither side has a remote. A
-    // stale/default cadence alone must not produce a mismatch warning.
-    let mut cadence_only = eff.clone();
-    cadence_only.remote_key_cache_refresh_secs += 1;
-    assert!(config_mismatch_warnings(&config, &same, &cadence_only).is_empty());
-
-    // Different config provenance is visible even while selected values
-    // happen to match: edits to one file will not reach the other process.
-    let warnings = config_mismatch_warnings(&config, &other_path, &eff);
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("daemon loaded config"), "{warnings:?}");
-    assert!(warnings[0].contains("values may diverge"), "{warnings:?}");
-
-    // The path can stay fixed while its contents change between process
-    // starts. Exact loaded fingerprints keep that mismatch visible.
-    let changed = crate::config::ConfigFileProvenance {
-        path: same.path.clone(),
-        fingerprint: "changed-fingerprint".to_string(),
-    };
-    let warnings = config_mismatch_warnings(&config, &changed, &eff);
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("different snapshots"), "{warnings:?}");
-
-    // An intermediate/older daemon that reports effective values but no
-    // fingerprint must not create a false mismatch warning.
-    let mut old_eff = eff.clone();
-    old_eff.config_fingerprint = None;
-    assert!(config_mismatch_warnings(&config, &same, &old_eff).is_empty());
-
-    // Runtime placement is daemon-owned too, but an older daemon that
-    // cannot report it must not create a false mismatch.
-    let mut runtime_eff = effective_config_like(&config);
-    runtime_eff.runtime_dir = "/somewhere/runtime".to_string();
-    let warnings = config_mismatch_warnings(&config, &same, &runtime_eff);
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("runtime_dir=/somewhere/runtime"));
-    runtime_eff.runtime_dir.clear();
-    assert!(config_mismatch_warnings(&config, &same, &runtime_eff).is_empty());
-
-    // Store cap differs.
-    let mut eff = effective_config_like(&config);
-    eff.max_size = config.max_size * 2;
-    let warnings = config_mismatch_warnings(&config, &same, &eff);
-    assert_eq!(warnings.len(), 1);
-    assert!(
-        warnings[0].contains("local_max_size=2.0 MiB"),
-        "{warnings:?}"
-    );
-    assert!(warnings[0].contains("says 1.0 MiB"), "{warnings:?}");
-    assert!(
-        warnings[0].contains(
-            "daemon (started 2023-11-14 22:13 UTC, config /daemon-home/.config/kache/config.toml)"
-        ),
-        "{warnings:?}"
-    );
-    assert!(
-        warnings[0].contains("this process's config (/daemon-home/.config/kache/config.toml)"),
-        "{warnings:?}"
-    );
-    assert!(
-        warnings[0].contains("the daemon's value is in effect"),
-        "{warnings:?}"
-    );
-
-    // Every rendered field differs -> one warning per field, and the
-    // store divergence calls out that the numbers describe another store.
-    let mut eff = effective_config_like(&config);
-    eff.max_size += 1;
-    eff.cache_dir = "/somewhere/else".to_string();
-    eff.prefetch_enabled = !config.prefetch_enabled;
-    eff.remote_key_listing = !config.remote_key_listing;
-    eff.remote_description = Some("s3://daemon-bucket/artifacts".to_string());
-    eff.remote_key_cache_refresh_secs += 1;
-    eff.started_at_ms = 0; // old field default must not claim 1970
-    let warnings = config_mismatch_warnings(&config, &same, &eff);
-    assert_eq!(warnings.len(), 6);
-    assert!(
-        warnings[1].contains("local_store=/somewhere/else"),
-        "{warnings:?}"
-    );
-    assert!(
-        warnings[1].contains("the daemon's numbers describe ITS store"),
-        "{warnings:?}"
-    );
-    assert!(
-        warnings[2].contains("prefetch_enabled=false"),
-        "{warnings:?}"
-    );
-    assert!(
-        warnings[3].contains("remote_key_listing=true"),
-        "{warnings:?}"
-    );
-    assert!(warnings[4].contains("remote=s3://daemon-bucket/artifacts"));
-    assert!(warnings[5].contains("remote_key_cache_refresh_secs=61"));
-    assert!(warnings[0].contains("started unknown time"), "{warnings:?}");
-}
-
-/// #689: remote state and LIST cadence are daemon-owned. Both mismatch
-/// directions render the daemon's truth, never the invoking shell's.
-#[test]
-#[allow(clippy::field_reassign_with_default)]
-fn render_stats_remote_state_prefers_daemon_effective() {
-    let dir = tempfile::tempdir().unwrap();
-    let client_remote =
-        save_manifest_config(dir.path().join("client-remote"), Some(test_remote_cfg()));
-    let mut snap = StatsSnapshot::default();
-    snap.daemon_connected = true;
-    let mut eff = effective_config_like(&client_remote);
-    eff.remote_description = None;
-    eff.remote_key_cache_refresh_secs = 7;
-    snap.daemon_effective_config = Some(eff);
-    let out = render_stats(&snap, &client_remote, SinceWindow::DEFAULT);
-    assert_eq!(
-        stats_row(&out, "Remote").unwrap(),
-        "Remote | not configured | "
-    );
-
-    let client_local = save_manifest_config(dir.path().join("client-local"), None);
-    let mut eff = effective_config_like(&client_local);
-    eff.remote_description = Some("s3://daemon-bucket/artifacts".to_string());
-    snap.daemon_effective_config = Some(eff);
-    let out = render_stats(&snap, &client_local, SinceWindow::DEFAULT);
-    assert_eq!(
-        stats_row(&out, "Remote").unwrap(),
-        "Remote | s3://daemon-bucket/artifacts | "
-    );
-    assert!(!out.join("\n").contains("client config"), "{out:#?}");
-}
-
-/// A daemon keeps the read-only mode of the build that started it, so stats
-/// show the daemon's mode and warn the writable process it skips.
-#[test]
-#[allow(clippy::field_reassign_with_default)]
-fn stats_show_a_read_only_daemon_to_a_writable_process() {
-    let dir = tempfile::tempdir().unwrap();
-    let writable = save_manifest_config(dir.path().join("cache"), Some(test_remote_cfg()));
-    let provenance = crate::config::ConfigFileProvenance {
-        path: "/daemon-home/.config/kache/config.toml".into(),
-        fingerprint: "daemon-fingerprint".to_string(),
-    };
-    let mut snap = StatsSnapshot::default();
-    snap.daemon_connected = true;
-    let mut eff = effective_config_like(&writable);
-    eff.remote_readonly = Some(true);
-    snap.daemon_effective_config = Some(eff.clone());
-
-    let out = render_stats(&snap, &writable, SinceWindow::DEFAULT);
-    assert_eq!(
-        stats_row(&out, "Remote").unwrap(),
-        "Remote | s3://bucket/prefix | "
-    );
-    assert_eq!(
-        stats_row(&out, "Uploads").unwrap(),
-        "Uploads | off | the daemon is read-only and skips remote writes"
-    );
-    let warnings = config_mismatch_warnings(&writable, &provenance, &eff);
-    assert_eq!(warnings.len(), 1, "{warnings:?}");
-    assert!(
-        warnings[0].contains("skips this process's uploads"),
-        "{warnings:?}"
-    );
-
-    // A pull request job under kache-action: both sides read-only. The
-    // action fails the job unless the Remote line holds exactly the remote it
-    // configured.
-    let mut read_only = writable.clone();
-    read_only.remote_readonly = true;
-    let out = render_stats(&snap, &read_only, SinceWindow::DEFAULT);
-    assert_eq!(
-        action_remote_value(&out).as_deref(),
-        Some("s3://bucket/prefix")
-    );
-    assert!(stats_row(&out, "Uploads").is_some());
-
-    // A read-only process sends no uploads, so a writable daemon is no loss.
-    eff.remote_readonly = Some(false);
-    assert!(config_mismatch_warnings(&read_only, &provenance, &eff).is_empty());
-
-    // A daemon too old to report its mode claims nothing either way.
-    eff.remote_readonly = None;
-    snap.daemon_effective_config = Some(eff.clone());
-    assert!(config_mismatch_warnings(&writable, &provenance, &eff).is_empty());
-    let out = render_stats(&snap, &writable, SinceWindow::DEFAULT);
-    assert_eq!(
-        stats_row(&out, "Remote").unwrap(),
-        "Remote | s3://bucket/prefix | "
-    );
-    assert!(stats_row(&out, "Uploads").is_none());
-}
-
-/// Doctor flags a writable process whose daemon is read-only, and asks the
-/// daemon only when this process could upload.
-#[test]
-fn doctor_flags_a_read_only_daemon_for_a_writable_process() {
-    let check = remote_writes_check(None, false, || Some(true));
-    assert!(!check.pass, "{}", check.detail);
-    assert!(
-        check.detail.contains("daemon is read-only"),
-        "{}",
-        check.detail
-    );
-    assert!(
-        check
-            .fix
-            .as_deref()
-            .is_some_and(|fix| fix.contains("kache daemon restart"))
-    );
-    for daemon in [Some(false), None] {
-        let check = remote_writes_check(None, false, || daemon);
-        assert!(check.pass, "{daemon:?}");
-        assert_eq!(check.detail, "read-write");
-        assert!(check.fix.is_none());
-    }
-    for forced in [None, Some("pull request".to_string())] {
-        let check = remote_writes_check(forced.clone(), true, || {
-            panic!("a process that cannot upload must not ask the daemon")
-        });
-        assert!(check.pass);
-        assert!(check.detail.starts_with("read-only"), "{}", check.detail);
-        if let Some(reason) = forced {
-            assert!(check.detail.contains(&reason), "{}", check.detail);
-        }
-    }
-}
-
-/// What kache-action reads from `kache stats`: the rest of the first line
-/// whose `Remote` label is followed by a colon or at least two spaces.
-fn action_remote_value(lines: &[String]) -> Option<String> {
-    lines.iter().find_map(|line| {
-        let rest = line.trim_start().strip_prefix("Remote")?;
-        let value = match rest.strip_prefix(':') {
-            Some(value) => value,
-            None if rest.starts_with("  ") => rest,
-            None => return None,
-        };
-        Some(value.trim().to_string())
-    })
-}
-
-#[test]
-#[allow(clippy::field_reassign_with_default)] // incremental snapshot setup reads clearer
-fn render_stats_daemon_mismatch_and_local_only() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(dir.path().join("cache"), None);
-    config.local_only = true;
-
-    let mut snap = StatsSnapshot::default();
-    snap.daemon_connected = true;
-    snap.daemon_version = "0.0.1".to_string();
-    snap.daemon_build_epoch = crate::daemon::build_epoch().wrapping_add(1);
-    let out = render_stats(&snap, &config, SinceWindow::DEFAULT);
-    assert!(
-        stats_row(&out, "Daemon")
-            .unwrap()
-            .ends_with(" · older release; upgrade available")
-    );
-    assert!(
-        stats_row(&out, "Remote")
-            .unwrap()
-            .starts_with("Remote | local-only mode")
-    );
-}
 
 #[test]
 fn render_stats_offline_and_not_configured() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let snap = StatsSnapshot::default(); // daemon_connected=false
     let out = render_stats(&snap, &config, SinceWindow::DEFAULT);
     assert_eq!(stats_row(&out, "Daemon").unwrap(), "Daemon | offline | ");
-    assert_eq!(
-        stats_row(&out, "Remote").unwrap(),
-        "Remote | not configured | "
-    );
     // No blobs -> no Dedup row.
     assert_eq!(stats_row(&out, "Dedup"), None);
 }
@@ -5557,7 +4144,7 @@ fn cache_limit_note_names_the_disk_share_budget() {
 fn render_stats_handles_zero_limits_and_zero_logical_dedup() {
     // Zero max/logical sizes -> percentage branches stay finite.
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let snap = StatsSnapshot {
         total_size: 500,
         max_size: 0,
@@ -5607,7 +4194,7 @@ fn render_stats_handles_zero_limits_and_zero_logical_dedup() {
 #[test]
 fn snapshot_from_direct_reads_returns_only_the_newest_five_summaries() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let summary_path = config.summary_log_path();
     std::fs::create_dir_all(summary_path.parent().unwrap()).unwrap();
     let mut summaries = (0..7)
@@ -5634,7 +4221,7 @@ fn snapshot_from_direct_reads_returns_only_the_newest_five_summaries() {
 fn snapshot_from_direct_reads_reflects_store_and_events() {
     // No daemon: the snapshot is built from direct store + event-log reads.
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     put_entry(&config, "serdekey", "serde", dir.path());
     // Log a couple of events so event_stats is populated.
     crate::events::log_event(
@@ -5677,7 +4264,7 @@ fn snapshot_from_direct_reads_reflects_store_and_events() {
 #[test]
 fn snapshot_from_direct_reads_honors_a_sub_hour_window() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let now = chrono::Utc::now();
     let mut recent = build_event(
         "serde",
@@ -5715,7 +4302,7 @@ fn snapshot_from_direct_reads_honors_a_sub_hour_window() {
 fn snapshot_from_direct_reads_without_entries_skips_listing() {
     // include_entries=false -> entries list is empty even with a populated store.
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     put_entry(&config, "k1", "serde", dir.path());
     let snap = snapshot_from_direct_reads(&config, false, "size", SinceWindow::DEFAULT, false);
     assert!(
@@ -5725,19 +4312,6 @@ fn snapshot_from_direct_reads_without_entries_skips_listing() {
     assert_eq!(snap.entry_count, 1, "count still reflects the store");
 }
 
-#[test]
-fn sync_without_remote_errors() {
-    // The sync entry point bails before building a runtime/client when no
-    // remote is configured. Covers sync()'s no-remote guard.
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
-    let err = sync(&config, None, false, false, false, false, false, false)
-        .expect_err("sync without a remote must error");
-    assert!(
-        err.to_string().contains("no remote configured"),
-        "got: {err}"
-    );
-}
 
 #[test]
 fn repair_tip_and_reconciliation_message_cover_every_boundary() {
@@ -5764,7 +4338,7 @@ fn repair_tip_and_reconciliation_message_cover_every_boundary() {
 #[test]
 fn verify_detects_missing_blob_and_missing_meta_then_repairs() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let store = Store::open(&config).unwrap();
 
     // Entry A: blob deleted -> "missing blob" path.
@@ -5814,7 +4388,7 @@ fn verify_detects_missing_blob_and_missing_meta_then_repairs() {
 #[test]
 fn verify_reports_and_repairs_blob_index_drift() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     put_entry(&config, "driftkey", "drift", dir.path());
     let store = Store::open(&config).unwrap();
     let hash = store.get("driftkey").unwrap().unwrap().files[0]
@@ -5845,7 +4419,7 @@ fn verify_reports_and_repairs_blob_index_drift() {
 #[test]
 fn verify_accepts_build_script_out_dir_artifact_names() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let store = Store::open(&config).unwrap();
     let output = dir.path().join("asm.s");
     std::fs::write(&output, b"asm bytes").unwrap();
@@ -5877,7 +4451,7 @@ fn verify_accepts_build_script_out_dir_artifact_names() {
 #[test]
 fn verify_detects_checksum_mismatch_with_checksums_enabled() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let store = Store::open(&config).unwrap();
     put_entry(&config, "corruptblobkey", "eee", dir.path());
 
@@ -5927,7 +4501,7 @@ fn verify_detects_checksum_mismatch_with_checksums_enabled() {
 #[test]
 fn verify_scrubs_each_unique_blob_once_and_marks_every_referencing_entry() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let store = Store::open(&config).unwrap();
 
     // Two entries, identical content → one shared blob. Each put gets
@@ -6001,7 +4575,7 @@ fn verify_scrubs_each_unique_blob_once_and_marks_every_referencing_entry() {
 #[test]
 fn verify_reports_no_findings_for_a_clean_store() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     put_entry(&config, "cleanstorekey", "ggg", dir.path());
 
     let outcome = verify(&config, true, false).expect("verify should succeed");
@@ -6016,7 +4590,7 @@ fn verify_reports_no_findings_for_a_clean_store() {
 fn verify_detects_blob_size_mismatch() {
     // Blob metadata length mismatch -> entry is marked corrupt.
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let store = Store::open(&config).unwrap();
     put_entry(&config, "sizemismatchkey", "fff", dir.path());
     let meta = store.get("sizemismatchkey").unwrap().unwrap();
@@ -6037,47 +4611,9 @@ fn verify_detects_blob_size_mismatch() {
     verify(&config, false, false).expect("verify with size mismatch should succeed");
 }
 
-#[test]
-fn save_manifest_without_remote_errors() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), None);
-    let err = save_manifest(&config, None, None).expect_err("no remote -> error");
-    assert!(
-        err.to_string().contains("no remote configured"),
-        "got {err}"
-    );
-}
 
-#[test]
-fn automatic_manifest_save_without_remote_errors() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), None);
-    let err =
-        save_manifest_auto_for_session(&config, "key", "session").expect_err("no remote -> error");
-    assert!(
-        err.to_string().contains("no remote configured"),
-        "got {err}"
-    );
-}
 
-#[test]
-fn only_the_primary_manifest_key_publishes_shards() {
-    assert_eq!(shard_namespace_for_publish_key(0, Some("ns")), Some("ns"));
-    assert_eq!(shard_namespace_for_publish_key(1, Some("ns")), None);
-    assert_eq!(shard_namespace_for_publish_key(0, None), None);
-}
 
-#[test]
-fn save_manifest_with_no_events_returns_ok_before_touching_remote() {
-    // A remote is configured, but the event log is empty, so save_manifest
-    // returns Ok early ("No build events found") without creating a remote
-    // client or making any network call.
-    let dir = tempfile::tempdir().unwrap();
-    let remote = crate::config::RemoteConfig::test_s3("b", "p");
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(remote));
-    // No event log written -> read_events yields empty -> early Ok.
-    save_manifest(&config, Some("mykey"), None).expect("empty events -> Ok");
-}
 
 fn build_event(
     crate_name: &str,
@@ -6182,1422 +4718,27 @@ fn diff_meta(
     }
 }
 
-#[test]
-fn manifest_commit_prefers_github_then_gitlab_and_skips_daemon_sessions() {
-    let env = |vars: &'static [(&'static str, &'static str)]| {
-        move |name: &str| {
-            vars.iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, value)| value.to_string())
-        }
-    };
-    let both = env(&[("GITHUB_SHA", " gh "), ("CI_COMMIT_SHA", "gl")]);
-    assert_eq!(manifest_commit(None, both).as_deref(), Some("gh"));
-    assert_eq!(manifest_commit(Some("session"), both), None);
-    let blank_github = env(&[("GITHUB_SHA", "  "), ("CI_COMMIT_SHA", "gl")]);
-    assert_eq!(manifest_commit(None, blank_github).as_deref(), Some("gl"));
-    assert_eq!(manifest_commit(None, env(&[])), None);
-}
 
-#[test]
-fn manifest_entries_from_events_dedups_and_filters() {
-    use crate::events::EventResult;
-    let events = vec![
-        // Same key twice: the larger compile time wins.
-        build_event("serde", EventResult::Miss, 100, 0, 10, "k-serde"),
-        build_event("serde", EventResult::LocalHit, 900, 0, 10, "k-serde"),
-        // A distinct cacheable entry.
-        build_event("tokio", EventResult::Dup, 50, 0, 20, "k-tokio"),
-        // Ignored: empty cache_key.
-        build_event("nokey", EventResult::Miss, 5, 0, 0, ""),
-        // Ignored: non-cacheable outcomes.
-        build_event("passth", EventResult::Passthrough, 5, 0, 0, "k-p"),
-        build_event("skip", EventResult::Skipped, 5, 0, 0, "k-s"),
-        // Ignored: a build-script run, which never reaches the remote.
-        build_event(
-            crate::build_script::CRATE_NAME,
-            EventResult::Miss,
-            500,
-            0,
-            30,
-            "k-run",
-        ),
-    ];
 
-    let mut entries = manifest_entries_from_events(&events, None);
-    entries.sort_by(|a, b| a.crate_name.cmp(&b.crate_name));
 
-    assert_eq!(entries.len(), 2, "only the two cacheable keys survive");
-    let serde = entries.iter().find(|e| e.crate_name == "serde").unwrap();
-    assert_eq!(serde.compile_time_ms, 900, "larger compile time wins");
-    assert!(entries.iter().any(|e| e.crate_name == "tokio"));
-}
 
-#[test]
-fn manifest_entry_ties_keep_the_first_observation() {
-    use crate::events::EventResult;
-    let events = vec![
-        build_event("first", EventResult::Miss, 100, 0, 10, "same-key"),
-        build_event("second", EventResult::Miss, 100, 0, 20, "same-key"),
-    ];
 
-    let entries = manifest_entries_from_events(&events, None);
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].crate_name, "first");
-    assert_eq!(entries[0].artifact_size, 10);
-}
 
-#[test]
-fn automatic_manifest_entries_are_scoped_to_the_build_session() {
-    use crate::events::EventResult;
-    let mut current = build_event("current", EventResult::Miss, 100, 0, 10, "current-key");
-    current.session_id = "current-session".into();
-    let mut other = build_event("other", EventResult::Miss, 200, 0, 20, "other-key");
-    other.session_id = "other-session".into();
 
-    let entries = manifest_entries_from_events(&[other, current], Some("current-session"));
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].crate_name, "current");
-    assert_eq!(entries[0].cache_key, "current-key");
-}
 
-#[test]
-fn manifest_entries_from_events_falls_back_to_elapsed_when_no_compile_time() {
-    use crate::events::EventResult;
-    // compile_time_ms == 0 -> the entry's compile_time_ms uses elapsed_ms.
-    let events = vec![build_event("x", EventResult::Miss, 0, 77, 1, "k")];
-    let entries = manifest_entries_from_events(&events, None);
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].compile_time_ms, 77);
-}
 
-#[test]
-fn manifest_entries_from_events_accepts_remote_and_prefetch_hits() {
-    use crate::events::EventResult;
-    // Prefetch/remote hits are cacheable manifest inputs.
-    let events = vec![
-        build_event(
-            "prefetch",
-            EventResult::PrefetchHit,
-            12,
-            3,
-            10,
-            "k-prefetch",
-        ),
-        build_event("remote", EventResult::RemoteHit, 34, 5, 20, "k-remote"),
-        build_event("error", EventResult::Error, 99, 99, 99, "k-error"),
-    ];
 
-    let mut entries = manifest_entries_from_events(&events, None);
-    entries.sort_by(|a, b| a.crate_name.cmp(&b.crate_name));
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].crate_name, "prefetch");
-    assert_eq!(entries[0].artifact_size, 10);
-    assert_eq!(entries[1].crate_name, "remote");
-    assert_eq!(entries[1].compile_time_ms, 34);
-}
 
-fn test_remote_cfg() -> crate::config::RemoteConfig {
-    crate::config::RemoteConfig::test_s3("bucket", "prefix")
-}
 
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn upload_manifest_and_shards_uploads_manifest_only_without_namespace() {
-    // No namespace -> exactly one object (the monolithic manifest).
-    let backend = TestBackend::memory();
-    let client = as_remote_backend(&backend);
-    let remote = test_remote_cfg();
-    let remote_cache: Arc<crate::cache_remote::V3Remote> =
-        Arc::new(crate::cache_remote::V3Remote::new(client, remote));
-    let entries = vec![crate::remote::ManifestEntry {
-        cache_key: "k".to_string(),
-        crate_name: "c".to_string(),
-        compile_time_ms: 1,
-        artifact_size: 1,
-    }];
-    upload_manifest_and_shards(
-        &remote_cache,
-        "mykey",
-        None,
-        std::path::Path::new("/nonexistent/Cargo.lock"),
-        entries,
-        None,
-    )
-    .await
-    .expect("manifest-only upload should succeed");
-    assert_eq!(backend.put_calls(), vec!["prefix/_manifests/mykey.json"]);
-}
 
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn upload_manifest_and_shards_skips_shards_when_lock_missing() {
-    // Namespace given but Cargo.lock absent -> still only the manifest.
-    let backend = TestBackend::memory();
-    let client = as_remote_backend(&backend);
-    let remote = test_remote_cfg();
-    let remote_cache: Arc<crate::cache_remote::V3Remote> =
-        Arc::new(crate::cache_remote::V3Remote::new(client, remote));
-    let entries = vec![crate::remote::ManifestEntry {
-        cache_key: "k".to_string(),
-        crate_name: "c".to_string(),
-        compile_time_ms: 1,
-        artifact_size: 1,
-    }];
-    upload_manifest_and_shards(
-        &remote_cache,
-        "mykey",
-        Some("ns"),
-        std::path::Path::new("/nonexistent/Cargo.lock"),
-        entries,
-        None,
-    )
-    .await
-    .expect("upload should succeed, shards skipped");
-    assert_eq!(backend.put_calls(), vec!["prefix/_manifests/mykey.json"]);
-}
 
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn upload_manifest_and_shards_uploads_shards_when_lock_present() {
-    // Namespace + a real Cargo.lock with deps that match the entries -> the
-    // manifest PUT plus one PUT per non-empty shard.
-    let dir = tempfile::tempdir().unwrap();
-    let lock = dir.path().join("Cargo.lock");
-    std::fs::write(
-        &lock,
-        "version = 3\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.0\"\n",
-    )
-    .unwrap();
-    let entries = vec![crate::remote::ManifestEntry {
-        cache_key: "k-serde".to_string(),
-        crate_name: "serde".to_string(),
-        compile_time_ms: 1,
-        artifact_size: 1,
-    }];
-    let deps = crate::shards::parse_cargo_lock(&lock).unwrap();
-    let expected_shards = crate::shards::compute_shards(&deps).shards.len();
 
-    let backend = TestBackend::memory();
-    let client = as_remote_backend(&backend);
-    let remote = test_remote_cfg();
-    let remote_cache: Arc<crate::cache_remote::V3Remote> =
-        Arc::new(crate::cache_remote::V3Remote::new(client, remote));
 
-    upload_manifest_and_shards(&remote_cache, "mykey", Some("ns"), &lock, entries, None)
-        .await
-        .expect("upload with shards should succeed");
-    let puts = backend.put_calls();
-    assert_eq!(puts.len(), expected_shards + 1);
-    assert!(puts.contains(&"prefix/_manifests/mykey.json".to_string()));
-    assert_eq!(
-        puts.iter()
-            .filter(|key| key.starts_with("prefix/_manifests/v3/ns/shards/"))
-            .count(),
-        expected_shards
-    );
-}
 
-#[cfg(feature = "remote")]
-fn sync_test_cache_key(seed: &str) -> String {
-    blake3::hash(seed.as_bytes()).to_hex().to_string()
-}
 
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_dry_run_empty_remote_reports_nothing() {
-    // Empty remote + empty local store: the diff is empty and sync reports
-    // "Nothing to sync" after one list call.
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
 
-    let backend = TestBackend::memory();
-    sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        false,
-        false,
-        true,
-        false,
-        None,
-        false,
-        false,
-    )
-    .await
-    .expect("dry-run sync over empty remote should succeed");
-    assert_eq!(backend.list_calls(), vec!["prefix/v3/manifests/"]);
-}
 
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_workspace_pull_scopes_listing_to_workspace_members() {
-    // `--workspace` must scope the pull listing to workspace members and
-    // ignore the Cargo.lock dep set.
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
 
-    let workspace: std::collections::HashSet<String> = ["wsfoo".to_string()].into_iter().collect();
-    let lock: std::collections::HashSet<String> = ["dep_a".to_string(), "dep_b".to_string()]
-        .into_iter()
-        .collect();
-
-    let backend = TestBackend::memory();
-    sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        Some(&workspace), // workspace_crates
-        true,             // pull_only
-        false,            // push_only
-        true,             // dry_run
-        false,            // pull_all
-        Some(&lock),      // lock_crates — must be ignored under --workspace
-        true,             // pull_workspace
-        false,            // allow_partial
-    )
-    .await
-    .expect("workspace-scoped pull should list only the workspace member(s)");
-    assert_eq!(backend.list_calls(), vec!["prefix/v3/manifests/wsfoo/"]);
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_workspace_pull_errors_when_no_workspace_resolved() {
-    // `--workspace` with an unresolved (None) or empty workspace set must
-    // error, NOT silently fall back to a full-remote scan.
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-
-    let empty: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let cases: [Option<&std::collections::HashSet<String>>; 2] = [None, Some(&empty)];
-
-    for workspace_crates in cases {
-        let backend = TestBackend::memory();
-        let err = sync_with_client(
-            &as_cache_remote(as_remote_backend(&backend), &remote),
-            &config,
-            &store,
-            workspace_crates, // None or empty → cannot scope to workspace
-            true,             // pull_only
-            false,            // push_only
-            true,             // dry_run
-            false,            // pull_all
-            None,             // lock_crates (always None under --workspace)
-            true,             // pull_workspace
-            false,            // allow_partial
-        )
-        .await
-        .expect_err("--workspace with no resolved members must error, not scan the bucket");
-        assert!(
-            err.to_string().contains("no workspace members resolved"),
-            "unexpected error: {err}"
-        );
-        assert!(
-            backend.list_calls().is_empty(),
-            "guard must run before listing the remote"
-        );
-    }
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_push_uploads_local_only_entry() {
-    // A populated local store + an empty remote: push-only sync uploads the
-    // local entry end-to-end (real pack creation + manifest) through the
-    // backend. Exercises the push loop and upload_entry, not just planning.
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-
-    // Materialize one cache entry with a single artifact file.
-    let src_dir = dir.path().join("src");
-    std::fs::create_dir_all(&src_dir).unwrap();
-    let artifact = src_dir.join("libfoo.rlib");
-    std::fs::write(&artifact, b"artifact bytes").unwrap();
-    store
-        .put(
-            "pushkey123",
-            "foo",
-            &["lib".to_string()],
-            &[],
-            "x86_64-unknown-linux-gnu",
-            "debug",
-            &[(artifact, "libfoo.rlib".to_string())],
-            "",
-            "",
-        )
-        .unwrap();
-
-    let remote = test_remote_cfg();
-    let backend = TestBackend::memory();
-
-    sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        false,
-        true,
-        false,
-        false,
-        None,
-        false,
-        false,
-    )
-    .await
-    .expect("push sync should succeed");
-    let puts = backend.put_calls();
-    assert_eq!(puts.len(), 2);
-    assert!(puts.contains(&"prefix/v3/packs/foo/pushkey123.tar.zst".to_string()));
-    assert!(puts.contains(&"prefix/v3/manifests/foo/pushkey123.json".to_string()));
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_push_throttles_with_low_concurrency() {
-    // Two local entries with concurrency=1 force the push loop's
-    // max-concurrency wait branch (the second upload waits for the first).
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    config.s3_concurrency = 1;
-    let store = Store::open(&config).unwrap();
-
-    let src_dir = dir.path().join("src");
-    std::fs::create_dir_all(&src_dir).unwrap();
-    for (key, cn) in [("pusha1", "aaa"), ("pushb2", "bbb")] {
-        let artifact = src_dir.join(format!("{cn}.rlib"));
-        std::fs::write(&artifact, format!("{cn} bytes")).unwrap();
-        store
-            .put(
-                key,
-                cn,
-                &["lib".to_string()],
-                &[],
-                "x86_64-unknown-linux-gnu",
-                "debug",
-                &[(artifact, format!("{cn}.rlib"))],
-                "",
-                "",
-            )
-            .unwrap();
-    }
-
-    let remote = test_remote_cfg();
-    let backend = TestBackend::memory();
-
-    sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        false,
-        true,
-        false,
-        false,
-        None,
-        false,
-        false,
-    )
-    .await
-    .expect("throttled push sync should succeed");
-    assert_eq!(backend.put_calls().len(), 4);
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_dry_run_plans_pull_for_remote_only_key() {
-    // The remote lists a manifest for a key absent from the local store, so
-    // the dry-run plan schedules a pull and returns without transferring.
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-    let key = sync_test_cache_key("dry-run-remote-only");
-
-    let backend = TestBackend::memory();
-    backend
-        .seed(
-            &format!("prefix/v3/manifests/serde/{key}.json"),
-            b"{}".to_vec(),
-        )
-        .await;
-    sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        false,
-        false,
-        true,
-        false,
-        None,
-        false,
-        false,
-    )
-    .await
-    .expect("dry-run sync planning a pull should succeed");
-    assert!(
-        backend.get_calls().is_empty(),
-        "dry-run must not download the pack"
-    );
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_pull_loop_records_failure_and_returns_err_by_default() {
-    // A remote-only key drives a real (non-dry-run) pull. The served pack is
-    // garbage, so download_entry errors — the pull loop must record the
-    // failure and return Err by default.
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-    let key = sync_test_cache_key("failed-pull");
-
-    let backend = TestBackend::memory();
-    backend
-        .seed(
-            &format!("prefix/v3/manifests/serde/{key}.json"),
-            b"{}".to_vec(),
-        )
-        .await;
-    backend
-        .seed(
-            &format!("prefix/v3/packs/serde/{key}.tar.zst"),
-            b"not a valid pack".to_vec(),
-        )
-        .await;
-
-    let err = sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        true,
-        false,
-        false,
-        false,
-        None,
-        false,
-        false,
-    )
-    .await
-    .expect_err("pull sync should return Err when a download fails by default");
-    assert!(
-        err.to_string()
-            .contains("1 transfer(s) or import(s) failed")
-    );
-    assert_eq!(
-        backend.get_calls(),
-        vec![format!("prefix/v3/packs/serde/{key}.tar.zst")]
-    );
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_pull_allows_partial_when_flag_set() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-    let key = sync_test_cache_key("failed-pull-partial");
-
-    let backend = TestBackend::memory();
-    backend
-        .seed(
-            &format!("prefix/v3/manifests/serde/{key}.json"),
-            b"{}".to_vec(),
-        )
-        .await;
-    backend
-        .seed(
-            &format!("prefix/v3/packs/serde/{key}.tar.zst"),
-            b"not a valid pack".to_vec(),
-        )
-        .await;
-
-    sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        true,
-        false,
-        false,
-        false,
-        None,
-        false,
-        true,
-    )
-    .await
-    .expect("pull sync with allow_partial should complete Ok despite failed download");
-    assert_eq!(
-        backend.get_calls(),
-        vec![format!("prefix/v3/packs/serde/{key}.tar.zst")]
-    );
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_push_reports_failed_uploads_and_returns_err_by_default() {
-    // A local-only entry is scheduled for push, but the backend rejects
-    // uploads, so upload_entry errors and the loop records a failure.
-    // Returns Err by default.
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-
-    let src_dir = dir.path().join("src");
-    std::fs::create_dir_all(&src_dir).unwrap();
-    let artifact = src_dir.join("foo.rlib");
-    std::fs::write(&artifact, b"foo bytes").unwrap();
-    store
-        .put(
-            "pushfail1aaaa",
-            "foo",
-            &["lib".to_string()],
-            &[],
-            "x86_64-unknown-linux-gnu",
-            "debug",
-            &[(artifact, "foo.rlib".to_string())],
-            "",
-            "",
-        )
-        .unwrap();
-
-    let backend = TestBackend::failing_put();
-
-    let err = sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        false,
-        true,
-        false,
-        false,
-        None,
-        false,
-        false,
-    )
-    .await
-    .expect_err("push sync should return Err when an upload fails by default");
-    assert!(
-        err.to_string()
-            .contains("1 transfer(s) or import(s) failed")
-    );
-    assert_eq!(
-        backend.put_calls(),
-        vec!["prefix/v3/packs/foo/pushfail1aaaa.tar.zst"]
-    );
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_push_allows_partial_when_flag_set() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-
-    let src_dir = dir.path().join("src");
-    std::fs::create_dir_all(&src_dir).unwrap();
-    let artifact = src_dir.join("foo.rlib");
-    std::fs::write(&artifact, b"foo bytes").unwrap();
-    store
-        .put(
-            "pushfail1aaaa",
-            "foo",
-            &["lib".to_string()],
-            &[],
-            "x86_64-unknown-linux-gnu",
-            "debug",
-            &[(artifact, "foo.rlib".to_string())],
-            "",
-            "",
-        )
-        .unwrap();
-
-    let backend = TestBackend::failing_put();
-
-    sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        false,
-        true,
-        false,
-        false,
-        None,
-        false,
-        true,
-    )
-    .await
-    .expect("push sync with allow_partial should complete Ok even when an upload fails");
-    assert_eq!(
-        backend.put_calls(),
-        vec!["prefix/v3/packs/foo/pushfail1aaaa.tar.zst"]
-    );
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_pull_throttles_with_low_concurrency() {
-    // Two remote-only keys with concurrency=1 force the pull loop's
-    // max-concurrency wait branch (the second download waits for the first
-    // to drain a slot). Packs are garbage so each download fails fast, but
-    // the throttle path is still exercised; with allow_partial, the sync completes Ok.
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    config.s3_concurrency = 1;
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-
-    let backend = TestBackend::memory();
-    for (crate_name, key) in [
-        ("aaa", sync_test_cache_key("throttled-pull-a")),
-        ("bbb", sync_test_cache_key("throttled-pull-b")),
-    ] {
-        backend
-            .seed(
-                &format!("prefix/v3/manifests/{crate_name}/{key}.json"),
-                b"{}".to_vec(),
-            )
-            .await;
-        backend
-            .seed(
-                &format!("prefix/v3/packs/{crate_name}/{key}.tar.zst"),
-                b"not a pack".to_vec(),
-            )
-            .await;
-    }
-
-    sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        true,
-        false,
-        false,
-        false,
-        None,
-        false,
-        true,
-    )
-    .await
-    .expect("throttled pull sync should complete Ok with allow_partial");
-    assert_eq!(backend.get_calls().len(), 2);
-}
-
-/// Build a valid v3 entry pack (tar.zst) for `key`/`crate_name` from a
-/// throwaway store, so tests can serve it as a GET body to drive the
-/// download-success path.
-#[cfg(feature = "remote")]
-fn build_entry_pack(key: &str, crate_name: &str) -> Vec<u8> {
-    let tmp = tempfile::tempdir().unwrap();
-    let cfg = save_manifest_config(tmp.path().to_path_buf(), None);
-    let store = Store::open(&cfg).unwrap();
-    let src = tmp.path().join("src");
-    std::fs::create_dir_all(&src).unwrap();
-    let artifact = src.join("libfoo.rlib");
-    std::fs::write(&artifact, b"real artifact bytes").unwrap();
-    store
-        .put(
-            key,
-            crate_name,
-            &["lib".to_string()],
-            &[],
-            "x86_64-unknown-linux-gnu",
-            "debug",
-            &[(artifact, "libfoo.rlib".to_string())],
-            "",
-            "",
-        )
-        .unwrap();
-    let entry_dir = store.entry_dir(key);
-    let meta: crate::store::EntryMeta =
-        serde_json::from_slice(&std::fs::read(entry_dir.join("meta.json")).unwrap()).unwrap();
-    crate::remote_layout::create_entry_pack_zstd(&entry_dir, &store.blobs_dir(), &meta, 3).unwrap()
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn lockfile_sync_pulls_hyphenated_packages_from_compiler_crate_prefixes() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-    let backend = TestBackend::memory();
-    let packages = [
-        ("aho-corasick", "aho_corasick"),
-        ("wasm-bindgen-shared", "wasm_bindgen_shared"),
-        ("serde", "serde"),
-    ];
-    let lock = dir.path().join("Cargo.lock");
-    let mut content = String::from("version = 3\n");
-    let mut expected_lists = Vec::new();
-    let mut expected_gets = Vec::new();
-    let mut keys = Vec::new();
-    for (package, crate_name) in packages {
-        content.push_str(&format!(
-            "\n[[package]]\nname = {package:?}\nversion = \"1.0.0\"\n"
-        ));
-        let key = sync_test_cache_key(crate_name);
-        backend
-            .seed(
-                &format!("prefix/v3/manifests/{crate_name}/{key}.json"),
-                b"{}".to_vec(),
-            )
-            .await;
-        let pack_path = format!("prefix/v3/packs/{crate_name}/{key}.tar.zst");
-        backend
-            .seed(&pack_path, build_entry_pack(&key, crate_name))
-            .await;
-        expected_lists.push(format!("prefix/v3/manifests/{crate_name}/"));
-        expected_gets.push(pack_path);
-        keys.push(key);
-    }
-    // Different versions of one package still need only one prefix listing.
-    content.push_str("\n[[package]]\nname = \"aho-corasick\"\nversion = \"2.0.0\"\n");
-    std::fs::write(&lock, content).unwrap();
-    let crates = parse_cargo_lock_crate_names_from(&lock).unwrap();
-    sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        true,
-        false,
-        false,
-        false,
-        Some(&crates),
-        false,
-        false,
-    )
-    .await
-    .unwrap();
-    let mut listed = backend.list_calls();
-    listed.sort();
-    expected_lists.sort();
-    assert_eq!(listed, expected_lists);
-    let mut downloaded = backend.get_calls();
-    downloaded.sort();
-    expected_gets.sort();
-    assert_eq!(downloaded, expected_gets);
-    for key in keys {
-        assert!(config.store_dir().join(key).join("meta.json").exists());
-    }
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_pull_downloads_and_imports_entry() {
-    // Remote lists a key absent locally; the GET returns a VALID pack, so
-    // the pull downloads, extracts, and imports it into the local store.
-    // Covers the pull SUCCESS path (download_entry + import), not just the
-    // error path.
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-
-    let key = sync_test_cache_key("successful-pull");
-    let pack = build_entry_pack(&key, "serde");
-
-    let backend = TestBackend::memory();
-    backend
-        .seed(
-            &format!("prefix/v3/manifests/serde/{key}.json"),
-            b"{}".to_vec(),
-        )
-        .await;
-    backend
-        .seed(&format!("prefix/v3/packs/serde/{key}.tar.zst"), pack)
-        .await;
-
-    sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        true,
-        false,
-        false,
-        false,
-        None,
-        false,
-        false,
-    )
-    .await
-    .expect("pull sync should succeed");
-
-    // The entry was imported into the local store.
-    assert!(
-        config.store_dir().join(&key).join("meta.json").exists(),
-        "pulled entry should be materialized in the local store"
-    );
-    assert_eq!(
-        backend.get_calls(),
-        vec![format!("prefix/v3/packs/serde/{key}.tar.zst")]
-    );
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_pull_flushes_deferred_imports_without_a_daemon() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    config.deferred_durability = true;
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-
-    let key = sync_test_cache_key("deferred-pull");
-    let pack = build_entry_pack(&key, "serde");
-    let backend = TestBackend::memory();
-    backend
-        .seed(
-            &format!("prefix/v3/manifests/serde/{key}.json"),
-            b"{}".to_vec(),
-        )
-        .await;
-    backend
-        .seed(&format!("prefix/v3/packs/serde/{key}.tar.zst"), pack)
-        .await;
-
-    sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        true,
-        false,
-        false,
-        false,
-        None,
-        false,
-        false,
-    )
-    .await
-    .expect("pull sync should succeed");
-
-    assert!(store.contains(&key));
-    assert_eq!(
-        store.pending_durability().unwrap(),
-        0,
-        "no daemon will flush the pulled entry, so the pull does"
-    );
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_retries_pending_durability_on_a_no_op_but_not_a_dry_run() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    config.deferred_durability = true;
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-    let key = sync_test_cache_key("no-op-durability-retry");
-    let source = dir.path().join("pending.rlib");
-    std::fs::write(&source, b"pending local artifact").unwrap();
-    store
-        .put(
-            &key,
-            "serde",
-            &["lib".to_string()],
-            &[],
-            "",
-            "dev",
-            &[(source, "libserde.rlib".to_string())],
-            "",
-            "",
-        )
-        .unwrap();
-    let meta = store.get(&key).unwrap().unwrap();
-    let blob = store.blob_path(&meta.files[0].hash);
-    let temporarily_unavailable = dir.path().join("temporarily-unavailable");
-    std::fs::rename(&blob, &temporarily_unavailable).unwrap();
-    assert_eq!(store.flush_durability(10).unwrap(), 0);
-    assert_eq!(store.pending_durability().unwrap(), 1);
-    std::fs::rename(&temporarily_unavailable, &blob).unwrap();
-
-    let backend = TestBackend::memory();
-    backend
-        .seed(
-            &format!("prefix/v3/manifests/serde/{key}.json"),
-            b"{}".to_vec(),
-        )
-        .await;
-    let client = as_cache_remote(as_remote_backend(&backend), &remote);
-    let held = store.try_durability_flush_lock().unwrap().unwrap();
-    sync_with_client(
-        &client, &config, &store, None, true, false, false, false, None, false, false,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        store.pending_durability().unwrap(),
-        1,
-        "another flusher owns the queue"
-    );
-    drop(held);
-    sync_with_client(
-        &client, &config, &store, None, true, false, true, false, None, false, false,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        store.pending_durability().unwrap(),
-        1,
-        "dry-run must not flush"
-    );
-    sync_with_client(
-        &client, &config, &store, None, true, false, false, false, None, false, false,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        store.pending_durability().unwrap(),
-        0,
-        "no-op sync must retry"
-    );
-    assert!(
-        backend.get_calls().is_empty(),
-        "the entry must not be downloaded again"
-    );
-    assert_eq!(std::fs::read(&blob).unwrap(), b"pending local artifact");
-}
-
-#[cfg(unix)]
-#[test]
-fn standalone_sync_leaves_pending_work_to_a_reachable_daemon() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(dir.path().to_path_buf(), None);
-    config.deferred_durability = true;
-    let store = Store::open(&config).unwrap();
-    let source = dir.path().join("daemon-owned.rlib");
-    std::fs::write(&source, b"daemon-owned pending artifact").unwrap();
-    store
-        .put(
-            "daemon-owned",
-            "fixture",
-            &["lib".to_string()],
-            &[],
-            "",
-            "dev",
-            &[(source, "libfixture.rlib".to_string())],
-            "",
-            "",
-        )
-        .unwrap();
-    let listener = crate::transport::ListenerOptions::new()
-        .name(crate::transport::socket_name(&config.socket_path()).unwrap())
-        .create_sync()
-        .unwrap();
-    flush_standalone_sync(&config, &store);
-    assert_eq!(store.pending_durability().unwrap(), 1);
-    drop(listener);
-    flush_standalone_sync(&config, &store);
-    assert_eq!(store.pending_durability().unwrap(), 0);
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_pull_recovers_uncommitted_extracted_entry() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-    let key = sync_test_cache_key("uncommitted-extracted-pull");
-    let pack_path = format!("prefix/v3/packs/serde/{key}.tar.zst");
-    let backend = TestBackend::memory();
-    backend
-        .seed(
-            &format!("prefix/v3/manifests/serde/{key}.json"),
-            b"{}".to_vec(),
-        )
-        .await;
-    backend
-        .seed(&pack_path, build_entry_pack(&key, "serde"))
-        .await;
-    let client = as_cache_remote(as_remote_backend(&backend), &remote);
-    crate::cache_remote::CacheRemote::download_entry(
-        &client,
-        &key,
-        "serde",
-        &store.entry_dir(&key),
-        &store.blobs_dir(),
-        None,
-    )
-    .await
-    .unwrap();
-    assert!(store.entry_dir(&key).join("libfoo.rlib").is_file());
-    assert!(!store.contains(&key));
-
-    sync_with_client(
-        &client, &config, &store, None, true, false, false, true, None, false, false,
-    )
-    .await
-    .expect("sync should recover extraction interrupted before index import");
-    let meta = store
-        .get(&key)
-        .unwrap()
-        .expect("successful sync must make the extracted entry available to local consumers");
-    assert_eq!(
-        fs::read(store.blob_path(&meta.files[0].hash)).unwrap(),
-        b"real artifact bytes"
-    );
-    assert_eq!(backend.get_calls(), vec![pack_path.clone(), pack_path]);
-
-    sync_with_client(
-        &client, &config, &store, None, true, false, false, true, None, false, false,
-    )
-    .await
-    .expect("syncing a committed entry should remain successful");
-    assert_eq!(
-        backend.get_calls().len(),
-        2,
-        "committed entries need no pull"
-    );
-}
-
-#[cfg(feature = "remote")]
-struct DisappearingBackend {
-    inner: Arc<TestBackend>,
-    on_put_delete: std::path::PathBuf,
-}
-
-#[cfg(feature = "remote")]
-#[async_trait::async_trait]
-impl crate::remote_backend::RemoteBackend for DisappearingBackend {
-    async fn head(&self, key: &str) -> Result<bool> {
-        self.inner.as_ref().head(key).await
-    }
-    async fn get(
-        &self,
-        key: &str,
-        max_bytes: Option<u64>,
-    ) -> Result<Option<crate::remote_backend::GetObject>> {
-        self.inner.as_ref().get(key, max_bytes).await
-    }
-    async fn put(&self, key: &str, body: Vec<u8>, content_type: Option<&str>) -> Result<()> {
-        if self.on_put_delete.exists() {
-            let _ = std::fs::remove_dir_all(&self.on_put_delete);
-        }
-        self.inner.as_ref().put(key, body, content_type).await
-    }
-    async fn list(&self, prefix: &str) -> Result<Vec<String>> {
-        self.inner.as_ref().list(prefix).await
-    }
-    fn describe(&self, key: &str) -> String {
-        self.inner.as_ref().describe(key)
-    }
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_push_fails_when_local_entry_disappears() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    config.s3_concurrency = 1;
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-
-    let src_dir = dir.path().join("src");
-    std::fs::create_dir_all(&src_dir).unwrap();
-
-    // Materialize two entries ("aaa" sorts before "zzz")
-    for (k, cn) in [("keep_first", "aaa"), ("disappear_second", "zzz")] {
-        let artifact = src_dir.join(format!("{cn}.rlib"));
-        std::fs::write(&artifact, format!("{cn} bytes")).unwrap();
-        store
-            .put(
-                k,
-                cn,
-                &["lib".to_string()],
-                &[],
-                "x86_64-unknown-linux-gnu",
-                "debug",
-                &[(artifact, format!("{cn}.rlib"))],
-                "",
-                "",
-            )
-            .unwrap();
-    }
-
-    let disappear_dir = config.store_dir().join("disappear_second");
-    let backend: Arc<dyn crate::remote_backend::RemoteBackend> = Arc::new(DisappearingBackend {
-        inner: TestBackend::memory(),
-        on_put_delete: disappear_dir,
-    });
-
-    let err = sync_with_client(
-        &as_cache_remote(backend, &remote),
-        &config,
-        &store,
-        None,
-        false,
-        true,
-        false,
-        false,
-        None,
-        false,
-        false,
-    )
-    .await
-    .expect_err("disappeared local entry must cause non-zero exit by default");
-    assert!(
-        err.to_string()
-            .contains("1 transfer(s) or import(s) failed")
-    );
-}
-
-/// Build a tar.zst pack containing an invalid meta.json to test import failure.
-#[cfg(feature = "remote")]
-fn build_invalid_meta_pack() -> Vec<u8> {
-    let mut tar_builder = tar::Builder::new(Vec::new());
-    let meta_bytes = b"{\"not\": \"valid meta\"}";
-    let mut header = tar::Header::new_gnu();
-    header.set_path("meta.json").unwrap();
-    header.set_size(meta_bytes.len() as u64);
-    header.set_mode(0o644);
-    header.set_cksum();
-    tar_builder.append(&header, &meta_bytes[..]).unwrap();
-    let tar_data = tar_builder.into_inner().unwrap();
-    zstd::encode_all(&tar_data[..], 3).unwrap()
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_pull_fails_when_import_fails_by_default() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-
-    let key = sync_test_cache_key("invalid-meta-pull");
-    let pack = build_invalid_meta_pack();
-
-    let backend = TestBackend::memory();
-    backend
-        .seed(
-            &format!("prefix/v3/manifests/foo/{key}.json"),
-            b"{}".to_vec(),
-        )
-        .await;
-    backend
-        .seed(&format!("prefix/v3/packs/foo/{key}.tar.zst"), pack)
-        .await;
-
-    let err = sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        true,
-        false,
-        false,
-        false,
-        None,
-        false,
-        false,
-    )
-    .await
-    .expect_err("pull sync should return Err when import fails by default");
-    assert!(
-        err.to_string()
-            .contains("1 transfer(s) or import(s) failed")
-    );
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_pull_allows_partial_when_import_fails() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-
-    let key = sync_test_cache_key("invalid-meta-pull-allow");
-    let pack = build_invalid_meta_pack();
-
-    let backend = TestBackend::memory();
-    backend
-        .seed(
-            &format!("prefix/v3/manifests/foo/{key}.json"),
-            b"{}".to_vec(),
-        )
-        .await;
-    backend
-        .seed(&format!("prefix/v3/packs/foo/{key}.tar.zst"), pack)
-        .await;
-
-    sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        true,
-        false,
-        false,
-        false,
-        None,
-        false,
-        true,
-    )
-    .await
-    .expect("pull sync with allow_partial should return Ok even when import fails");
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_mixed_success_and_failure_completes_all_and_fails_default() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-
-    let key_good = sync_test_cache_key("mixed-good");
-    let key_bad = sync_test_cache_key("mixed-bad");
-    let pack_good = build_entry_pack(&key_good, "serde");
-
-    let backend = TestBackend::memory();
-    backend
-        .seed(
-            &format!("prefix/v3/manifests/serde/{key_good}.json"),
-            b"{}".to_vec(),
-        )
-        .await;
-    backend
-        .seed(
-            &format!("prefix/v3/packs/serde/{key_good}.tar.zst"),
-            pack_good,
-        )
-        .await;
-
-    backend
-        .seed(
-            &format!("prefix/v3/manifests/tokio/{key_bad}.json"),
-            b"{}".to_vec(),
-        )
-        .await;
-    backend
-        .seed(
-            &format!("prefix/v3/packs/tokio/{key_bad}.tar.zst"),
-            b"corrupted bytes".to_vec(),
-        )
-        .await;
-
-    // Default behavior: completes all transfers, but returns Err
-    let err = sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        true,
-        false,
-        false,
-        false,
-        None,
-        false,
-        false,
-    )
-    .await
-    .expect_err("mixed sync should complete all transfers and return Err by default");
-    assert!(
-        err.to_string()
-            .contains("1 transfer(s) or import(s) failed")
-    );
-
-    // Both GET calls were executed (no fail-fast abort)
-    assert_eq!(backend.get_calls().len(), 2);
-    // The good pack was successfully imported
-    assert!(
-        config
-            .store_dir()
-            .join(&key_good)
-            .join("meta.json")
-            .exists(),
-        "good entry should be materialized"
-    );
-}
-
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_mixed_success_and_failure_with_allow_partial_returns_ok() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    let store = Store::open(&config).unwrap();
-    let remote = test_remote_cfg();
-
-    let key_good = sync_test_cache_key("mixed-good-2");
-    let key_bad = sync_test_cache_key("mixed-bad-2");
-    let pack_good = build_entry_pack(&key_good, "serde");
-
-    let backend = TestBackend::memory();
-    backend
-        .seed(
-            &format!("prefix/v3/manifests/serde/{key_good}.json"),
-            b"{}".to_vec(),
-        )
-        .await;
-    backend
-        .seed(
-            &format!("prefix/v3/packs/serde/{key_good}.tar.zst"),
-            pack_good,
-        )
-        .await;
-
-    backend
-        .seed(
-            &format!("prefix/v3/manifests/tokio/{key_bad}.json"),
-            b"{}".to_vec(),
-        )
-        .await;
-    backend
-        .seed(
-            &format!("prefix/v3/packs/tokio/{key_bad}.tar.zst"),
-            b"corrupted bytes".to_vec(),
-        )
-        .await;
-
-    // With allow_partial: completes all transfers and returns Ok
-    sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        true,
-        false,
-        false,
-        false,
-        None,
-        false,
-        true,
-    )
-    .await
-    .expect("mixed sync with allow_partial should complete Ok");
-
-    assert_eq!(backend.get_calls().len(), 2);
-    assert!(
-        config
-            .store_dir()
-            .join(&key_good)
-            .join("meta.json")
-            .exists(),
-        "good entry should be materialized"
-    );
-}
 
 #[test]
 fn draw_clean_renders_target_table() {
@@ -8765,119 +5906,8 @@ fn clean_event_applies_press_but_ignores_release() {
     );
 }
 
-#[cfg(feature = "remote")]
-#[tokio::test]
-async fn sync_with_client_push_skipped_when_remote_readonly() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    config.remote_readonly = true;
-    let store = Store::open(&config).unwrap();
 
-    // Materialize one cache entry with a single artifact file.
-    let src_dir = dir.path().join("src");
-    std::fs::create_dir_all(&src_dir).unwrap();
-    let artifact = src_dir.join("libfoo.rlib");
-    std::fs::write(&artifact, b"artifact bytes").unwrap();
-    store
-        .put(
-            "pushkey123",
-            "foo",
-            &["lib".to_string()],
-            &[],
-            "x86_64-unknown-linux-gnu",
-            "debug",
-            &[(artifact, "libfoo.rlib".to_string())],
-            "",
-            "",
-        )
-        .unwrap();
 
-    let remote = test_remote_cfg();
-    // Since remote_readonly is true, the plan lists the remote keys but
-    // does not push.
-    let backend = TestBackend::memory();
-
-    sync_with_client(
-        &as_cache_remote(as_remote_backend(&backend), &remote),
-        &config,
-        &store,
-        None,
-        false,
-        true,
-        false,
-        false,
-        None,
-        false,
-        false,
-    )
-    .await
-    .expect("push sync should succeed (by skipping pushes)");
-    assert!(backend.put_calls().is_empty());
-}
-
-#[tokio::test]
-async fn save_manifest_skipped_when_remote_readonly() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(dir.path().to_path_buf(), Some(test_remote_cfg()));
-    config.remote_readonly = true;
-
-    // Create an event so save_manifest wouldn't normally skip due to empty events.
-    let event_log = config.event_log_path();
-    std::fs::create_dir_all(event_log.parent().unwrap()).unwrap();
-    let event = serde_json::json!({
-        "ts": chrono::Utc::now().to_rfc3339(),
-        "crate_name": "foo",
-        "result": "Miss",
-        "elapsed_ms": 100,
-        "compile_time_ms": 100,
-        "size": 10,
-        "cache_key": "key123"
-    });
-    let mut file = std::fs::File::create(&event_log).unwrap();
-    use std::io::Write;
-    writeln!(file, "{event}").unwrap();
-
-    // Calling save_manifest should return Ok immediately without creating
-    // a remote client or making any calls.
-    save_manifest(&config, Some("mykey"), None)
-        .expect("save_manifest should succeed by doing nothing");
-}
-
-/// The end-of-job publish warns a writable job whose daemon is read-only,
-/// and asks the daemon only when the job could upload at all and published
-/// a manifest.
-#[test]
-fn save_manifest_warns_a_writable_job_about_a_read_only_daemon() {
-    let dir = tempfile::tempdir().unwrap();
-    let writable = save_manifest_config(dir.path().join("writable"), Some(test_remote_cfg()));
-    let warning =
-        readonly_daemon_warning(&writable, true, || Some(true)).expect("writable job warns");
-    assert!(warning.contains("kache daemon restart"), "{warning}");
-    for daemon_readonly in [Some(false), None] {
-        assert_eq!(
-            readonly_daemon_warning(&writable, true, || daemon_readonly),
-            None
-        );
-    }
-    assert_eq!(
-        readonly_daemon_warning(&writable, false, || panic!(
-            "no manifest, nothing to warn about"
-        )),
-        None
-    );
-
-    let mut read_only = writable.clone();
-    read_only.remote_readonly = true;
-    let local = save_manifest_config(dir.path().join("local"), None);
-    for config in [&read_only, &local] {
-        assert_eq!(
-            readonly_daemon_warning(config, true, || {
-                panic!("a job that cannot upload must not ask")
-            }),
-            None
-        );
-    }
-}
 
 #[test]
 fn a_quiet_gc_the_user_asked_for_is_requested() {
@@ -9952,6 +6982,21 @@ fn init_offers_recovery_with_the_floor_its_file_and_environment_set() {
     );
 }
 
+fn effective_config_like(config: &Config) -> crate::daemon::EffectiveConfig {
+    crate::daemon::EffectiveConfig {
+        process: None,
+        max_size: config.max_size,
+        cache_dir: config.cache_dir.display().to_string(),
+        runtime_dir: config.runtime_dir.display().to_string(),
+        config_path: "/daemon-home/.config/kache/config.toml".to_string(),
+        config_fingerprint: Some("daemon-fingerprint".to_string()),
+        socket_path: config.socket_path().display().to_string(),
+        started_at_ms: 1_700_000_000_000,
+        auto_recover_min_free_bytes: None,
+        auto_recover_targets: None,
+    }
+}
+
 #[test]
 fn stats_shows_the_recovery_the_daemon_runs() {
     let dir = tempfile::tempdir().unwrap();
@@ -10654,17 +7699,6 @@ fn list_details_use_the_short_key_and_local_time() {
     );
 }
 
-#[test]
-fn the_sync_plan_prints_short_keys() {
-    let lines = sync_plan_lines(
-        &[("96b68103bea22193ffee".to_string(), "serde".to_string())],
-        &[("abc".to_string(), "tiny".to_string())],
-    );
-    assert_eq!(
-        lines,
-        ["  pull  96b68103bea2 (serde)", "  push  abc (tiny)"]
-    );
-}
 
 #[test]
 fn a_declined_store_is_the_latest_compile_and_a_fallback_run_is_not() {
@@ -11350,7 +8384,7 @@ fn an_explicit_workspace_must_have_a_valid_workspace_manifest() {
 #[test]
 fn direct_stats_include_rotated_events() {
     let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"), None);
+    let config = save_manifest_config(dir.path().join("cache"));
     let log = config.event_log_path();
     let mut hit =
         crate::events::BuildEvent::new_for_test("archived", crate::events::EventResult::LocalHit);

@@ -25,14 +25,13 @@ fn test_tab_needs_entries_only_for_store() {
     assert!(!tab_needs_entries(Tab::Build));
     assert!(!tab_needs_entries(Tab::Projects));
     assert!(tab_needs_entries(Tab::Store));
-    assert!(!tab_needs_entries(Tab::Transfer));
     assert!(!tab_needs_entries(Tab::Why));
 }
 
 #[test]
-fn now_leads_and_transfer_stays_last() {
+fn now_leads_and_store_stays_last() {
     assert_eq!(Tab::ORDER[0], Tab::Now);
-    assert_eq!(*Tab::ORDER.last().unwrap(), Tab::Transfer);
+    assert_eq!(*Tab::ORDER.last().unwrap(), Tab::Store);
     assert_eq!(Tab::Now.next(), Tab::Build);
     assert_eq!(Tab::Build.previous(), Tab::Now);
 }
@@ -66,14 +65,6 @@ fn fmt_duration_ms_blanks_zero_and_scales() {
 }
 
 #[test]
-fn format_speed_scales_units() {
-    assert_eq!(format_speed(0.0), "0 B/s");
-    assert_eq!(format_speed(500.0), "500 B/s");
-    assert_eq!(format_speed(2_000.0), "2 KB/s");
-    assert_eq!(format_speed(5_000_000.0), "5.0 MB/s");
-}
-
-#[test]
 fn sort_mode_next_cycles_through_all_modes() {
     let mut m = SortMode::Size;
     let mut labels = vec![m.label().to_string()];
@@ -97,18 +88,12 @@ fn shorten_home_replaces_home_prefix() {
 }
 
 fn test_config() -> Config {
-    use crate::config::{
-        DEFAULT_DAEMON_IDLE_TIMEOUT_SECS, DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
-        DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS, DEFAULT_S3_POOL_IDLE_SECS,
-    };
+    use crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS;
     Config {
         readonly_store: None,
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -147,8 +132,6 @@ fn test_config() -> Config {
         cache_dir: std::env::temp_dir().join("kache-tui-test"),
         runtime_dir: std::env::temp_dir().join("kache-tui-test"),
         max_size: 1024 * 1024,
-        remote: None,
-        remote_error: None,
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
@@ -163,19 +146,9 @@ fn test_config() -> Config {
         event_log_max_size: 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: crate::config::DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: crate::config::DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: crate::config::DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: crate::config::DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: crate::config::DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     }
 }
 
@@ -208,12 +181,7 @@ fn test_state() -> AppState {
         now_page_size: 1,
         shown: None,
         why_cache: None,
-        transfer_scroll: Viewport::new(ScrollAnchor::Top),
         why_scroll: Viewport::new(ScrollAnchor::Top),
-        prev_bytes_uploaded: 0,
-        prev_bytes_downloaded: 0,
-        upload_speed_bps: 0.0,
-        download_speed_bps: 0.0,
         rustc_version_slot: Arc::new(Mutex::new(None)),
         stats_result_slot: Arc::new(Mutex::new(None)),
         stats_fetch_in_flight: false,
@@ -236,39 +204,6 @@ fn project_scan_status_distinguishes_loading_idle_and_unscanned() {
     assert!(!project_scan_can_start(true));
 }
 
-#[test]
-fn tui_uses_the_daemon_remote_status() {
-    let config = test_config();
-    let daemon_cache_dir =
-        std::path::absolute(std::env::temp_dir().join("kache-tui-daemon-a")).unwrap();
-    let snapshot = StatsSnapshot {
-        daemon_connected: true,
-        daemon_effective_config: Some(crate::daemon::EffectiveConfig {
-            process: None,
-            max_size: config.max_size,
-            cache_dir: daemon_cache_dir.to_string_lossy().into_owned(),
-            runtime_dir: "/shared/runtime".to_string(),
-            config_path: "/daemon-a/config.toml".to_string(),
-            config_fingerprint: Some("daemon-a-fingerprint".to_string()),
-            prefetch_enabled: true,
-            remote_key_listing: false,
-            remote_description: Some("s3://daemon-a/cache".to_string()),
-            local_only: false,
-            remote_readonly: Some(false),
-            remote_error: None,
-            remote_key_cache_refresh_secs: 60,
-            socket_path: "/shared/daemon.sock".to_string(),
-            started_at_ms: 1,
-            auto_recover_min_free_bytes: None,
-            auto_recover_targets: None,
-        }),
-        ..StatsSnapshot::default()
-    };
-    assert_eq!(
-        effective_remote_status(&config, &snapshot),
-        "s3://daemon-a/cache"
-    );
-}
 
 #[test]
 fn project_scan_removes_stale_entries() {
@@ -352,8 +287,6 @@ fn handle_key_number_keys_switch_tabs() {
     assert_eq!(s.active_tab, Tab::Projects);
     handle_key(&mut s, KeyCode::Char('5'));
     assert_eq!(s.active_tab, Tab::Store);
-    handle_key(&mut s, KeyCode::Char('6'));
-    assert_eq!(s.active_tab, Tab::Transfer);
 }
 
 /// Landing on Projects or Store backdates that tab's refresh clock so its
@@ -382,7 +315,7 @@ fn switching_to_a_fetching_tab_forces_an_immediate_refresh() {
     // Tabs without their own fetch leave both clocks alone.
     let before_project = s.last_project_refresh;
     let before_stats = s.last_stats_fetch;
-    switch_tab(&mut s, Tab::Transfer);
+    switch_tab(&mut s, Tab::Why);
     assert_eq!(s.last_project_refresh, before_project);
     assert_eq!(s.last_stats_fetch, before_stats);
 }
@@ -390,14 +323,7 @@ fn switching_to_a_fetching_tab_forces_an_immediate_refresh() {
 #[test]
 fn handle_key_tab_cycles_forward_and_wraps() {
     let mut s = test_state();
-    let order = [
-        Tab::Why,
-        Tab::Projects,
-        Tab::Store,
-        Tab::Transfer,
-        Tab::Now,
-        Tab::Build,
-    ];
+    let order = [Tab::Why, Tab::Projects, Tab::Store, Tab::Now, Tab::Build];
     for expected in order {
         handle_key(&mut s, KeyCode::Tab);
         assert_eq!(s.active_tab, expected);
@@ -679,51 +605,6 @@ fn rendered_lines(state: &mut AppState, tab: Tab, width: u16, height: u16) -> Ve
         .collect()
 }
 
-#[test]
-fn packed_list_and_cancellation_have_distinct_transfer_labels() {
-    let mut state = populated_state();
-    let transfer = &mut state.stats_snapshot.recent_transfers[0];
-    transfer.direction = daemon::TransferDirection::Download;
-    transfer.ok = false;
-    transfer.outcome = "cancelled".to_owned();
-    transfer.accounting = Some(kache_core::timeline::PrefetchAccounting {
-        operation: kache_core::timeline::PrefetchOperation::List,
-        ..Default::default()
-    });
-    let screen = rendered_lines(&mut state, Tab::Transfer, 120, 40).join("\n");
-    assert!(screen.contains("STOP"), "{screen}");
-    assert!(!screen.contains("FAIL"), "{screen}");
-    let row = screen.lines().find(|line| line.contains("serde")).unwrap();
-    assert!(
-        row.trim_start_matches('│').trim_start().starts_with("L "),
-        "LIST row: {row}"
-    );
-}
-
-#[test]
-fn not_found_transfers_render_as_misses() {
-    let mut state = populated_state();
-    let transfer = &mut state.stats_snapshot.recent_transfers[0];
-    transfer.direction = daemon::TransferDirection::Download;
-    transfer.ok = false;
-    transfer.outcome = "not_found".to_string();
-    let screen = rendered_lines(&mut state, Tab::Transfer, 120, 40).join("\n");
-    assert!(screen.contains("MISS"), "{screen}");
-    assert!(!screen.contains("FAIL"), "{screen}");
-    state.stats_snapshot.recent_transfers[0].direction = daemon::TransferDirection::Upload;
-    let screen = rendered_lines(&mut state, Tab::Transfer, 120, 40).join("\n");
-    assert!(screen.contains("FAIL"), "{screen}");
-    state.stats_snapshot.recent_transfers[0].direction = daemon::TransferDirection::Download;
-    state.stats_snapshot.recent_transfers[0].outcome = "error".to_string();
-    let screen = rendered_lines(&mut state, Tab::Transfer, 120, 40).join("\n");
-    assert!(screen.contains("FAIL"), "{screen}");
-    state.stats_snapshot.recent_transfers[0].outcome = "skipped".to_string();
-    state.stats_snapshot.recent_transfers[0].request_count = 0;
-    let screen = rendered_lines(&mut state, Tab::Transfer, 120, 40).join("\n");
-    assert!(screen.contains("SKIP"), "{screen}");
-    assert!(!screen.contains("FAIL"), "{screen}");
-}
-
 fn populated_state() -> AppState {
     let mut state = test_state();
     state.events = vec![
@@ -738,39 +619,7 @@ fn populated_state() -> AppState {
     state.stats_snapshot.entry_count = 2;
     state.stats_snapshot.total_size = 3_500_000;
     state.stats_loaded = true;
-    state.stats_snapshot.recent_transfers = vec![daemon::TransferEvent {
-        accounting: None,
-        prefetch: None,
-        outcome: String::new(),
-        schema: 3,
-        crate_name: "serde".to_string(),
-        direction: daemon::TransferDirection::Upload,
-        format: "tar.zst".to_string(),
-        cache_key: "serde-key".to_string(),
-        object_key: "prefix/serde".to_string(),
-        compressed_bytes: 1000,
-        started_at_unix_ms: 0,
-        finished_at_unix_ms: 0,
-        elapsed_ms: 12,
-        network_ms: 6,
-        semaphore_wait_ms: 0,
-        head_ms: 0,
-        request_ms: 2,
-        body_ms: 4,
-        request_count: 1,
-        original_bytes: 3000,
-        decompress_ms: 0,
-        extract_ms: 0,
-        disk_io_ms: 0,
-        import_lock_wait_ms: 0,
-        import_ms: 0,
-        compression_ms: 0,
-        head_checks_ms: 0,
-        blobs_skipped: 0,
-        blobs_total: 1,
-        ok: true,
-        timestamp: 0,
-    }];
+
     {
         let mut scan = state.project_scan.lock().unwrap();
         scan.project_targets = vec![cli::TargetEntry {
@@ -1053,7 +902,6 @@ fn every_tab_fits_narrow_and_wide_terminals() {
         (Tab::Build, "serde", "Size"),
         (Tab::Store, "serde", "Created"),
         (Tab::Projects, "myproj", ""),
-        (Tab::Transfer, "serde", ""),
         (Tab::Why, "build.rs", "direct"),
     ] {
         for (width, height) in [(80u16, 24u16), (120, 40)] {
@@ -1182,11 +1030,11 @@ fn shift_tab_walks_backwards() {
     assert_eq!(s.active_tab, Tab::Why);
     handle_key(&mut s, KeyCode::BackTab);
     assert_eq!(s.active_tab, Tab::Build);
-    // Back from Build is Now, and back from Now wraps to Transfer.
+    // Back from Build is Now, and back from Now wraps to Store.
     handle_key(&mut s, KeyCode::BackTab);
     assert_eq!(s.active_tab, Tab::Now);
     handle_key(&mut s, KeyCode::BackTab);
-    assert_eq!(s.active_tab, Tab::Transfer);
+    assert_eq!(s.active_tab, Tab::Store);
     handle_key(&mut s, KeyCode::Tab);
     assert_eq!(s.active_tab, Tab::Now);
 }
@@ -1309,11 +1157,10 @@ fn handle_key_scroll_is_per_tab() {
     assert_eq!(s.store_scroll.offset, 2);
     handle_key(&mut s, KeyCode::Up);
     assert_eq!(s.store_scroll.offset, 1);
-    // A different tab tracks its own offset.
-    s.active_tab = Tab::Transfer;
-    s.transfer_scroll.max_offset = 10;
+    // Moving to another tab and back leaves the scrolled tab's offset alone.
+    s.active_tab = Tab::Build;
     handle_key(&mut s, KeyCode::Down);
-    assert_eq!(s.transfer_scroll.offset, 1);
+    s.active_tab = Tab::Store;
     assert_eq!(s.store_scroll.offset, 1, "store offset is untouched");
 }
 
@@ -1363,14 +1210,7 @@ fn draw_ui_renders_every_tab_without_panicking() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    for tab in [
-        Tab::Now,
-        Tab::Build,
-        Tab::Projects,
-        Tab::Store,
-        Tab::Transfer,
-        Tab::Why,
-    ] {
+    for tab in [Tab::Now, Tab::Build, Tab::Projects, Tab::Store, Tab::Why] {
         let mut state = test_state();
         state.active_tab = tab;
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
@@ -1534,7 +1374,6 @@ fn store_names_the_daemon_and_now_leaves_the_version_off() {
     // 10 hits out of 14 lookups is 71%. 3000 of 5000 ms is 60% of the clock.
     // Compile time is unset, so the weighted sentence stays empty.
     let mut state = test_state();
-    state.config.remote = Some(crate::config::RemoteConfig::test_s3("b", "p"));
     state.stats_loaded = true;
 
     let snap = &mut state.stats_snapshot;
@@ -1557,13 +1396,6 @@ fn store_names_the_daemon_and_now_leaves_the_version_off() {
         runtime_dir: "/runtime".to_string(),
         config_path: "/daemon/config.toml".to_string(),
         config_fingerprint: None,
-        prefetch_enabled: false,
-        remote_key_listing: false,
-        remote_description: None,
-        local_only: false,
-        remote_readonly: Some(false),
-        remote_error: None,
-        remote_key_cache_refresh_secs: 60,
         socket_path: "/daemon.sock".to_string(),
         started_at_ms: 1,
         auto_recover_min_free_bytes: None,
@@ -1574,7 +1406,6 @@ fn store_names_the_daemon_and_now_leaves_the_version_off() {
     assert!(now.contains("71%"), "{now}");
     assert!(now.contains("60% of the clock was a miss"), "{now}");
     assert!(now.contains("no compile time recorded yet"), "{now}");
-    assert!(now.contains("remote is off"), "{now}");
     assert!(!now.contains("9.9.9"), "version stays on Store: {now}");
     assert!(!now.contains("stats are still loading"), "{now}");
 
@@ -1622,7 +1453,7 @@ fn draw_ui_renders_populated_tabs_without_panicking() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    for tab in [Tab::Build, Tab::Store, Tab::Why, Tab::Transfer] {
+    for tab in [Tab::Build, Tab::Store, Tab::Why] {
         let mut state = test_state();
         state.active_tab = tab;
         // Build events (varied results incl. a passthrough) drive the build +
@@ -1641,10 +1472,6 @@ fn draw_ui_renders_populated_tabs_without_panicking() {
         state.stats_snapshot.total_size = 3_500_000;
         state.stats_loaded = true;
         state.refresh_sessions(chrono::Utc::now());
-        // Transfer-tab counters/speeds.
-        state.stats_snapshot.uploads_completed = 3;
-        state.upload_speed_bps = 2_500_000.0;
-        state.download_speed_bps = 800_000.0;
 
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
         terminal
@@ -2483,34 +2310,6 @@ fn share_pct_rounds_to_the_nearest_percent() {
     assert_eq!(share_pct(1, 1), "100%");
 }
 
-#[test]
-fn now_copy_uses_the_rates_the_daemon_already_has() {
-    assert_eq!(weighted_sentence(None), "no compile time recorded yet");
-    assert_eq!(
-        weighted_sentence(Some(50.0)),
-        "50% of compile time came back from the cache"
-    );
-    assert_eq!(miss_clock_sentence(None), "no lookup time recorded yet");
-    assert_eq!(
-        miss_clock_sentence(Some(78.0)),
-        "78% of the clock was a miss"
-    );
-    assert_eq!(remote_sentence("not configured"), "remote is off");
-    assert_eq!(remote_sentence("local-only"), "remote is off");
-    assert_eq!(remote_sentence("misconfigured"), "remote: misconfigured");
-    assert_eq!(figure_saved(0), "0s");
-    assert_eq!(figure_saved(3_600_000), "1.0h");
-
-    let label = |result| {
-        let mut s = test_state();
-        s.events = vec![session_event("c", result, "/w", "s", 1)];
-        s.refresh_sessions(chrono::Utc::now());
-        misses_label(&s.sessions[0].tally)
-    };
-    assert_eq!(label(EventResult::Passthrough), "\u{2014}");
-    assert_eq!(label(EventResult::LocalHit), "0");
-    assert_eq!(label(EventResult::Miss), "1");
-}
 
 #[test]
 fn tree_name_uses_the_project_above_target() {
@@ -2705,7 +2504,7 @@ fn small_now_keeps_the_selector_compact_and_the_detail_readable() {
             );
         }
         if width == 60 {
-            assert!(row_text(&buffer, 0).contains("[6]Transfer"));
+            assert!(row_text(&buffer, 0).contains("[5]Store"));
         }
     }
     assert_eq!(now_layout(Rect::new(0, 1, 80, 23), 2).builds.height, 5);

@@ -205,25 +205,29 @@ fn custom_harness_test_binary_is_executable_after_restore() {
     {
         use std::os::unix::fs::PermissionsExt;
 
-        let binary = std::fs::read_dir(target.path().join("debug").join("deps"))
-            .unwrap()
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .find(|path| {
+        let profile = target.path().join("debug");
+        let binaries: Vec<_> = common::profile_artifacts(&profile)
+            .into_iter()
+            .filter(|path| {
                 path.extension().is_none()
-                    && path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|name| name.starts_with("harness-"))
+                    && path.file_name().and_then(|name| name.to_str()).is_some_and(
+                        |name| name == "harness" || name.starts_with("harness-"),
+                    )
             })
-            .expect("restored harness test binary");
-
-        let mode = std::fs::metadata(&binary).unwrap().permissions().mode();
-        assert_ne!(
-            mode & 0o111,
-            0,
-            "{} was restored without its executable bit (mode {mode:o})",
-            binary.display()
+            .collect();
+        assert!(
+            !binaries.is_empty(),
+            "restored harness test binary under {}",
+            profile.display()
         );
+        for binary in &binaries {
+            let mode = std::fs::metadata(binary).unwrap().permissions().mode();
+            assert_ne!(
+                mode & 0o111,
+                0,
+                "{} was restored without its executable bit (mode {mode:o})",
+                binary.display()
+            );
+        }
     }
 }

@@ -516,6 +516,19 @@ fn test_transfer(
         timestamp: Utc::now().timestamp() as u64,
     }
 }
+fn write_transfer_line(path: &std::path::Path, event: &TransferEvent) {
+    use std::io::Write;
+    let mut line = serde_json::to_string(event).unwrap();
+    line.push('\n');
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap()
+        .write_all(line.as_bytes())
+        .unwrap();
+}
+
 
 #[test]
 fn report_preserves_daemon_publication_without_counting_it_as_wrapper_time() {
@@ -554,9 +567,6 @@ fn write_test_events(dir: &std::path::Path) -> Config {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -595,8 +605,6 @@ fn write_test_events(dir: &std::path::Path) -> Config {
         cache_dir: dir.to_path_buf(),
         runtime_dir: dir.to_path_buf(),
         max_size: 1024,
-        remote: None,
-        remote_error: None,
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
@@ -611,19 +619,9 @@ fn write_test_events(dir: &std::path::Path) -> Config {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: crate::config::DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: crate::config::DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: crate::config::DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: crate::config::DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: crate::config::DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: crate::config::DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: crate::config::DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: crate::config::DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     };
 
     // Write build events
@@ -737,7 +735,7 @@ fn write_test_events(dir: &std::path::Path) -> Config {
         test_transfer("fail_dl", TransferDirection::Download, "v3", 0, 50, false),
     ];
     for t in &transfers {
-        events::log_transfer(&config.transfer_log_path(), t).unwrap();
+        write_transfer_line(&config.transfer_log_path(), t);
     }
 
     config
@@ -1939,9 +1937,6 @@ fn test_missing_transfer_data() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -1980,8 +1975,6 @@ fn test_missing_transfer_data() {
         cache_dir: dir.path().to_path_buf(),
         runtime_dir: dir.path().to_path_buf(),
         max_size: 1024,
-        remote: None,
-        remote_error: None,
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
@@ -1996,19 +1989,9 @@ fn test_missing_transfer_data() {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: crate::config::DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: crate::config::DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: crate::config::DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: crate::config::DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: crate::config::DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: crate::config::DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: crate::config::DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: crate::config::DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     };
 
     // Only write build events, no transfers
@@ -2024,16 +2007,6 @@ fn test_missing_transfer_data() {
             .any(|s| s.contains("No remote transfer")),
         "no remote is configured"
     );
-
-    let mut config = config;
-    config.remote = Some(crate::config::RemoteConfig::test_s3("bucket", "prefix"));
-    let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
-    assert!(
-        report
-            .suggestions
-            .iter()
-            .any(|s| s.contains("No remote transfer"))
-    );
 }
 
 #[test]
@@ -2044,9 +2017,6 @@ fn test_suggestion_high_miss_share() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -2085,8 +2055,6 @@ fn test_suggestion_high_miss_share() {
         cache_dir: dir.path().to_path_buf(),
         runtime_dir: dir.path().to_path_buf(),
         max_size: 1024,
-        remote: None,
-        remote_error: None,
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
@@ -2101,19 +2069,9 @@ fn test_suggestion_high_miss_share() {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: crate::config::DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: crate::config::DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: crate::config::DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: crate::config::DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: crate::config::DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: crate::config::DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: crate::config::DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: crate::config::DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     };
 
     // Mostly misses — should trigger high miss share suggestion
@@ -2148,9 +2106,6 @@ fn test_suggestion_high_hit_overhead() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -2189,8 +2144,6 @@ fn test_suggestion_high_hit_overhead() {
         cache_dir: dir.path().to_path_buf(),
         runtime_dir: dir.path().to_path_buf(),
         max_size: 1024,
-        remote: None,
-        remote_error: None,
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
@@ -2205,19 +2158,9 @@ fn test_suggestion_high_hit_overhead() {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: crate::config::DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: crate::config::DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: crate::config::DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: crate::config::DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: crate::config::DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: crate::config::DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: crate::config::DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: crate::config::DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     };
 
     // Several hits, each with a high elapsed time -> avg overhead > 50ms
@@ -2253,9 +2196,6 @@ fn test_suggestion_network_download_failures_and_fanout() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -2294,8 +2234,6 @@ fn test_suggestion_network_download_failures_and_fanout() {
         cache_dir: dir.path().to_path_buf(),
         runtime_dir: dir.path().to_path_buf(),
         max_size: 1024,
-        remote: None,
-        remote_error: None,
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
@@ -2310,19 +2248,9 @@ fn test_suggestion_network_download_failures_and_fanout() {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: crate::config::DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: crate::config::DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: crate::config::DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: crate::config::DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: crate::config::DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: crate::config::DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: crate::config::DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: crate::config::DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     };
 
     // One OK download (test_transfer sets request_count=4 -> 4 GETs for 1 hit,
@@ -2334,7 +2262,7 @@ fn test_suggestion_network_download_failures_and_fanout() {
         test_transfer("bad2", TransferDirection::Download, "v3", 0, 50, false),
     ];
     for t in &transfers {
-        events::log_transfer(&config.transfer_log_path(), t).unwrap();
+        write_transfer_line(&config.transfer_log_path(), t);
     }
 
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
@@ -2363,9 +2291,6 @@ fn test_suggestion_network_latency_thresholds() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -2404,8 +2329,6 @@ fn test_suggestion_network_latency_thresholds() {
         cache_dir: dir.path().to_path_buf(),
         runtime_dir: dir.path().to_path_buf(),
         max_size: 1024,
-        remote: None,
-        remote_error: None,
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
@@ -2420,19 +2343,9 @@ fn test_suggestion_network_latency_thresholds() {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: crate::config::DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: crate::config::DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: crate::config::DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: crate::config::DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: crate::config::DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: crate::config::DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: crate::config::DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: crate::config::DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     };
 
     let slow = TransferEvent {
@@ -2468,7 +2381,7 @@ fn test_suggestion_network_latency_thresholds() {
         ok: true,
         timestamp: Utc::now().timestamp() as u64,
     };
-    events::log_transfer(&config.transfer_log_path(), &slow).unwrap();
+    write_transfer_line(&config.transfer_log_path(), &slow);
 
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
     let joined = report.suggestions.join("\n");
@@ -2876,9 +2789,6 @@ fn test_empty_report() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -2917,8 +2827,6 @@ fn test_empty_report() {
         cache_dir: dir.path().to_path_buf(),
         runtime_dir: dir.path().to_path_buf(),
         max_size: 1024,
-        remote: None,
-        remote_error: None,
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
@@ -2933,19 +2841,9 @@ fn test_empty_report() {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: crate::config::DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: crate::config::DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: crate::config::DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: crate::config::DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: crate::config::DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: crate::config::DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: crate::config::DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: crate::config::DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     };
 
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
@@ -3362,9 +3260,6 @@ fn report_counts_each_download_transfer_format() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -3403,8 +3298,6 @@ fn report_counts_each_download_transfer_format() {
         cache_dir: dir.path().to_path_buf(),
         runtime_dir: dir.path().to_path_buf(),
         max_size: 1024,
-        remote: None,
-        remote_error: None,
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
@@ -3419,23 +3312,13 @@ fn report_counts_each_download_transfer_format() {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: crate::config::DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: crate::config::DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: crate::config::DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: crate::config::DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: crate::config::DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: crate::config::DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: crate::config::DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: crate::config::DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     };
     for fmt in ["v1", "v2", "weird-future-format"] {
         let t = test_transfer(fmt, TransferDirection::Download, fmt, 500, 40, true);
-        events::log_transfer(&config.transfer_log_path(), &t).unwrap();
+        write_transfer_line(&config.transfer_log_path(), &t);
     }
 
     // Must aggregate without panicking across all format arms.
@@ -3933,7 +3816,7 @@ fn timed_transfers_are_async_spans_and_a_zero_timestamp_is_skipped() {
     upload.started_at_unix_ms = 1_700_000_000_020;
     upload.finished_at_unix_ms = 1_700_000_000_030;
     for transfer in [&zero_start, &zero_finish, &download, &upload] {
-        events::log_transfer(&config.transfer_log_path(), transfer).unwrap();
+        write_transfer_line(&config.transfer_log_path(), transfer);
     }
 
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
@@ -4388,7 +4271,7 @@ fn suggestions_name_three_distinct_misses_only_above_the_share() {
         stats.dups = dups;
         stats.misses = misses;
         let details: Vec<CrateDetail> = names.iter().copied().map(miss_detail).collect();
-        generate_suggestions(&stats, &prefetch, &None, false, false, &details, 1, 0).join("\n")
+        generate_suggestions(&stats, &prefetch, &None, &details, 1, 0).join("\n")
     };
     let phrase = "compile time spent on compiled cache-key misses";
     assert!(!suggest(80, 20, 4, 0, &["a"]).contains(phrase));
@@ -4666,29 +4549,6 @@ fn adaptive_reasons_have_plain_words() {
     assert_eq!(uncached_reason_words("linker"), "linker");
 }
 
-#[test]
-fn remote_suggestions_need_a_configured_remote() {
-    let prefetch = PrefetchAnalysis {
-        prefetch_hits: 0,
-        total_hits: 0,
-        contribution_pct: 0.0,
-    };
-    let stats = crate::events::compute_stats(&[]);
-    let network = Some(zero_network());
-    let suggest = |network: &Option<NetworkAnalysis>, root_filtered, remote| {
-        generate_suggestions(&stats, &prefetch, network, root_filtered, remote, &[], 0, 0)
-            .join("\n")
-    };
-    let omitted = "Remote transfer data omitted";
-    let missing = "No remote transfer data";
-    assert!(suggest(&None, false, true).contains(missing));
-    assert!(!suggest(&None, false, false).contains(missing));
-    assert!(!suggest(&network, false, true).contains(missing));
-    assert!(suggest(&None, true, true).contains(omitted));
-    assert!(!suggest(&None, true, true).contains(missing));
-    assert!(!suggest(&None, true, false).contains(omitted));
-    assert!(!suggest(&None, true, false).contains(missing));
-}
 
 #[test]
 fn markdown_headlines_count_passthrough_compiles() {

@@ -25,9 +25,6 @@ The envelope is documented in [`cli.schema.json`](https://github.com/kunobi-ninj
 | `monitor` | Open the live dashboard |
 | `explain` | Explain why a crate, or the latest build, missed the cache |
 | `list` | Inspect local entries |
-| `sync` | Pull from and push to a remote |
-| `login` | Log in to the planner with a Kunobi account |
-| `logout` | Log out of the planner and revoke the stored session |
 | `daemon` | Inspect and manage the background daemon |
 | `completions` | Generate shell completion scripts |
 
@@ -36,8 +33,7 @@ These are for CI, scripts and integrations, and are not listed by `kache --help`
 | Command | Purpose |
 | --- | --- |
 | `cargo` | Run Cargo with duplicate Cargo-home rustflags collapsed |
-| `save-manifest` | Publish build metadata for later prefetch |
-| `telemetry` | Write cache counters and this machine's shared-cache state as OTLP JSON for Kartero (`write`), or send build timeline records to the planner service (`push`) |
+| `telemetry` | Write cache counters as OTLP JSON for Kartero (`write`) |
 | `test-runner` | Run a test binary as Cargo's target runner, paced by the scheduler |
 | `report` | Same report as `kache stats --full`, kept for scripts |
 | `gc`, `purge`, `targets` | What `kache clean` does now (`targets` lists what `kache clean --dry-run` shows), kept for scripts |
@@ -192,7 +188,7 @@ kache doctor --repair
 - `--fix` migrates from sccache: it stops a running sccache server, replaces `sccache` with `kache` in `$CARGO_HOME/config.toml`, and prints the lines to change in your shell startup files. It does not set up other missing pieces such as `rustc-wrapper` or the shims; run `kache init` for those.
 - `--purge-sccache` also deletes the sccache cache directory (`~/Library/Caches/Mozilla.sccache` on macOS, `~/.cache/sccache` on Linux) and runs `cargo uninstall sccache` when sccache was installed with Cargo. It requires `--fix`.
 - `--verify` checks entries, blobs, and metadata. It exits 1 while corrupted entries or index mismatches remain, so a scheduled job can gate on it. Orphan blobs do not count.
-- `--probe` compiles a small Rust library, removes its output, then checks that the second invocation restores identical bytes without running the compiler. It uses an isolated temporary cache and configuration, never accesses the remote, and removes its files afterwards. Each wrapped invocation has a 30-second deadline. It can also run with `--json`; findings appear in `checks` and `issues`.
+- `--probe` compiles a small Rust library, removes its output, then checks that the second invocation restores identical bytes without running the compiler. It uses an isolated temporary cache and configuration and removes its files afterwards. Each wrapped invocation has a 30-second deadline. It can also run with `--json`; findings appear in `checks` and `issues`.
 - `--checksums` also hashes blob contents and implies `--verify`.
 - `--repair` removes corrupted entries, reconciles the index with the entries on disk, reclaims orphan blobs, prunes stale C/C++ memos, input predictions and old file hashes, and compacts a large, sparse index when disk space allows. It implies `--verify`.
 
@@ -206,84 +202,11 @@ Where volume information is available, doctor checks free space for the cache, C
 
 Storage rows include the volume identity when reported. Unix rows show available and total inode counts; exhausted inodes are an issue even when bytes remain free. Unreported inode capacity stays unavailable. Distinct volume identities can share capacity through an APFS container, so their free-space figures are not independent. These checks do not remove anything; `kache clean --dry-run` previews tracked build directories.
 
-When a daemon answers, doctor compares its reported configuration with this process's snapshot and names differences in store paths, remote state and other reported settings. New daemons also report their PID, effective user and open-file limits captured after startup raised the limit. Older daemons show an informational notice when those fields are unavailable. The temporary cache probe checks the local Rust pipeline separately from the configured store and project-specific flags.
+When a daemon answers, doctor compares its reported configuration with this process's snapshot and names differences in store paths and other reported settings. New daemons also report their PID, effective user and open-file limits captured after startup raised the limit. Older daemons show an informational notice when those fields are unavailable. The temporary cache probe checks the local Rust pipeline separately from the configured store and project-specific flags.
 
 If a build emitted a store-open warning in the last 24 hours, doctor reports that history even when the database opens now. The history is informational and depends on the warning marker remaining in the same temporary directory. To capture the full error, rerun the failing Cargo command with `KACHE_LOG_FILE=kache=debug,kache_store=debug` and inspect `kache.log` (see [diagnostic logs](/docs/daemon/lifecycle)).
 
 Doctor also reports, for information, how many misses in the latest build differ from the same crates built in another checkout ("Other checkouts"); `kache explain` says what to set. It reports where the running binary is installed ("Install path"), whether the C/C++ shims are active, broken, not first on `PATH` or not installed, and whether the login service runs a binary that no longer exists, is not executable, or is a different file from the running Kache. Run `kache daemon install` to fix the last one.
-
-With a remote configured, `kache doctor` also asks it for an object that is never written. A miss passes: the store answered and accepted the credentials. A failure names the likely cause when the store says, such as expired credentials, a secret key that does not match, a clock too far from the store's, the bucket's real region, or a bucket that does not exist. An S3 endpoint that uses plain `http://` to another machine fails its own check. For S3, a pass names where the credentials came from, and a selected AWS profile that cannot supply credentials fails the check with the profile and the cause.
-
-## `kache sync`
-
-```bash
-kache sync
-kache sync --pull
-kache sync --push
-kache sync --dry-run
-kache sync --pull --workspace
-kache sync --pull --all
-```
-
-Options:
-
-| Flag | Effect |
-| --- | --- |
-| `--manifest-path <PATH>` | Cargo manifest whose workspace members filter what is pushed and, with `--workspace`, what is pulled. Defaults to `./Cargo.toml` when it exists; without one, pushes are not filtered and `--workspace` fails |
-| `--pull` | Skip uploads |
-| `--push` | Skip downloads |
-| `--dry-run`, `-n` | Plan without transfer |
-| `--all` | Ignore normal pull filtering |
-| `--workspace` | Scope pull discovery to workspace members; conflicts with `--all` |
-| `--allow-partial` | Exit successfully despite reported transfer/import failures |
-
-See [Sync](/docs/remote-cache/sync) for filtering semantics.
-
-## `kache save-manifest`
-
-```bash
-kache save-manifest
-kache save-manifest --manifest-key x86_64-linux-release
-kache save-manifest --namespace x86_64-unknown-linux-gnu/rustc-hash/release
-```
-
-Without `--manifest-key` or `KACHE_MANIFEST_KEY`, Kache publishes under the
-host target triple. When `Cargo.lock` exists and `KACHE_PROFILE` or `PROFILE`
-names the profile, it also publishes under an identity key,
-`id/<lock-digest>/<host-triple>/<profile>`. `--manifest-key` or
-`KACHE_MANIFEST_KEY` writes a single key. A namespace from `--namespace` or
-`KACHE_NAMESPACE`, plus `Cargo.lock`, also publishes content-addressed shards.
-
-The manifest lists each cache key in the retained event log once, from every
-build the log still holds. Build-script runs are left out: they stay in the
-local store, so no other machine could fetch them.
-
-With a remote configured, the daemon also publishes a build session's identity
-manifest when the session goes idle or a newer one replaces it; daemon
-shutdown publishes nothing.
-
-When the remote has no manifest for the current lockfile, the planner tries
-the manifests of up to three earlier committed revisions of `Cargo.lock`
-before the host-triple key, so a dependency bump still prefetches the part of
-the graph it did not change. This reads git history: a shallow clone needs
-enough of it (`fetch-depth` on GitHub Actions), and without git the step is
-skipped.
-
-CI jobs that share a key, such as tests and lints on the same lockfile, target
-and profile, add to one manifest rather than replacing each other. Entries from
-the publisher's commit (`GITHUB_SHA` or `CI_COMMIT_SHA`) stay together and
-entries from any other known commit are dropped, so a rerun of an older
-commit's job also drops a newer commit's entries. When either commit is
-unknown, a stored entry stays for an hour after it was last published. A merged
-manifest keeps at most 50,000 entries, putting the publishing job's entries
-first.
-
-On S3 the update is a conditional write: a job that loses a race reads the
-manifest again and retries, and after five tries it fails and leaves the
-manifest as the other jobs wrote it. Stores without conditional writes,
-including filesystem remotes, get the merged manifest written plainly, so two
-jobs finishing at the same moment can still drop each other's entries there.
-Shards merge the same way.
 
 ## `kache daemon`
 
@@ -377,9 +300,9 @@ kache telemetry write ./cache-otlp
 kache telemetry write ./cache-otlp --scenario bench-firefox --phase warm
 ```
 
-Writes `metrics.otlp.json` and `schema_version` for Kartero. Metric names are `kache.cache.*` / `kache.prefetch.*` (scope `kache.cache`), never `kache.bench.*`. `--scenario` must match `kache.bench.project`. `--phase` is `cold`, `warm-same-tree`, `warm`, or `pull` so dumps from the same scenario do not collide. The rustc wrapper does not write these files.
+Writes `metrics.otlp.json` and `schema_version` for Kartero. Metric names are `kache.cache.*` (scope `kache.cache`), never `kache.bench.*`. `--scenario` must match `kache.bench.project`. `--phase` is `cold`, `warm-same-tree`, `warm`, or `pull` so dumps from the same scenario do not collide. The rustc wrapper does not write these files.
 
-The payload also carries this host's shared cache: registered blob bytes (`kache.cache.store.physical_size`), index and WAL size, and a rowid high-water mark per table (`kache.cache.index.*`; it is not a row count). `kache.cache.store.size` counts logical entry bytes; GC compares the physical blob figure with `kache.cache.store.max`. Last-run GC gauges include duration, pinned and unreclaimable entries, bytes held by target directories, failed evictions, stale WAL snapshot failures, and recently accessed entries skipped before reading their metadata. The read-only index probe has a 25 ms lock timeout; unavailable figures are omitted.
+The payload also carries this host's local store: registered blob bytes (`kache.cache.store.physical_size`), index and WAL size, and a rowid high-water mark per table (`kache.cache.index.*`; it is not a row count). `kache.cache.store.size` counts logical entry bytes; GC compares the physical blob figure with `kache.cache.store.max`. Last-run GC gauges include duration, pinned and unreclaimable entries, bytes held by target directories, failed evictions, stale WAL snapshot failures, and recently accessed entries skipped before reading their metadata. The read-only index probe has a 25 ms lock timeout; unavailable figures are omitted.
 
 ## `kache explain`
 
@@ -441,101 +364,15 @@ Build trees are matched by Cargo's unit id. It is the same for a workspace membe
 
 > A crate that depends on a path crate outside the workspace root, or is built with `RUSTFLAGS` that contain the checkout path, gets a different unit id in each checkout. It has no comparison.
 
-## `kache telemetry push`
-
-After a build, inspect its timeline or send it to the configured planner:
-
-```bash
-kache telemetry push --dry-run
-kache telemetry push --all --label prefetch=on
-kache telemetry push --session SESSION_ID --label prefetch=off
-```
-
-The default selects the latest session. `--all` selects every retained session;
-`--session` selects one ID. `--label KEY=VALUE` is repeatable. Set the planner
-with `KACHE_PLANNER_ENDPOINT` or `[cache.planner] endpoint`, and its
-credentials. A record that fails to upload prints a warning and the command
-still exits 0, so a CI post-step does not fail a finished job. With no planner
-configured, it says how many records it would send.
-
-Timeline schema 7 records the session, plan, candidate source and zero-based
-rank for ordinary prefetch downloads. Transfers retain `completed`,
-`not_found`, `error` and `import_error` outcomes. The origin stays with a
-download even if another build starts before it finishes.
-
-When a prefetch delivered a unit's key in the same session, the unit carries a
-`prefetch` object: the plan origin and rank, when the GET started, when the
-entry was imported, its compressed bytes, and `timing` against the key's first
-demand (`before_demand`, `in_flight` or `after_demand`). A `local_hit` with
-`before_demand` timing is a prefetched local hit. The session summary counts
-consumed, useful and in-flight prefetch keys and bytes, plus `get_not_found`,
-`get_errors` and `get_cancelled`.
-
-Each unit also carries `demands`, one observation per cache key looked up by
-the wrapper. `first_demand_at_ms` is the first lookup's Unix timestamp in
-milliseconds, including local hits. `remote_wait_ms` sums wall time blocked on
-the existing daemon remote-check calls, including failed calls, IPC and daemon
-admission. It does not estimate time saved. A stale predicted key and its
-replacement retain separate observations. Recording adds no network request.
-
-An orderly daemon shutdown drains prefetch tasks, then writes the active
-session's local summary. A timeout aborts remaining tasks and sets `incomplete: true`;
-missing transfer outcomes then remain unknown. The summary records `shutdown`
-or `shutdown_timeout` as its closure reason. Shutdown does not publish an
-identity manifest. Summaries written after inactivity or supersession are
-snapshots, and pending tasks or log writes mark them incomplete. Complete
-precision figures need a summary from an orderly shutdown, after all producers
-drain.
-`kache stats` marks incomplete summaries as partial totals. Forced termination
-can prevent the final write.
-
-Upgrade the service before sending schema 7 records. The updated service also
-accepts schemas 1 through 6. Wrapper events before schema 20 have no demand
-observations. Current demand transfers and older logs still require a unique
-key or time-window match; ambiguous transfers remain unattributed.
-Prefetch records each ordinary entry GET, catalog GET, pack GET and LIST once.
-Background index LISTs retain the origin captured before their async work. A
-completed LIST stays completed if later local index work is cancelled; its
-result count and completion time describe the backend call.
-`accounting.operation` distinguishes GET from LIST; `request_count` counts
-backend invocations, excluding SDK retries and LIST pages. `requests_complete`
-states whether that count is known. LIST records include `list_result_count`
-when successful; response bytes remain unknown.
-
-For GETs, `compressed_bytes` counts the received object body, including pack
-headers and catalog metadata. `accounting.bytes_complete: false` means partial
-received bytes are unknown, so a complete GET-body precision ratio cannot be
-computed. A failed validation or import still retains a fully received body.
-Cancellation receipts preserve known bytes and use the `cancelled` outcome.
-Work cancelled before a GET starts records zero backend attempts. A 404 records
-one attempt and known zero body bytes. Transport failures and interrupted bodies keep bytes unknown;
-fully received bodies remain known even if decoding or import later fails.
-`skipped` means another download or local entry made this candidate unnecessary;
-it made no backend GET and is neutral in reports.
-A bounded logging queue marks the final summary incomplete if records overflow
-or cannot be written; such a run cannot establish full accounting coverage.
-
-Pack `accounting.entries` contains each validated frame's cache key, compressed
-payload bytes, immutable origin and outcome. `finished_at_ms` is the successful
-local import time; zero means no import. Entries imported beyond the candidate
-list have no candidate rank. Entry bytes are part of the physical pack body:
-do not add them to total downloaded bytes. Useful bytes require an actual
-wrapper hit in the same session and entry completion before first demand.
-LIST response sizes are excluded from this GET-body measure.
-
-For prefetch comparisons, keep cold builds and remote contents matched, label
-the control run, and measure the whole CI job. Timeline compiler timings alone
-do not include setup or an explicit warm step.
-
 ## `kache config`
 
 ```bash
 kache config
 kache config path
 kache config list --json
-kache config get cache.local_only
-kache config set --project cache.local_only true
-kache config unset --project cache.local_only
+kache config get cache.cache_executables
+kache config set --project cache.cache_executables false
+kache config unset --project cache.cache_executables
 ```
 
 Without a subcommand, opens the interactive editor. The subcommands read or edit the selected TOML file without starting a daemon. `get` and `list` show explicit file values, excluding environment overrides, host settings and defaults. A missing key makes `get` or `unset` fail.
@@ -543,24 +380,6 @@ Without a subcommand, opens the interactive editor. The subcommands read or edit
 Each subcommand accepts `--project`, `--global`, or `--file PATH`. Without one, it uses Kache's normal config-file selection. `--project` selects the nearest existing `.kache.toml`, or creates it in the current directory when setting a value. `--global` selects the user config and ignores `KACHE_CONFIG` and project files. `--file` selects an explicit path. These selectors cannot be combined.
 
 `set` validates known keys and their TOML types. Boolean, number and array values use TOML syntax; strings such as `50GiB` can be unquoted. Workspace declarations and entire tables are edited directly in TOML. Edits preserve comments and other keys, follow existing file symlinks, and replace the file atomically under a writer lock. Invalid TOML is refused. All subcommands support `--json`; the interactive editor does not. See [Configuration](/docs/getting-started/configuration).
-
-## `kache login`
-
-```bash
-kache login
-kache login --device
-kache login --retrust
-```
-
-Logs in to the configured planner with your Kunobi account, for a planner that requires authentication. It reads the planner's issuer and client id from `/.well-known/kunobi-auth`, trusts that planner, and stores a session that the daemon refreshes. `--device` prints a URL and a code for a machine without a browser. `--retrust` accepts a planner whose login issuer changed since it was first trusted. See [Planner authentication](/docs/getting-started/configuration#planner-authentication).
-
-## `kache logout`
-
-```bash
-kache logout
-```
-
-Forgets the stored planner session and asks the identity provider to revoke it.
 
 ## `kache test-runner`
 

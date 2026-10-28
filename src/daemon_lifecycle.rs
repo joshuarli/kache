@@ -123,7 +123,6 @@ fn observe(config: &Config, deadline: Instant) -> Result<ObservedOwner> {
                 ObservedOwner::Ready(DaemonHealth {
                     version: health.build,
                     build_epoch: health.revision,
-                    remote_readonly: None,
                 })
             } else {
                 ObservedOwner::Pending
@@ -269,7 +268,6 @@ impl Driver for KacheReplacement<'_> {
                         .open(log)
                         .map(kunobi_daemon::launch::DaemonOutput::File)
                         .unwrap_or(kunobi_daemon::launch::DaemonOutput::Null);
-                    warn_if_remote_is_env_only(config);
                     self.child = Some(spawn_detached_daemon(
                         self.executable.as_ref().unwrap(),
                         stderr,

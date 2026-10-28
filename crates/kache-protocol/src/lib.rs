@@ -6,7 +6,6 @@
 
 use kache_core::timeline::{PrefetchAccounting, PrefetchOrigin};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PrestageRequest {
@@ -19,47 +18,6 @@ pub struct SeedTargetRequest {
     pub workspace_root: String,
     /// `rustc -vV` from the compiler Cargo is probing.
     pub rustc_version: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PredictionFetchRequest {
-    pub identity: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct UploadJob {
-    pub key: String,
-    pub entry_dir: String,
-    #[serde(default)]
-    pub crate_name: String,
-    /// Client executable mtime. Daemons from 1.0.x and earlier drain when it
-    /// is newer than their own; later daemons ignore it.
-    #[serde(default)]
-    pub client_epoch: u64,
-    /// Release requesting an upgrade. Absent from legacy and read-only requests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_version: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RemoteCheckRequest {
-    pub key: String,
-    pub entry_dir: String,
-    #[serde(default)]
-    pub crate_name: String,
-    /// Client-side end-to-end budget. New daemons use the stricter of this,
-    /// their own configured budget, and the legacy three-second demand cap, so
-    /// config drift cannot make the client time out while the daemon keeps
-    /// doing abandoned work. Missing/zero values retain that legacy cap for
-    /// compatibility with old clients.
-    #[serde(default)]
-    pub deadline_ms: Option<u64>,
-    /// Volume-shard cache dir to import into. Missing or empty keeps the
-    /// main store so older clients stay on the historical path; a value
-    /// must equal the main cache dir or a configured `[cache.volumes]`
-    /// shard. Unknown paths are rejected rather than writing off-tree.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shard_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -86,11 +44,6 @@ pub struct StatsRequest {
     /// Release requesting an upgrade. Absent from legacy and read-only requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_version: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct BatchRemoteCheckRequest {
-    pub checks: Vec<RemoteCheckRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -124,45 +77,6 @@ pub struct HashFileResult {
     pub bytes_hashed: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PrefetchRequest {
-    /// (cache_key, crate_name) pairs
-    pub keys: Vec<(String, String)>,
-    /// Warm the whole remote: LIST every key in the bucket and download the
-    /// ones missing locally, in addition to `keys`.
-    ///
-    /// This has to be asked for explicitly (kunobi-ninja/kache#615). It used
-    /// to be what an EMPTY `keys` meant, so any caller that encoded "no
-    /// candidates" the obvious way started a download proportional to the
-    /// entire bucket. An empty `keys` now means what it says: nothing to do.
-    ///
-    /// Still unbounded by key count, bytes, or time — see #616.
-    #[serde(default)]
-    pub warm_all: bool,
-    /// Set inside the daemon from the chosen plan, never accepted over IPC.
-    #[serde(skip)]
-    pub origin: Option<PrefetchOrigin>,
-    #[serde(skip)]
-    pub candidate_sources: HashMap<String, kache_core::CandidateSource>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct BuildStartedRequest {
-    #[serde(default)]
-    pub intent: kache_core::BuildIntent,
-    /// Client executable mtime. Daemons from 1.0.x and earlier drain when it
-    /// is newer than their own; later daemons ignore it.
-    #[serde(default)]
-    pub client_epoch: u64,
-    /// Release requesting an upgrade. Absent from legacy and read-only requests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_version: Option<String>,
-    /// Build session id minted by the wrapper that won the session-marker
-    /// lock (kunobi-ninja/kache#583 P0.5). Empty from legacy wrappers.
-    #[serde(default)]
-    pub session_id: String,
 }
 
 /// Register (or update) an in-flight miss compile in the daemon's registry
@@ -216,10 +130,6 @@ pub struct DaemonHealth {
     /// whose executable is older than theirs; later clients only display it.
     #[serde(default)]
     pub build_epoch: u64,
-    /// Whether the daemon skips remote uploads. `None` from older daemons and
-    /// from the lifecycle control endpoint, which does not carry it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_readonly: Option<bool>,
 }
 
 /// The configuration the daemon loaded at startup, carried in every
@@ -253,31 +163,6 @@ pub struct EffectiveConfig {
     /// subset and ties the watcher baseline to what was actually loaded.
     #[serde(default)]
     pub config_fingerprint: Option<String>,
-    /// `[cache] prefetch_enabled` / `KACHE_PREFETCH_ENABLED` as resolved.
-    pub prefetch_enabled: bool,
-    /// `[cache] remote_key_listing` / `KACHE_REMOTE_KEY_LISTING` as resolved.
-    #[serde(default = "default_effective_remote_key_listing")]
-    pub remote_key_listing: bool,
-    /// Credential-free remote description (for example `s3://bucket/prefix`)
-    /// as resolved by the daemon. `None` means no usable remote.
-    #[serde(default)]
-    pub remote_description: Option<String>,
-    /// Whether the daemon started in strict local-only mode.
-    #[serde(default)]
-    pub local_only: bool,
-    /// Whether the daemon skips remote uploads. A daemon keeps the read-only
-    /// setting it started with, so a writable build can still reach a
-    /// read-only daemon. `None` from daemons that predate the field.
-    #[serde(default)]
-    pub remote_readonly: Option<bool>,
-    /// Why a configured remote was unusable, when configuration degraded to
-    /// local-only operation. This is the same user-facing reason the daemon
-    /// logs; credentials are never included.
-    #[serde(default)]
-    pub remote_error: Option<String>,
-    /// Remote key-index refresh cadence used by the daemon.
-    #[serde(default = "default_effective_remote_key_cache_refresh_secs")]
-    pub remote_key_cache_refresh_secs: u64,
     /// The socket endpoint the daemon serves on.
     pub socket_path: String,
     /// Unix millis when the daemon captured this config (process startup),
@@ -322,69 +207,6 @@ pub struct InFlightEntry {
     pub typical_s: Option<u64>,
     #[serde(default)]
     pub eta_s: Option<u64>,
-}
-
-/// Point-in-time view of prefetch counters and the cancel latch carried in
-/// the daemon statistics response.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct PrefetchStatsSnapshot {
-    #[serde(default)]
-    pub downloads_completed: u64,
-    #[serde(default)]
-    pub bytes_downloaded: u64,
-    #[serde(default)]
-    pub keys_used: u64,
-    #[serde(default)]
-    pub keys_cancelled: u64,
-    /// Candidates dropped un-downloaded because a plan budget was exhausted
-    /// (kunobi-ninja/kache#616). Distinct from `keys_cancelled`, which is the
-    /// adaptive hit-rate cancellation or daemon shutdown.
-    #[serde(default)]
-    pub keys_over_budget: u64,
-    /// Whether the daemon-lifetime adaptive cancel latch has fired.
-    #[serde(default)]
-    pub cancelled: bool,
-    #[serde(default)]
-    pub plans_advisory: u64,
-    #[serde(default)]
-    pub plans_fallback: u64,
-    #[serde(default)]
-    pub last_plan_candidates: u64,
-    #[serde(default)]
-    pub dedup_join_waits: u64,
-    #[serde(default)]
-    pub dedup_join_wait_ms: u64,
-    #[serde(default)]
-    pub last_list_duration_ms: u64,
-    #[serde(default)]
-    pub last_list_key_count: u64,
-    #[serde(default)]
-    pub list_requests_total: u64,
-    #[serde(default)]
-    pub list_failures_total: u64,
-    #[serde(default)]
-    pub list_duration_ms_total: u64,
-    #[serde(default)]
-    pub list_keys_total: u64,
-    /// Remote operations used by packed-prefetch discovery and pack GETs.
-    #[serde(default)]
-    pub pack_requests_total: u64,
-    #[serde(default)]
-    pub pack_bytes_downloaded: u64,
-    /// Existing object-by-object v3 GETs started by speculative prefetch.
-    #[serde(default)]
-    pub v3_requests_total: u64,
-    #[serde(default)]
-    pub v3_bytes_downloaded: u64,
-    #[serde(default)]
-    pub pack_validation_failures: u64,
-    #[serde(default)]
-    pub pack_fallback_entries: u64,
-    /// Real wall time from plan dispatch through its final import/fallback.
-    #[serde(default)]
-    pub last_plan_wall_ms: u64,
-    #[serde(default)]
-    pub plan_wall_ms_total: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -546,16 +368,6 @@ pub const TRANSFER_SCHEMA: u32 = 5;
 
 const fn default_transfer_schema() -> u32 {
     TRANSFER_SCHEMA
-}
-
-// Compatibility defaults describe old messages, independently of the current
-// application's configuration defaults.
-fn default_effective_remote_key_listing() -> bool {
-    true
-}
-
-fn default_effective_remote_key_cache_refresh_secs() -> u64 {
-    60
 }
 
 mod envelopes;

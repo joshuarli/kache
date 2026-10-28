@@ -583,27 +583,22 @@ fn build_script_runs_are_restored_and_keyed_on_their_declarations() {
     let fx = fixture();
     let out_dir_contents = |target: &Path| -> Vec<(String, String)> {
         let mut found = Vec::new();
-        for build in std::fs::read_dir(target.join("debug/build")).unwrap() {
-            let build = build.unwrap().path();
-            if !build
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("withbuild-")
-            {
-                continue;
-            }
-            let out = build.join("out");
-            if !out.is_dir() {
+        for out in common::unit_out_dirs(&target.join("debug")) {
+            if !out.to_string_lossy().contains("withbuild") {
                 continue;
             }
             for entry in walkdir(&out) {
-                if entry.is_file() {
-                    found.push((
-                        entry.strip_prefix(&out).unwrap().display().to_string(),
-                        std::fs::read_to_string(&entry).unwrap(),
-                    ));
+                if !entry.is_file() {
+                    continue;
                 }
+                let relative = entry.strip_prefix(&out).unwrap();
+                if relative != Path::new("gen.rs") && relative != Path::new("nested/marker.txt") {
+                    continue;
+                }
+                found.push((
+                    relative.display().to_string(),
+                    std::fs::read_to_string(&entry).unwrap(),
+                ));
             }
         }
         found.sort();
@@ -1055,10 +1050,8 @@ fn bundled_c_library_scripts_hit_in_another_target_directory() {
             &[],
         ));
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let build = target.join("debug/build");
-        let out_dir = std::fs::read_dir(&build)
-            .unwrap()
-            .map(|entry| entry.unwrap().path().join("out"))
+        let out_dir = common::unit_out_dirs(&target.join("debug"))
+            .into_iter()
             .find(|out| out.join("lib/pkgconfig/bundled.pc").is_file())
             .expect("the bundled OUT_DIR");
         assert!(

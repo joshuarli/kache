@@ -51,7 +51,7 @@ fn ignored_override_warnings_use_only_client_keys_and_never_their_values() {
     };
     let empty = invocation(Vec::new());
     let left = invocation(vec![("KACHE_CACHE_DIR", "private-client-cache")]);
-    let right = invocation(vec![("KACHE_PLANNER_TOKEN", "private-planner-token")]);
+    let right = invocation(vec![("KACHE_KEY_SALT", "private-key-salt")]);
     let warnings = Warnings(Arc::new(Mutex::new(Vec::new())));
     tracing::subscriber::with_default(warnings.clone(), || {
         warn_ignored_env_overrides_for(&empty);
@@ -61,88 +61,12 @@ fn ignored_override_warnings_use_only_client_keys_and_never_their_values() {
     let messages = warnings.0.lock().unwrap();
     assert_eq!(messages.len(), 2, "{messages:?}");
     assert!(messages[0].contains("KACHE_CACHE_DIR"));
-    assert!(!messages[0].contains("KACHE_PLANNER_TOKEN"));
-    assert!(messages[1].contains("KACHE_PLANNER_TOKEN"));
+    assert!(!messages[0].contains("KACHE_KEY_SALT"));
+    assert!(messages[1].contains("KACHE_KEY_SALT"));
     assert!(!messages[1].contains("KACHE_CACHE_DIR"));
     assert!(messages.iter().all(|message| !message.contains("private-")));
 }
 
-#[test]
-fn invocation_boolean_policies_follow_each_clients_snapshot() {
-    type Policy = fn(&InvocationEnv, &Result<FileConfig>) -> bool;
-    let root = tempfile::tempdir().unwrap();
-    let invocation = |vars: Vec<(&str, &str)>| {
-        InvocationEnv::from_parts(
-            vars,
-            Some(root.path().to_owned()),
-            None,
-            root.path().to_owned(),
-        )
-    };
-    let policies: [(&str, &str, Policy, bool); 4] = [
-        (
-            "KACHE_REMOTE_READONLY",
-            "remote_readonly",
-            Config::remote_readonly_enabled_for,
-            false,
-        ),
-        (
-            "KACHE_MODIFIED_INPUT_GUARD",
-            "modified_input_guard",
-            Config::modified_input_guard_enabled_for,
-            false,
-        ),
-        (
-            "KACHE_AUTO_GC",
-            "auto_gc",
-            Config::auto_gc_enabled_for,
-            true,
-        ),
-        (
-            "KACHE_EXPLAIN_MISS",
-            "explain_miss",
-            Config::explain_miss_enabled_for,
-            false,
-        ),
-    ];
-    for (name, key, policy, default) in policies {
-        let absent = Ok(FileConfig::default());
-        assert_eq!(policy(&invocation(vec![]), &absent), default, "{name}");
-        for file_value in [false, true] {
-            let file = Ok(toml::from_str(&format!("[cache]\n{key} = {file_value}\n")).unwrap());
-            assert_eq!(policy(&invocation(vec![]), &file), file_value, "{name}");
-            for (value, expected) in [
-                ("1", true),
-                ("true", true),
-                ("TrUe", true),
-                ("0", false),
-                ("false", false),
-                ("FaLsE", false),
-                ("", default),
-                ("no", default),
-            ] {
-                let client = invocation(vec![(name, value)]);
-                assert_eq!(policy(&client, &file), expected, "{name}={value:?}");
-                let ignored = Ok(toml::from_str(&format!(
-                    "[cache]\n{key} = {file_value}\nignore_env = true\n"
-                ))
-                .unwrap());
-                assert_eq!(
-                    policy(&client, &ignored),
-                    file_value,
-                    "ignored {name}={value:?}"
-                );
-            }
-        }
-        std::thread::scope(|threads| {
-            for value in ["1", "0"] {
-                let client = invocation(vec![(name, value)]);
-                let absent = &absent;
-                threads.spawn(move || assert_eq!(policy(&client, absent), value == "1"));
-            }
-        });
-    }
-}
 
 #[test]
 fn global_config_path_uses_the_clients_home_and_config_override() {
@@ -801,238 +725,7 @@ fn min_store_compile_is_opt_in_and_obeys_env_precedence() {
     assert_eq!(Config::load().unwrap().min_store_compile_ms, 750);
 }
 
-#[test]
-fn remote_key_listing_defaults_to_on_only_for_a_filesystem_remote() {
-    let filesystem = RemoteConfig {
-        prefix: "artifacts".to_string(),
-        backend: RemoteBackendConfig::Filesystem(FilesystemRemoteConfig {
-            root: PathBuf::from("/cache"),
-            atomic_write_dir: PathBuf::from("/cache/.staging"),
-        }),
-    };
-    let s3 = RemoteConfig {
-        prefix: "artifacts".to_string(),
-        backend: RemoteBackendConfig::S3(S3RemoteConfig {
-            bucket: "bucket".to_string(),
-            endpoint: None,
-            region: "us-east-1".to_string(),
-            profile: None,
-            user_agent: None,
-        }),
-    };
-    assert!(default_remote_key_listing(Some(&filesystem)));
-    assert!(!default_remote_key_listing(Some(&s3)));
-    assert!(!default_remote_key_listing(None));
-}
 
-#[test]
-fn remote_key_listing_is_off_unless_the_file_or_env_turns_it_on() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&config_path);
-
-    std::fs::write(&config_path, "[cache]\n").unwrap();
-    {
-        let _listing = NamedEnvGuard::remove("KACHE_REMOTE_KEY_LISTING");
-        assert!(!Config::load().unwrap().remote_key_listing);
-    }
-
-    std::fs::write(&config_path, "[cache]\nremote_key_listing = true\n").unwrap();
-    {
-        let _listing = NamedEnvGuard::remove("KACHE_REMOTE_KEY_LISTING");
-        assert!(Config::load().unwrap().remote_key_listing);
-    }
-    {
-        let _listing = NamedEnvGuard::set("KACHE_REMOTE_KEY_LISTING", "0");
-        assert!(!Config::load().unwrap().remote_key_listing);
-    }
-
-    std::fs::write(&config_path, "[cache]\nremote_key_listing = false\n").unwrap();
-    {
-        let _listing = NamedEnvGuard::set("KACHE_REMOTE_KEY_LISTING", "1");
-        assert!(Config::load().unwrap().remote_key_listing);
-    }
-}
-
-#[test]
-fn prefetch_enabled_env_value_truth_table() {
-    assert!(!prefetch_enabled_from_env("0"));
-    assert!(!prefetch_enabled_from_env("false"));
-    assert!(!prefetch_enabled_from_env("FALSE"));
-    assert!(prefetch_enabled_from_env("1"));
-    assert!(prefetch_enabled_from_env("true"));
-    assert!(prefetch_enabled_from_env("yes"));
-    assert!(prefetch_enabled_from_env(""));
-}
-
-#[test]
-fn prefetch_controls_default_and_follow_file_then_env_precedence() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&config_path);
-
-    std::fs::write(
-        &config_path,
-        "[cache]
-",
-    )
-    .unwrap();
-    {
-        let _enabled = NamedEnvGuard::remove("KACHE_PREFETCH_ENABLED");
-        let _refresh = NamedEnvGuard::remove("KACHE_REMOTE_KEY_CACHE_REFRESH_SECS");
-        let config = Config::load().unwrap();
-        assert!(config.prefetch_enabled);
-        assert_eq!(config.remote_key_cache_refresh_secs, 60);
-    }
-
-    std::fs::write(
-        &config_path,
-        "[cache]
-prefetch_enabled = false
-remote_key_cache_refresh_secs = 900
-",
-    )
-    .unwrap();
-    {
-        let _enabled = NamedEnvGuard::remove("KACHE_PREFETCH_ENABLED");
-        let _refresh = NamedEnvGuard::remove("KACHE_REMOTE_KEY_CACHE_REFRESH_SECS");
-        let config = Config::load().unwrap();
-        assert!(!config.prefetch_enabled);
-        assert_eq!(config.remote_key_cache_refresh_secs, 900);
-    }
-
-    {
-        let _enabled = NamedEnvGuard::set("KACHE_PREFETCH_ENABLED", "true");
-        let _refresh = NamedEnvGuard::set("KACHE_REMOTE_KEY_CACHE_REFRESH_SECS", "0");
-        let config = Config::load().unwrap();
-        assert!(config.prefetch_enabled);
-        assert_eq!(config.remote_key_cache_refresh_secs, 0);
-    }
-}
-
-#[test]
-fn remote_resilience_knobs_default_and_follow_file_then_env_precedence() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    std::fs::write(&config_path, "[cache]\n").unwrap();
-    let _config = set_kache_config_for_test(&config_path);
-
-    {
-        let _restore = NamedEnvGuard::remove("KACHE_REMOTE_RESTORE_TIMEOUT_SECS");
-        let _negative = NamedEnvGuard::remove("KACHE_REMOTE_NEGATIVE_TTL_SECS");
-        let config = Config::load().unwrap();
-        assert_eq!(
-            config.remote_restore_timeout_secs,
-            DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS
-        );
-        assert_eq!(
-            config.remote_negative_ttl_secs,
-            DEFAULT_REMOTE_NEGATIVE_TTL_SECS
-        );
-    }
-
-    std::fs::write(
-        &config_path,
-        "[cache]
-remote_restore_timeout_secs = 42
-remote_negative_ttl_secs = 90
-",
-    )
-    .unwrap();
-    {
-        let _restore = NamedEnvGuard::remove("KACHE_REMOTE_RESTORE_TIMEOUT_SECS");
-        let _negative = NamedEnvGuard::remove("KACHE_REMOTE_NEGATIVE_TTL_SECS");
-        let config = Config::load().unwrap();
-        assert_eq!(config.remote_restore_timeout_secs, 42);
-        assert_eq!(config.remote_negative_ttl_secs, 90);
-    }
-
-    // Env wins over the file; 0 disables the daemon operation deadline and
-    // the negative cache (synchronous demand still has its legacy cap).
-    {
-        let _restore = NamedEnvGuard::set("KACHE_REMOTE_RESTORE_TIMEOUT_SECS", "0");
-        let _negative = NamedEnvGuard::set("KACHE_REMOTE_NEGATIVE_TTL_SECS", "0");
-        let config = Config::load().unwrap();
-        assert_eq!(config.remote_restore_timeout_secs, 0);
-        assert_eq!(config.remote_negative_ttl_secs, 0);
-    }
-
-    std::fs::write(
-        &config_path,
-        "[cache]
-ignore_env = true
-remote_restore_timeout_secs = 42
-remote_negative_ttl_secs = 90
-",
-    )
-    .unwrap();
-    {
-        let _restore = NamedEnvGuard::set("KACHE_REMOTE_RESTORE_TIMEOUT_SECS", "7");
-        let _negative = NamedEnvGuard::set("KACHE_REMOTE_NEGATIVE_TTL_SECS", "8");
-        let config = Config::load().unwrap();
-        assert_eq!(config.remote_restore_timeout_secs, 42);
-        assert_eq!(config.remote_negative_ttl_secs, 90);
-    }
-    assert!(IGNORE_ENV_GATED_VARS.contains(&"KACHE_REMOTE_RESTORE_TIMEOUT_SECS"));
-    assert!(IGNORE_ENV_GATED_VARS.contains(&"KACHE_REMOTE_NEGATIVE_TTL_SECS"));
-}
-
-#[test]
-fn ignore_env_pins_prefetch_controls_to_the_file() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    std::fs::write(
-        &config_path,
-        "[cache]
-ignore_env = true
-prefetch_enabled = false
-remote_key_cache_refresh_secs = 900
-",
-    )
-    .unwrap();
-    let _config = set_kache_config_for_test(&config_path);
-    let _enabled = NamedEnvGuard::set("KACHE_PREFETCH_ENABLED", "true");
-    let _refresh = NamedEnvGuard::set("KACHE_REMOTE_KEY_CACHE_REFRESH_SECS", "1");
-
-    let config = Config::load().unwrap();
-    assert!(!config.prefetch_enabled);
-    assert_eq!(config.remote_key_cache_refresh_secs, 900);
-}
-
-#[test]
-fn remote_prefix_is_backend_neutral() {
-    assert_eq!(
-        normalize_remote_prefix("artifacts/team").unwrap(),
-        "artifacts/team"
-    );
-    // Shapes the pre-OpenDAL loader accepted normalize instead of failing the
-    // build. `""` is legitimate ("store at the root") and stays empty.
-    for (legacy, expected) in [
-        ("/artifacts", "artifacts"),
-        ("artifacts/", "artifacts"),
-        ("artifacts//team", "artifacts/team"),
-        ("  artifacts/team  ", "artifacts/team"),
-        ("/", ""),
-        ("", ""),
-    ] {
-        assert_eq!(
-            normalize_remote_prefix(legacy).unwrap(),
-            expected,
-            "{legacy:?} must normalize, not fail"
-        );
-    }
-    // Traversal shapes have no defensible normalization.
-    for invalid in [r"artifacts\team", r"..\escape", "artifacts/../team", ".."] {
-        assert!(
-            normalize_remote_prefix(invalid).is_err(),
-            "{invalid:?} must be rejected"
-        );
-    }
-}
 
 #[test]
 fn test_shellexpand() {
@@ -1405,29 +1098,6 @@ fn a_missing_host_file_changes_nothing() {
     );
 }
 
-/// The CI shape: kache-action's `KACHE_CONFIG` file sets only the remote,
-/// and the host's keys still apply alongside it.
-#[test]
-fn host_keys_apply_under_a_kache_config_that_does_not_set_them() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let (host, chosen) = write_host_and_chosen(
-        dir.path(),
-        "[cache]\ninput_predictions = true\nlocal_max_size = \"50GiB\"\n",
-        Some("[cache.remote]\ntype = \"s3\"\nbucket = \"ci\"\n"),
-    );
-    let _host = set_host_config_for_test(&host);
-    let _chosen = set_kache_config_for_test(&chosen);
-
-    let cache = Config::load_file_config().unwrap().cache.unwrap();
-    assert_eq!(cache.input_predictions, Some(true));
-    assert_eq!(cache.local_max_size.as_deref(), Some("50GiB"));
-    assert_eq!(
-        cache.remote.unwrap().bucket.as_deref(),
-        Some("ci"),
-        "the chosen file's nested table survives the merge"
-    );
-}
 
 #[test]
 fn the_chosen_file_beats_the_host_key_by_key() {
@@ -1475,7 +1145,7 @@ fn the_environment_beats_both_files() {
 }
 
 /// A CI host turns session recording on once, in the host layer, under a
-/// kache-action `KACHE_CONFIG` that only names the remote.
+/// chosen file that sets other cache keys and leaves recording unset.
 #[test]
 fn record_sessions_comes_from_the_host_layer() {
     let _lock = config_path_lock();
@@ -1483,7 +1153,7 @@ fn record_sessions_comes_from_the_host_layer() {
     let (host, chosen) = write_host_and_chosen(
         dir.path(),
         "[cache]\nrecord_sessions = true\n",
-        Some("[cache.remote]\ntype = \"s3\"\nbucket = \"ci\"\n"),
+        Some("[cache]\nheartbeat_secs = 30\n"),
     );
     let _host = set_host_config_for_test(&host);
     let _chosen = set_kache_config_for_test(&chosen);
@@ -1527,30 +1197,6 @@ fn a_removed_local_hit_daemon_key_is_ignored() {
     assert!(Config::record_sessions_enabled(&file), "host value");
 }
 
-/// A remote is one description: mixing a host `path` into a project's
-/// `type = "s3"` would configure a remote neither file named.
-#[test]
-fn a_chosen_remote_replaces_the_host_remote_whole() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let (host, chosen) = write_host_and_chosen(
-        dir.path(),
-        "[cache.remote]\ntype = \"filesystem\"\npath = \"/mnt/kache\"\n",
-        Some("[cache.remote]\ntype = \"s3\"\nbucket = \"ci\"\n"),
-    );
-    let _host = set_host_config_for_test(&host);
-    let _chosen = set_kache_config_for_test(&chosen);
-
-    let remote = Config::load_file_config()
-        .unwrap()
-        .cache
-        .unwrap()
-        .remote
-        .unwrap();
-    assert_eq!(remote._type.as_deref(), Some("s3"));
-    assert_eq!(remote.bucket.as_deref(), Some("ci"));
-    assert_eq!(remote.path, None, "no host remote key may leak in");
-}
 
 /// A project that lists its volume stores means exactly those; a host
 /// shard on another volume must not join them.
@@ -1578,93 +1224,7 @@ fn a_chosen_volume_set_replaces_the_host_volumes_whole() {
     );
 }
 
-/// A job that sets only `KACHE_PLANNER_ENDPOINT`, with no
-/// `[cache.planner]` in its file, must not get the host planner's token:
-/// kache would send it to the endpoint the job chose.
-#[test]
-fn an_environment_planner_never_gets_the_host_planner_token() {
-    let _lock = config_path_lock();
-    let _unset: Vec<_> = PLANNER_ENV_VARS
-        .iter()
-        .chain(["KACHE_LOCAL_ONLY"].iter())
-        .map(|name| set_env_for_test(name, None))
-        .collect();
-    let host_planner = "[cache.planner]\nendpoint = \"http://host-planner\"\n\
-                            token = \"host-secret\"\ntimeout_ms = 1234\n";
-    let job_endpoint = std::ffi::OsStr::new("http://job-planner");
 
-    for chosen_content in [Some("[cache]\n"), None] {
-        let dir = tempfile::tempdir().unwrap();
-        let (host, chosen) = write_host_and_chosen(dir.path(), host_planner, chosen_content);
-        let _host = set_host_config_for_test(&host);
-        let _chosen = set_kache_config_for_test(&chosen);
-
-        let planner = Config::load_planner_config().expect("the host planner applies");
-        assert_eq!(planner.token.as_deref(), Some("host-secret"));
-        assert_eq!(planner.timeout_ms, 1234);
-
-        let _endpoint = set_env_for_test("KACHE_PLANNER_ENDPOINT", Some(job_endpoint));
-        let planner = Config::load_planner_config().expect("the environment's planner");
-        assert_eq!(planner.endpoint, "http://job-planner");
-        assert_eq!(
-            planner.token, None,
-            "the host token must not reach a job-chosen endpoint ({chosen_content:?})"
-        );
-        assert_eq!(planner.timeout_ms, DEFAULT_PLANNER_TIMEOUT_MS);
-    }
-
-    // A planner the chosen file declares keeps per-field env overrides.
-    let dir = tempfile::tempdir().unwrap();
-    let (host, chosen) = write_host_and_chosen(
-        dir.path(),
-        host_planner,
-        Some("[cache.planner]\nendpoint = \"http://project\"\ntoken = \"project-secret\"\n"),
-    );
-    let _host = set_host_config_for_test(&host);
-    let _chosen = set_kache_config_for_test(&chosen);
-    let _endpoint = set_env_for_test("KACHE_PLANNER_ENDPOINT", Some(job_endpoint));
-    let planner = Config::load_planner_config().expect("the chosen planner");
-    assert_eq!(planner.endpoint, "http://job-planner");
-    assert_eq!(planner.token.as_deref(), Some("project-secret"));
-}
-
-/// A job whose remote lives only in its environment (`KACHE_S3_BUCKET`,
-/// no `[cache.remote]` in its file) keeps that remote on a machine whose
-/// host file declares a filesystem remote.
-#[test]
-fn an_environment_remote_beats_a_host_remote() {
-    let _lock = config_path_lock();
-    let _unset: Vec<_> = REMOTE_ENV_VARS
-        .iter()
-        .map(|name| set_env_for_test(name, None))
-        .collect();
-    for chosen_content in [Some("[cache]\nlocal_max_size = \"10GiB\"\n"), None] {
-        let dir = tempfile::tempdir().unwrap();
-        let host_content = format!(
-            "[cache.remote]\ntype = \"filesystem\"\npath = {:?}\n",
-            dir.path().join("remote")
-        );
-        let (host, chosen) = write_host_and_chosen(dir.path(), &host_content, chosen_content);
-        let _host = set_host_config_for_test(&host);
-        let _chosen = set_kache_config_for_test(&chosen);
-        let backend = || {
-            Config::load_remote_config(&Config::load_file_config())
-                .unwrap()
-                .expect("a remote is configured")
-                .backend
-        };
-
-        assert!(
-            matches!(backend(), RemoteBackendConfig::Filesystem(_)),
-            "with no S3 environment the host remote applies ({chosen_content:?})"
-        );
-        let _bucket = set_env_for_test("KACHE_S3_BUCKET", Some(std::ffi::OsStr::new("ci")));
-        let RemoteBackendConfig::S3(s3) = backend() else {
-            panic!("the environment's S3 remote must win ({chosen_content:?})");
-        };
-        assert_eq!(s3.bucket, "ci");
-    }
-}
 
 /// A host path that exists but cannot be read is reported, not mistaken
 /// for a machine without a host file.
@@ -1822,18 +1382,12 @@ fn host_status_names_what_overrides_each_key() {
     let dir = tempfile::tempdir().unwrap();
     let (host, chosen) = write_host_and_chosen(
         dir.path(),
-        "[cache]\ninput_predictions = true\nlocal_max_size = \"50GiB\"\nlocal_only = true\n\n\
-             [cache.remote]\ntype = \"s3\"\nbucket = \"host\"\n",
+        "[cache]\ninput_predictions = true\nlocal_max_size = \"50GiB\"\n",
         Some("[cache]\nlocal_max_size = \"10GiB\"\n"),
     );
     let _host = set_host_config_for_test(&host);
     let _chosen = set_kache_config_for_test(&chosen);
     let _predictions = set_env_for_test("KACHE_INPUT_PREDICTIONS", Some(std::ffi::OsStr::new("1")));
-    let _local_only = set_env_for_test("KACHE_LOCAL_ONLY", None);
-    let _remote: Vec<_> = REMOTE_ENV_VARS
-        .iter()
-        .map(|name| set_env_for_test(name, None))
-        .collect();
 
     let HostConfigStatus::Present { keys, .. } = host_config_status() else {
         panic!("the host file must be present");
@@ -1853,9 +1407,7 @@ fn host_status_names_what_overrides_each_key() {
         source("cache.local_max_size"),
         HostKeySource::ChosenFile(normalize_config_path(chosen))
     );
-    assert_eq!(source("cache.local_only"), HostKeySource::Host);
-    assert_eq!(source("cache.remote"), HostKeySource::Host);
-    assert_eq!(keys.len(), 4, "a replaced-whole table is listed once");
+    assert_eq!(keys.len(), 2, "a replaced-whole table is listed once");
 }
 
 /// Doctor names the variable config resolution reads, which for many keys
@@ -1868,9 +1420,7 @@ fn host_status_names_the_variable_config_reads() {
         dir.path(),
         "[cache]\nlocal_max_size = \"50GiB\"\nlocal_store = \"/srv/kache\"\n\
              daemon_idle_timeout_secs = 60\n\n\
-             [cc]\nextra_allowlist_flags = [\"-x\"]\n\n\
-             [cache.planner]\nendpoint = \"http://planner\"\n\n\
-             [cache.remote]\ntype = \"s3\"\nbucket = \"host\"\n",
+             [cc]\nextra_allowlist_flags = [\"-x\"]\n",
         Some("[cache]\n"),
     );
     let _host = set_host_config_for_test(&host);
@@ -1883,8 +1433,6 @@ fn host_status_names_the_variable_config_reads() {
             "KACHE_DAEMON_IDLE_TIMEOUT",
         ),
         ("cc.extra_allowlist_flags", "KACHE_CC_EXTRA_ALLOWLIST_FLAGS"),
-        ("cache.planner", "KACHE_PLANNER_TOKEN"),
-        ("cache.remote", "KACHE_S3_REGION"),
     ];
     let _unset: Vec<_> = ENV_FILE_KEYS
         .iter()
@@ -1952,23 +1500,6 @@ fn every_env_var_config_reads_maps_to_a_config_key() {
         gated, mapped,
         "ignore_env gates exactly the file-backed variables"
     );
-    // KACHE_PULL_REQUEST_PREFIX modifies a remote but does not describe one,
-    // so it must not make the host's [cache.remote] table yield to the
-    // environment.
-    let remote: Vec<&str> = ENV_FILE_KEYS
-        .iter()
-        .filter(|(var, key)| {
-            key.starts_with("cache.remote.") && *var != "KACHE_PULL_REQUEST_PREFIX"
-        })
-        .map(|(var, _)| *var)
-        .collect();
-    assert_eq!(remote, REMOTE_ENV_VARS);
-    let planner: Vec<&str> = ENV_FILE_KEYS
-        .iter()
-        .filter(|(_, key)| key.starts_with("cache.planner."))
-        .map(|(var, _)| *var)
-        .collect();
-    assert_eq!(planner, PLANNER_ENV_VARS);
 }
 
 /// Each key in [`ENV_FILE_KEYS`] is one the config file has: a value set
@@ -2708,8 +2239,6 @@ fn test_file_config_roundtrip() {
             bypass_env: None,
             bypass_argv: None,
             bypass_crates: None,
-            local_only: None,
-            remote_readonly: None,
             volumes: None,
             modified_input_guard: None,
             input_predictions: None,
@@ -2746,7 +2275,6 @@ fn test_file_config_roundtrip() {
             local_store: Some("~/my/cache".to_string()),
             runtime_dir: Some("~/my/runtime".to_string()),
             local_max_size: Some("50GiB".to_string()),
-            planner: None,
             cache_executables: Some(true),
             cache_cc_links: None,
             trust_codegen_backends: None,
@@ -2761,33 +2289,9 @@ fn test_file_config_roundtrip() {
             event_log_max_size: Some("10MiB".to_string()),
             event_log_keep_lines: Some(500),
             compression_level: Some(3),
-            s3_concurrency: Some(8),
-            prefetch_enabled: None,
-            remote_key_listing: None,
-            remote_key_cache_refresh_secs: None,
-            prefetch_max_keys: None,
-            prefetch_max_bytes: None,
-            prefetch_deadline_secs: None,
             min_store_compile_ms: None,
             gc_max_age_hours: None,
             daemon_idle_timeout_secs: None,
-            s3_pool_idle_secs: None,
-            remote_restore_timeout_secs: None,
-            remote_negative_ttl_secs: None,
-            remote: Some(RemoteFileConfig {
-                _type: Some("s3".to_string()),
-                bucket: Some("my-bucket".to_string()),
-                endpoint: Some("https://s3.example.com".to_string()),
-                region: Some("eu-west-1".to_string()),
-                prefix: Some("my-prefix".to_string()),
-                profile: None,
-                user_agent: None,
-                path: None,
-                atomic_write_dir: None,
-                pull_request_prefix: None,
-                repository: None,
-                insecure: None,
-            }),
             scheduler: None,
         }),
     };
@@ -2817,37 +2321,6 @@ fn test_file_config_roundtrip() {
         deserialized.cache.as_ref().unwrap().adaptive_incremental,
         Some(false)
     );
-    assert_eq!(
-        deserialized
-            .cache
-            .as_ref()
-            .unwrap()
-            .remote
-            .as_ref()
-            .unwrap()
-            .bucket
-            .as_deref(),
-        Some("my-bucket")
-    );
-}
-
-#[test]
-fn test_file_config_empty_remote_omitted() {
-    let config = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            local_store: Some("~/cache".to_string()),
-            remote: Some(RemoteFileConfig::default()),
-            ..Default::default()
-        }),
-    };
-    let serialized = toml::to_string_pretty(&config).unwrap();
-    // Empty remote section should still serialize (just with empty table)
-    // but all None fields should be omitted thanks to skip_serializing_if
-    assert!(!serialized.contains("bucket"));
-    assert!(!serialized.contains("endpoint"));
 }
 
 #[test]
@@ -3363,9 +2836,6 @@ fn test_config_store_dir() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -3404,8 +2874,6 @@ fn test_config_store_dir() {
         runtime_dir: PathBuf::from("/tmp/kache"),
         socket_path_override: None,
         max_size: 1024,
-        remote: None,
-        remote_error: None,
         disabled: false,
         cache_executables: false,
         cache_cc_links: false,
@@ -3420,19 +2888,9 @@ fn test_config_store_dir() {
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     };
     assert_eq!(config.store_dir(), PathBuf::from("/tmp/kache/store"));
     assert_eq!(
@@ -3448,9 +2906,6 @@ fn test_config_index_db_path() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -3489,8 +2944,6 @@ fn test_config_index_db_path() {
         runtime_dir: PathBuf::from("/tmp/kache"),
         socket_path_override: None,
         max_size: 1024,
-        remote: None,
-        remote_error: None,
         disabled: false,
         cache_executables: false,
         cache_cc_links: false,
@@ -3505,19 +2958,9 @@ fn test_config_index_db_path() {
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     };
     assert_eq!(config.index_db_path(), PathBuf::from("/tmp/kache/index.db"));
 }
@@ -3529,9 +2972,6 @@ fn test_config_event_log_path() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -3570,8 +3010,6 @@ fn test_config_event_log_path() {
         runtime_dir: PathBuf::from("/tmp/kache-runtime"),
         socket_path_override: None,
         max_size: 1024,
-        remote: None,
-        remote_error: None,
         disabled: false,
         cache_executables: false,
         cache_cc_links: false,
@@ -3586,19 +3024,9 @@ fn test_config_event_log_path() {
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     };
     assert_eq!(
         config.event_log_path(),
@@ -3629,9 +3057,6 @@ fn test_config_socket_path() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        local_only: false,
-        remote_readonly: false,
-        pull_request_prefix: None,
         modified_input_guard: false,
         input_predictions: false,
         record_sessions: false,
@@ -3670,8 +3095,6 @@ fn test_config_socket_path() {
         runtime_dir: PathBuf::from("/tmp/kache-runtime"),
         socket_path_override: None,
         max_size: 1024,
-        remote: None,
-        remote_error: None,
         disabled: false,
         cache_executables: false,
         cache_cc_links: false,
@@ -3686,19 +3109,9 @@ fn test_config_socket_path() {
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
-        s3_concurrency: 16,
-        prefetch_enabled: DEFAULT_PREFETCH_ENABLED,
-        remote_key_listing: false,
-        remote_key_cache_refresh_secs: DEFAULT_REMOTE_KEY_CACHE_REFRESH_SECS,
-        prefetch_max_keys: DEFAULT_PREFETCH_MAX_KEYS,
-        prefetch_max_bytes: DEFAULT_PREFETCH_MAX_BYTES,
-        prefetch_deadline_secs: DEFAULT_PREFETCH_DEADLINE_SECS,
         min_store_compile_ms: DEFAULT_MIN_STORE_COMPILE_MS,
         gc_max_age_hours: DEFAULT_GC_MAX_AGE_HOURS,
         daemon_idle_timeout_secs: DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
-        s3_pool_idle_secs: DEFAULT_S3_POOL_IDLE_SECS,
-        remote_restore_timeout_secs: DEFAULT_REMOTE_RESTORE_TIMEOUT_SECS,
-        remote_negative_ttl_secs: DEFAULT_REMOTE_NEGATIVE_TTL_SECS,
     };
     assert_eq!(
         config.socket_path(),
@@ -4266,36 +3679,6 @@ fn test_shellexpand_bare_tilde() {
     }
 }
 
-/// Clear an env var for the duration of a test, restoring it on drop.
-///
-/// Tests that assert on *file* config must not inherit ambient `KACHE_*`
-/// values: CI runs under kache-action, which exports `KACHE_S3_PREFIX` and
-/// friends, and env overrides win over the file.
-fn remove_env_var_for_test(key: &'static str) -> GenericEnvGuard {
-    let previous = std::env::var_os(key);
-    unsafe {
-        std::env::remove_var(key);
-    }
-    GenericEnvGuard { key, previous }
-}
-
-const S3_ENV_VARS: [&str; 6] = [
-    "KACHE_S3_BUCKET",
-    "KACHE_S3_ENDPOINT",
-    "KACHE_S3_REGION",
-    "KACHE_S3_PREFIX",
-    "KACHE_S3_PROFILE",
-    "KACHE_S3_USER_AGENT",
-];
-
-/// Clear every `KACHE_S3_*` override, restoring them on drop.
-fn isolate_s3_env() -> Vec<GenericEnvGuard> {
-    S3_ENV_VARS
-        .into_iter()
-        .map(remove_env_var_for_test)
-        .collect()
-}
-
 struct GenericEnvGuard {
     key: &'static str,
     previous: Option<OsString>,
@@ -4363,8 +3746,6 @@ fn test_save_and_load_file_config() {
             bypass_env: None,
             bypass_argv: None,
             bypass_crates: None,
-            local_only: None,
-            remote_readonly: None,
             volumes: None,
             modified_input_guard: None,
             input_predictions: None,
@@ -4401,7 +3782,6 @@ fn test_save_and_load_file_config() {
             local_store: Some("/tmp/my-cache".to_string()),
             runtime_dir: Some("/tmp/my-runtime".to_string()),
             local_max_size: Some("10GiB".to_string()),
-            planner: None,
             cache_executables: Some(true),
             cache_cc_links: None,
             trust_codegen_backends: None,
@@ -4416,20 +3796,9 @@ fn test_save_and_load_file_config() {
             event_log_max_size: None,
             event_log_keep_lines: None,
             compression_level: Some(5),
-            s3_concurrency: None,
-            prefetch_enabled: None,
-            remote_key_listing: None,
-            remote_key_cache_refresh_secs: None,
-            prefetch_max_keys: None,
-            prefetch_max_bytes: None,
-            prefetch_deadline_secs: None,
             min_store_compile_ms: None,
             gc_max_age_hours: None,
             daemon_idle_timeout_secs: None,
-            s3_pool_idle_secs: None,
-            remote_restore_timeout_secs: None,
-            remote_negative_ttl_secs: None,
-            remote: None,
             scheduler: None,
         }),
     };
@@ -4505,8 +3874,8 @@ local_max_size = "40GiB" # keep it small
 retired_setting = true
 exclude = ["vendor/**"]
 
-[cache.remote]
-# legacy spelling
+[cache.retired]
+# unknown table
 user-agent = "old/1.0"
 bucket = "b"
 "#;
@@ -4517,7 +3886,6 @@ bucket = "b"
     cache.local_max_size = Some("55GiB".into());
     cache.exclude = None;
     cache.fallback = Some("custom".into());
-    cache.remote.as_mut().unwrap().user_agent = Some("new/2.0".into());
 
     Config::update_file_config_at(&path, &before, &after).unwrap();
 
@@ -4527,9 +3895,9 @@ local_max_size = "55GiB" # keep it small
 retired_setting = true
 fallback = "custom"
 
-[cache.remote]
-# legacy spelling
-user-agent = "new/2.0"
+[cache.retired]
+# unknown table
+user-agent = "old/1.0"
 bucket = "b"
 "#;
     assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
@@ -4618,162 +3986,10 @@ fn unusable_config_file_names_the_file_and_the_error() {
     assert!(reason.contains("line 1"), "{reason}");
 }
 
-/// #221: `[cache] local_only` must suppress BOTH the remote and the
-/// planner, even when a bucket + endpoint are configured.
-#[test]
-fn local_only_via_file_suppresses_remote_and_planner() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("kache/config.toml");
-    let _env_guard = set_kache_config_for_test(&config_path);
 
-    let file = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            local_only: Some(true),
-            remote: Some(RemoteFileConfig {
-                bucket: Some("hermetic-bucket".to_string()),
-                ..Default::default()
-            }),
-            planner: Some(PlannerFileConfig {
-                endpoint: Some("https://planner.example.com".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-    };
-    Config::save_file_config_to(&file, &config_path).unwrap();
 
-    let config = Config::load().unwrap();
-    assert!(config.local_only, "local_only must be on");
-    assert!(
-        config.remote.is_none(),
-        "remote must be suppressed under local-only, got {:?}",
-        config.remote
-    );
-    assert!(
-        Config::load_planner_config().is_none(),
-        "planner must be suppressed under local-only"
-    );
-}
 
-#[test]
-fn pull_request_ci_forces_remote_readonly() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("kache/config.toml");
-    let _cfg = set_kache_config_for_test(&config_path);
-    let _gha = NamedEnvGuard::set("GITHUB_ACTIONS", "true");
-    let _event = NamedEnvGuard::set("GITHUB_EVENT_NAME", "pull_request");
-    let _ref_type = NamedEnvGuard::set("GITHUB_REF_TYPE", "branch");
-    let _protected = NamedEnvGuard::set("GITHUB_REF_PROTECTED", "false");
-    let _gitlab = NamedEnvGuard::remove("GITLAB_CI");
-    let _explicit = NamedEnvGuard::remove("KACHE_REMOTE_READONLY");
 
-    let config = Config::load().unwrap();
-    assert!(
-        config.remote_readonly,
-        "untrusted GitHub Actions must suppress remote writes"
-    );
-}
-
-#[test]
-fn remote_readonly_zero_does_not_disable_ci_policy() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("kache/config.toml");
-    let _cfg = set_kache_config_for_test(&config_path);
-    let _gha = NamedEnvGuard::set("GITHUB_ACTIONS", "true");
-    let _event = NamedEnvGuard::set("GITHUB_EVENT_NAME", "pull_request");
-    let _ref_type = NamedEnvGuard::set("GITHUB_REF_TYPE", "branch");
-    let _protected = NamedEnvGuard::set("GITHUB_REF_PROTECTED", "false");
-    let _gitlab = NamedEnvGuard::remove("GITLAB_CI");
-    let _explicit = NamedEnvGuard::set("KACHE_REMOTE_READONLY", "0");
-
-    let config = Config::load().unwrap();
-    assert!(
-        config.remote_readonly,
-        "KACHE_REMOTE_READONLY=0 must not re-enable writes on a pull request"
-    );
-}
-
-#[test]
-fn protected_branch_push_keeps_configured_writable() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("kache/config.toml");
-    let _cfg = set_kache_config_for_test(&config_path);
-    let _gha = NamedEnvGuard::set("GITHUB_ACTIONS", "true");
-    let _event = NamedEnvGuard::set("GITHUB_EVENT_NAME", "push");
-    let _ref_type = NamedEnvGuard::set("GITHUB_REF_TYPE", "branch");
-    let _protected = NamedEnvGuard::set("GITHUB_REF_PROTECTED", "true");
-    let _gitlab = NamedEnvGuard::remove("GITLAB_CI");
-    let _explicit = NamedEnvGuard::remove("KACHE_REMOTE_READONLY");
-
-    let config = Config::load().unwrap();
-    assert!(
-        !config.remote_readonly,
-        "a protected-branch push must keep the configured write mode"
-    );
-}
-
-#[test]
-fn local_shell_keeps_configured_writable() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("kache/config.toml");
-    let _cfg = set_kache_config_for_test(&config_path);
-    let _gha = NamedEnvGuard::remove("GITHUB_ACTIONS");
-    let _gitlab = NamedEnvGuard::remove("GITLAB_CI");
-    let _explicit = NamedEnvGuard::remove("KACHE_REMOTE_READONLY");
-
-    let config = Config::load().unwrap();
-    assert!(
-        !config.remote_readonly,
-        "a local shell must not be forced read-only"
-    );
-}
-
-/// #221: the `KACHE_LOCAL_ONLY` env var wins over the file — `=0` forces it
-/// off even when the file enables it, `=1` forces it on.
-#[test]
-fn local_only_env_wins_over_file() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("kache/config.toml");
-    let _env_guard = set_kache_config_for_test(&config_path);
-
-    let file = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            local_only: Some(true),
-            ..Default::default()
-        }),
-    };
-    Config::save_file_config_to(&file, &config_path).unwrap();
-
-    let prev = std::env::var_os("KACHE_LOCAL_ONLY");
-    unsafe { std::env::set_var("KACHE_LOCAL_ONLY", "0") };
-    let off = Config::load().unwrap().local_only;
-    unsafe { std::env::set_var("KACHE_LOCAL_ONLY", "1") };
-    let on = Config::load().unwrap().local_only;
-    unsafe {
-        match prev {
-            Some(v) => std::env::set_var("KACHE_LOCAL_ONLY", v),
-            None => std::env::remove_var("KACHE_LOCAL_ONLY"),
-        }
-    }
-
-    assert!(
-        !off,
-        "KACHE_LOCAL_ONLY=0 must force local-only OFF despite file=true"
-    );
-    assert!(on, "KACHE_LOCAL_ONLY=1 must force local-only ON");
-}
 
 /// #551: storage-layout advisories default ON; `[cache]
 /// storage_layout_advice = false` is the explicit acknowledgement that
@@ -4963,497 +4179,6 @@ fn test_lease_comes_from_the_environment_even_with_ignore_env() {
 }
 
 #[test]
-fn test_remote_file_config_with_profile() {
-    let config = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            planner: None,
-            remote: Some(RemoteFileConfig {
-                _type: Some("s3".to_string()),
-                bucket: Some("mybucket".to_string()),
-                region: Some("eu-west-1".to_string()),
-                profile: Some("ceph".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-    };
-    let serialized = toml::to_string_pretty(&config).unwrap();
-    assert!(serialized.contains("profile = \"ceph\""));
-
-    let deserialized: FileConfig = toml::from_str(&serialized).unwrap();
-    assert_eq!(
-        deserialized
-            .cache
-            .unwrap()
-            .remote
-            .unwrap()
-            .profile
-            .as_deref(),
-        Some("ceph")
-    );
-}
-
-#[test]
-fn test_load_remote_config_from_file_fields() {
-    // Serialize the env-vs-file precedence: with KACHE_S3_* unset, all remote
-    // fields come from the file (covers load_remote_config's file-fallback).
-    let _guard = config_path_lock();
-    for v in [
-        "KACHE_S3_BUCKET",
-        "KACHE_S3_ENDPOINT",
-        "KACHE_S3_REGION",
-        "KACHE_S3_PREFIX",
-        "KACHE_S3_PROFILE",
-        "KACHE_S3_USER_AGENT",
-    ] {
-        // SAFETY: serialized by config_path_lock; restored implicitly by
-        // being absent (these are not set elsewhere in the test suite).
-        unsafe { std::env::remove_var(v) };
-    }
-
-    let file = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            planner: None,
-            remote: Some(RemoteFileConfig {
-                _type: Some("s3".to_string()),
-                bucket: Some("filebucket".to_string()),
-                endpoint: Some("https://s3.example.com".to_string()),
-                region: Some("eu-west-2".to_string()),
-                prefix: Some("myprefix".to_string()),
-                profile: Some("  ceph  ".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-    };
-
-    let remote = Config::load_remote_config(&Ok(file))
-        .expect("valid remote config")
-        .expect("remote from file");
-    assert_eq!(remote.prefix, "myprefix");
-    let RemoteBackendConfig::S3(s3) = remote.backend else {
-        panic!("expected S3 remote");
-    };
-    assert_eq!(s3.bucket, "filebucket");
-    assert_eq!(s3.endpoint.as_deref(), Some("https://s3.example.com"));
-    assert_eq!(s3.region, "eu-west-2");
-    assert_eq!(s3.profile.as_deref(), Some("ceph")); // trimmed
-
-    // No bucket anywhere -> None.
-    let empty = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            planner: None,
-            remote: None,
-            ..Default::default()
-        }),
-    };
-    assert!(
-        Config::load_remote_config(&Ok(empty))
-            .expect("empty config is valid")
-            .is_none()
-    );
-}
-
-#[test]
-fn filesystem_remote_loads_without_a_bucket_and_defaults_atomic_dir() {
-    let _guard = config_path_lock();
-    let root = tempfile::tempdir().unwrap();
-    let file = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            remote: Some(RemoteFileConfig {
-                _type: Some("filesystem".to_string()),
-                path: Some(root.path().to_string_lossy().into_owned()),
-                prefix: Some("shared".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-    };
-
-    let remote = Config::load_remote_config(&Ok(file))
-        .expect("valid filesystem config")
-        .expect("filesystem remote");
-    assert_eq!(remote.prefix, "shared");
-    let RemoteBackendConfig::Filesystem(fs) = remote.backend else {
-        panic!("expected filesystem remote");
-    };
-    assert_eq!(fs.root, root.path());
-    assert_eq!(fs.atomic_write_dir, root.path().join(".kache-tmp"));
-}
-
-#[test]
-fn filesystem_remote_ignores_legacy_s3_environment_overrides() {
-    let _guard = config_path_lock();
-    let _bucket = set_env_var_for_test("KACHE_S3_BUCKET", "ambient-bucket");
-    let _prefix = set_env_var_for_test("KACHE_S3_PREFIX", "ambient-prefix");
-    let root = tempfile::tempdir().unwrap();
-    let file = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            remote: Some(RemoteFileConfig {
-                _type: Some("filesystem".to_string()),
-                path: Some(root.path().to_string_lossy().into_owned()),
-                prefix: Some("file-prefix".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-    };
-
-    let remote = Config::load_remote_config(&Ok(file))
-        .expect("valid filesystem config")
-        .expect("filesystem remote");
-    assert_eq!(remote.prefix, "file-prefix");
-    assert!(matches!(
-        remote.backend,
-        RemoteBackendConfig::Filesystem(FilesystemRemoteConfig { root: loaded, .. })
-            if loaded == root.path()
-    ));
-}
-
-#[test]
-fn filesystem_remote_rejects_a_drive_prefix() {
-    let root = tempfile::tempdir().unwrap();
-    let file = FileConfig {
-        cache: Some(CacheFileConfig {
-            remote: Some(RemoteFileConfig {
-                _type: Some("filesystem".to_string()),
-                path: Some(root.path().to_string_lossy().into_owned()),
-                prefix: Some("C:/escape".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    let error = Config::load_remote_config(&Ok(file))
-        .expect_err("filesystem drive prefix must be rejected")
-        .to_string();
-    assert!(error.contains("cannot contain ':'"), "{error}");
-}
-
-#[test]
-fn legacy_remote_without_type_still_infers_s3() {
-    let _guard = config_path_lock();
-    let file = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            remote: Some(RemoteFileConfig {
-                bucket: Some("legacy".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-    };
-
-    let remote = Config::load_remote_config(&Ok(file))
-        .expect("legacy config is valid")
-        .expect("legacy S3 remote");
-    assert!(matches!(
-        remote.backend,
-        RemoteBackendConfig::S3(S3RemoteConfig { bucket, .. }) if bucket == "legacy"
-    ));
-}
-
-#[test]
-fn explicit_s3_rejects_an_empty_bucket() {
-    let _guard = config_path_lock();
-    let _bucket = set_env_var_for_test("KACHE_S3_BUCKET", "");
-    let file = FileConfig {
-        cache: Some(CacheFileConfig {
-            remote: Some(RemoteFileConfig {
-                _type: Some("s3".to_string()),
-                bucket: Some("   ".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    let error = Config::load_remote_config(&Ok(file))
-        .expect_err("empty S3 bucket must be rejected")
-        .to_string();
-    assert!(error.contains("non-empty bucket"), "{error}");
-}
-
-/// Regression: `prefix = "team/"` and `KACHE_S3_PREFIX=""` were accepted by the
-/// pre-OpenDAL loader. Rejecting them made `Config::load` fail, and because
-/// `run_wrapper_mode` propagates that with `?`, every compiler invocation died.
-#[test]
-fn legacy_noncanonical_prefixes_normalize_instead_of_failing() {
-    let _guard = config_path_lock();
-    let _isolated = isolate_s3_env();
-    let _bucket = set_env_var_for_test("KACHE_S3_BUCKET", "legacy-bucket");
-
-    for (configured, expected) in [("team/", "team"), ("/team", "team"), ("a//b", "a/b")] {
-        let file = FileConfig {
-            cache: Some(CacheFileConfig {
-                remote: Some(RemoteFileConfig {
-                    prefix: Some(configured.to_string()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let remote = Config::load_remote_config(&Ok(file))
-            .unwrap_or_else(|e| panic!("{configured:?} must not fail: {e:#}"))
-            .expect("remote");
-        assert_eq!(remote.prefix, expected, "{configured:?}");
-    }
-}
-
-#[test]
-fn legacy_empty_env_prefix_means_the_bucket_root() {
-    let _guard = config_path_lock();
-    let _isolated = isolate_s3_env();
-    let _bucket = set_env_var_for_test("KACHE_S3_BUCKET", "legacy-bucket");
-    let _prefix = set_env_var_for_test("KACHE_S3_PREFIX", "");
-
-    let remote = Config::load_remote_config(&Ok(FileConfig::default()))
-        .expect("empty prefix must be accepted")
-        .expect("remote");
-    assert_eq!(remote.prefix, "");
-}
-
-/// Regression: a present-but-empty override used to be filtered out, so the
-/// job silently got the *file-configured* bucket instead of no remote.
-#[test]
-fn empty_env_bucket_disables_the_remote_instead_of_falling_back() {
-    let _guard = config_path_lock();
-    let _isolated = isolate_s3_env();
-    let _bucket = set_env_var_for_test("KACHE_S3_BUCKET", "");
-    let file = FileConfig {
-        cache: Some(CacheFileConfig {
-            remote: Some(RemoteFileConfig {
-                bucket: Some("production-cache".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    assert!(
-        Config::load_remote_config(&Ok(file))
-            .expect("empty override is not an error without an explicit type")
-            .is_none(),
-        "an empty KACHE_S3_BUCKET must not select the file-configured bucket"
-    );
-}
-
-/// The load-bearing invariant: an unusable remote must cost cache hits, never
-/// the build. `Config::load` is on the rustc-wrapper path.
-#[test]
-fn unusable_remote_config_degrades_to_local_only() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let cfg = dir.path().join("config.toml");
-    let _g = set_kache_config_for_test(&cfg);
-    let _isolated = isolate_s3_env();
-
-    // `..` cannot be normalized, so this is a genuinely unusable remote.
-    std::fs::write(
-        &cfg,
-        "[cache.remote]\ntype = \"s3\"\nbucket = \"b\"\nprefix = \"a/../b\"\n",
-    )
-    .unwrap();
-
-    let loaded = Config::load().expect("a bad remote must not fail Config::load");
-    assert!(loaded.remote.is_none(), "remote must be dropped");
-    let reason = loaded
-        .remote_error
-        .as_deref()
-        .expect("reason must be recorded");
-    assert!(reason.contains("path segments"), "{reason}");
-    // ...but a command that exists to use the remote still fails loudly.
-    let error = loaded
-        .require_remote()
-        .expect_err("require_remote must fail");
-    assert!(error.to_string().contains("unusable"), "{error}");
-}
-
-#[test]
-fn staging_dir_inside_the_object_tree_is_rejected() {
-    let root = std::path::Path::new("/tmp/kache-remote");
-    let problem = filesystem_staging_problem(root, &root.join("artifacts/v3/staging"), "artifacts")
-        .expect("staging inside the object tree must be rejected");
-    assert!(problem.contains("inside the object tree"), "{problem}");
-
-    // The documented default sits beside the object tree, not inside it.
-    assert!(filesystem_staging_problem(root, &root.join(".kache-tmp"), "artifacts").is_none());
-
-    // Regression: with an empty prefix the staging dir is NECESSARILY under the
-    // root, so comparing against the root rather than the object tree rejected
-    // the documented default and made empty-prefix filesystem remotes unusable.
-    assert!(
-        filesystem_staging_problem(root, &root.join(".kache-tmp"), "").is_none(),
-        "the default staging dir must be accepted with an empty prefix"
-    );
-    assert!(filesystem_staging_problem(root, &root.join("v3/staging"), "").is_some());
-}
-
-/// A filesystem remote with an empty prefix must resolve cleanly end to end.
-#[test]
-fn filesystem_remote_with_an_empty_prefix_resolves() {
-    let _guard = config_path_lock();
-    let _isolated = isolate_s3_env();
-    let dir = tempfile::tempdir().unwrap();
-    let file = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            remote: Some(RemoteFileConfig {
-                _type: Some("filesystem".to_string()),
-                path: Some(dir.path().to_string_lossy().to_string()),
-                prefix: Some(String::new()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-    };
-
-    let remote = Config::load_remote_config(&Ok(file))
-        .expect("an empty prefix must be usable")
-        .expect("remote");
-    assert_eq!(remote.prefix, "");
-}
-
-#[test]
-fn filesystem_remote_rejects_mixed_s3_fields() {
-    let file = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            remote: Some(RemoteFileConfig {
-                _type: Some("filesystem".to_string()),
-                path: Some("/tmp/kache-remote".to_string()),
-                bucket: Some("wrong-backend".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-    };
-
-    let error = Config::load_remote_config(&Ok(file))
-        .expect_err("mixed backend fields must be rejected")
-        .to_string();
-    assert!(error.contains("cannot include S3"), "{error}");
-}
-
-#[test]
-fn test_load_planner_config_from_file() {
-    let _guard = config_path_lock();
-
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("kache/config.toml");
-    let _env_guard = set_kache_config_for_test(&config_path);
-
-    let config = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            planner: Some(PlannerFileConfig {
-                endpoint: Some("https://planner.example.com".to_string()),
-                timeout_ms: Some(1200),
-                token: Some("secret".to_string()),
-            }),
-            ..Default::default()
-        }),
-    };
-
-    Config::save_file_config_to(&config, &config_path).unwrap();
-
-    let loaded = Config::load_planner_config().unwrap();
-    assert_eq!(loaded.endpoint, "https://planner.example.com");
-    assert_eq!(loaded.timeout_ms, 1200);
-    assert_eq!(loaded.token.as_deref(), Some("secret"));
-}
-
-#[test]
-fn test_load_planner_config_env_overrides_file() {
-    let _guard = config_path_lock();
-
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("kache/config.toml");
-    let _env_guard = set_kache_config_for_test(&config_path);
-
-    let config = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            planner: Some(PlannerFileConfig {
-                endpoint: Some("https://planner.example.com".to_string()),
-                timeout_ms: Some(1200),
-                token: Some("secret".to_string()),
-            }),
-            ..Default::default()
-        }),
-    };
-
-    Config::save_file_config_to(&config, &config_path).unwrap();
-
-    struct ScopedVar {
-        key: &'static str,
-        previous: Option<OsString>,
-    }
-
-    impl ScopedVar {
-        fn set(key: &'static str, value: &str) -> Self {
-            let previous = std::env::var_os(key);
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for ScopedVar {
-        fn drop(&mut self) {
-            match &self.previous {
-                Some(value) => unsafe {
-                    std::env::set_var(self.key, value);
-                },
-                None => unsafe {
-                    std::env::remove_var(self.key);
-                },
-            }
-        }
-    }
-
-    let _endpoint = ScopedVar::set("KACHE_PLANNER_ENDPOINT", "https://env.example.com");
-    let _timeout = ScopedVar::set("KACHE_PLANNER_TIMEOUT_MS", "400");
-    let _token = ScopedVar::set("KACHE_PLANNER_TOKEN", "env-token");
-
-    let loaded = Config::load_planner_config().unwrap();
-    assert_eq!(loaded.endpoint, "https://env.example.com");
-    assert_eq!(loaded.timeout_ms, 400);
-    assert_eq!(loaded.token.as_deref(), Some("env-token"));
-}
-
-#[test]
 fn test_resolve_config_path_prefers_project_file() {
     let dir = tempfile::tempdir().unwrap();
     let project_root = dir.path().join("workspace");
@@ -5508,406 +4233,12 @@ fn test_normalize_cc_flags_trims_dedupes_and_drops_empty() {
     assert!(normalize_cc_flags(Vec::<String>::new()).is_empty());
 }
 
-#[test]
-fn s3_user_agent_loaded_from_file_and_env() {
-    let _guard = config_path_lock();
-    let _env_guard = isolate_s3_env();
 
-    // 1. From TOML with `user_agent`
-    let toml_underscore = r#"
-            [cache.remote]
-            type = "s3"
-            bucket = "my-bucket"
-            user_agent = "custom-agent/1.0"
-        "#;
-    let file_cfg: Result<FileConfig> = toml::from_str(toml_underscore).map_err(Into::into);
-    let loaded = Config::load_remote_config(&file_cfg).unwrap().unwrap();
-    match loaded.backend {
-        RemoteBackendConfig::S3(s3) => {
-            assert_eq!(s3.user_agent.as_deref(), Some("custom-agent/1.0"));
-        }
-        _ => panic!("expected S3 backend"),
-    }
 
-    // 2. From TOML with `user-agent` (alias)
-    let toml_hyphen = r#"
-            [cache.remote]
-            type = "s3"
-            bucket = "my-bucket"
-            user-agent = "custom-agent/2.0"
-        "#;
-    let file_cfg: Result<FileConfig> = toml::from_str(toml_hyphen).map_err(Into::into);
-    let loaded = Config::load_remote_config(&file_cfg).unwrap().unwrap();
-    match loaded.backend {
-        RemoteBackendConfig::S3(s3) => {
-            assert_eq!(s3.user_agent.as_deref(), Some("custom-agent/2.0"));
-        }
-        _ => panic!("expected S3 backend"),
-    }
 
-    // 3. Environment variable KACHE_S3_USER_AGENT overrides file config (precedence)
-    unsafe { std::env::set_var("KACHE_S3_USER_AGENT", "env-agent/3.0") };
-    let toml_file_val = r#"
-            [cache.remote]
-            type = "s3"
-            bucket = "my-bucket"
-            user_agent = "file-agent/1.0"
-        "#;
-    let file_cfg: Result<FileConfig> = toml::from_str(toml_file_val).map_err(Into::into);
-    let loaded = Config::load_remote_config(&file_cfg).unwrap().unwrap();
-    match loaded.backend {
-        RemoteBackendConfig::S3(s3) => {
-            assert_eq!(
-                s3.user_agent.as_deref(),
-                Some("env-agent/3.0"),
-                "environment variable override must take precedence over file config"
-            );
-        }
-        _ => panic!("expected S3 backend"),
-    }
 
-    // 4. [cache] ignore_env = true suppresses environment override in favor of file
-    let toml_ignore_env = r#"
-            [cache]
-            ignore_env = true
 
-            [cache.remote]
-            type = "s3"
-            bucket = "my-bucket"
-            user_agent = "file-agent/1.0"
-        "#;
-    let resolved_cfg =
-        Config::load_resolved(toml::from_str(toml_ignore_env).map_err(Into::into)).unwrap();
-    match resolved_cfg.remote.unwrap().backend {
-        RemoteBackendConfig::S3(s3) => {
-            assert_eq!(
-                s3.user_agent.as_deref(),
-                Some("file-agent/1.0"),
-                "ignore_env = true must ignore KACHE_S3_USER_AGENT in favor of file config"
-            );
-        }
-        _ => panic!("expected S3 backend"),
-    }
-    unsafe { std::env::remove_var("KACHE_S3_USER_AGENT") };
 
-    // 5. Reject user_agent when type = "filesystem"
-    let toml_fs = r#"
-            [cache.remote]
-            type = "filesystem"
-            path = "/tmp/cache"
-            user_agent = "invalid-for-fs"
-        "#;
-    let file_cfg: Result<FileConfig> = toml::from_str(toml_fs).map_err(Into::into);
-    let err = Config::load_remote_config(&file_cfg).unwrap_err();
-    assert!(
-        err.to_string()
-            .contains("cannot include S3 bucket, endpoint, region, profile, or user_agent")
-    );
-}
-
-fn gcs_remote(remote: RemoteFileConfig) -> Result<Option<RemoteConfig>> {
-    let file = FileConfig {
-        cache: Some(CacheFileConfig {
-            remote: Some(remote),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    Config::load_remote_config(&Ok(file))
-}
-
-#[test]
-fn a_gcs_remote_takes_a_bucket_prefix_and_endpoint() {
-    let remote = gcs_remote(RemoteFileConfig {
-        _type: Some("GCS".to_string()),
-        bucket: Some(" builds ".to_string()),
-        endpoint: Some("http://127.0.0.1:4443".to_string()),
-        ..Default::default()
-    })
-    .unwrap()
-    .unwrap();
-    assert_eq!(remote.prefix, "artifacts");
-    assert_eq!(remote.describe(), "gs://builds/artifacts");
-    assert_eq!(remote.backend_kind(), "gcs");
-    assert_eq!(
-        remote.backend,
-        RemoteBackendConfig::Gcs(GcsRemoteConfig {
-            bucket: "builds".to_string(),
-            endpoint: Some("http://127.0.0.1:4443".to_string()),
-        })
-    );
-}
-
-#[test]
-fn a_gcs_remote_needs_a_bucket_and_refuses_other_backends_fields() {
-    let error = gcs_remote(RemoteFileConfig {
-        _type: Some("gcs".to_string()),
-        ..Default::default()
-    })
-    .unwrap_err();
-    assert!(
-        error.to_string().contains("requires a non-empty bucket"),
-        "{error:#}"
-    );
-    for remote in [
-        RemoteFileConfig {
-            region: Some("us-east-1".to_string()),
-            ..Default::default()
-        },
-        RemoteFileConfig {
-            path: Some("/cache".to_string()),
-            ..Default::default()
-        },
-    ] {
-        let error = gcs_remote(RemoteFileConfig {
-            _type: Some("gcs".to_string()),
-            bucket: Some("builds".to_string()),
-            ..remote
-        })
-        .unwrap_err();
-        assert!(error.to_string().contains("do not apply"), "{error:#}");
-    }
-}
-
-#[test]
-fn oci_remote_config_validates_repository_and_keeps_s3_environment_out() {
-    let remote = gcs_remote(RemoteFileConfig {
-        _type: Some(" OCI ".to_string()),
-        repository: Some(" ghcr.io/team/cache ".to_string()),
-        ..Default::default()
-    })
-    .unwrap()
-    .unwrap();
-    assert_eq!(remote.backend_kind(), "oci");
-    assert_eq!(remote.describe(), "oci://ghcr.io/team/cache/artifacts");
-    assert_eq!(
-        remote.backend,
-        RemoteBackendConfig::Oci(OciRemoteConfig {
-            repository: "ghcr.io/team/cache".to_string(),
-            insecure: false,
-        })
-    );
-    let remote = gcs_remote(RemoteFileConfig {
-        _type: Some("oci".to_string()),
-        repository: Some("localhost:5000/team/cache".to_string()),
-        prefix: Some("".to_string()),
-        insecure: Some(true),
-        ..Default::default()
-    })
-    .unwrap()
-    .unwrap();
-    assert_eq!(remote.describe(), "oci://localhost:5000/team/cache");
-    assert!(matches!(
-        remote.backend,
-        RemoteBackendConfig::Oci(OciRemoteConfig { insecure: true, .. })
-    ));
-    for repository in [
-        "",
-        "team/cache",
-        "cache",
-        "https://ghcr.io/team/cache",
-        "ghcr.io/team/cache:tag",
-        "ghcr.io/team/cache@sha256:1234",
-        "ghcr.io/Team/cache",
-        "ghcr.io",
-        "ghcr.io/",
-    ] {
-        assert!(
-            gcs_remote(RemoteFileConfig {
-                _type: Some("oci".to_string()),
-                repository: Some(repository.to_string()),
-                ..Default::default()
-            })
-            .is_err(),
-            "{repository:?}"
-        );
-    }
-    assert!(
-        gcs_remote(RemoteFileConfig {
-            _type: Some("oci".to_string()),
-            ..Default::default()
-        })
-        .is_err()
-    );
-}
-
-#[test]
-fn oci_remote_rejects_mixed_backend_fields_and_round_trips_toml() {
-    for field in [
-        "bucket",
-        "endpoint",
-        "region",
-        "profile",
-        "user_agent",
-        "path",
-        "atomic_write_dir",
-    ] {
-        let remote: RemoteFileConfig = toml::from_str(&format!(
-            "type = \"oci\"\nrepository = \"ghcr.io/team/cache\"\n{field} = \"value\"\n"
-        ))
-        .unwrap();
-        assert!(
-            gcs_remote(remote)
-                .unwrap_err()
-                .to_string()
-                .contains("takes repository"),
-            "{field}"
-        );
-    }
-    for backend in [None, Some("s3"), Some("gcs"), Some("filesystem")] {
-        for remote in [
-            RemoteFileConfig {
-                repository: Some("ghcr.io/team/cache".to_string()),
-                ..Default::default()
-            },
-            RemoteFileConfig {
-                insecure: Some(false),
-                ..Default::default()
-            },
-        ] {
-            assert!(
-                gcs_remote(RemoteFileConfig {
-                    _type: backend.map(str::to_string),
-                    ..remote
-                })
-                .unwrap_err()
-                .to_string()
-                .contains("require [cache.remote] type")
-            );
-        }
-    }
-    let file: FileConfig = toml::from_str("[cache.remote]\ntype = \"oci\"\nrepository = \"ghcr.io/team/cache\"\ninsecure = false\nprefix = \"team/artifacts\"\n").unwrap();
-    let serialized = toml::to_string(&file).unwrap();
-    let parsed: FileConfig = toml::from_str(&serialized).unwrap();
-    assert_eq!(
-        Config::load_remote_config(&Ok(file)).unwrap(),
-        Config::load_remote_config(&Ok(parsed)).unwrap()
-    );
-}
-
-#[test]
-fn a_pull_request_prefix_must_stay_clear_of_the_base_prefix() {
-    assert_eq!(pull_request_prefix_for("artifacts", "  ").unwrap(), None);
-    assert_eq!(
-        pull_request_prefix_for("artifacts", "artifacts-pr")
-            .unwrap()
-            .as_deref(),
-        Some("artifacts-pr")
-    );
-    for (base, configured) in [
-        ("artifacts", "artifacts"),
-        ("artifacts", "artifacts/pr"),
-        ("shared/artifacts", "shared"),
-        ("", "pr"),
-    ] {
-        assert!(
-            pull_request_prefix_for(base, configured).is_err(),
-            "{base:?} / {configured:?}"
-        );
-    }
-}
-
-fn load_in_ci(event: &str, protected: &str, remote_toml: &str) -> Config {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("kache/config.toml");
-    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
-    std::fs::write(&config_path, remote_toml).unwrap();
-    let _cfg = set_kache_config_for_test(&config_path);
-    let _gha = NamedEnvGuard::set("GITHUB_ACTIONS", "true");
-    let _event = NamedEnvGuard::set("GITHUB_EVENT_NAME", event);
-    let _ref_type = NamedEnvGuard::set("GITHUB_REF_TYPE", "branch");
-    let _protected = NamedEnvGuard::set("GITHUB_REF_PROTECTED", protected);
-    let _gitlab = NamedEnvGuard::remove("GITLAB_CI");
-    let _explicit = NamedEnvGuard::remove("KACHE_REMOTE_READONLY");
-    let _prefix_env = NamedEnvGuard::remove("KACHE_PULL_REQUEST_PREFIX");
-    let _bucket = NamedEnvGuard::remove("KACHE_S3_BUCKET");
-    let _s3_prefix = NamedEnvGuard::remove("KACHE_S3_PREFIX");
-    Config::load().unwrap()
-}
-
-#[test]
-fn a_pull_request_job_with_its_own_prefix_may_write_there() {
-    let with_prefix = "[cache.remote]\ntype = \"s3\"\nbucket = \"b\"\nprefix = \"artifacts\"\n\
-                       pull_request_prefix = \"artifacts-pr\"\n";
-    let config = load_in_ci("pull_request", "false", with_prefix);
-    assert_eq!(config.pull_request_prefix.as_deref(), Some("artifacts-pr"));
-    assert!(!config.remote_readonly);
-
-    let without = "[cache.remote]\ntype = \"s3\"\nbucket = \"b\"\nprefix = \"artifacts\"\n";
-    let config = load_in_ci("pull_request", "false", without);
-    assert_eq!(config.pull_request_prefix, None);
-    assert!(config.remote_readonly, "no prefix of its own: read-only");
-
-    let nested = "[cache.remote]\ntype = \"s3\"\nbucket = \"b\"\nprefix = \"artifacts\"\n\
-                  pull_request_prefix = \"artifacts/pr\"\n";
-    let config = load_in_ci("pull_request", "false", nested);
-    assert_eq!(config.pull_request_prefix, None);
-    assert!(
-        config.remote_readonly,
-        "an unusable prefix leaves the job read-only"
-    );
-
-    let config = load_in_ci("push", "true", with_prefix);
-    assert_eq!(
-        config.pull_request_prefix, None,
-        "a protected push never uses the pull request prefix"
-    );
-    assert!(!config.remote_readonly);
-}
-
-#[test]
-fn a_pull_request_job_never_shares_a_daemon_or_upload_queue_with_a_trusted_job() {
-    let with_prefix = "[cache.remote]\ntype = \"s3\"\nbucket = \"b\"\nprefix = \"artifacts\"\n\
-                       pull_request_prefix = \"artifacts-pr/7\"\n";
-    let pull_request = load_in_ci("pull_request", "false", with_prefix);
-    let push = Config {
-        pull_request_prefix: None,
-        ..pull_request.clone()
-    };
-    assert_eq!(push.socket_path(), push.runtime_dir.join("daemon.sock"));
-    assert_eq!(push.upload_spool_dir(), push.cache_dir.join("upload-queue"));
-
-    let socket = pull_request.socket_path();
-    assert_eq!(socket.parent(), push.socket_path().parent());
-    let name = socket.file_name().unwrap().to_str().unwrap();
-    assert!(
-        name.starts_with("daemon-pr-") && name.ends_with(".sock") && name.len() == 23,
-        "{name}"
-    );
-    let queue = pull_request.upload_spool_dir();
-    assert_eq!(queue.parent(), Some(pull_request.cache_dir.as_path()));
-    assert_eq!(
-        queue.file_name().unwrap().to_str().unwrap(),
-        format!(
-            "upload-queue-{}",
-            &name["daemon-".len()..name.len() - ".sock".len()]
-        )
-    );
-
-    let other = Config {
-        pull_request_prefix: Some("artifacts-pr/8".into()),
-        ..pull_request.clone()
-    };
-    assert_ne!(
-        other.socket_path(),
-        socket,
-        "each prefix gets its own daemon"
-    );
-    assert_ne!(other.upload_spool_dir(), queue);
-}
-
-#[test]
-fn a_scoped_socket_keeps_its_directory_and_extension() {
-    assert_eq!(
-        scoped_socket_path(Path::new("/run/kache/daemon.sock"), "pr-0123abcd"),
-        PathBuf::from("/run/kache/daemon-pr-0123abcd.sock")
-    );
-    assert_eq!(
-        scoped_socket_path(Path::new("/run/kache/pipe"), "pr-0123abcd"),
-        PathBuf::from("/run/kache/pipe-pr-0123abcd")
-    );
-}
 
 #[test]
 fn target_file_sharing_is_on_unless_turned_off() {
@@ -5935,20 +4266,6 @@ fn target_file_sharing_is_on_unless_turned_off() {
     assert!(Config::load().unwrap().auto_share_target_files);
 }
 
-#[test]
-fn oci_pull_request_jobs_stay_readonly_even_with_a_separate_tag_prefix() {
-    let remote = "[cache.remote]\ntype = \"oci\"\nrepository = \"ghcr.io/team/cache\"\nprefix = \"artifacts\"\n\
-                  pull_request_prefix = \"artifacts-pr\"\n";
-    for event in ["pull_request", "pull_request_target"] {
-        let config = load_in_ci(event, "false", remote);
-        assert!(config.remote.is_some());
-        assert!(config.remote_readonly);
-        assert_eq!(config.pull_request_prefix, None);
-    }
-    let trusted = load_in_ci("push", "true", remote);
-    assert!(!trusted.remote_readonly);
-    assert_eq!(trusted.pull_request_prefix, None);
-}
 
 #[test]
 fn the_default_floor_is_ten_gib_and_the_user_file_never_a_project_one() {

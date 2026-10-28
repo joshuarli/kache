@@ -4,7 +4,7 @@ use crate::invocation::process::CommandExt as _;
 use crate::path_normalizer::{PathNormalizer, check_for_path_leak};
 use crate::probe_memo::{self, Material};
 use anyhow::{Context, Result, bail};
-pub(crate) use kache_format::{is_valid_cache_key, is_valid_crate_name};
+pub(crate) use kache_format::is_valid_cache_key;
 pub(crate) use kache_store::file_hash::*;
 use std::borrow::Cow;
 use std::cell::{Cell, OnceCell, RefCell};
@@ -1588,7 +1588,6 @@ pub(crate) struct InvocationKeyScope {
     defer_discovery: bool,
     compile_while_keying: bool,
     provided_dep_info: Option<(DepInfo, Option<TreeGuard>)>,
-    remote_rows: Option<RemoteRows>,
     _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
@@ -1598,7 +1597,6 @@ impl InvocationKeyScope {
             defer_discovery: DEFER_DISCOVERY.with(|cell| cell.replace(false)),
             compile_while_keying: COMPILE_WHILE_KEYING.with(|cell| cell.replace(false)),
             provided_dep_info: PROVIDED_DEP_INFO.with(|cell| cell.replace(None)),
-            remote_rows: REMOTE_ROWS.with(|cell| cell.replace(None)),
             _thread_bound: std::marker::PhantomData,
         }
     }
@@ -1610,10 +1608,9 @@ impl Drop for InvocationKeyScope {
         COMPILE_WHILE_KEYING.with(|cell| cell.set(self.compile_while_keying));
         let discarded_dep_info =
             PROVIDED_DEP_INFO.with(|cell| cell.replace(self.provided_dep_info.take()));
-        let discarded_remote = REMOTE_ROWS.with(|cell| cell.replace(self.remote_rows.take()));
         // Release callback captures after every slot has been restored and
         // outside the RefCell borrow, so their destructors can observe it.
-        drop((discarded_dep_info, discarded_remote));
+        drop(discarded_dep_info);
     }
 }
 
@@ -2271,18 +2268,9 @@ fn predicted_key_inputs(
     };
     let identity = rustc_prediction_identity(args).ok_or(Rejection::Disabled)?;
     let shared = rustc_shared_prediction_identity(args);
-    // Filled when the record came from the remote, so a record that checks
-    // out is kept here and not asked for again.
-    let mut from_remote = None;
     let Some(record) = file_hasher
         .input_prediction(&identity)
         .or_else(|| file_hasher.input_prediction(shared.as_deref()?))
-        .or_else(|| {
-            let shared = shared.as_deref()?;
-            let record = remote_plain_row(shared, &registry_src_of(&vars)?)?;
-            from_remote = Some(shared);
-            Some(record)
-        })
     else {
         return match &workspace {
             Some(workspace) => workspace_key_inputs(args, file_hasher, workspace, vars, tree),
@@ -2303,7 +2291,7 @@ fn predicted_key_inputs(
     {
         return Err(Rejection::NoRecord);
     }
-    let validated = validate_prediction(
+    validate_prediction(
         &record,
         |path| {
             file_hasher
@@ -2318,34 +2306,7 @@ fn predicted_key_inputs(
                 .is_some_and(|path| path.exists())
         },
         |var| file_hasher.invocation_env.var_os(var),
-    );
-    if let Some(shared) = from_remote {
-        keep_remote_plain_row(file_hasher, shared, args, &record, &validated);
-    }
-    validated
-}
-
-/// Keep a registry unit's shared row that came from the remote and checked
-/// out, so the next build finds it locally.
-fn keep_remote_plain_row(
-    file_hasher: &FileHasher<'_>,
-    identity: &str,
-    args: &RustcArgs,
-    record: &InputPrediction,
-    validated: &std::result::Result<DepInfo, Rejection>,
-) {
-    crate::phase_trace::decision(
-        "remote_prediction",
-        if validated.is_ok() { "used" } else { "refused" },
-    );
-    if let Ok(dep_info) = validated {
-        file_hasher.record_input_prediction(
-            identity,
-            args.crate_name.as_deref(),
-            dep_info,
-            record.tree.clone(),
-        );
-    }
+    )
 }
 
 /// The third lookup, after this checkout's row and the shared one both
@@ -2388,16 +2349,14 @@ fn relocated_key_inputs(
         workspace: None,
         registry: registry.as_deref().and_then(Path::to_str),
     };
-    portable_key_inputs(file_hasher, &identity, args, &guard, &places)
+    portable_key_inputs(file_hasher, &identity, &guard, &places)
 }
 
-/// Use this machine's row for `identity`, or failing that the remote's
-/// ([`set_remote_rows`]), checked the same way. A remote row that passes is
-/// kept locally, so the next build does not ask again.
+/// Use this machine's row for `identity`, checked the same way rows filed
+/// by other checkouts are.
 fn portable_key_inputs(
     file_hasher: &FileHasher<'_>,
     identity: &str,
-    args: &RustcArgs,
     guard: &str,
     places: &Places<'_>,
 ) -> std::result::Result<DepInfo, Rejection> {
@@ -2424,64 +2383,7 @@ fn portable_key_inputs(
     if let Some(record) = file_hasher.portable_prediction(identity) {
         return validate(&record);
     }
-    let record = remote_portable_row(identity).ok_or(Rejection::NoRecord)?;
-    let validated = validate(&record);
-    crate::phase_trace::decision(
-        "remote_prediction",
-        if validated.is_ok() { "used" } else { "refused" },
-    );
-    if validated.is_ok() {
-        file_hasher.record_portable_prediction(identity, args.crate_name.as_deref(), &record);
-    }
-    validated
-}
-
-thread_local! {
-    /// Where a portable row comes from when this machine has none: the
-    /// daemon's remote, installed by the wrapper when a remote is configured.
-    static REMOTE_ROWS: std::cell::RefCell<Option<RemoteRows>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Asks the remote for the row filed under an identity.
-pub(crate) type RemoteRows = Box<dyn Fn(&str) -> Option<crate::prediction_share::SharedPrediction>>;
-
-/// Let the key ask `rows` for a portable row this machine lacks, or stop
-/// asking with `None` (kunobi-ninja/kache#1011).
-pub(crate) fn set_remote_rows(rows: Option<RemoteRows>) {
-    REMOTE_ROWS.with(|slot| *slot.borrow_mut() = rows);
-}
-
-fn remote_row(identity: &str) -> Option<crate::prediction_share::SharedPrediction> {
-    REMOTE_ROWS.with(|slot| slot.borrow().as_ref().and_then(|rows| rows(identity)))
-}
-
-fn remote_portable_row(identity: &str) -> Option<PortablePrediction> {
-    match remote_row(identity)? {
-        crate::prediction_share::SharedPrediction::Portable(row) => Some(row),
-        crate::prediction_share::SharedPrediction::Plain(_) => None,
-    }
-}
-
-fn remote_plain_row(identity: &str, registry: &Path) -> Option<InputPrediction> {
-    match remote_row(identity)? {
-        crate::prediction_share::SharedPrediction::Plain(row) => {
-            crate::prediction_share::plain_from_remote(&row, registry)
-        }
-        crate::prediction_share::SharedPrediction::Portable(_) => None,
-    }
-}
-
-/// The bytes of `value` after `registry`, for a path inside one package under
-/// it ([`under_registry_src`]), or `None`.
-pub(crate) fn registry_suffix(value: &str, registry: &Path) -> Option<String> {
-    suffix_within(std::ffi::OsStr::new(value), registry, 2).filter(|suffix| !suffix.is_empty())
-}
-
-/// Is a shared row filed under `identity`? A registry unit's may travel
-/// (see [`crate::prediction_share`]).
-pub(crate) fn is_shared_target_identity(identity: &str) -> bool {
-    identity.starts_with(SHARED_PREDICTION_PREFIX)
+    Err(Rejection::NoRecord)
 }
 
 /// `<CARGO_HOME>/registry/src` for a registry unit, from its
@@ -2490,13 +2392,6 @@ pub(crate) fn registry_src_of(
     vars: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> Option<PathBuf> {
     registry_src_root(Path::new(env_var_in(vars, "CARGO_MANIFEST_DIR")?)).map(Path::to_path_buf)
-}
-
-/// Is a row filed under `identity` free of machine-specific paths, so that it
-/// may travel through the remote? The workspace and relocated `OUT_DIR` rows.
-pub(crate) fn is_portable_identity(identity: &str) -> bool {
-    identity.starts_with(WORKSPACE_PREDICTION_PREFIX)
-        || identity.starts_with(RELOCATABLE_PREDICTION_PREFIX)
 }
 
 /// The fourth lookup, for a workspace or path unit (kunobi-ninja/kache#1005):
@@ -2520,7 +2415,7 @@ fn workspace_key_inputs(
         workspace_prediction_identity(args, vars, workspace).ok_or(Rejection::NoRecord)?;
     let guard = tree.ok_or(Rejection::NoRecord)?;
     let places = workspace.places().ok_or(Rejection::NoRecord)?;
-    let dep_info = portable_key_inputs(file_hasher, &identity, args, &guard, &places)?;
+    let dep_info = portable_key_inputs(file_hasher, &identity, &guard, &places)?;
     if !guard_covers(&dep_info.source_files, workspace) {
         return Err(Rejection::NoRecord);
     }
@@ -9234,7 +9129,6 @@ mod invocation_key_scope_tests {
         !DEFER_DISCOVERY.with(Cell::get)
             && !COMPILE_WHILE_KEYING.with(Cell::get)
             && !dep_info_provided()
-            && remote_row("fixture").is_none()
     }
 
     fn install(name: &str, defer: bool, while_keying: bool) {
@@ -9250,23 +9144,12 @@ mod invocation_key_scope_tests {
                 walks: Vec::new(),
             }),
         );
-        let name = name.to_string();
-        set_remote_rows(Some(Box::new(move |identity| {
-            (identity == "fixture").then(|| {
-                crate::prediction_share::SharedPrediction::Portable(PortablePrediction {
-                    schema: PORTABLE_PREDICTION_SCHEMA,
-                    sources: vec![Portable::Literal(format!("{name}.rs"))],
-                    env_deps: Vec::new(),
-                    tree: name.clone(),
-                })
-            })
-        })));
+
     }
 
     fn consume(name: &str, defer: bool, while_keying: bool) {
         assert_eq!(DEFER_DISCOVERY.with(Cell::get), defer);
         assert_eq!(COMPILE_WHILE_KEYING.with(Cell::get), while_keying);
-        assert_eq!(remote_portable_row("fixture").unwrap().tree, name);
         let mut outputs = KeyOutputs::default();
         let dep_info = resolve_key_inputs(
             &RustcArgs::default(),
@@ -9290,7 +9173,7 @@ mod invocation_key_scope_tests {
     }
 
     #[test]
-    fn nested_key_scopes_restore_the_parent_closure_flags_and_remote() {
+    fn nested_key_scopes_restore_the_parent_closure_flags() {
         let _parent = InvocationKeyScope::enter();
         install("parent", true, false);
         {

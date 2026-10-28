@@ -25,8 +25,6 @@ pub struct PublishCcRequest {
     pub stdout: String,
     pub stderr: String,
     pub compile_time_ms: u64,
-    /// Whether the entry may be uploaded to a writable remote.
-    pub publishes_to_remote: bool,
     /// The build event the wrapper would have logged, with the store fields
     /// still empty. The daemon fills them in and writes it.
     pub event: BuildEvent,

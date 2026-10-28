@@ -69,20 +69,7 @@ fn past_mtime() -> i64 {
 }
 
 fn reset_fixture_fingerprint(target_dir: &Path) {
-    let fingerprints = target_dir.join("debug/.fingerprint");
-    if fingerprints.is_dir() {
-        for entry in fs::read_dir(&fingerprints).unwrap() {
-            let entry = entry.unwrap();
-            if entry.file_type().unwrap().is_dir()
-                && entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|name| name.starts_with("adaptive-fixture-"))
-            {
-                fs::remove_dir_all(entry.path()).unwrap();
-            }
-        }
-    }
+    common::clear_package_fingerprints(&target_dir.join("debug"), "adaptive-fixture");
 }
 
 fn write_source(project: &Path, source_mtime: i64, body: &str) {
@@ -175,19 +162,21 @@ fn build_variant_impl(
 
     // Execute a tiny direct consumer of the produced rlib. Event transitions
     // alone would not catch stale incremental output.
-    let deps = target_dir.join("debug/deps");
-    let rlib = fs::read_dir(&deps)
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .find(|path| {
+    let rlibs: Vec<_> = common::profile_artifacts(&target_dir.join("debug"))
+        .into_iter()
+        .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| {
                     name.starts_with("libadaptive_fixture-") && name.ends_with(".rlib")
                 })
         })
-        .expect("fixture rlib was not produced");
+        .collect();
+    let rlib = rlibs
+        .iter()
+        .max_by_key(|path| std::fs::metadata(path).and_then(|meta| meta.modified()).ok())
+        .expect("fixture rlib was not produced")
+        .clone();
     let consumer_source = project.join("consumer.rs");
     let consumer_binary = project.join("consumer");
     fs::write(
@@ -195,13 +184,24 @@ fn build_variant_impl(
         "extern crate adaptive_fixture; fn main() { print!(\"{}\", adaptive_fixture::answer()); }\n",
     )
     .unwrap();
-    let consumer_compile = Command::new("rustc")
+    let mut consumer_compile = Command::new("rustc");
+    consumer_compile
         .arg(&consumer_source)
         .arg("--edition=2024")
         .arg("--extern")
-        .arg(format!("adaptive_fixture={}", rlib.display()))
+        .arg(format!("adaptive_fixture={}", rlib.display()));
+    let rmeta = rlib.with_extension("rmeta");
+    if rmeta.is_file() {
+        consumer_compile
+            .arg("--extern")
+            .arg(format!("adaptive_fixture={}", rmeta.display()));
+    }
+    let consumer_compile = consumer_compile
         .arg("-L")
-        .arg(format!("dependency={}", deps.display()))
+        .arg(format!(
+            "dependency={}",
+            rlib.parent().expect("rlib has a directory").display()
+        ))
         .arg("-o")
         .arg(&consumer_binary)
         .output()
@@ -217,7 +217,9 @@ fn build_variant_impl(
     assert!(consumer.status.success());
     assert_eq!(
         String::from_utf8_lossy(&consumer.stdout),
-        answer.to_string()
+        answer.to_string(),
+        "rlib {}",
+        rlib.display()
     );
     only_new_event(cache_dir, event_count)
 }
