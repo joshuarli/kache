@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 0655002ac7bd2073e1d9cea2ce6e55cec4c2a121e6f8390a41b30e0ef98d6f45 # shrinks to unit = Unit { codegen: [None, None, None], cfgs: [false, false, false], features: [false, false, false], sources: [""], generated: "", out_dir_unit: "aa00", rustflags: [false, false, false], cargo_cfgs: [None, None], env_deps: ["", ""], externs: [None, None] }, seed = 0

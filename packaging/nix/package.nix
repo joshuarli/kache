@@ -36,10 +36,14 @@ rustPlatform.buildRustPackage {
   cargoBuildFlags = [
     "-p"
     "kache"
+    "--features"
+    "remote"
   ];
   cargoTestFlags = [
     "-p"
     "kache"
+    "--features"
+    "remote"
   ];
 
   nativeCheckInputs = [

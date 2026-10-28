@@ -1,3 +1,4 @@
+#![cfg(feature = "remote")]
 //! Acceptance tests for the filesystem remote backend (kunobi-ninja/kache#414).
 //!
 //! The issue's headline criterion is a *cross-client* one: "two or more hosts

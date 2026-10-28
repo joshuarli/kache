@@ -8,8 +8,6 @@ fn doctor_link_layout_uses_the_mapped_store_and_leaves_missing_shards_absent() {
     let build = dir.path().join("build");
     fs::create_dir(&build).unwrap();
     let volume = format!("{}{}", build.display(), std::path::MAIN_SEPARATOR);
-    #[cfg(windows)]
-    let volume = volume.replace('/', "\\").to_uppercase();
     let mapping = crate::config::VolumeStore {
         volume,
         store: dir.path().join("shard"),
@@ -221,46 +219,33 @@ fn pager_line_writer_stops_on_content_or_newline_errors() {
 #[test]
 fn pager_resolution_obeys_tty_disable_and_environment_precedence() {
     assert_eq!(
-        resolve_pager_argv(false, true, Some("most -R"), Some("less -S"), false),
+        resolve_pager_argv(false, true, Some("most -R"), Some("less -S")),
         Some(vec!["most".to_string(), "-R".to_string()])
     );
     assert_eq!(
-        resolve_pager_argv(false, true, None, Some("less -S"), false),
+        resolve_pager_argv(false, true, None, Some("less -S")),
         Some(vec!["less".to_string(), "-S".to_string()])
     );
-    assert_eq!(
-        resolve_pager_argv(true, true, Some("less"), None, false),
-        None
-    );
-    assert_eq!(
-        resolve_pager_argv(false, false, Some("less"), None, false),
-        None
-    );
+    assert_eq!(resolve_pager_argv(true, true, Some("less"), None), None);
+    assert_eq!(resolve_pager_argv(false, false, Some("less"), None), None);
 
     // A present but empty KACHE_PAGER wins over PAGER and disables paging.
     assert_eq!(
-        resolve_pager_argv(false, true, Some(""), Some("less"), false),
+        resolve_pager_argv(false, true, Some(""), Some("less")),
         None
     );
     assert_eq!(
-        resolve_pager_argv(false, true, Some("cat"), Some("less"), false),
+        resolve_pager_argv(false, true, Some("cat"), Some("less")),
         None
     );
-    assert_eq!(
-        resolve_pager_argv(false, true, None, Some("cat"), false),
-        None
-    );
+    assert_eq!(resolve_pager_argv(false, true, None, Some("cat")), None);
 }
 
 #[test]
 fn pager_resolution_uses_platform_defaults() {
     assert_eq!(
-        resolve_pager_argv(false, true, None, None, false),
+        resolve_pager_argv(false, true, None, None),
         Some(vec!["less".to_string(), "-FRX".to_string()])
-    );
-    assert_eq!(
-        resolve_pager_argv(false, true, None, None, true),
-        Some(vec!["more.com".to_string()])
     );
 }
 
@@ -271,8 +256,7 @@ fn pager_resolution_groups_quotes_without_shell_evaluation() {
             false,
             true,
             Some(r#""C:\Program Files\Git\usr\bin\less.exe" -FRX"#),
-            None,
-            true
+            None
         ),
         Some(vec![
             r"C:\Program Files\Git\usr\bin\less.exe".to_string(),
@@ -284,8 +268,7 @@ fn pager_resolution_groups_quotes_without_shell_evaluation() {
             false,
             true,
             Some("less --prompt='literal ; $HOME | text'"),
-            None,
-            false
+            None
         ),
         Some(vec![
             "less".to_string(),
@@ -293,7 +276,7 @@ fn pager_resolution_groups_quotes_without_shell_evaluation() {
         ])
     );
     assert_eq!(
-        resolve_pager_argv(false, true, Some("less 'unterminated"), None, false),
+        resolve_pager_argv(false, true, Some("less 'unterminated"), None),
         None
     );
 }
@@ -332,6 +315,7 @@ fn stats_names_the_host_config_only_when_in_effect() {
 /// Each host-config state reads the way `kache doctor` should say it: an
 /// unusable file is the only failure, and an overridden key names what
 /// wins over it.
+#[cfg(feature = "remote")]
 #[test]
 fn remote_access_reports_the_explained_cause() {
     let ok = remote_access_from(Ok(()), None, None);
@@ -360,6 +344,7 @@ fn remote_access_reports_the_explained_cause() {
 /// The remote line says whose credentials the store accepted, so an
 /// instance role in use is visible. A chain that stopped is reported by its
 /// reason alone.
+#[cfg(feature = "remote")]
 #[test]
 fn remote_access_names_the_credential_source_and_a_stopped_chain() {
     let ok = remote_access_from(Ok(()), None, Some("EC2 instance metadata"));
@@ -393,8 +378,10 @@ fn remote_access_names_the_credential_source_and_a_stopped_chain() {
 }
 
 /// A transport whose GET never answers.
+#[cfg(feature = "remote")]
 struct Silent;
 
+#[cfg(feature = "remote")]
 #[async_trait::async_trait]
 impl crate::remote_backend::RemoteBackend for Silent {
     async fn head(&self, _key: &str) -> Result<bool> {
@@ -422,6 +409,7 @@ impl crate::remote_backend::RemoteBackend for Silent {
     }
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn a_remote_that_never_answers_fails_the_probe() {
     assert_eq!(REMOTE_PROBE_TIMEOUT, std::time::Duration::from_secs(10));
@@ -2621,47 +2609,6 @@ fn unsupported_storage_observation_treats_the_whole_file_as_private() {
     assert!(observation.hardlink.is_none());
 }
 
-#[cfg(windows)]
-#[test]
-fn windows_hardlinks_share_one_reclaimable_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let first = dir.path().join("first.rlib");
-    let second = dir.path().join("second.rlib");
-    fs::write(&first, vec![0u8; 4096]).unwrap();
-    fs::hard_link(&first, &second).unwrap();
-
-    let first_meta = fs::metadata(&first).unwrap();
-    let second_meta = fs::metadata(&second).unwrap();
-    let (first_identity, first_links) =
-        query_windows_file_identity(&first).expect("first hardlink has a Windows identity");
-    let (second_identity, second_links) =
-        query_windows_file_identity(&second).expect("second hardlink has a Windows identity");
-    assert_eq!(first_identity, second_identity);
-    assert_eq!((first_links, second_links), (2, 2));
-
-    let distinct = dir.path().join("distinct.rlib");
-    fs::write(&distinct, vec![0u8; 4096]).unwrap();
-    let (distinct_identity, distinct_links) =
-        query_windows_file_identity(&distinct).expect("a plain file has a Windows identity");
-    assert_ne!(first_identity, distinct_identity);
-    assert_eq!(distinct_links, 1);
-    assert!(
-        query_windows_file_identity(&dir.path().join("missing.rlib")).is_none(),
-        "a failed open must not invent an identity"
-    );
-
-    let first_observation = observe_storage(&first, &first_meta);
-    let second_observation = observe_storage(&second, &second_meta);
-    assert_eq!(first_observation.hardlink, second_observation.hardlink);
-    let distinct_observation = observe_storage(&distinct, &fs::metadata(&distinct).unwrap());
-    assert!(distinct_observation.hardlink.is_none());
-
-    let mut reclaim = ReclaimEstimator::default();
-    reclaim.record(first_meta.len(), first_observation);
-    reclaim.record(second_meta.len(), second_observation);
-    assert_eq!(reclaim.estimated_reclaimable_bytes(), 4096);
-}
-
 #[test]
 fn test_compute_project_stats_with_profiles() {
     let dir = tempfile::tempdir().unwrap();
@@ -3051,23 +2998,18 @@ fn rustdoc_doctor_fix_is_present_only_when_the_check_fails() {
 }
 
 #[test]
-fn rustdoc_doctor_fields_cover_windows_unset_and_a_bad_path() {
+fn rustdoc_doctor_fields_cover_unset_and_a_bad_path() {
+    assert_eq!(rustdoc_doctor_fields(None, false), (true, "not set"));
     assert_eq!(
-        rustdoc_doctor_fields(false, Some("/usr/bin/rustdoc"), false),
-        (true, "not cached on Windows")
-    );
-    assert_eq!(rustdoc_doctor_fields(true, None, false), (true, "not set"));
-    assert_eq!(
-        rustdoc_doctor_fields(true, Some("/shim/rustdoc"), true),
+        rustdoc_doctor_fields(Some("/shim/rustdoc"), true),
         (true, "shim")
     );
     assert_eq!(
-        rustdoc_doctor_fields(true, Some("/usr/bin/rustdoc"), false),
+        rustdoc_doctor_fields(Some("/usr/bin/rustdoc"), false),
         (false, "not a rustdoc shim")
     );
 }
 
-#[cfg(any(unix, windows))]
 #[test]
 fn rustdoc_shim_path_requires_an_absolute_rustdoc_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -3435,6 +3377,7 @@ fn test_get_workspace_crate_names_errors_on_bad_manifest() {
 
 // ── backend-neutral remote tests ──────────────────────────────────────────
 
+#[cfg(feature = "remote")]
 #[derive(Default)]
 struct BackendCalls {
     gets: Vec<String>,
@@ -3442,6 +3385,7 @@ struct BackendCalls {
     lists: Vec<String>,
 }
 
+#[cfg(feature = "remote")]
 struct TestBackend {
     inner: crate::remote_backend::OpenDalBackend,
     calls: std::sync::Mutex<BackendCalls>,
@@ -3449,6 +3393,7 @@ struct TestBackend {
     listing: Option<Arc<ControlledListing>>,
 }
 
+#[cfg(feature = "remote")]
 impl TestBackend {
     fn memory() -> Arc<Self> {
         Arc::new(Self {
@@ -3487,10 +3432,12 @@ impl TestBackend {
     }
 }
 
+#[cfg(feature = "remote")]
 fn as_remote_backend(backend: &Arc<TestBackend>) -> Arc<dyn crate::remote_backend::RemoteBackend> {
     backend.clone()
 }
 
+#[cfg(feature = "remote")]
 fn as_cache_remote(
     backend: Arc<dyn crate::remote_backend::RemoteBackend>,
     remote: &crate::config::RemoteConfig,
@@ -3498,6 +3445,7 @@ fn as_cache_remote(
     crate::cache_remote::V3Remote::new(backend, remote.clone())
 }
 
+#[cfg(feature = "remote")]
 #[async_trait::async_trait]
 impl crate::remote_backend::RemoteBackend for TestBackend {
     async fn head(&self, key: &str) -> Result<bool> {
@@ -3545,6 +3493,7 @@ impl crate::remote_backend::RemoteBackend for TestBackend {
     }
 }
 
+#[cfg(feature = "remote")]
 struct ControlledListing {
     active: std::sync::atomic::AtomicUsize,
     started: tokio::sync::Semaphore,
@@ -3552,8 +3501,10 @@ struct ControlledListing {
     fail: bool,
 }
 
+#[cfg(feature = "remote")]
 struct ActiveListing<'a>(&'a ControlledListing);
 
+#[cfg(feature = "remote")]
 impl Drop for ActiveListing<'_> {
     fn drop(&mut self) {
         self.0
@@ -3562,6 +3513,7 @@ impl Drop for ActiveListing<'_> {
     }
 }
 
+#[cfg(feature = "remote")]
 fn controlled_listing(fail: bool) -> (Arc<TestBackend>, Arc<ControlledListing>) {
     let listing = Arc::new(ControlledListing {
         active: std::sync::atomic::AtomicUsize::new(0),
@@ -3574,6 +3526,7 @@ fn controlled_listing(fail: bool) -> (Arc<TestBackend>, Arc<ControlledListing>) 
     (backend, listing)
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn scoped_sync_lists_overlap_within_the_configured_limit() {
     use std::sync::atomic::Ordering::SeqCst;
@@ -3653,6 +3606,7 @@ async fn scoped_sync_lists_overlap_within_the_configured_limit() {
     }
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn scoped_listing_propagates_failures_and_drops_cancelled_requests() {
     use std::sync::atomic::Ordering::SeqCst;
@@ -3676,6 +3630,7 @@ async fn scoped_listing_propagates_failures_and_drops_cancelled_requests() {
     assert_eq!(backend.list_calls().len(), 2);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn scoped_listing_merges_every_requested_crates_keys() {
     let remote = test_remote_cfg();
@@ -3707,6 +3662,7 @@ async fn scoped_listing_merges_every_requested_crates_keys() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn upload_shards_uploads_one_shard_per_nonempty_bucket() {
     // Two deps that both have build events -> they land in (likely) two
@@ -3759,6 +3715,7 @@ async fn upload_shards_uploads_one_shard_per_nonempty_bucket() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn upload_shards_skips_when_no_entries_match() {
     // Deps present but no matching build events -> no shards uploaded, so
@@ -3783,6 +3740,7 @@ async fn upload_shards_skips_when_no_entries_match() {
     assert!(backend.put_calls().is_empty());
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn upload_shards_errors_on_malformed_lockfile() {
     // Bad Cargo.lock -> parse error before any shard upload.
@@ -3827,7 +3785,6 @@ fn save_manifest_config(
         input_predictions: false,
         record_sessions: false,
         volume_stores: Vec::new(),
-        windows_hardlink: false,
         shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
@@ -6344,6 +6301,7 @@ fn test_remote_cfg() -> crate::config::RemoteConfig {
     crate::config::RemoteConfig::test_s3("bucket", "prefix")
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn upload_manifest_and_shards_uploads_manifest_only_without_namespace() {
     // No namespace -> exactly one object (the monolithic manifest).
@@ -6371,6 +6329,7 @@ async fn upload_manifest_and_shards_uploads_manifest_only_without_namespace() {
     assert_eq!(backend.put_calls(), vec!["prefix/_manifests/mykey.json"]);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn upload_manifest_and_shards_skips_shards_when_lock_missing() {
     // Namespace given but Cargo.lock absent -> still only the manifest.
@@ -6398,6 +6357,7 @@ async fn upload_manifest_and_shards_skips_shards_when_lock_missing() {
     assert_eq!(backend.put_calls(), vec!["prefix/_manifests/mykey.json"]);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn upload_manifest_and_shards_uploads_shards_when_lock_present() {
     // Namespace + a real Cargo.lock with deps that match the entries -> the
@@ -6438,10 +6398,12 @@ async fn upload_manifest_and_shards_uploads_shards_when_lock_present() {
     );
 }
 
+#[cfg(feature = "remote")]
 fn sync_test_cache_key(seed: &str) -> String {
     blake3::hash(seed.as_bytes()).to_hex().to_string()
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_dry_run_empty_remote_reports_nothing() {
     // Empty remote + empty local store: the diff is empty and sync reports
@@ -6470,6 +6432,7 @@ async fn sync_with_client_dry_run_empty_remote_reports_nothing() {
     assert_eq!(backend.list_calls(), vec!["prefix/v3/manifests/"]);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_workspace_pull_scopes_listing_to_workspace_members() {
     // `--workspace` must scope the pull listing to workspace members and
@@ -6503,6 +6466,7 @@ async fn sync_with_client_workspace_pull_scopes_listing_to_workspace_members() {
     assert_eq!(backend.list_calls(), vec!["prefix/v3/manifests/wsfoo/"]);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_workspace_pull_errors_when_no_workspace_resolved() {
     // `--workspace` with an unresolved (None) or empty workspace set must
@@ -6543,6 +6507,7 @@ async fn sync_with_client_workspace_pull_errors_when_no_workspace_resolved() {
     }
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_push_uploads_local_only_entry() {
     // A populated local store + an empty remote: push-only sync uploads the
@@ -6595,6 +6560,7 @@ async fn sync_with_client_push_uploads_local_only_entry() {
     assert!(puts.contains(&"prefix/v3/manifests/foo/pushkey123.json".to_string()));
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_push_throttles_with_low_concurrency() {
     // Two local entries with concurrency=1 force the push loop's
@@ -6645,6 +6611,7 @@ async fn sync_with_client_push_throttles_with_low_concurrency() {
     assert_eq!(backend.put_calls().len(), 4);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_dry_run_plans_pull_for_remote_only_key() {
     // The remote lists a manifest for a key absent from the local store, so
@@ -6683,6 +6650,7 @@ async fn sync_with_client_dry_run_plans_pull_for_remote_only_key() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_pull_loop_records_failure_and_returns_err_by_default() {
     // A remote-only key drives a real (non-dry-run) pull. The served pack is
@@ -6733,6 +6701,7 @@ async fn sync_with_client_pull_loop_records_failure_and_returns_err_by_default()
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_pull_allows_partial_when_flag_set() {
     let dir = tempfile::tempdir().unwrap();
@@ -6776,6 +6745,7 @@ async fn sync_with_client_pull_allows_partial_when_flag_set() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_push_reports_failed_uploads_and_returns_err_by_default() {
     // A local-only entry is scheduled for push, but the backend rejects
@@ -6831,6 +6801,7 @@ async fn sync_with_client_push_reports_failed_uploads_and_returns_err_by_default
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_push_allows_partial_when_flag_set() {
     let dir = tempfile::tempdir().unwrap();
@@ -6879,6 +6850,7 @@ async fn sync_with_client_push_allows_partial_when_flag_set() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_pull_throttles_with_low_concurrency() {
     // Two remote-only keys with concurrency=1 force the pull loop's
@@ -6931,6 +6903,7 @@ async fn sync_with_client_pull_throttles_with_low_concurrency() {
 /// Build a valid v3 entry pack (tar.zst) for `key`/`crate_name` from a
 /// throwaway store, so tests can serve it as a GET body to drive the
 /// download-success path.
+#[cfg(feature = "remote")]
 fn build_entry_pack(key: &str, crate_name: &str) -> Vec<u8> {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = save_manifest_config(tmp.path().to_path_buf(), None);
@@ -6958,6 +6931,7 @@ fn build_entry_pack(key: &str, crate_name: &str) -> Vec<u8> {
     crate::remote_layout::create_entry_pack_zstd(&entry_dir, &store.blobs_dir(), &meta, 3).unwrap()
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn lockfile_sync_pulls_hyphenated_packages_from_compiler_crate_prefixes() {
     let dir = tempfile::tempdir().unwrap();
@@ -7026,6 +7000,7 @@ async fn lockfile_sync_pulls_hyphenated_packages_from_compiler_crate_prefixes() 
     }
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_pull_downloads_and_imports_entry() {
     // Remote lists a key absent locally; the GET returns a VALID pack, so
@@ -7078,6 +7053,7 @@ async fn sync_with_client_pull_downloads_and_imports_entry() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_pull_flushes_deferred_imports_without_a_daemon() {
     let dir = tempfile::tempdir().unwrap();
@@ -7123,6 +7099,7 @@ async fn sync_with_client_pull_flushes_deferred_imports_without_a_daemon() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_retries_pending_durability_on_a_no_op_but_not_a_dry_run() {
     let dir = tempfile::tempdir().unwrap();
@@ -7234,6 +7211,7 @@ fn standalone_sync_leaves_pending_work_to_a_reachable_daemon() {
     assert_eq!(store.pending_durability().unwrap(), 0);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_pull_recovers_uncommitted_extracted_entry() {
     let dir = tempfile::tempdir().unwrap();
@@ -7293,11 +7271,13 @@ async fn sync_with_client_pull_recovers_uncommitted_extracted_entry() {
     );
 }
 
+#[cfg(feature = "remote")]
 struct DisappearingBackend {
     inner: Arc<TestBackend>,
     on_put_delete: std::path::PathBuf,
 }
 
+#[cfg(feature = "remote")]
 #[async_trait::async_trait]
 impl crate::remote_backend::RemoteBackend for DisappearingBackend {
     async fn head(&self, key: &str) -> Result<bool> {
@@ -7324,6 +7304,7 @@ impl crate::remote_backend::RemoteBackend for DisappearingBackend {
     }
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_push_fails_when_local_entry_disappears() {
     let dir = tempfile::tempdir().unwrap();
@@ -7382,6 +7363,7 @@ async fn sync_with_client_push_fails_when_local_entry_disappears() {
 }
 
 /// Build a tar.zst pack containing an invalid meta.json to test import failure.
+#[cfg(feature = "remote")]
 fn build_invalid_meta_pack() -> Vec<u8> {
     let mut tar_builder = tar::Builder::new(Vec::new());
     let meta_bytes = b"{\"not\": \"valid meta\"}";
@@ -7395,6 +7377,7 @@ fn build_invalid_meta_pack() -> Vec<u8> {
     zstd::encode_all(&tar_data[..], 3).unwrap()
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_pull_fails_when_import_fails_by_default() {
     let dir = tempfile::tempdir().unwrap();
@@ -7437,6 +7420,7 @@ async fn sync_with_client_pull_fails_when_import_fails_by_default() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_pull_allows_partial_when_import_fails() {
     let dir = tempfile::tempdir().unwrap();
@@ -7475,6 +7459,7 @@ async fn sync_with_client_pull_allows_partial_when_import_fails() {
     .expect("pull sync with allow_partial should return Ok even when import fails");
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_mixed_success_and_failure_completes_all_and_fails_default() {
     let dir = tempfile::tempdir().unwrap();
@@ -7547,6 +7532,7 @@ async fn sync_with_client_mixed_success_and_failure_completes_all_and_fails_defa
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_mixed_success_and_failure_with_allow_partial_returns_ok() {
     let dir = tempfile::tempdir().unwrap();
@@ -8779,6 +8765,7 @@ fn clean_event_applies_press_but_ignores_release() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn sync_with_client_push_skipped_when_remote_readonly() {
     let dir = tempfile::tempdir().unwrap();
@@ -9427,33 +9414,19 @@ fn a_declined_unit_clean_says_nothing_was_removed() {
 }
 
 #[test]
-fn command_lines_quote_for_the_platform_shell() {
+fn command_lines_quote_for_the_posix_shell() {
     let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
-    let windows_path = argv(&["kache", "clean", r"C:\Users\RUNNER~1\Temp\.tmp1", "--yes"]);
     assert_eq!(
-        command_line(&windows_path, true),
-        r"kache clean C:\Users\RUNNER~1\Temp\.tmp1 --yes"
-    );
-    let spaced = argv(&["kache", "clean", r"C:\My Dir", r#"say "hi""#]);
-    assert_eq!(
-        command_line(&spaced, true),
-        r#"kache clean "C:\My Dir" "say \"hi\"""#
-    );
-    assert_eq!(command_line(&argv(&["kache", ""]), true), r#"kache """#);
-    assert_eq!(
-        command_line(&argv(&["kache", "clean", "/tmp/my dir"]), false),
+        command_line(&argv(&["kache", "clean", "/tmp/my dir"])),
         "kache clean '/tmp/my dir'"
     );
+    assert_eq!(command_line(&argv(&["kache", ""])), "kache ''");
 }
 
 #[test]
 fn no_terminal_names_the_same_command_with_yes() {
     let args = ["clean".to_string(), "/tmp/my dir".to_string()];
-    let quoted = if cfg!(windows) {
-        "\"/tmp/my dir\""
-    } else {
-        "'/tmp/my dir'"
-    };
+    let quoted = "'/tmp/my dir'";
     assert_eq!(
         no_terminal("nothing removed", &args, true).to_string(),
         format!(

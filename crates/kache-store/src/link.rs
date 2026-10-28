@@ -7,7 +7,6 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 struct LinkPolicy {
-    windows_hardlink_restore: Cell<bool>,
     shared_hardlink_restores: Cell<bool>,
     cow_warn_marker: OnceCell<PathBuf>,
     storage_layout_advice: Cell<bool>,
@@ -18,7 +17,6 @@ struct LinkPolicy {
 impl Default for LinkPolicy {
     fn default() -> Self {
         Self {
-            windows_hardlink_restore: Cell::new(false),
             shared_hardlink_restores: Cell::new(false),
             cow_warn_marker: OnceCell::new(),
             storage_layout_advice: Cell::new(true),
@@ -97,11 +95,7 @@ fn mapped_target() -> bool {
     policy_bool(&MAPPED_TARGET, |policy| &policy.mapped_target)
 }
 
-/// Legacy process default: restore via hardlink on a non-CoW Windows volume (NTFS)
-/// instead of the default copy (#429). Set once from `config.windows_hardlink`
-/// at wrapper entry; read on the Windows restore path. Off everywhere else.
-static WINDOWS_HARDLINK_RESTORE: AtomicBool = AtomicBool::new(false);
-/// Unix opt-in: every target directory may share a store blob's inode.
+/// Every target directory may share a store blob's inode.
 static SHARED_HARDLINK_RESTORES: AtomicBool = AtomicBool::new(false);
 
 /// Let restores hardlink a blob that another target directory already links
@@ -115,35 +109,13 @@ pub fn set_shared_hardlink_restores(enabled: bool) {
     );
 }
 
-/// Legacy process default: marker file used to dedup storage-layout advisories across
+/// Marker file used to dedup storage-layout advisories across
 /// the hundreds of wrapper processes a single build spawns (#508, #835). Set
 /// at wrapper entry; if unset the advisory falls back to once-per-process.
 ///
-/// Originally Windows-only for the no-CoW advisory; #835 reuses the same
-/// marker infrastructure for the Linux EXDEV/EPERM hardlink advisory, with
+/// Dedups the Linux EXDEV/EPERM hardlink advisory, with
 /// separate buckets so one severity never mutes another.
 static COW_WARN_MARKER: OnceLock<PathBuf> = OnceLock::new();
-
-/// Set the Windows hardlink-restore opt-in (from `Config::windows_hardlink`).
-/// Call before restoring. No effect off Windows.
-pub fn set_windows_hardlink_restore(enabled: bool) {
-    set_policy_bool(
-        &WINDOWS_HARDLINK_RESTORE,
-        |policy| &policy.windows_hardlink_restore,
-        enabled,
-    );
-}
-
-/// Is the `[cache] windows_hardlink` opt-in active for the current invocation?
-/// The store's insert-side blob hardlinking keys off the same flag as
-/// restore: without it, a hardlink would propagate the blob's read-only
-/// attribute to the build's own output (shared MFT record, #429).
-#[cfg(any(test, windows))]
-pub fn windows_hardlink_enabled() -> bool {
-    policy_bool(&WINDOWS_HARDLINK_RESTORE, |policy| {
-        &policy.windows_hardlink_restore
-    })
-}
 
 /// Set the cross-process dedup marker for storage-layout advisories. The first
 /// call in an invocation scope (or legacy process) wins. Each advisory
@@ -159,11 +131,9 @@ pub fn set_cow_warn_marker(path: std::path::PathBuf) {
     });
 }
 
-/// Legacy process default: surface storage-*layout* advisories ("no CoW",
-/// "cross-volume") on copy-restores (#551). On by default; set once from
-/// `Config::storage_layout_advice` at wrapper entry. Muting this never mutes
-/// fault reports (`UnexpectedOnCowVolume`) — advice and faults have different
-/// severities and different audiences.
+/// Surface storage-*layout* advisories
+/// ("cross-volume") on copy-restores (#551). On by default; set once from
+/// `Config::storage_layout_advice` at wrapper entry.
 static STORAGE_LAYOUT_ADVICE: AtomicBool = AtomicBool::new(true);
 
 /// Set the storage-layout advisory toggle (from `Config::storage_layout_advice`).
@@ -191,12 +161,11 @@ fn storage_layout_advice_enabled() -> bool {
     })
 }
 
-/// Legacy process default: send storage-layout advice to stderr (the default, for CLI
+/// Send storage-layout advice to stderr (the default, for CLI
 /// commands) or to the tracing log. Wrapper entries pick the log: a
 /// `RUSTC_WRAPPER`'s stderr is rustc's stderr to cargo and to every tool that
 /// reads it, so advice there looks like compiler output and can fail builds
-/// that reject unexpected stderr (kunobi-ninja/kache#1067). Faults
-/// (`UnexpectedOnCowVolume`) always use stderr.
+/// that reject unexpected stderr (kunobi-ninja/kache#1067).
 static LAYOUT_ADVICE_TO_LOG: AtomicBool = AtomicBool::new(false);
 
 /// Route storage-layout advice to the tracing log instead of stderr. Call
@@ -318,7 +287,7 @@ fn try_hard_link(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 /// Emit the Linux once-per-session hardlink advisory for EXDEV/EPERM (#835),
 /// reusing the cross-process marker-dedup helper (`warn_once_per_session`)
-/// that the Windows no-CoW advisory uses. Observability only: never changes
+/// that the hardlink advisory uses. Observability only: never changes
 /// what gets linked. Respects `[cache] storage_layout_advice = false`, which
 /// mutes layout advice but never faults.
 ///
@@ -424,10 +393,10 @@ pub(crate) fn warn_hardlink_fallback_once(
 ///   executables, dylibs, and proc-macros that may be mutated post-build
 ///   (codesigning, stripping, etc.).
 /// - `ExecutableHardlink`: an executable or loadable library that nothing
-///   rewrites in place after the restore. On Unix it falls back like
+///   rewrites in place after the restore. It falls back like
 ///   `Hardlink`, but only when the blob is read-only and already carries every
-///   execute bit, because the shared inode cannot be chmod'ed. Any other blob,
-///   and every Windows restore, is copied as `Copy` would. The caller decides
+///   execute bit, because the shared inode cannot be chmod'ed. Any other blob
+///   is copied as `Copy` would. The caller decides
 ///   which artifacts qualify.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LinkStrategy {
@@ -437,7 +406,6 @@ pub enum LinkStrategy {
     ExecutableHardlink,
 }
 
-#[cfg(not(windows))]
 fn remove_restore_file(path: &Path) -> std::io::Result<()> {
     if let Some(result) = crate::workspace::dispatch(crate::workspace::Operation::Remove(path)) {
         return result;
@@ -483,8 +451,6 @@ fn link_to_target_via(
                     |source, target| reflink(source, target).map_err(std::io::Error::other),
                 )?
             };
-            #[cfg(windows)]
-            clear_target(target_path)?;
             return prepared.publish_replacing();
         }
 
@@ -499,59 +465,35 @@ fn link_to_target_via(
         // Try reflink first. CoW gives us zero-copy *and* mutations don't
         // propagate to the cache blob — strictly better than hardlink when
         // available (APFS, btrfs, XFS-with-reflink).
-        // Keep the failure reason: on Windows it separates "this volume can't
-        // block-clone" from "this one file couldn't be cloned" (#508).
-        let reflink_err = match reflink(store_path, target_path) {
-            Ok(()) => {
-                if strategy == LinkStrategy::Hardlink {
-                    set_owner_write_permission(target_path)?;
-                } else {
-                    // Executables and loadable libraries also need execute bits.
-                    set_executable_permissions(target_path)?;
-                }
-                tracing::debug!(
-                    "reflinked {} -> {}",
-                    store_path.display(),
-                    target_path.display()
-                );
-                crate::opcounts::record_reflinked(bytes);
-                return Ok(());
+        if reflink(store_path, target_path).is_ok() {
+            if strategy == LinkStrategy::Hardlink {
+                set_owner_write_permission(target_path)?;
+            } else {
+                // Executables and loadable libraries also need execute bits.
+                set_executable_permissions(target_path)?;
             }
-            Err(e) => e,
-        };
-        #[cfg(not(windows))]
-        let _ = &reflink_err;
+            tracing::debug!(
+                "reflinked {} -> {}",
+                store_path.display(),
+                target_path.display()
+            );
+            crate::opcounts::record_reflinked(bytes);
+            return Ok(());
+        }
 
         // Reflink unsupported on this filesystem — strategy-specific fallback.
         if strategy == LinkStrategy::Hardlink {
-            // NTFS shares the read-only attribute across hardlinks. Unless the
-            // caller opted in, give its build a writable independent file.
-            #[cfg(windows)]
-            {
-                if windows_hardlink_enabled() {
-                    return hardlink_or_copy(store_path, target_path, bytes);
-                }
-                copy_file(store_path, target_path, false)?;
-                warn_no_cow_restore_once(store_path, target_path, bytes, &reflink_err, true);
-                crate::opcounts::record_copied(bytes);
-                return Ok(());
-            }
-            #[cfg(not(windows))]
             return hardlink_or_copy(store_path, target_path, bytes);
         }
         // Share the inode only when the blob can already run as it is:
         // changing permissions on the link would change the blob too.
-        #[cfg(unix)]
         if strategy == LinkStrategy::ExecutableHardlink
             && executable_blob_is_shareable(blob_mode(store_path))
         {
             return executable_hardlink_or_copy(store_path, target_path, bytes);
         }
-        // Executables and dylibs may change after the build. A large artifact
-        // that failed to clone on a CoW volume still needs a fault report.
+        // Executables and dylibs may change after the build.
         copy_file(store_path, target_path, true)?;
-        #[cfg(windows)]
-        warn_no_cow_restore_once(store_path, target_path, bytes, &reflink_err, false);
         crate::opcounts::record_copied(bytes);
         Ok(())
     };
@@ -579,23 +521,17 @@ fn link_to_target_via(
 }
 
 /// Hardlink fallback for the `Hardlink` strategy when reflink is unavailable.
-/// On Unix, keep at most one target output linked to the store blob; later
+/// Keep at most one target output linked to the store blob; later
 /// consumers get a private copy so their restore-time mtime stamp cannot
 /// affect a still-linked active reader in another target tree (#794). Falls
 /// back to a plain copy on hardlink failure (including cross-filesystem
 /// restores).
-///
-/// On Windows this runs only under the legacy `[cache] windows_hardlink`
-/// opt-in. That explicit tradeoff retains unrestricted hardlink sharing; it is
-/// unsafe for concurrent builds sharing a store as well as for consumers that
-/// delete or rewrite restored outputs (#429, #794). The default copies.
 fn hardlink_or_copy(store_path: &Path, target_path: &Path, bytes: u64) -> Result<()> {
     hardlink_or_copy_with_prelink_hook(store_path, target_path, bytes, false, || {})
 }
 
 /// [`hardlink_or_copy`] for an executable blob: the same one-consumer rule and
 /// post-link check, with a copy fallback that stays runnable (`0o755`).
-#[cfg(unix)]
 fn executable_hardlink_or_copy(store_path: &Path, target_path: &Path, bytes: u64) -> Result<()> {
     hardlink_or_copy_with_prelink_hook(store_path, target_path, bytes, true, || {})
 }
@@ -605,13 +541,11 @@ fn executable_hardlink_or_copy(store_path: &Path, target_path: &Path, bytes: u64
 /// instead of reaching the store, and must carry every execute bit, because
 /// the link cannot be chmod'ed on its own. A remote import lands at `0o444`
 /// and would not run from a link.
-#[cfg_attr(not(unix), allow(dead_code))]
 fn executable_blob_is_shareable(blob_mode: Option<u32>) -> bool {
     blob_mode.is_some_and(|mode| mode & 0o111 == 0o111 && mode & 0o222 == 0)
 }
 
 /// Permission bits of a store blob, or `None` when it cannot be read.
-#[cfg(unix)]
 fn blob_mode(store_path: &Path) -> Option<u32> {
     use std::os::unix::fs::PermissionsExt;
     fs::metadata(store_path)
@@ -631,12 +565,10 @@ fn hardlink_or_copy_with_prelink_hook(
     // existing target consumer. Metadata failure is handled conservatively:
     // a copy preserves isolation and lets the ordinary read report any real
     // source failure.
-    #[cfg_attr(not(unix), allow(unused_variables))]
     let shared = shared_hardlink_restores_enabled();
     // Every fallback below copies the same way, so an executable stays
     // runnable whichever check sends it there.
     let copy_instead = || copy_hardlink_fallback(store_path, target_path, bytes, executable);
-    #[cfg(unix)]
     match fs::metadata(store_path) {
         Ok(meta) => {
             use std::os::unix::fs::MetadataExt;
@@ -693,7 +625,6 @@ fn hardlink_or_copy_with_prelink_hook(
     // link. Only a contender that observes exactly blob + itself may retain
     // the link. Others unlink before returning, so no contender can reach its
     // mtime stamp while sharing an inode with an existing consumer.
-    #[cfg(unix)]
     if !shared {
         use std::os::unix::fs::MetadataExt;
         match fs::metadata(store_path) {
@@ -748,7 +679,6 @@ fn copy_hardlink_fallback(
 /// safe to keep; otherwise exclusivity cannot be shown and the failure
 /// surfaces. Extracted from its caller so tests can inject both observations
 /// instead of racing the validation window (#794).
-#[cfg(unix)]
 fn verify_orphaned_hardlink(
     target_path: &Path,
     target_meta: std::io::Result<fs::Metadata>,
@@ -779,299 +709,9 @@ fn verify_orphaned_hardlink(
     }
 }
 
-/// Why a Windows cache hit was restored by COPY instead of a block-clone.
-///
-/// A failed `FSCTL_DUPLICATE_EXTENTS_TO_FILE` does NOT imply the volume lacks
-/// copy-on-write, and conflating the two is what made kache cry wolf at every
-/// Dev Drive user (#508). The three causes need three different responses:
-///
-/// - **`CrossVolume`**: cache blob and build output are on different volumes.
-///   Block-cloning cannot span volumes (nor can hardlinks), so even two ReFS Dev
-///   Drives copy. Fix: co-locate cache + build on one volume — not a filesystem
-///   problem, so this is worth saying (#490).
-/// - **`NoCow`**: the volume genuinely has no block-cloning (NTFS). Fix: move
-///   both onto a ReFS Dev Drive, or opt into `[cache] windows_hardlink`. Worth
-///   saying — this is the case that really does double disk usage.
-/// - **`SubClusterOnCowVolume`**: the volume DOES block-clone, and this file is
-///   smaller than one cluster, so it has no cluster-aligned range (ReFS clones
-///   whole clusters; cloning past EOF is undefined). Every `.d` under ~4 KB hits
-///   this on a healthy Dev Drive: all 670 warnings in #508 were sub-cluster `.d`
-///   files while the `.rlib`/`.rmeta` beside them block-cloned fine. Saying
-///   nothing is right — the volume is healthy and there is no advice to give.
-/// - **`UnknownCow`**: the capability probe itself failed, so we do NOT know
-///   whether this volume block-clones. Still worth saying — a copy-restore is
-///   happening either way — but say it *honestly*: asserting "no copy-on-write"
-///   from a failed probe would repeat the very mistake #508 is about.
-/// - **`SubClusterOnCowVolume`**: the volume DOES block-clone, and this file is
-///   smaller than one cluster, so it has no cluster-aligned range (ReFS clones
-///   whole clusters; cloning past EOF is undefined). Every `.d` under ~4 KB hits
-///   this on a healthy Dev Drive: all 670 warnings in #508 were sub-cluster `.d`
-///   files while the `.rlib`/`.rmeta` beside them block-cloned fine. Saying
-///   nothing is right — the volume is healthy and there is no advice to give.
-/// - **`UnexpectedOnCowVolume`**: the volume block-clones and the file was big
-///   enough to clone, yet the clone still failed. That is NOT benign — a filter
-///   driver, an integrity-stream mismatch, or a kache bug could silently demote
-///   every large artifact to a copy. Surface it (with the OS error) rather than
-///   hiding it behind the #508 fix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(windows), allow(dead_code))]
-enum CopyRestoreCause {
-    CrossVolume,
-    NoCow,
-    UnknownCow,
-    SubClusterOnCowVolume,
-    UnexpectedOnCowVolume,
-}
-
-impl CopyRestoreCause {
-    #[cfg_attr(not(windows), allow(dead_code))]
-    fn mute_advice(self, mapped: bool, strategy_advice: bool, config_advice: bool) -> bool {
-        (self == Self::CrossVolume && mapped)
-            || (self.is_layout_advisory() && (!strategy_advice || !config_advice))
-    }
-
-    /// Which dedup bucket this advisory belongs to.
-    ///
-    /// A storage-*layout* advisory ("no CoW", "cross-volume") must NOT be able
-    /// to mute a *fault* ("the clone failed unexpectedly") — they have different
-    /// severities and different audiences, so they get separate markers. Sharing
-    /// one bucket would let a benign cross-volume note swallow the report of a
-    /// filter driver silently demoting every large artifact to a copy.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    fn warn_bucket(self) -> &'static str {
-        match self {
-            CopyRestoreCause::UnexpectedOnCowVolume => "cow-fault",
-            _ => "cow",
-        }
-    }
-
-    /// Where this cause's message goes. Advice follows the process's
-    /// layout-advice sink; a fault always reaches stderr, even in wrapper mode.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    fn warn_sink(self) -> crate::markers::WarnSink {
-        if self.is_layout_advisory() {
-            layout_advice_sink()
-        } else {
-            crate::markers::WarnSink::Stderr
-        }
-    }
-
-    /// Is this cause storage-layout *advice* (mutable via the `Copy` strategy
-    /// or `[cache] storage_layout_advice = false`, #551) rather than a fault
-    /// report? Exhaustive on purpose: a future variant must decide explicitly
-    /// which side it is on — a fault must never be muteable by an advice knob.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    fn is_layout_advisory(self) -> bool {
-        match self {
-            CopyRestoreCause::CrossVolume
-            | CopyRestoreCause::NoCow
-            | CopyRestoreCause::UnknownCow => true,
-            CopyRestoreCause::SubClusterOnCowVolume | CopyRestoreCause::UnexpectedOnCowVolume => {
-                false
-            }
-        }
-    }
-}
-
-/// Classify a copy-restore from the two volume roots, the build volume's
-/// block-cloning capability, and whether the file was too small to clone. Pure —
-/// kept platform-independent so the decision table is unit-testable off Windows.
-///
-/// Unknowns are never resolved *toward silence*: a failed capability probe warns
-/// as `UnknownCow` (hedged) rather than asserting NTFS, and an unknown size
-/// resolves to "unexpected" rather than assuming the benign sub-cluster case.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn classify_copy_restore(
-    cache_vol: Option<&str>,
-    build_vol: Option<&str>,
-    build_vol_has_cow: Option<bool>,
-    file_is_sub_cluster: Option<bool>,
-) -> CopyRestoreCause {
-    // If we can't resolve a volume for either side, don't assert cross-volume.
-    if let (Some(cache), Some(build)) = (cache_vol, build_vol)
-        && !cache.eq_ignore_ascii_case(build)
-    {
-        return CopyRestoreCause::CrossVolume;
-    }
-    match build_vol_has_cow {
-        // Same volume, and it block-clones — the other files in this same build
-        // reflink fine. Expected only when the file had no clonable range.
-        Some(true) => {
-            if file_is_sub_cluster == Some(true) {
-                CopyRestoreCause::SubClusterOnCowVolume
-            } else {
-                CopyRestoreCause::UnexpectedOnCowVolume
-            }
-        }
-        Some(false) => CopyRestoreCause::NoCow,
-        None => CopyRestoreCause::UnknownCow,
-    }
-}
-
-/// Tell the user their cache hits are being restored by COPY — but only when
-/// that is actually a problem, and at most once per warn-session window per
-/// [bucket](CopyRestoreCause::warn_bucket) across all wrapper processes (#508).
-///
-/// Both gates matter: a sub-cluster file on a working Dev Drive says nothing at
-/// all, and the real advisories dedup through a marker file rather than a
-/// per-process `Once` — each rustc is its own process, which is why a single
-/// build used to emit the same warning hundreds of times.
-///
-/// `bytes` is the blob's size and `reflink_err` the clone failure, so a file
-/// that was big enough to clone but failed anyway can still be surfaced instead
-/// of being swallowed along with the benign sub-cluster case.
-///
-/// `layout_advice` gates the *configuration* advisories ("no CoW", "cross
-/// volume"). The `Copy` strategy (executables, dylibs) always intended to copy,
-/// so it passes `false`: it must not start nagging about storage layout. But it
-/// still routes through here, because a LARGE artifact that fails to clone on a
-/// CoW volume is a genuine fault that must not pass silently just because the
-/// restore strategy happened to be `Copy`.
-///
-/// `[cache] storage_layout_advice = false` (#551) mutes the same advisories
-/// process-wide — the user saying their layout is intentional (e.g. an
-/// NTFS-only machine that can never host a ReFS Dev Drive). Like the `Copy`
-/// strategy, it can never mute a fault.
-#[cfg(windows)]
-fn warn_no_cow_restore_once(
-    store_path: &Path,
-    target_path: &Path,
-    bytes: u64,
-    reflink_err: &anyhow::Error,
-    layout_advice: bool,
-) {
-    let cache_vol = windows_volume_root(store_path);
-    let build_vol = windows_volume_root(target_path);
-    // A file with no cluster-aligned range can't be block-cloned on ANY volume.
-    // If the cluster size can't be read, leave it unknown rather than guessing.
-    let sub_cluster = kache_fs::windows_cluster_size(target_path)
-        .ok()
-        .map(|cluster| bytes > 0 && bytes < cluster);
-    let cause = classify_copy_restore(
-        cache_vol.as_deref(),
-        build_vol.as_deref(),
-        windows_volume_supports_block_clone(target_path),
-        sub_cluster,
-    );
-
-    let message = match cause {
-        CopyRestoreCause::SubClusterOnCowVolume => {
-            // Not a filesystem problem: the volume block-clones, this file is
-            // just smaller than a cluster. Debug-log it and stay quiet.
-            tracing::debug!(
-                "copy-restored {} — {} bytes is smaller than one cluster, so it has \
-                 no cluster-aligned range to block-clone; volume {} does support \
-                 copy-on-write",
-                target_path.display(),
-                bytes,
-                build_vol.as_deref().unwrap_or("?"),
-            );
-            return;
-        }
-        CopyRestoreCause::UnexpectedOnCowVolume => format!(
-            "kache: this volume ({vol}) supports copy-on-write and this file is \
-             large enough to block-clone, but the clone FAILED — so the cache hit \
-             was restored by COPY and does not share storage blocks with the cache. This \
-             is unexpected; please report it with the error below.\n         \
-             error:           {err:#}\n         affected output: {target} \
-             ({bytes} bytes)",
-            vol = build_vol.as_deref().unwrap_or("?"),
-            err = reflink_err,
-            target = target_path.display(),
-            bytes = bytes,
-        ),
-        CopyRestoreCause::CrossVolume => format!(
-            "kache: cache hits are restored by COPY because the cache and build \
-             tree are on different volumes ({cache_vol} vs {build_vol}), and \
-             copy-on-write block-cloning cannot span volumes — so they do not \
-             share storage blocks, roughly doubling disk for cached content. Put the \
-             cache and build dir on the SAME volume (ideally a ReFS Dev Drive) \
-             for zero-copy dedup. If this layout is intentional, silence this \
-             advice with `[cache] storage_layout_advice = false` (clone faults \
-             are still reported).\n         cache blob:   {store}\n         \
-             build output: {target}",
-            cache_vol = cache_vol.as_deref().unwrap_or("?"),
-            build_vol = build_vol.as_deref().unwrap_or("?"),
-            store = store_path.display(),
-            target = target_path.display(),
-        ),
-        CopyRestoreCause::NoCow => format!(
-            "kache: this volume ({vol}) has no copy-on-write, so cache hits are \
-             restored by COPY — the cache and build tree do not share storage blocks, \
-             roughly doubling disk for cached content. For zero-copy dedup put \
-             the cache + build dir on a ReFS Dev Drive, or set \
-             `[cache] windows_hardlink = true` (only if your build never \
-             deletes or rewrites an object output). If this layout is \
-             intentional, silence this advice with \
-             `[cache] storage_layout_advice = false` (clone faults are still \
-             reported).\n         affected output: {target}",
-            vol = build_vol.as_deref().unwrap_or("NTFS"),
-            target = target_path.display(),
-        ),
-        // Probe failed: we do NOT know what this volume supports. Say exactly
-        // that — claiming "no copy-on-write" here would be the same unfounded
-        // assertion that produced #508 in the first place.
-        CopyRestoreCause::UnknownCow => format!(
-            "kache: cache hits are restored by COPY, so the cache and build tree \
-             do not share storage blocks. kache could not determine whether this volume \
-             ({vol}) supports copy-on-write — the capability probe failed. For \
-             zero-copy dedup the cache + build dir must be on the same ReFS Dev \
-             Drive. If this layout is intentional, silence this advice with \
-             `[cache] storage_layout_advice = false` (clone faults are still \
-             reported).\n         probe error:     {err:#}\n         affected output: \
-             {target}",
-            vol = build_vol.as_deref().unwrap_or("?"),
-            err = reflink_err,
-            target = target_path.display(),
-        ),
-    };
-
-    // The Copy strategy always meant to copy — it must not nag about storage
-    // layout — and `[cache] storage_layout_advice = false` is the user saying
-    // their layout is intentional (#551). Either way this mutes only the
-    // *advice*: a genuine clone fault still reports (see `layout_advice`).
-    if cause.mute_advice(
-        mapped_target(),
-        layout_advice,
-        storage_layout_advice_enabled(),
-    ) {
-        tracing::debug!(
-            "copy-restored {} ({:?}; layout advice muted: strategy={}, config={})",
-            target_path.display(),
-            cause,
-            !layout_advice,
-            !storage_layout_advice_enabled(),
-        );
-        return;
-    }
-
-    let sink = cause.warn_sink();
-    match cow_warn_marker() {
-        Some(base) => {
-            // Separate bucket per severity: a layout advisory must never mute a
-            // fault report (and vice versa).
-            let marker = bucket_marker(&base, cause.warn_bucket());
-            let _warned = crate::markers::warn_once_per_session_to(
-                &marker,
-                crate::markers::WARN_SESSION_SECS,
-                &message,
-                sink,
-            );
-        }
-        // No marker configured (unit tests, non-wrapper entrypoints): fall back
-        // to once-per-process rather than going silent.
-        None => {
-            use std::sync::Once;
-            static WARNED: Once = Once::new();
-            WARNED.call_once(|| sink.emit(&message));
-        }
-    }
-}
-
 /// Derive a per-bucket marker path from the base marker (`…/kache-cow-warn-<hash>`
 /// → `…/kache-cow-warn-<hash>.<bucket>`), so advisories of different severity
 /// dedup independently.
-#[cfg_attr(not(windows), allow(dead_code))]
 fn bucket_marker(base: &Path, bucket: &str) -> std::path::PathBuf {
     let mut name = base.as_os_str().to_os_string();
     name.push(".");
@@ -1079,83 +719,17 @@ fn bucket_marker(base: &Path, bucket: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(name)
 }
 
-/// Does the volume holding `path` support ReFS block-cloning (copy-on-write)?
-/// `None` if the capability can't be determined.
-///
-/// This is the question `warn_no_cow_restore_once` actually needs answered —
-/// asking the volume directly, rather than inferring "no CoW" from one failed
-/// clone of one file (#508).
-#[cfg(windows)]
-fn windows_volume_supports_block_clone(path: &Path) -> Option<bool> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationW;
-    use windows_sys::Win32::System::SystemServices::FILE_SUPPORTS_BLOCK_REFCOUNTING;
-
-    let root = windows_volume_root(path)?;
-    let wide: Vec<u16> = std::ffi::OsStr::new(&root)
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    let mut flags: u32 = 0;
-    let ok = unsafe {
-        GetVolumeInformationW(
-            wide.as_ptr(),
-            std::ptr::null_mut(),
-            0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut flags,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if ok == 0 {
-        return None;
-    }
-    Some(flags & FILE_SUPPORTS_BLOCK_REFCOUNTING != 0)
-}
-
-/// Volume mount root (e.g. `C:\` or `D:\`) that holds `path`, or `None` if it
-/// can't be resolved. `path` need not exist; its nearest existing parent volume
-/// is used. Used to tell a cross-volume copy-restore from a no-CoW one (#490).
-#[cfg(windows)]
-fn windows_volume_root(path: &Path) -> Option<String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::GetVolumePathNameW;
-
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let mut root = [0u16; 260];
-    let ok = unsafe { GetVolumePathNameW(wide.as_ptr(), root.as_mut_ptr(), root.len() as u32) };
-    if ok == 0 {
-        return None;
-    }
-    let len = root.iter().position(|&c| c == 0).unwrap_or(root.len());
-    Some(String::from_utf16_lossy(&root[..len]))
-}
-
 fn writable_mode(permissions: &fs::Permissions) -> u32 {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        permissions.mode() & 0o777
-    }
-    #[cfg(windows)]
-    {
-        if permissions.readonly() { 0o444 } else { 0o644 }
-    }
+    use std::os::unix::fs::PermissionsExt;
+    permissions.mode() & 0o777
 }
 
 /// Grant owner write access on an independent restore, retaining other bits.
 /// Call only after the target is known to have its own inode.
 fn set_owner_write_permission(path: &Path) -> Result<()> {
     let mut permissions = fs::metadata(path)?.permissions();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        permissions.set_mode(permissions.mode() | 0o200);
-    }
-    #[cfg(not(unix))]
-    permissions.set_readonly(false);
+    use std::os::unix::fs::PermissionsExt;
+    permissions.set_mode(permissions.mode() | 0o200);
     if let Some(result) = crate::workspace::dispatch(crate::workspace::Operation::Permissions(
         path,
         writable_mode(&permissions),
@@ -1525,30 +1099,12 @@ fn temp_clone_path(directory: &Path) -> PathBuf {
 }
 
 fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        left.dev() == right.dev() && left.ino() == right.ino()
-    }
-    // Windows `Metadata` has no stable file index. Clones come from
-    // `try_reflink`, which creates a new file rather than a hardlink.
-    #[cfg(not(unix))]
-    {
-        let _ = (left, right);
-        false
-    }
+    use std::os::unix::fs::MetadataExt;
+    left.dev() == right.dev() && left.ino() == right.ino()
 }
 
 fn link_count(meta: &fs::Metadata) -> u64 {
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::MetadataExt::nlink(meta)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = meta;
-        1
-    }
+    std::os::unix::fs::MetadataExt::nlink(meta)
 }
 
 /// Prepare transformed bytes with the same absent-only guarantee.
@@ -1598,12 +1154,6 @@ fn clear_target(target_path: &Path) -> Result<()> {
         };
     }
     if target_path.exists() || target_path.symlink_metadata().is_ok() {
-        #[cfg(windows)]
-        if let Ok(meta) = fs::metadata(target_path) {
-            let mut perms = meta.permissions();
-            perms.set_readonly(false);
-            let _ = fs::set_permissions(target_path, perms);
-        }
         fs::remove_file(target_path)
             .with_context(|| format!("removing existing file at {}", target_path.display()))?;
     }
@@ -1630,8 +1180,6 @@ pub fn write_restored(target_path: &Path, content: &[u8], strategy: LinkStrategy
     if strategy == LinkStrategy::WritableCopy {
         create_restore_directories(stage_parent(target_path))?;
         let prepared = prepare_writable_target_from_bytes(target_path, content)?;
-        #[cfg(windows)]
-        clear_target(target_path)?;
         return prepared.publish_replacing();
     }
     if let Some(result) = crate::workspace::dispatch(crate::workspace::Operation::Write(
@@ -1652,22 +1200,17 @@ pub fn write_restored(target_path: &Path, content: &[u8], strategy: LinkStrategy
         clear_target(target_path)?;
         fs::write(target_path, content)
             .with_context(|| format!("writing restored file {}", target_path.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = if matches!(
-                strategy,
-                LinkStrategy::Copy | LinkStrategy::ExecutableHardlink
-            ) {
-                0o755
-            } else {
-                0o644
-            };
-            fs::set_permissions(target_path, fs::Permissions::from_mode(mode))
-                .with_context(|| format!("setting perms on {}", target_path.display()))?;
-        }
-        #[cfg(not(unix))]
-        let _ = strategy;
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if matches!(
+            strategy,
+            LinkStrategy::Copy | LinkStrategy::ExecutableHardlink
+        ) {
+            0o755
+        } else {
+            0o644
+        };
+        fs::set_permissions(target_path, fs::Permissions::from_mode(mode))
+            .with_context(|| format!("setting perms on {}", target_path.display()))?;
         Ok(())
     };
 
@@ -1725,7 +1268,6 @@ pub fn touch_mtime_write_clock(path: &Path) -> Result<()> {
     // Any failure below propagates to `restore_from_cache`'s callers, which
     // treat it as a clean miss and recompile (never a failed build) — so
     // fail-closed checks here cost a recompile, not correctness.
-    #[cfg(unix)]
     {
         use std::os::fd::{AsRawFd, FromRawFd};
         use std::os::unix::ffi::OsStrExt;
@@ -1783,64 +1325,7 @@ pub fn touch_mtime_write_clock(path: &Path) -> Result<()> {
         }
     }
 
-    // Non-unix targets have no UTIME_NOW, so sample the filesystem's write
-    // clock directly: write a sibling temp file in the same directory (same
-    // volume — timestamp behavior is per-filesystem), read back the mtime it
-    // was stamped with, and apply that value to the target. Sampling BEFORE
-    // stamping is the safe direction: the stamp can only sit slightly in the
-    // past relative to later writes, never ahead of them — the #677/#681
-    // inversion was the precise clock stamping AHEAD of write timestamps
-    // (measured ~1.8 ms on NTFS by the first Windows CI run of the ordering
-    // test below). A sampling failure PROPAGATES: falling back to
-    // `FileTime::now()` would silently reintroduce the known-bad precise
-    // stamp, whereas an error here degrades to a clean recompile at the
-    // restore call sites.
-    #[cfg(not(unix))]
-    {
-        let now = sample_write_clock(path)
-            .with_context(|| format!("sampling write clock next to {}", path.display()))?;
-
-        // On Windows, hardlinked files share permissions with the store
-        // blob, which is read-only. Temporarily make it writable to update
-        // the mtime, then restore the read-only flag.
-        #[cfg(windows)]
-        {
-            let meta = fs::metadata(path)?;
-            let was_readonly = meta.permissions().readonly();
-            if was_readonly {
-                let mut perms = meta.permissions();
-                perms.set_readonly(false);
-                fs::set_permissions(path, perms)?;
-            }
-            let result = filetime::set_file_mtime(path, now);
-            if was_readonly {
-                let mut perms = fs::metadata(path)?.permissions();
-                perms.set_readonly(true);
-                let _ = fs::set_permissions(path, perms);
-            }
-            result.with_context(|| format!("updating mtime of {}", path.display()))?;
-        }
-
-        #[cfg(not(windows))]
-        filetime::set_file_mtime(path, now)
-            .with_context(|| format!("updating mtime of {}", path.display()))?;
-    }
-
     Ok(())
-}
-
-/// Sample the write clock of the filesystem holding `path`: create a sibling
-/// temp file (exclusively — never truncating something that already exists),
-/// write to it, close it, and read the mtime the filesystem gave that write.
-/// The close between write and stat matters on Windows, where the last-write
-/// time of an open handle may not be visible to a path-based stat until the
-/// handle closes. Returns an error on failure (e.g. the directory is not
-/// writable); the caller propagates it, degrading to a recompile.
-#[cfg(not(unix))]
-fn sample_write_clock(path: &Path) -> Result<filetime::FileTime> {
-    kache_fs::sample_write_clock(path)
-        .map(filetime::FileTime::from_system_time)
-        .with_context(|| format!("sampling write clock next to {}", path.display()))
 }
 
 const DEPINFO_ROOT_SENTINEL: &str = "__kache_root__/";
@@ -1885,8 +1370,8 @@ pub fn rebase_depinfo_content(content: &str, from: &Path, to: &Path) -> Option<S
     if content.contains(DEPINFO_ROOT_SENTINEL) {
         return None;
     }
-    let from_prefixes = depinfo_prefixes_for_path(from, DepInfoMode::Relativize, cfg!(windows));
-    let to_prefixes = depinfo_prefixes_for_path(to, DepInfoMode::Expand, cfg!(windows));
+    let from_prefixes = depinfo_prefixes_for_path(from, DepInfoMode::Relativize);
+    let to_prefixes = depinfo_prefixes_for_path(to, DepInfoMode::Expand);
     let (outputs, _) = content.lines().next()?.split_once(": ")?;
     let outputs = rewrite_depinfo_content_with_prefixes_and_sentinel(
         outputs,
@@ -2074,7 +1559,7 @@ fn rewrite_rustc_depinfo_targets(content: &str, target_dir: &Path, mode: DepInfo
 }
 
 /// Rewrite one exact configured-rule spelling. Configured roots already carry
-/// their explicitly constructed lexical/canonical/Windows aliases; adding a
+/// their explicitly constructed lexical/canonical aliases; adding a
 /// fresh canonical alias here could let one configured symlink steal another
 /// configured slot's sentinel.
 fn rewrite_depinfo_content_with_exact_sentinel(
@@ -2083,43 +1568,12 @@ fn rewrite_depinfo_content_with_exact_sentinel(
     sentinel: &str,
     mode: DepInfoMode,
 ) -> String {
-    rewrite_depinfo_content_with_exact_sentinel_for_platform(
-        content,
-        project_dir,
-        sentinel,
-        mode,
-        cfg!(windows),
-    )
-}
-
-fn rewrite_depinfo_content_with_exact_sentinel_for_platform(
-    content: &str,
-    project_dir: &Path,
-    sentinel: &str,
-    mode: DepInfoMode,
-    windows: bool,
-) -> String {
-    let prefixes = depinfo_prefixes_for_exact_display(&project_dir.to_string_lossy(), windows);
+    let prefixes = depinfo_prefixes_for_exact_display(&project_dir.to_string_lossy());
     rewrite_depinfo_content_with_prefixes_and_sentinel(content, &prefixes, sentinel, mode)
 }
 
-fn depinfo_prefixes_for_exact_display(raw: &str, windows: bool) -> Vec<String> {
-    if windows {
-        // Expand uses the first spelling. Preserve the configured spelling:
-        // verbatim/native Windows paths require `\`, while slash-form paths
-        // (including the platform-neutral paths used by pure tests) keep `/`.
-        let (first, second) = if windows_display_prefers_backslash(raw) {
-            ('\\', '/')
-        } else {
-            ('/', '\\')
-        };
-        vec![
-            with_trailing_separator(raw, first),
-            with_trailing_separator(raw, second),
-        ]
-    } else {
-        vec![with_trailing_separator(raw, '/')]
-    }
+fn depinfo_prefixes_for_exact_display(raw: &str) -> Vec<String> {
+    vec![with_trailing_separator(raw, '/')]
 }
 
 fn rewrite_depinfo_content_with_sentinel(
@@ -2128,27 +1582,11 @@ fn rewrite_depinfo_content_with_sentinel(
     sentinel: &str,
     mode: DepInfoMode,
 ) -> String {
-    rewrite_depinfo_content_with_sentinel_for_platform(
-        content,
-        project_dir,
-        sentinel,
-        mode,
-        cfg!(windows),
-    )
-}
-
-fn rewrite_depinfo_content_with_sentinel_for_platform(
-    content: &str,
-    project_dir: &Path,
-    sentinel: &str,
-    mode: DepInfoMode,
-    windows: bool,
-) -> String {
-    let prefixes = depinfo_prefixes_for_path(project_dir, mode, windows);
+    let prefixes = depinfo_prefixes_for_path(project_dir, mode);
     rewrite_depinfo_content_with_prefixes_and_sentinel(content, &prefixes, sentinel, mode)
 }
 
-fn depinfo_prefixes_for_path(project_dir: &Path, mode: DepInfoMode, windows: bool) -> Vec<String> {
+fn depinfo_prefixes_for_path(project_dir: &Path, mode: DepInfoMode) -> Vec<String> {
     let mut roots = vec![project_dir.to_path_buf()];
     if matches!(mode, DepInfoMode::Relativize)
         && let Ok(canonical) = project_dir.canonicalize()
@@ -2161,7 +1599,6 @@ fn depinfo_prefixes_for_path(project_dir: &Path, mode: DepInfoMode, windows: boo
         prefixes.extend(depinfo_prefixes_for_display(
             &root.to_string_lossy(),
             matches!(mode, DepInfoMode::Relativize),
-            windows,
         ));
     }
     let mut seen = std::collections::HashSet::new();
@@ -2169,61 +1606,8 @@ fn depinfo_prefixes_for_path(project_dir: &Path, mode: DepInfoMode, windows: boo
     prefixes
 }
 
-fn depinfo_prefixes_for_display(
-    raw: &str,
-    retain_verbatim_alias: bool,
-    windows: bool,
-) -> Vec<String> {
-    let stripped = raw
-        .strip_prefix(r"\\?\UNC\")
-        .map(|path| format!(r"\\{path}"))
-        .or_else(|| raw.strip_prefix(r"\\?\").map(str::to_string))
-        .unwrap_or_else(|| raw.to_string());
-    let mut displays = vec![stripped.clone()];
-    if retain_verbatim_alias && raw != stripped {
-        displays.push(raw.to_string());
-    }
-    let mut prefixes = Vec::new();
-    for display in displays {
-        if windows {
-            let prefers_backslash = windows_display_prefers_backslash(&display);
-            let verbatim = display.starts_with(r"\\?\");
-            let preferred = if verbatim {
-                display.clone()
-            } else if prefers_backslash {
-                display.replace('/', "\\")
-            } else {
-                display.replace('\\', "/")
-            };
-            let alternate = if prefers_backslash {
-                display.replace('\\', "/")
-            } else {
-                display.replace('/', "\\")
-            };
-            let (first, second) = if prefers_backslash {
-                ('\\', '/')
-            } else {
-                ('/', '\\')
-            };
-            prefixes.push(with_trailing_separator(&preferred, first));
-            prefixes.push(with_trailing_separator(&display, first));
-            prefixes.push(with_trailing_separator(&display, second));
-            if retain_verbatim_alias && !verbatim {
-                prefixes.push(with_trailing_separator(&alternate, second));
-            }
-        } else {
-            prefixes.push(with_trailing_separator(&display, '/'));
-        }
-    }
-    prefixes
-}
-
-fn windows_display_prefers_backslash(display: &str) -> bool {
-    let bytes = display.as_bytes();
-    display.starts_with('\\')
-        || (bytes.first().is_some_and(u8::is_ascii_alphabetic)
-            && bytes.get(1) == Some(&b':')
-            && bytes.get(2) == Some(&b'\\'))
+fn depinfo_prefixes_for_display(raw: &str, _retain_verbatim_alias: bool) -> Vec<String> {
+    vec![with_trailing_separator(raw, '/')]
 }
 
 fn with_trailing_separator(display: &str, separator: char) -> String {
@@ -2235,7 +1619,7 @@ fn with_trailing_separator(display: &str, separator: char) -> String {
     value
 }
 
-/// Prefix-parameterized core of the Windows [`rewrite_depinfo_content`]
+/// Prefix-parameterized core of the [`rewrite_depinfo_content`]
 /// branch, split out so the dual-spelling behavior is unit-testable on every
 /// host.
 ///
@@ -2279,7 +1663,6 @@ fn rewrite_depinfo_content_with_prefixes_and_sentinel(
                             &acc,
                             &escape_depinfo_env_value(p),
                             sentinel,
-                            cfg!(windows),
                             DepInfoTextContext::EnvValue,
                         )
                     }),
@@ -2287,7 +1670,6 @@ fn rewrite_depinfo_content_with_prefixes_and_sentinel(
                         value,
                         sentinel,
                         &escape_depinfo_env_value(&prefixes[0]),
-                        false,
                         DepInfoTextContext::EnvValue,
                     ),
                 };
@@ -2300,22 +1682,14 @@ fn rewrite_depinfo_content_with_prefixes_and_sentinel(
                             &acc,
                             &escaped,
                             sentinel,
-                            cfg!(windows),
                             DepInfoTextContext::MakeLine,
                         );
-                        replace_depinfo_text(
-                            &escaped,
-                            p,
-                            sentinel,
-                            cfg!(windows),
-                            DepInfoTextContext::MakeLine,
-                        )
+                        replace_depinfo_text(&escaped, p, sentinel, DepInfoTextContext::MakeLine)
                     }),
                     DepInfoMode::Expand => replace_depinfo_text(
                         line,
                         sentinel,
                         &escape_depinfo_make_path(&prefixes[0]),
-                        false,
                         DepInfoTextContext::MakeLine,
                     ),
                 }
@@ -2334,7 +1708,6 @@ fn replace_depinfo_text(
     input: &str,
     needle: &str,
     replacement: &str,
-    ascii_case_insensitive: bool,
     context: DepInfoTextContext,
 ) -> String {
     if needle.is_empty() {
@@ -2354,21 +1727,14 @@ fn replace_depinfo_text(
         // an index slip here exhausts memory instead of returning. Debug-only,
         // so the release scan is unchanged.
         let scan_start = search;
-        let offset = if ascii_case_insensitive {
-            input_bytes[search..]
-                .windows(needle_bytes.len())
-                .position(|window| window.eq_ignore_ascii_case(needle_bytes))
-        } else {
-            input[search..].find(needle)
-        };
+        let offset = input[search..].find(needle);
         let Some(offset) = offset else {
             break;
         };
         let found = search + offset;
         let end = found + needle_bytes.len();
         // UTF-8 is self-synchronizing: a valid UTF-8 `needle` cannot match
-        // across code-point boundaries. `str::find` guarantees this directly;
-        // the ASCII-insensitive byte scan changes only ASCII case.
+        // across code-point boundaries.
         if !depinfo_path_prefix_has_left_boundary(input, found, context) {
             search = depinfo_next_char_boundary(input, found);
             debug_assert!(scan_start < search, "rejected match must advance");
@@ -2453,18 +1819,11 @@ fn write_rewritten_depinfo(depinfo_path: &Path, rewritten: String) -> Result<()>
     // store side `Store::put` never hardlinks `.d` blobs (DepInfo is
     // excluded from insert-side hardlinking precisely because of this
     // post-put in-place rewrite), so this rarely fires — but it keeps
-    // `rewrite_depinfo` safe for any caller. Windows exposes no portable
-    // nlink count; remove unconditionally there.
-    #[cfg(unix)]
     if let Ok(meta) = fs::metadata(depinfo_path) {
         use std::os::unix::fs::MetadataExt;
         if meta.nlink() > 1 {
             let _ = fs::remove_file(depinfo_path);
         }
-    }
-    #[cfg(not(unix))]
-    if depinfo_path.exists() {
-        let _ = fs::remove_file(depinfo_path);
     }
 
     fs::write(depinfo_path, rewritten)?;
@@ -2495,7 +1854,6 @@ mod tests {
     }
 
     fn configure_invocation_policy(enabled: bool, marker: &Path) {
-        set_windows_hardlink_restore(enabled);
         set_shared_hardlink_restores(enabled);
         set_cow_warn_marker(marker.to_path_buf());
         set_storage_layout_advice(!enabled);
@@ -2504,7 +1862,6 @@ mod tests {
     }
 
     fn assert_invocation_policy(enabled: bool, marker: &Path) {
-        assert_eq!(windows_hardlink_enabled(), enabled);
         assert_eq!(shared_hardlink_restores_enabled(), enabled);
         assert_eq!(cow_warn_marker().as_deref(), Some(marker));
         assert_eq!(storage_layout_advice_enabled(), !enabled);
@@ -2520,7 +1877,6 @@ mod tests {
     }
 
     fn assert_default_invocation_policy() {
-        assert!(!windows_hardlink_enabled());
         assert!(!shared_hardlink_restores_enabled());
         assert_eq!(cow_warn_marker(), None);
         assert!(storage_layout_advice_enabled());
@@ -2541,7 +1897,6 @@ mod tests {
                     configure_invocation_policy(enabled, &marker);
                     barrier.wait();
                     assert_invocation_policy(enabled, &marker);
-                    #[cfg(unix)]
                     {
                         use std::os::unix::fs::MetadataExt;
                         let blob = dir.path().join("blob.rlib");
@@ -2649,40 +2004,6 @@ mod tests {
                 reason == HardlinkIoReason::CrossDevice
             );
         }
-        for cause in [
-            CopyRestoreCause::CrossVolume,
-            CopyRestoreCause::NoCow,
-            CopyRestoreCause::UnknownCow,
-            CopyRestoreCause::SubClusterOnCowVolume,
-            CopyRestoreCause::UnexpectedOnCowVolume,
-        ] {
-            assert!(!cause.mute_advice(false, true, true));
-            assert_eq!(
-                cause.mute_advice(true, true, true),
-                cause == CopyRestoreCause::CrossVolume
-            );
-        }
-    }
-
-    #[test]
-    fn copy_advice_switches_preserve_faults_for_every_mapping() {
-        for mapped in [false, true] {
-            for (strategy, config) in [(false, true), (true, false), (false, false)] {
-                for cause in [
-                    CopyRestoreCause::CrossVolume,
-                    CopyRestoreCause::NoCow,
-                    CopyRestoreCause::UnknownCow,
-                ] {
-                    assert!(cause.mute_advice(mapped, strategy, config));
-                }
-                for cause in [
-                    CopyRestoreCause::SubClusterOnCowVolume,
-                    CopyRestoreCause::UnexpectedOnCowVolume,
-                ] {
-                    assert!(!cause.mute_advice(mapped, strategy, config));
-                }
-            }
-        }
     }
 
     #[test]
@@ -2733,147 +2054,6 @@ mod tests {
         }
     }
 
-    /// The regression from #508: on a ReFS Dev Drive that DOES block-clone, a
-    /// sub-cluster file (every `.d` under ~4 KB) falls back to copy — and kache
-    /// used to blame the filesystem, once per rustc process, hundreds of times
-    /// per build. A healthy volume must produce no advisory at all.
-    #[test]
-    fn sub_cluster_copy_on_a_cow_volume_is_not_a_no_cow_problem() {
-        assert_eq!(
-            classify_copy_restore(Some("G:\\"), Some("G:\\"), Some(true), Some(true)),
-            CopyRestoreCause::SubClusterOnCowVolume,
-        );
-    }
-
-    /// But silence must not extend to a file that COULD have been cloned and
-    /// wasn't — that would hide a filter driver or a kache bug quietly demoting
-    /// every large artifact to a copy.
-    #[test]
-    fn a_clonable_file_that_fails_to_clone_is_still_surfaced() {
-        assert_eq!(
-            classify_copy_restore(Some("G:\\"), Some("G:\\"), Some(true), Some(false)),
-            CopyRestoreCause::UnexpectedOnCowVolume,
-        );
-        assert_eq!(
-            classify_copy_restore(Some("G:\\"), Some("G:\\"), Some(true), None),
-            CopyRestoreCause::UnexpectedOnCowVolume,
-            "an unknown size must not be assumed benign",
-        );
-    }
-
-    #[test]
-    fn same_volume_without_block_cloning_is_a_real_no_cow_warning() {
-        assert_eq!(
-            classify_copy_restore(Some("C:\\"), Some("C:\\"), Some(false), Some(true)),
-            CopyRestoreCause::NoCow,
-        );
-    }
-
-    /// Cross-volume wins over capability: two Dev Drives still can't clone
-    /// across the volume boundary, so the co-locate advice is the useful one.
-    #[test]
-    fn different_volumes_report_cross_volume_even_when_both_support_cow() {
-        assert_eq!(
-            classify_copy_restore(Some("C:\\"), Some("G:\\"), Some(true), Some(false)),
-            CopyRestoreCause::CrossVolume,
-        );
-        assert_eq!(
-            classify_copy_restore(Some("c:\\"), Some("C:\\"), Some(false), Some(true)),
-            CopyRestoreCause::NoCow,
-            "volume roots compare case-insensitively",
-        );
-    }
-
-    /// A failed probe must still warn (a copy-restore IS happening) — but as
-    /// "unknown", not as "no copy-on-write". Asserting NTFS from a failed probe
-    /// would be the same unfounded claim that produced #508.
-    #[test]
-    fn a_failed_capability_probe_warns_without_claiming_no_cow() {
-        assert_eq!(
-            classify_copy_restore(Some("C:\\"), Some("C:\\"), None, Some(true)),
-            CopyRestoreCause::UnknownCow,
-        );
-        assert_eq!(
-            classify_copy_restore(None, None, None, None),
-            CopyRestoreCause::UnknownCow,
-        );
-    }
-
-    /// A benign storage-layout advisory must not be able to mute a genuine clone
-    /// FAULT: they dedup in separate buckets, so one can't swallow the other.
-    #[test]
-    fn a_layout_advisory_cannot_mute_a_clone_fault() {
-        let fault = CopyRestoreCause::UnexpectedOnCowVolume.warn_bucket();
-        for benign in [
-            CopyRestoreCause::NoCow,
-            CopyRestoreCause::CrossVolume,
-            CopyRestoreCause::UnknownCow,
-        ] {
-            assert_ne!(
-                benign.warn_bucket(),
-                fault,
-                "{benign:?} must not share a dedup marker with a clone fault",
-            );
-        }
-
-        let base = Path::new("/tmp/kache-cow-warn-abc123");
-        assert_ne!(
-            bucket_marker(base, CopyRestoreCause::NoCow.warn_bucket()),
-            bucket_marker(base, fault),
-        );
-    }
-
-    /// #551: `[cache] storage_layout_advice = false` mutes exactly the three
-    /// layout advisories. The sub-cluster case is already silent, and the fault
-    /// case must stay un-muteable — advice and faults are different severities.
-    #[test]
-    fn storage_layout_advice_mutes_advice_never_faults() {
-        for advisory in [
-            CopyRestoreCause::NoCow,
-            CopyRestoreCause::CrossVolume,
-            CopyRestoreCause::UnknownCow,
-        ] {
-            assert!(
-                advisory.is_layout_advisory(),
-                "{advisory:?} is layout advice and must be muteable",
-            );
-        }
-        for non_advisory in [
-            CopyRestoreCause::SubClusterOnCowVolume,
-            CopyRestoreCause::UnexpectedOnCowVolume,
-        ] {
-            assert!(
-                !non_advisory.is_layout_advisory(),
-                "{non_advisory:?} must not be muteable by the advice knob",
-            );
-        }
-    }
-
-    /// #1067: wrapper mode sends layout advice to the log, never faults.
-    #[test]
-    fn layout_advice_sink_follows_the_process_setting_but_faults_keep_stderr() {
-        use crate::markers::WarnSink;
-        let _lock = crate::test_support::process_state_test_lock();
-        for (to_log, advice_sink) in [(false, WarnSink::Stderr), (true, WarnSink::Log)] {
-            set_layout_advice_to_log(to_log);
-            assert_eq!(layout_advice_sink(), advice_sink);
-            for advisory in [
-                CopyRestoreCause::CrossVolume,
-                CopyRestoreCause::NoCow,
-                CopyRestoreCause::UnknownCow,
-            ] {
-                assert_eq!(advisory.warn_sink(), advice_sink, "{advisory:?}");
-            }
-            for fault in [
-                CopyRestoreCause::SubClusterOnCowVolume,
-                CopyRestoreCause::UnexpectedOnCowVolume,
-            ] {
-                assert_eq!(fault.warn_sink(), WarnSink::Stderr, "{fault:?}");
-            }
-        }
-        set_layout_advice_to_log(false);
-    }
-
     #[test]
     fn test_hardlink_strategy_restores_content() {
         let _guard = SHARED_TEST_LOCK.lock().unwrap();
@@ -2898,7 +2078,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("restored");
         fs::write(&target, b"artifact").unwrap();
-        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             for (before, after) in [
@@ -2915,14 +2094,6 @@ mod tests {
                     after
                 );
             }
-        }
-        #[cfg(not(unix))]
-        {
-            let mut permissions = fs::metadata(&target).unwrap().permissions();
-            permissions.set_readonly(true);
-            fs::set_permissions(&target, permissions).unwrap();
-            set_owner_write_permission(&target).unwrap();
-            assert!(!fs::metadata(&target).unwrap().permissions().readonly());
         }
         fs::write(&target, b"rebuilt artifact").unwrap();
         assert!(set_owner_write_permission(&dir.path().join("missing")).is_err());
@@ -3140,38 +2311,6 @@ mod tests {
         let error = verify_orphaned_hardlink(&target, fs::metadata(&target), vanished)
             .expect_err("unreadable target must fail");
         assert!(error.to_string().contains("verifying hardlink target"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_hardlink_restore_yields_writable_deletable_output() {
-        // #429: on Windows a Hardlink-strategy restore must NOT leave the
-        // output read-only (a hardlink to the read-only store blob would be),
-        // or a consumer that owns its output — mozbuild's configure conftest —
-        // cannot delete/rewrite it (WinError 5). The output must be writable
-        // and deletable, while the store blob stays read-only (integrity).
-        let dir = tempfile::tempdir().unwrap();
-        let blob = dir.path().join("deadbeef");
-        fs::write(&blob, b"obj bytes").unwrap();
-        let mut p = fs::metadata(&blob).unwrap().permissions();
-        p.set_readonly(true);
-        fs::set_permissions(&blob, p).unwrap();
-
-        let out = dir.path().join("conftest.o");
-        link_to_target(&blob, &out, LinkStrategy::Hardlink).unwrap();
-
-        assert_eq!(fs::read(&out).unwrap(), b"obj bytes");
-        assert!(
-            !fs::metadata(&out).unwrap().permissions().readonly(),
-            "restored output must be writable on Windows (#429)"
-        );
-        // The consumer must be able to delete its own output.
-        fs::remove_file(&out).expect("consumer must be able to delete its output (#429)");
-        // ...without the store blob losing its read-only integrity guard.
-        assert!(
-            fs::metadata(&blob).unwrap().permissions().readonly(),
-            "store blob must stay read-only after a restore"
-        );
     }
 
     #[test]
@@ -3645,33 +2784,6 @@ mod tests {
         assert_eq!(reflinked, reflinked_before);
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn writable_copy_is_private_and_writable_on_windows() {
-        let dir = tempfile::tempdir().unwrap();
-        let blob = dir.path().join("blob.obj");
-        fs::write(&blob, b"cached object").unwrap();
-        let mut perms = fs::metadata(&blob).unwrap().permissions();
-        perms.set_readonly(true);
-        fs::set_permissions(&blob, perms).unwrap();
-
-        let output = dir.path().join("output.obj");
-        prepare_writable_target_from_file(&blob, &output)
-            .unwrap()
-            .publish()
-            .unwrap();
-
-        assert!(!fs::metadata(&output).unwrap().permissions().readonly());
-        fs::write(&output, b"changed").unwrap();
-        assert_eq!(fs::read(&blob).unwrap(), b"cached object");
-        assert!(fs::metadata(&blob).unwrap().permissions().readonly());
-
-        let mut perms = fs::metadata(&blob).unwrap().permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
-        perms.set_readonly(false);
-        fs::set_permissions(&blob, perms).unwrap();
-    }
-
     #[test]
     fn writable_materializers_never_replace_existing_target() {
         let dir = tempfile::tempdir().unwrap();
@@ -3681,13 +2793,6 @@ mod tests {
         fs::write(&blob, b"cached").unwrap();
         fs::write(&linked, b"race winner").unwrap();
         fs::write(&written, b"race winner").unwrap();
-
-        #[cfg(windows)]
-        for target in [&linked, &written] {
-            let mut permissions = fs::metadata(target).unwrap().permissions();
-            permissions.set_readonly(true);
-            fs::set_permissions(target, permissions).unwrap();
-        }
 
         assert!(
             prepare_writable_target_from_file(&blob, &linked)
@@ -3703,15 +2808,6 @@ mod tests {
         );
         assert_eq!(fs::read(&linked).unwrap(), b"race winner");
         assert_eq!(fs::read(&written).unwrap(), b"race winner");
-
-        #[cfg(windows)]
-        for target in [&linked, &written] {
-            let mut permissions = fs::metadata(target).unwrap().permissions();
-            assert!(permissions.readonly(), "refusal must not chmod the target");
-            #[allow(clippy::permissions_set_readonly_false)]
-            permissions.set_readonly(false);
-            fs::set_permissions(target, permissions).unwrap();
-        }
     }
 
     #[test]
@@ -3804,11 +2900,7 @@ mod tests {
             mtime(&touched)
         );
         // The after-bound is the #677 regression assertion and runs
-        // everywhere. On unix the stamp goes through futimens(UTIME_NOW);
-        // on Windows through a sibling write-clock sample
-        // (kunobi-ninja/kache#681) — before that fix, the first Windows CI
-        // run of this test measured the precise-clock stamp postdating a
-        // file written ~2ms later (an ~1.8ms inversion window on NTFS).
+        // everywhere. The stamp goes through futimens(UTIME_NOW).
         assert!(
             mtime(&touched) <= mtime(&after),
             "write-clock touch must not postdate a subsequent write: touched={:?} after={:?}",
@@ -4295,51 +3387,6 @@ __kache_target_rule__/debug/build/serde_core-fe75/out/private.rs\n"
         assert!(!restored.contains("/home/alice"));
     }
 
-    #[test]
-    fn depinfo_prefix_replacement_can_match_windows_ascii_case_aliases() {
-        assert_eq!(
-            replace_depinfo_text(
-                r"c:\\WORKTREE\\src\\lib.rs",
-                r"C:\\worktree\\",
-                DEPINFO_CWD_SENTINEL,
-                true,
-                DepInfoTextContext::MakeLine,
-            ),
-            r"__kache_cwd__/src\\lib.rs"
-        );
-        assert_eq!(
-            replace_depinfo_text(
-                "unrelated",
-                "C:\\worktree\\",
-                DEPINFO_CWD_SENTINEL,
-                true,
-                DepInfoTextContext::MakeLine,
-            ),
-            "unrelated"
-        );
-        assert_eq!(
-            replace_depinfo_text(
-                r"c:\WORKTREE\",
-                r"C:\worktree\",
-                DEPINFO_CWD_SENTINEL,
-                true,
-                DepInfoTextContext::MakeLine,
-            ),
-            DEPINFO_CWD_SENTINEL,
-            "a case-insensitive match ending exactly at EOF must be replaced"
-        );
-        assert_eq!(
-            replace_depinfo_text(
-                r"keep c:\WORKTREE\src\lib.rs and C:\worktree\asset.txt",
-                r"C:\worktree\",
-                DEPINFO_CWD_SENTINEL,
-                true,
-                DepInfoTextContext::MakeLine,
-            ),
-            r"keep __kache_cwd__/src\lib.rs and __kache_cwd__/asset.txt"
-        );
-    }
-
     /// `replace_depinfo_text`'s search loop terminates only because this step
     /// strictly advances. Asserted here rather than left to the loop, where a
     /// slip shows up as a hang instead of a failure.
@@ -4365,216 +3412,6 @@ __kache_target_rule__/debug/build/serde_core-fe75/out/private.rs\n"
     }
 
     #[test]
-    fn windows_depinfo_prefixes_retain_drive_and_unc_verbatim_aliases() {
-        let drive = depinfo_prefixes_for_display(r"\\?\C:\Work", true, true);
-        assert!(drive.contains(&r"C:\Work\".to_string()));
-        assert!(drive.contains(&r"\\?\C:\Work\".to_string()));
-        assert!(drive.contains(&r"C:\Work/".to_string()));
-        assert!(drive.contains(&r"\\?\C:\Work/".to_string()));
-
-        let unc = depinfo_prefixes_for_display(r"\\?\UNC\server\share\root", true, true);
-        assert!(unc.contains(&r"\\server\share\root\".to_string()));
-        assert!(unc.contains(&r"\\?\UNC\server\share\root\".to_string()));
-
-        let expand = depinfo_prefixes_for_display(r"\\?\C:\Work", false, true);
-        assert!(!expand.iter().any(|prefix| prefix.starts_with(r"\\?\")));
-        assert!(expand.iter().all(|prefix| prefix.starts_with(r"C:\Work")));
-    }
-
-    /// The opposite-separator alias is contributed by the stripped display
-    /// only. A verbatim `\\?\` display is backslash-only to Windows, so
-    /// slash-expanding it would invent a spelling no dep-info ever carries.
-    #[test]
-    fn windows_depinfo_alternate_alias_is_expanded_only_for_non_verbatim_displays() {
-        let prefixes = depinfo_prefixes_for_display(r"\\?\C:\Work", true, true);
-
-        assert!(
-            prefixes.contains(&"C:/Work/".to_string()),
-            "stripped display contributes its slash alternate: {prefixes:?}"
-        );
-        assert!(
-            !prefixes.iter().any(|prefix| prefix.starts_with("//?/")),
-            "verbatim display must not be slash-expanded: {prefixes:?}"
-        );
-    }
-
-    #[test]
-    fn windows_depinfo_expansion_preserves_native_and_slash_root_styles() {
-        assert!(windows_display_prefers_backslash(r"C:\work"));
-        assert!(windows_display_prefers_backslash(r"\\?\C:\work"));
-        assert!(windows_display_prefers_backslash(r"\\server\share"));
-        assert!(!windows_display_prefers_backslash("C:/work"));
-        assert!(!windows_display_prefers_backslash("/external/work"));
-
-        assert_eq!(with_trailing_separator("/", '/'), "/");
-        assert_eq!(with_trailing_separator("/work/", '/'), "/work/");
-        assert_eq!(with_trailing_separator(r"C:\", '\\'), r"C:\");
-        assert_eq!(with_trailing_separator(r"C:\work\", '/'), "C:\\work/");
-
-        let native = rewrite_depinfo_content_with_sentinel_for_platform(
-            "__kache_root__/debug/deps/demo.d\n",
-            Path::new(r"C:\work\target"),
-            DEPINFO_ROOT_SENTINEL,
-            DepInfoMode::Expand,
-            true,
-        );
-        assert_eq!(native, "C:\\work\\target\\debug/deps/demo.d\n");
-
-        let slash = rewrite_depinfo_content_with_sentinel_for_platform(
-            "__kache_root__/debug/deps/demo.d\n",
-            Path::new("/external/target"),
-            DEPINFO_ROOT_SENTINEL,
-            DepInfoMode::Expand,
-            true,
-        );
-        assert_eq!(slash, "/external/target/debug/deps/demo.d\n");
-
-        let mixed = rewrite_depinfo_content_with_sentinel_for_platform(
-            "/build/work/target/debug/deps/demo.d\n",
-            Path::new(r"/build/work\target"),
-            DEPINFO_ROOT_SENTINEL,
-            DepInfoMode::Relativize,
-            true,
-        );
-        assert_eq!(mixed, "__kache_root__/debug/deps/demo.d\n");
-    }
-
-    #[test]
-    fn configured_windows_roots_keep_verbatim_and_plain_slots_distinct() {
-        let verbatim_drive = depinfo_prefixes_for_exact_display(r"\\?\C:\Work", true);
-        assert_eq!(verbatim_drive.len(), 2);
-        assert!(verbatim_drive.contains(&r"\\?\C:\Work/".to_string()));
-        assert!(verbatim_drive.contains(&r"\\?\C:\Work\".to_string()));
-        assert!(
-            verbatim_drive
-                .iter()
-                .all(|prefix| prefix.starts_with(r"\\?\"))
-        );
-        assert!(
-            !verbatim_drive
-                .iter()
-                .any(|prefix| prefix.starts_with(r"C:\Work"))
-        );
-
-        let verbatim_unc = depinfo_prefixes_for_exact_display(r"\\?\UNC\server\share", true);
-        assert_eq!(verbatim_unc.len(), 2);
-        assert!(verbatim_unc.contains(&r"\\?\UNC\server\share/".to_string()));
-        assert!(verbatim_unc.contains(&r"\\?\UNC\server\share\".to_string()));
-        assert!(
-            verbatim_unc
-                .iter()
-                .all(|prefix| prefix.starts_with(r"\\?\UNC\server\share"))
-        );
-        assert!(
-            !verbatim_unc
-                .iter()
-                .any(|prefix| prefix.starts_with(r"\\server\share"))
-        );
-
-        let input = r"out: \\?\C:\Work\src\verbatim.rs C:\Work\src\plain.rs \\?\UNC\server\share\src\verbatim_unc.rs \\server\share\src\plain_unc.rs";
-        let producer_roots = [
-            (
-                PathBuf::from(r"\\?\C:\Work"),
-                "__kache_base_dir_0__/".to_string(),
-            ),
-            (
-                PathBuf::from(r"C:\Work"),
-                "__kache_base_dir_1__/".to_string(),
-            ),
-            (
-                PathBuf::from(r"\\?\UNC\server\share"),
-                "__kache_base_dir_2__/".to_string(),
-            ),
-            (
-                PathBuf::from(r"\\server\share"),
-                "__kache_base_dir_3__/".to_string(),
-            ),
-        ];
-        let stored = producer_roots
-            .iter()
-            .fold(input.to_string(), |content, (root, sentinel)| {
-                rewrite_depinfo_content_with_exact_sentinel_for_platform(
-                    &content,
-                    root,
-                    sentinel,
-                    DepInfoMode::Relativize,
-                    true,
-                )
-            });
-        assert!(
-            stored.contains(r"__kache_base_dir_0__/src\verbatim.rs"),
-            "{stored}"
-        );
-        assert!(
-            stored.contains(r"__kache_base_dir_1__/src\plain.rs"),
-            "{stored}"
-        );
-        assert!(
-            stored.contains(r"__kache_base_dir_2__/src\verbatim_unc.rs"),
-            "{stored}"
-        );
-        assert!(
-            stored.contains(r"__kache_base_dir_3__/src\plain_unc.rs"),
-            "{stored}"
-        );
-
-        let consumer_roots = [
-            (
-                PathBuf::from(r"\\?\D:\Other"),
-                "__kache_base_dir_0__/".to_string(),
-            ),
-            (
-                PathBuf::from(r"D:\Other"),
-                "__kache_base_dir_1__/".to_string(),
-            ),
-            (
-                PathBuf::from(r"\\?\UNC\server2\share2"),
-                "__kache_base_dir_2__/".to_string(),
-            ),
-            (
-                PathBuf::from(r"\\server2\share2"),
-                "__kache_base_dir_3__/".to_string(),
-            ),
-        ];
-        let restored = consumer_roots
-            .iter()
-            .fold(stored, |content, (root, sentinel)| {
-                rewrite_depinfo_content_with_exact_sentinel_for_platform(
-                    &content,
-                    root,
-                    sentinel,
-                    DepInfoMode::Expand,
-                    true,
-                )
-            });
-        assert!(restored.contains(r"\\?\D:\Other\src\verbatim.rs"));
-        assert!(restored.contains(r"D:\Other\src\plain.rs"));
-        assert!(restored.contains(r"\\?\UNC\server2\share2\src\verbatim_unc.rs"));
-        assert!(restored.contains(r"\\server2\share2\src\plain_unc.rs"));
-        assert!(!restored.contains(r"C:\Work"));
-        assert!(!restored.contains(r"\\server\share"));
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn rustc_depinfo_rewrite_handles_native_windows_cwd_and_env_dep() {
-        let input = "D:\\WORK TREE\\target\\debug\\deps\\demo.d: \
-D:\\WORK TREE\\crate\\src\\lib.rs\n\
-# env-dep:ASSET=D:\\\\WORK TREE\\\\crate\\\\asset.txt\n";
-        let stored = rewrite_rustc_depinfo_content(
-            input,
-            Path::new(r"d:\work tree\target"),
-            Path::new(r"d:\work tree\crate"),
-            Some(Path::new(r"d:\work tree")),
-            DepInfoMode::Relativize,
-        );
-        assert!(stored.contains("__kache_root__/debug\\deps\\demo.d"));
-        assert!(stored.contains("__kache_cwd__/src\\lib.rs"));
-        assert!(stored.contains("# env-dep:ASSET=__kache_cwd__/asset.txt"));
-        assert!(!stored.to_ascii_lowercase().contains(r"d:\work tree"));
-    }
-
-    #[test]
     #[cfg(unix)]
     fn depinfo_relativize_matches_a_canonical_symlink_target() {
         let dir = tempfile::tempdir().unwrap();
@@ -4592,44 +3429,6 @@ D:\\WORK TREE\\crate\\src\\lib.rs\n\
         let stored = rewrite_depinfo_content(&input, &alias, DepInfoMode::Relativize);
         assert_eq!(stored.matches(DEPINFO_ROOT_SENTINEL).count(), 2, "{stored}");
         assert!(!stored.contains(canonical.to_str().unwrap()), "{stored}");
-    }
-
-    /// kunobi-ninja/kache#330: Windows dep-info uses backslash separators and
-    /// often mixes them (an env-var join appends with `/`). Relativize must
-    /// catch both spellings of the prefix, or the builder's absolute paths
-    /// ship in the cached entry and poison every other project sharing it.
-    #[test]
-    #[cfg(windows)]
-    fn test_depinfo_relativize_handles_windows_separators() {
-        let input = "S:\\proj\\target\\debug\\deps\\demo.d: \
-S:\\proj\\target\\debug\\build\\demo-8a22\\out/generated.rs\n";
-
-        let rewritten = rewrite_depinfo_content(
-            input,
-            Path::new("S:\\proj\\target"),
-            DepInfoMode::Relativize,
-        );
-        assert!(
-            !rewritten.contains("S:\\proj\\target"),
-            "the builder's absolute prefix must not survive: {rewritten}"
-        );
-        assert_eq!(
-            rewritten.matches(DEPINFO_ROOT_SENTINEL).count(),
-            2,
-            "both references relativize: {rewritten}"
-        );
-
-        // Expansion re-roots at the consumer using its native separator.
-        let expanded = rewrite_depinfo_content(
-            &rewritten,
-            Path::new("T:\\other\\target"),
-            DepInfoMode::Expand,
-        );
-        assert!(
-            expanded.contains("T:\\other\\target\\debug\\build\\demo-8a22\\out/generated.rs"),
-            "consumer-rooted mixed-separator path: {expanded}"
-        );
-        assert!(!expanded.contains(DEPINFO_ROOT_SENTINEL));
     }
 
     /// Mirrors cargo's `unescape_env` grammar for `# env-dep:` values: only
@@ -4852,30 +3651,15 @@ Unified_mm_ettings-WrongChannel0.o: Unified_mm_ettings-WrongChannel0.mm \\
         let path = dir.path().join("restored-executable");
         fs::write(&path, b"executable").unwrap();
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
-        }
-        #[cfg(not(unix))]
-        {
-            let mut permissions = fs::metadata(&path).unwrap().permissions();
-            permissions.set_readonly(true);
-            fs::set_permissions(&path, permissions).unwrap();
-        }
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
 
         set_executable_permissions(&path).unwrap();
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-                0o755
-            );
-        }
-        #[cfg(not(unix))]
-        assert!(!fs::metadata(&path).unwrap().permissions().readonly());
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
     }
 
     #[test]

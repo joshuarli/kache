@@ -230,31 +230,15 @@ fn write_otlp_until_spawned(
 }
 
 fn fake_kache_that_records(dir: &Path, marker: &Path, exit: i32) -> PathBuf {
-    #[cfg(unix)]
-    {
-        let path = dir.join("fake-kache");
-        kache_fs::testutil::write_executable(
-            &path,
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\" > '{}'\nexit {exit}\n",
-                marker.display()
-            ),
-        );
-        path
-    }
-    #[cfg(windows)]
-    {
-        let path = dir.join("fake-kache.cmd");
-        std::fs::write(
-            &path,
-            format!(
-                "@echo off\r\necho %* > \"{}\"\r\nexit /b {exit}\r\n",
-                marker.display()
-            ),
-        )
-        .unwrap();
-        path
-    }
+    let path = dir.join("fake-kache");
+    kache_fs::testutil::write_executable(
+        &path,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\" > '{}'\nexit {exit}\n",
+            marker.display()
+        ),
+    );
+    path
 }
 
 #[test]
@@ -353,22 +337,11 @@ fn posix_sh_resolves_a_shell() {
 }
 
 #[test]
-fn de_verbatim_strips_windows_extended_prefix() {
+fn de_verbatim_leaves_unix_paths_untouched() {
     assert_eq!(
         de_verbatim(PathBuf::from("/tmp/x")),
         PathBuf::from("/tmp/x")
     );
-    #[cfg(windows)]
-    {
-        assert_eq!(
-            de_verbatim(PathBuf::from(r"\\?\C:\a\b")),
-            PathBuf::from(r"C:\a\b")
-        );
-        assert_eq!(
-            de_verbatim(PathBuf::from(r"\\?\UNC\srv\share")),
-            PathBuf::from(r"\\srv\share")
-        );
-    }
 }
 
 #[test]

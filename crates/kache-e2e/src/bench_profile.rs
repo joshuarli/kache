@@ -510,34 +510,15 @@ pub(crate) fn native_executable_on_path(tool: &str) -> Option<PathBuf> {
     std::env::split_paths(&path).find_map(|dir| native_executable_in_dir(&dir, tool))
 }
 
-/// Find an executable named `tool` in `dir`: the exact name, plus — on
-/// Windows — the usual executable extensions, so a bare `cargo` matches
-/// `cargo.exe` (PATH entries on Windows hold `*.exe`, not extensionless files).
+/// Find an executable named `tool` in `dir`: the exact name.
 fn executable_in_dir(dir: &Path, tool: &str) -> Option<PathBuf> {
-    if let Some(candidate) = native_executable_in_dir(dir, tool) {
-        return Some(candidate);
-    }
-    #[cfg(windows)]
-    for ext in ["cmd", "bat"] {
-        let candidate = dir.join(format!("{tool}.{ext}"));
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
+    native_executable_in_dir(dir, tool)
 }
 
 fn native_executable_in_dir(dir: &Path, tool: &str) -> Option<PathBuf> {
     let exact = dir.join(tool);
     if exact.is_file() {
         return Some(exact);
-    }
-    #[cfg(windows)]
-    {
-        let candidate = dir.join(format!("{tool}.exe"));
-        if candidate.is_file() {
-            return Some(candidate);
-        }
     }
     None
 }
@@ -550,32 +531,16 @@ mod tests {
     fn executable_in_dir_distinguishes_shell_and_native_programs() {
         let dir = std::env::temp_dir().join(format!("kb-which-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        // Exact name is found on every platform.
         std::fs::write(dir.join("bar"), b"x").unwrap();
         assert_eq!(executable_in_dir(&dir, "bar"), Some(dir.join("bar")));
-        // A bare `foo` matches `foo.exe` on Windows (the real bug: `cargo`
-        // matching `cargo.exe`); on Unix there's no extension to append.
         std::fs::write(dir.join("foo.exe"), b"x").unwrap();
         let got = executable_in_dir(&dir, "foo");
-        #[cfg(windows)]
-        assert_eq!(got, Some(dir.join("foo.exe")));
-        #[cfg(not(windows))]
         assert_eq!(got, None);
-        // Shell scripts are valid for shell-driven bench requirements, but
-        // not for fixture delegates launched directly by Command.
         std::fs::write(dir.join("baz.cmd"), b"@exit /b 0\r\n").unwrap();
         let shell = executable_in_dir(&dir, "baz");
         let native = native_executable_in_dir(&dir, "baz");
-        #[cfg(windows)]
-        {
-            assert_eq!(shell, Some(dir.join("baz.cmd")));
-            assert_eq!(native, None);
-        }
-        #[cfg(not(windows))]
-        {
-            assert_eq!(shell, None);
-            assert_eq!(native, None);
-        }
+        assert_eq!(shell, None);
+        assert_eq!(native, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

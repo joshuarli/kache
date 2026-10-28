@@ -115,13 +115,8 @@ impl Tally {
     }
 }
 
-#[cfg(unix)]
 use unix::{allocated_bytes, file_id};
 
-#[cfg(not(unix))]
-use other::{allocated_bytes, file_id};
-
-#[cfg(unix)]
 mod unix {
     use std::fs::Metadata;
     use std::os::unix::fs::MetadataExt;
@@ -136,21 +131,7 @@ mod unix {
     }
 }
 
-/// Without inode identity or block counts every path counts at its length.
-#[cfg(not(unix))]
-mod other {
-    use std::fs::Metadata;
-
-    pub(super) fn file_id(_metadata: &Metadata) -> Option<(u64, u64)> {
-        None
-    }
-
-    pub(super) fn allocated_bytes(metadata: &Metadata) -> u64 {
-        metadata.len()
-    }
-}
-
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

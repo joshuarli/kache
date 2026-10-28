@@ -42,13 +42,10 @@ pub fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = std::fs::metadata(path) else {
         return false;
     };
-    #[cfg(unix)]
     let runnable = {
         use std::os::unix::fs::PermissionsExt;
         metadata.permissions().mode() & 0o111 != 0
     };
-    #[cfg(not(unix))]
-    let runnable = true;
     metadata.is_file() && runnable
 }
 

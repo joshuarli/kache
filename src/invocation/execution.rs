@@ -4,7 +4,7 @@ use super::InvocationContext;
 use anyhow::Result;
 use std::path::Path;
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(crate) fn try_execute(
     socket: &Path,
     args: &[String],
@@ -19,7 +19,6 @@ pub(crate) fn try_execute_with_trust(
     context: &InvocationContext,
     trusted_pipeline: bool,
 ) -> Result<Option<i32>> {
-    #[cfg(unix)]
     let (files, terminal) = match context.io.transfer_files() {
         Ok(files) => files,
         Err(error) => {
@@ -27,8 +26,6 @@ pub(crate) fn try_execute_with_trust(
             return Ok(None);
         }
     };
-    #[cfg(windows)]
-    let (files, terminal) = (Vec::new(), false);
     let executable = match crate::platform::frontend_executable() {
         Ok(path) => path,
         Err(error) => {

@@ -854,56 +854,11 @@ fn read_ends(path: &Path) -> io::Result<Ends> {
     Ok(Ends { head, tail })
 }
 
-/// Volume that holds this file.
-///
-/// Unix uses `st_dev` from `meta`. Windows cannot: `volume_serial_number` is
-/// still the unstable `windows_by_handle` feature on the 1.98 toolchain, so
-/// the serial comes from `GetFileInformationByHandle` on `path`. A missing
-/// serial is `None`, not `0`. Unknown files used to compare equal, and a
-/// cross-drive copy was hashed and then recorded as a failed clone.
+/// Volume that holds this file, from `st_dev` in `meta`.
 fn device_of(path: &Path, meta: &fs::Metadata) -> Option<u64> {
-    #[cfg(unix)]
-    {
-        let _ = path;
-        use std::os::unix::fs::MetadataExt;
-        Some(meta.dev())
-    }
-    #[cfg(windows)]
-    {
-        let _ = meta;
-        windows_volume_serial(path)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (path, meta);
-        None
-    }
-}
-
-/// Volume serial of `path`, including a directory. `None` when the file cannot
-/// be opened or the query fails.
-///
-/// The Win32 call is not in the Linux mutation binary. Skipping it here keeps
-/// a replaced body from being reported as a survivor of tests that never
-/// compiled it.
-#[cfg(windows)]
-#[mutants::skip]
-fn windows_volume_serial(path: &Path) -> Option<u64> {
-    use std::os::windows::fs::OpenOptionsExt;
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, GetFileInformationByHandle,
-    };
-
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(path)
-        .ok()?;
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    // SAFETY: `file` is open and `info` is a valid output buffer for this call.
-    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
-    (ok != 0).then_some(u64::from(info.dwVolumeSerialNumber))
+    let _ = path;
+    use std::os::unix::fs::MetadataExt;
+    Some(meta.dev())
 }
 
 fn device_of_path(path: &Path) -> Option<u64> {
@@ -958,9 +913,9 @@ fn path_holds(dir: &str, cursor: &str) -> bool {
 }
 
 fn path_separator(byte: u8) -> bool {
-    // `\` separates paths only where `Path` does. Both checks are compiled
-    // everywhere: a Windows-only `==` never changes the Linux mutation binary.
-    matches!(byte, b'/') || cfg!(windows) && matches!(byte, b'\\')
+    // `\\` separates paths only where `Path` does, which on this host is
+    // nowhere, so only `/` counts.
+    matches!(byte, b'/')
 }
 
 /// Collect up to `limit` candidate files strictly after `cursor`. `true` means
@@ -1661,15 +1616,6 @@ mod tests {
         assert!(!path_holds("/work/target", "/work/target2/debug"));
         assert!(!path_holds("/work/target", "/elsewhere/target/debug"));
         assert!(!path_holds("/work/target/debug", "/work/target"));
-        #[cfg(windows)]
-        {
-            assert!(path_holds(
-                r"C:\work\target",
-                r"C:\work\target\debug\deps\lib.rlib"
-            ));
-            assert!(!path_holds(r"C:\work\target", r"C:\work\target2\debug"));
-        }
-        #[cfg(not(windows))]
         assert!(!path_holds("work", "work\\debug"));
     }
 

@@ -2,7 +2,8 @@ use crate::args::RustcArgs;
 use crate::invocation::InvocationEnv;
 use crate::invocation::process::CommandExt as _;
 use crate::path_normalizer::{PathNormalizer, check_for_path_leak};
-use anyhow::{Context, Result};
+use crate::probe_memo::{self, Material};
+use anyhow::{Context, Result, bail};
 pub(crate) use kache_format::{is_valid_cache_key, is_valid_crate_name};
 pub(crate) use kache_store::file_hash::*;
 use std::borrow::Cow;
@@ -555,53 +556,16 @@ fn key_env_digest(patterns: &[String], mut matched: Vec<RawEnvPair>) -> String {
 /// `to_string_lossy` would map every distinct invalid sequence onto `U+FFFD`,
 /// merging values a macro reading `var_os` can still tell apart.
 pub(crate) fn env_os_key_bytes(value: &std::ffi::OsStr) -> Vec<u8> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        value.as_bytes().to_vec()
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        value.encode_wide().flat_map(u16::to_le_bytes).collect()
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        value.to_string_lossy().into_owned().into_bytes()
-    }
+    use std::os::unix::ffi::OsStrExt;
+    value.as_bytes().to_vec()
 }
 
 /// An env var *name* as key bytes.
 ///
-/// Same lossless rule as [`env_os_key_bytes`], plus case folding on Windows:
-/// there `PATH` and `Path` are one variable, so folding whichever casing the OS
-/// happened to report would split the cache between two machines describing the
-/// same environment. On Unix the two are genuinely different variables and the
-/// case is preserved.
-///
-/// Windows compares names by an *uppercase* mapping, and that mapping is not
-/// ASCII-only, so fold through `str::to_uppercase` (full Unicode) whenever the
-/// name is representable — which is every name the OS actually produces. The
-/// fallback for an unpaired surrogate keeps the raw units; it can only cost a
-/// miss, and getting there at all means the name is not a real Windows name.
-/// Both arms emit UTF-16LE so the two encodings can never be confused.
+/// Same lossless rule as [`env_os_key_bytes`]. The host is Unix-only, where
+/// `PATH` and `Path` are genuinely different variables, so the case is
+/// preserved.
 pub(crate) fn env_name_key_bytes(name: &std::ffi::OsStr) -> Vec<u8> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        // Tail expression, not `return`: on Windows the `cfg(not(windows))` arm
-        // below is compiled out, so this block IS the function body and clippy
-        // rejects the `return` under `-D warnings`.
-        match name.to_str() {
-            Some(name) => name
-                .to_uppercase()
-                .encode_utf16()
-                .flat_map(u16::to_le_bytes)
-                .collect(),
-            None => name.encode_wide().flat_map(u16::to_le_bytes).collect(),
-        }
-    }
-    #[cfg(not(windows))]
     env_os_key_bytes(name)
 }
 
@@ -2685,8 +2649,7 @@ fn workspace_roots_in(
     suffix_within(manifest_dir.as_os_str(), &root, 0)?;
     let canonical_root = std::fs::canonicalize(&root).ok()?;
     // Cargo and the working directory can use different spellings: macOS
-    // resolves `/var` to `/private/var`, and Windows canonicalization adds
-    // a verbatim prefix and normalizes separators.
+    // resolves `/var` to `/private/var`.
     let cwd = suffix_within(current_dir.as_os_str(), &root, 0).or_else(|| {
         let canonical_cwd = std::fs::canonicalize(current_dir).ok()?;
         suffix_within(canonical_cwd.as_os_str(), &canonical_root, 0)
@@ -3143,20 +3106,6 @@ fn dep_info_pre_pass_for(args: &RustcArgs, env: &InvocationEnv) -> Result<Option
         .transpose()
 }
 
-/// Whether this invocation can produce an EXE whose external debug database
-/// must pass the pairing audit. Libraries and known non-Windows outputs keep
-/// their previous keys. A custom spec's output format is not inferred here.
-fn executable_pdb_admission(args: &RustcArgs, rustc_version: &str, custom_target: bool) -> bool {
-    args.is_user_facing_executable()
-        && args.emits_link()
-        && (custom_target
-            || args
-                .target
-                .as_deref()
-                .or_else(|| rustc_host_triple(rustc_version))
-                .is_none_or(|target| target.split('-').any(|part| part == "windows")))
-}
-
 /// Compute the blake3 cache key for a rustc invocation, with what the
 /// computation learned on the way ([`KeyOutputs`]).
 ///
@@ -3309,21 +3258,6 @@ fn compute_key_into(
                 );
             }
         }
-    }
-
-    // Pre-audit clients can store an EXE-only entry under the old key. Keep
-    // those entries out of every local/remote lookup and committed-peer
-    // recheck. Custom specs can choose PE without saying so in
-    // their filename, so their linked executables take the same namespace.
-    let custom_target = custom_target_file
-        || args.target.as_deref().is_some_and(|target| {
-            target.contains(['/', '\\'])
-                || target.ends_with(".json")
-                || invocation.var_os("RUST_TARGET_PATH").is_some()
-        });
-    if executable_pdb_admission(args, &rustc_version, custom_target) {
-        hasher.set_group("pe_pdb_admission");
-        fold_field(&mut hasher, b"executable_pdb_pairing.v1:", b"verified");
     }
 
     // crate identity
@@ -3739,22 +3673,12 @@ fn compute_key_into(
     // specs, files named in its link arguments, and every archive in its `-L`
     // dirs outside Cargo's packages and the system library dirs. A `:RENAME`
     // or unknown modifier is uncacheable.
-    // Direct command-line native Windows MSVC libraries are handled separately
-    // below: their import-library bytes affect the executable and are hashed
-    // as part of the host link identity. That identity also hashes compiled
-    // resources; other raw files and explicit manifest inputs stay refused.
     // Linker order/section-order/map files and opaque response files require
     // side-input/output handling beyond the archive key. Fail closed instead
     // of caching an invocation whose auxiliary behavior cannot be reproduced.
     if native_linker_side_files_are_unmodeled(args) {
         anyhow::bail!("native linker order/map/response side files are not cacheable");
     }
-    // Native MSVC links resolve their libraries and link-argument files in
-    // the MSVC identity below, so the Unix rules here stay off for them.
-    let native_windows_msvc =
-        is_native_windows_msvc_link(args, &rustc_version, cfg!(target_os = "windows"), |rustc| {
-            get_rustc_version_for(rustc, invocation)
-        })?;
     // Only a link searches for libraries, so only a link reads the host.
     let link_rustc_version = if args.invokes_linker() {
         Some(rustc_version_for_native_link(
@@ -3778,7 +3702,6 @@ fn compute_key_into(
             framework: &framework_search_dirs,
         },
         &NativeLinkContext {
-            native_windows_msvc,
             target,
             default_dirs: default_library_dirs(
                 target,
@@ -3971,7 +3894,7 @@ fn compute_key_into(
 
     // Linker identity for bin/dylib targets
     hasher.set_group("link");
-    fold_generic_linker_identity(&mut hasher, args, native_windows_msvc, |args| {
+    fold_generic_linker_identity(&mut hasher, args, |args| {
         get_linker_identity_for(args, invocation)
     });
 
@@ -4010,7 +3933,7 @@ fn compute_key_into(
             // are unchanged; content hashes are still reused only with an
             // unchanged file fingerprint, through the same guards as other
             // key inputs.
-            crate::native_link_key::probe_linux_crt_objects_memoized_for(
+            probe_linux_crt_objects_memoized_for(
                 &crate::config::probe_memo_dir_for(invocation)?,
                 driver,
                 |path| file_hasher.hash(path),
@@ -4023,41 +3946,11 @@ fn compute_key_into(
                 native_linker_for(args, rustc_version, driver, Some(&memo_dir), invocation)?;
             file_hasher.hash(&linker)
         },
-        |sdkroot| match crate::native_link_key::sdk_identity_for_invocation(sdkroot, invocation)? {
+        |sdkroot| match sdk_identity_for_invocation(sdkroot, invocation)? {
             Some(identity) => Ok(identity),
             None => anyhow::bail!("the macOS SDK could not be identified"),
         },
         env,
-        invocation,
-    )?;
-
-    // Native Windows MSVC links depend on the selected COFF linker/compiler,
-    // the architecture-specific MSVC/SDK/UCRT environment, and the runtime
-    // import/static libraries. The probe is strictly host-native: metadata,
-    // cross-target links, and windows-gnu links must remain portable and must
-    // not execute or inspect host tools. A failed probe bubbles out so the
-    // wrapper passes through rather than sharing an unidentified executable;
-    // so does any `-C link-arg` that names an input file the identity does
-    // not hash (see `windows_native_link_search_dirs`).
-    fold_native_windows_msvc_identity_for(
-        &mut hasher,
-        args,
-        &rustc_version,
-        cfg!(target_os = "windows"),
-        file_hasher,
-        |linker, architecture, host, search_dirs| {
-            crate::native_link_key::probe_windows_msvc_identity_with_library_dirs_for(
-                linker,
-                architecture,
-                &rustc_tool_dirs_for(args, host, invocation)?,
-                &search_dirs.rustc,
-                &search_dirs.linker,
-                &args.link_libs,
-                &search_dirs.default_libraries,
-                |path| file_hasher.hash_static_lib(path),
-                invocation,
-            )
-        },
         invocation,
     )?;
 
@@ -4301,91 +4194,32 @@ struct NormalizedEnvDep {
     decision: EnvDepNormalizationDecision,
 }
 
-/// Lexically collapse `.` / `..` components and unify path separators, without
-/// touching the filesystem. Splits on BOTH `/` and `\` so it handles
-/// Windows-style paths on any host, preserves a leading root / drive / UNC
-/// anchor that `..` cannot escape, and rejoins with the platform separator so
-/// the result lines up with the host-canonical rule prefixes the cache key
-/// matches against.
-///
-/// Why: Windows cargo joins a relative `CARGO_TARGET_DIR` (`../oot-target`) onto
-/// the package dir literally, so `OUT_DIR` arrives as
-/// `C:\proj\pkg\..\oot-target\...` with mixed separators and an unresolved
-/// `..`. The workspace-root prefix then only matches up to `C:\proj\pkg`,
-/// leaving a `\..`-bearing residual that differs by build location and breaks
-/// out-of-tree cross-location convergence (kunobi-ninja/kache#399). Resolving
-/// the `..` first yields `C:\proj\oot-target\...`, which normalizes
-/// consistently. On Linux cargo already resolves the target dir, so this is a
-/// no-op there.
+/// Lexically collapse `.` / `..` components without touching the filesystem,
+/// preserving a leading `/` root that `..` cannot escape.
 fn lexically_resolve_path(input: &str) -> String {
-    let is_sep = |c: char| c == '/' || c == '\\';
-    let sep = std::path::MAIN_SEPARATOR;
-    let chars: Vec<char> = input.chars().collect();
-    let n = chars.len();
-
-    // Split off the un-poppable anchor (root / drive / UNC) and the index where
-    // the resolvable component list starts.
-    let (anchor, start) = if n >= 2 && is_sep(chars[0]) && is_sep(chars[1]) {
-        // UNC: \\server\share — keep `\\` plus the next two components as root.
-        let mut root = String::from(r"\\");
-        let mut i = 2;
-        let mut taken = 0;
-        while i < n && taken < 2 {
-            while i < n && is_sep(chars[i]) {
-                i += 1;
-            }
-            let comp_start = i;
-            while i < n && !is_sep(chars[i]) {
-                i += 1;
-            }
-            if comp_start == i {
-                break;
-            }
-            if taken == 1 {
-                root.push(sep);
-            }
-            root.extend(&chars[comp_start..i]);
-            taken += 1;
-        }
-        root.push(sep);
-        (root, i)
-    } else if n >= 2 && chars[1] == ':' && chars[0].is_ascii_alphabetic() {
-        // Windows drive: `C:` optionally followed by a separator (absolute).
-        let mut root: String = chars[..2].iter().collect();
-        let mut i = 2;
-        if i < n && is_sep(chars[i]) {
-            root.push(sep);
-            i += 1;
-        }
-        (root, i)
-    } else if n >= 1 && is_sep(chars[0]) {
-        (String::from(sep), 1) // Unix absolute
-    } else {
-        (String::new(), 0) // relative
-    };
-
-    let absolute = anchor.ends_with(sep);
-    let tail: String = chars[start..].iter().collect();
+    let (anchor, rest) = input
+        .strip_prefix('/')
+        .map_or(("", input), |rest| ("/", rest));
     let mut stack: Vec<&str> = Vec::new();
-    for comp in tail.split(is_sep).filter(|c| !c.is_empty()) {
+    for comp in rest.split('/').filter(|c| !c.is_empty()) {
         match comp {
             "." => {}
             ".." => match stack.last() {
                 Some(&top) if top != ".." => {
                     stack.pop();
                 }
-                _ if absolute => {} // cannot escape the root
+                _ if !anchor.is_empty() => {}
                 _ => stack.push(".."),
             },
             other => stack.push(other),
         }
     }
 
-    let joined = stack.join(&sep.to_string());
+    let joined = stack.join("/");
     match (anchor.is_empty(), joined.is_empty()) {
         (true, true) => ".".to_string(),
         (true, false) => joined,
-        (false, true) => anchor,
+        (false, true) => anchor.to_string(),
         (false, false) => format!("{anchor}{joined}"),
     }
 }
@@ -4422,10 +4256,8 @@ fn resolve_native_static_lib(
     // file only exists where the build produced it). Build scripts can emit the
     // same search directory more than once (for example, one `cc::Build::compile`
     // call per archive), so repeated sightings of the same candidate are not
-    // ambiguous. Nor are distinct candidates with the same bytes: for an MSVC
-    // target `cc` hard-links or copies each `lib<name>.a` it builds to
-    // `<name>.lib`, and whichever one rustc or the linker takes, it reads the
-    // same contents. The first one found is hashed. Which copy rustc takes is
+    // ambiguous. Nor are distinct candidates with the same bytes: whichever
+    // one rustc or the linker takes, it reads the same contents. The first one found is hashed. Which copy rustc takes is
     // target-specific, and a bundling output records that file's name, so
     // where the copies are is part of the key. If candidates differ —
     // `lib<name>.a` and `<name>.lib`, or hits in two dirs — the choice is
@@ -4544,15 +4376,6 @@ fn linked_archive_use(args: &RustcArgs, archive: &Path, oso_root: Option<&Path>)
     } else {
         StaticLibUse::Linked
     }
-}
-
-/// Whether a `static` spec that resolves in none of the unit's dirs refuses
-/// the key. A linking unit hands the name to the linker, which may take a
-/// copy from a system dir the key does not see; rustc itself fails an rlib or
-/// staticlib that bundles a missing archive. Native MSVC links resolve the
-/// name through `LIB` in their own identity.
-fn unresolved_static_lib_is_error(links: bool, native_windows_msvc: bool) -> bool {
-    links && !native_windows_msvc
 }
 
 /// The name and `+verbatim` flag of a kindless or `dylib` `-l` spec, which a
@@ -4695,8 +4518,7 @@ fn multiarch_name(target: &str) -> String {
 
 /// Whether a file name marks a native archive: `*.a` or `*.lib`, in any case.
 fn is_native_archive_name(name: &str) -> bool {
-    crate::native_link_key::ends_with_ignore_ascii_case(name, ".a")
-        || crate::native_link_key::ends_with_ignore_ascii_case(name, ".lib")
+    ends_with_ignore_ascii_case(name, ".a") || ends_with_ignore_ascii_case(name, ".lib")
 }
 
 /// Whether a path, in the key's normalized spelling, lies inside a Cargo
@@ -4763,8 +4585,7 @@ fn is_under_any(path: &Path, roots: &[PathBuf]) -> bool {
 
 /// Where the OS, system package managers and Apple's SDKs install libraries.
 /// A `-L` dir under one of these and outside the build tree is not scanned
-/// (see [`native_scan_dirs`]). Windows has none, so every dir outside Cargo's
-/// packages is scanned there.
+/// (see [`native_scan_dirs`]).
 const SYSTEM_LIBRARY_DIRS: &[&str] = &[
     // The OS and its distribution packages.
     "/lib",
@@ -5004,11 +4825,11 @@ fn rlib_bundle(spec: &StaticLibSpec<'_>, emits_rlib: bool, packs_all: bool) -> O
 
 /// The `-L` dirs, input files and `-l` libraries of this unit's
 /// `link-arg`/`link-args` values.
-fn unix_link_arguments(args: &RustcArgs) -> Result<crate::native_link_key::LinkArgInputs> {
-    let mut inputs = crate::native_link_key::LinkArgInputs::default();
+fn unix_link_arguments(args: &RustcArgs) -> Result<LinkArgInputs> {
+    let mut inputs = LinkArgInputs::default();
     for (key, value) in &args.codegen_opts {
         if let ("link-arg" | "link-args", Some(value)) = (key.as_str(), value.as_deref()) {
-            let parsed = crate::native_link_key::unix_link_arg_inputs(key, value)?;
+            let parsed = unix_link_arg_inputs(key, value)?;
             inputs.files.extend(parsed.files);
             inputs.dirs.extend(parsed.dirs);
             inputs.libs.extend(parsed.libs);
@@ -5026,9 +4847,6 @@ struct NativeSearchDirs<'a> {
 
 /// What [`fold_native_link_inputs`] knows about a unit beyond its argv.
 struct NativeLinkContext<'a> {
-    /// A native Windows MSVC link, whose libraries and link-argument files
-    /// the MSVC identity keys instead.
-    native_windows_msvc: bool,
     /// The target the unit links for (see [`link_target`]).
     target: &'a str,
     /// Where a Unix linker looks for `-l` after the `-L` dirs (see
@@ -5176,11 +4994,10 @@ fn fold_native_link_inputs<H: KeyFold>(
 ) -> Result<KeyedNativeArchives> {
     let crate_name = args.crate_name.as_deref().unwrap_or("unknown");
     let links = args.invokes_linker();
-    let unix_link = links && !context.native_windows_msvc;
-    let mut link_arguments = if unix_link {
+    let mut link_arguments = if links {
         unix_link_arguments(args)?
     } else {
-        crate::native_link_key::LinkArgInputs::default()
+        LinkArgInputs::default()
     };
     for path in link_arguments
         .dirs
@@ -5224,7 +5041,7 @@ fn fold_native_link_inputs<H: KeyFold>(
     let shared_extensions = shared_library_extensions(context.target);
     let packs_all = packs_bundled_libs(&args.unstable_flags);
 
-    if unix_link && context.target.contains("-apple-") {
+    if links && context.target.contains("-apple-") {
         // Older entries did not inspect install names, even when a native
         // library is now missing from its search directory.
         fold_field(hasher, b"apple_install_names.v1:", b"");
@@ -5315,14 +5132,11 @@ fn fold_native_link_inputs<H: KeyFold>(
             );
         }
 
-        let dirs = if unix_link { &lib_dirs } else { search.native };
+        let dirs = if links { &lib_dirs } else { search.native };
         let spec = static_lib_spec(lib);
         let mut resolved = resolve_native_static_lib(lib, dirs, file_hasher, links, archive_use)?;
         let is_static = matches!(spec, StaticLibSpec::Archive { .. });
-        if resolved.is_none()
-            && is_static
-            && unresolved_static_lib_is_error(links, context.native_windows_msvc)
-        {
+        if resolved.is_none() && is_static && links {
             anyhow::bail!(
                 "native static library {lib:?} is in no -L directory; the linker could take \
                  a copy the key does not hash"
@@ -5337,7 +5151,7 @@ fn fold_native_link_inputs<H: KeyFold>(
             });
         }
         if resolved.is_none()
-            && unix_link
+            && links
             && let Some((name, verbatim)) = unix_library_request(lib)
             && let Some(path) = resolve_unix_library(
                 name,
@@ -5665,10 +5479,8 @@ fn normalize_env_dep_value_with_hasher(
         };
     }
     // Resolve the value to the SAME canonical form the rule prefixes use
-    // (kunobi-ninja/kache#399). Windows cargo joins a relative CARGO_TARGET_DIR
-    // literally, so an out-of-tree `OUT_DIR` arrives as `...\pkg\..\oot-target\...`
-    // with mixed separators and an unresolved `..`. The PathNormalizer rules are
-    // `canonicalize()`d (symlinks + `..` resolved, `\\?\` stripped, OS-native
+    // (kunobi-ninja/kache#399). An out-of-tree `OUT_DIR` can arrive with
+    // an unresolved `..`. The PathNormalizer rules are `canonicalize()`d (symlinks + `..` resolved, `\\?\` stripped, OS-native
     // separators, NFC), and `normalize` is a byte-literal substring replace — so
     // the raw value matches no rule and the build location stays in the key,
     // missing on relocate. Running the value through the rules' own
@@ -7787,8 +7599,7 @@ impl<'db> FileHasher<'db> {
     /// The change time does not count: linking a dependency's output
     /// elsewhere, as store ingest and Cargo's uplift do while its dependents
     /// compile, moves it and leaves the bytes alone. So a rewrite that keeps
-    /// the size and write time is missed, and on Windows, where fingerprints
-    /// carry no inode, so is a replacement with the same size and write time.
+    /// the size and write time is missed.
     pub fn guarded_inputs_moved_since_hash(inputs: &[ObservedFingerprint]) -> bool {
         inputs.iter().any(|input| {
             let expected = &input.fingerprint;
@@ -8527,50 +8338,6 @@ impl<'db> FileHasher<'db> {
         Ok(hash)
     }
 
-    /// Validate and hash a compiled resource from one open file. Whole-file
-    /// memo rows carry no format proof, so these inputs are streamed on every
-    /// key rather than accepting an archive renamed to `.res`.
-    fn hash_windows_resource(&self, path: &Path) -> Result<String> {
-        use std::io::Read as _;
-
-        let _trace = crate::phase_trace::phase("input_hash");
-        let resolved = self.resolve_path(path)?;
-        let path = resolved.as_path();
-        let before = ObservedFingerprint::from_path(path)?;
-        self.note_too_new(&before.fingerprint);
-        #[cfg(test)]
-        before_file_read(path);
-        let mut file = std::fs::File::open(path)?;
-        // The standard null-resource header starts RC output. Its first 16
-        // bytes are LLVM's WinResMagic; the remaining null fields are zero.
-        const HEADER: [u8; 32] = [
-            0, 0, 0, 0, 32, 0, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0,
-        ];
-        let mut prefix = [0; 32];
-        file.read_exact(&mut prefix)
-            .context("reading the compiled resource header")?;
-        if prefix != HEADER {
-            anyhow::bail!("linker input is not a supported compiled resource");
-        }
-        let mut digest = blake3::Hasher::new();
-        digest.update(&prefix);
-        digest.update_reader(file)?;
-        let hash = digest.finalize().to_hex().to_string();
-        self.record_miss(before.fingerprint.size);
-        let (observed, _) = self.restat_after_read(path, before, true);
-        self.guard_input(&observed);
-        self.recent_hashes.borrow_mut().insert(
-            resolved,
-            RecentHash {
-                hash: hash.clone(),
-                fingerprint: Some(observed.fingerprint),
-                header_scan: None,
-            },
-        );
-        Ok(hash)
-    }
-
     /// Hash a file that is not a key input, such as one a tree guard reads,
     /// through the persistent cache. It neither trips the too-new guard nor
     /// joins the inputs checked again after the compile: a file saved
@@ -8918,13 +8685,7 @@ impl<'db> FileHasher<'db> {
     /// applied either way, and every scheme is domain-tagged.
     /// Scoped to `static=` (this method) on purpose — `.rlib`s are also `ar`
     /// archives but are hashed whole via [`Self::hash`].
-    /// This is the strict [`StaticLibUse::Linked`] reading; rlib bundling
-    /// goes through [`Self::hash_static_lib_for`].
-    pub fn hash_static_lib(&self, path: &Path) -> Result<String> {
-        self.hash_static_lib_for(path, StaticLibUse::Linked)
-    }
-
-    /// [`Self::hash_static_lib`] for a known [`StaticLibUse`].
+    /// Hash a native static archive for a known [`StaticLibUse`].
     pub fn hash_static_lib_for(&self, path: &Path, usage: StaticLibUse) -> Result<String> {
         let resolved = self.resolve_path(path)?;
         let path = resolved.as_path();
@@ -9290,11 +9051,6 @@ pub(crate) fn run_dep_info_pass_for(
 
     let dep_args = dep_info_pass_args(source_file, rustc_args, &dep_file);
 
-    let use_response_file = crate::compile::command_needs_response_file(
-        use_response_file,
-        &cmd,
-        dep_args.iter().map(std::string::String::as_str),
-    );
     let response_file = if use_response_file {
         let response = crate::compile::RustcResponseFile::new_in(
             &temp_root,
@@ -9445,12 +9201,7 @@ fn parse_env_dep_info(dep_info: &str) -> Vec<(String, Option<String>)> {
 ///
 /// rustc writes env-dep values through `escape_dep_env`, which emits
 /// `\` as `\\`, newline as `\n`, and carriage return as `\r` so the
-/// value stays on one line. Without undoing it, a Windows path arrives
-/// doubled (`C:\\foo\\bar`); the cache-key path normalizer's rules use
-/// single backslashes, so the value never matched and `OUT_DIR` leaked
-/// its absolute path into the key — defeating cross-path cache hits on
-/// Windows (kunobi-ninja/kache#201). On Unix, paths rarely contain
-/// backslashes, so this was latent.
+/// value stays on one line.
 fn unescape_env_dep_value(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars();
@@ -9637,7 +9388,11 @@ mod invocation_core_tests {
         );
         let hasher = FileHasher::new().with_invocation_env(&env);
         assert!(hasher.hash(Path::new("Cargo.toml")).is_err());
-        assert!(hasher.hash_static_lib(Path::new("Cargo.toml")).is_err());
+        assert!(
+            hasher
+                .hash_static_lib_for(Path::new("Cargo.toml"), StaticLibUse::Linked)
+                .is_err()
+        );
     }
 
     #[test]
@@ -10077,33 +9832,6 @@ fn default_rustc_sysroot_for(rustc: &Path, env: &InvocationEnv) -> Option<PathBu
     let sysroot = env.resolve(Path::new(&sysroot))?;
     write_tool_version_cache_for(rustc, "rustc-sysroot", &sysroot.to_string_lossy(), env);
     Some(sysroot)
-}
-
-/// Where rustc looks first for a linker named without a directory, such as
-/// `-C linker=rust-lld.exe`: the tool directory of an explicit `--sysroot`,
-/// then that of the toolchain's own sysroot. rustc puts these before `PATH`
-/// for the linker it runs. In a double-wrapper invocation the sysroot is
-/// the inner rustc's, like the host triple. Without the toolchain's sysroot
-/// the lookup could find a different linker than rustc, so that is an error.
-#[cfg(test)]
-fn rustc_tool_dirs(args: &RustcArgs, host: &str) -> Result<Vec<PathBuf>> {
-    rustc_tool_dirs_for(args, host, &InvocationEnv::capture())
-}
-
-pub(crate) fn rustc_tool_dirs_for(
-    args: &RustcArgs,
-    host: &str,
-    env: &InvocationEnv,
-) -> Result<Vec<PathBuf>> {
-    let rustc = args.inner_rustc.as_deref().unwrap_or(&args.rustc);
-    let sysroot = default_rustc_sysroot_for(rustc, env).context("rustc --print sysroot failed")?;
-    Ok(args
-        .sysroot
-        .iter()
-        .filter_map(|root| env.resolve(root))
-        .chain([sysroot])
-        .map(|sysroot| crate::native_link_key::rustc_tool_dir(&sysroot, host))
-        .collect())
 }
 
 /// The libraries rustc may load for the codegen backend `name`, with their
@@ -10548,6 +10276,882 @@ where
     Ok(())
 }
 
+/// What the driver is asked to place, and which of it a key cannot do without.
+///
+/// Chosen with `cfg!` rather than `#[cfg]` so both tables compile everywhere;
+/// a table only one platform builds is a table only that platform's CI can
+/// catch a mistake in.
+#[derive(Clone, Copy)]
+pub(crate) struct FileProbes {
+    /// The object that starts a program. One of these must resolve.
+    startup: &'static [&'static str],
+    /// Names a libc goes by. One must resolve too.
+    libc: &'static [&'static str],
+    /// Constructor/destructor objects. Individually optional.
+    rest: &'static [&'static str],
+}
+
+const LINUX_PROBES: FileProbes = FileProbes {
+    startup: &["Scrt1.o", "crt1.o", "rcrt1.o"],
+    libc: &["libc.so.6", "libc.so", "libc.a"],
+    rest: &[
+        "crti.o",
+        "crtn.o",
+        "crtbegin.o",
+        "crtbeginS.o",
+        "crtbeginT.o",
+        "crtend.o",
+        "crtendS.o",
+    ],
+};
+
+/// with the driver's placements remembered.
+///
+/// Placing thirteen names costs thirteen driver spawns per linked output,
+/// which on a build-script-heavy warm build is most of what a hit spends.
+/// The placements only depend on the driver, the variables that steer its
+/// search, and what the searched directories contain, so they are memoised
+/// under the first two and validated against the third: every directory the
+/// driver searches, and every directory a placement came from, must still
+/// carry the modification stamp it had when the memo was written. A file
+/// added to or removed from any of them changes that stamp, so a name that
+/// would now place differently is probed again. Content is still hashed
+/// through `hash` on every call, as before.
+pub(crate) fn probe_linux_crt_objects_memoized_for(
+    memo_dir: &Path,
+    driver: &Path,
+    hash: impl Fn(&Path) -> Result<String>,
+    env: &InvocationEnv,
+) -> Result<BTreeMap<String, String>> {
+    let _trace = crate::phase_trace::phase("native_crt");
+    let driver = env
+        .resolve_program(driver)
+        .context("resolving native linker driver")?;
+    let memo_dir = env
+        .resolve(memo_dir)
+        .context("resolving CRT memo directory")?;
+    let placements = match crt_placement_memo_for(&memo_dir, &driver, env) {
+        Some(placed) => placed,
+        None => {
+            let placed = place_linux_crt_objects(&driver, env);
+            record_crt_placement_memo(&memo_dir, &driver, &placed, env);
+            placed
+        }
+    };
+    probe_files_with_hash(LINUX_PROBES, |name| placements.get(name).cloned(), hash)
+}
+
+fn place_linux_crt_objects(driver: &Path, env: &InvocationEnv) -> BTreeMap<String, PathBuf> {
+    LINUX_PROBES
+        .startup
+        .iter()
+        .chain(LINUX_PROBES.libc)
+        .chain(LINUX_PROBES.rest)
+        .filter_map(|name| Some((name.to_string(), print_file_name_for(driver, name, env)?)))
+        .collect()
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CrtPlacementMemo {
+    /// Name to absolute path, for the names the driver placed.
+    placed: BTreeMap<String, PathBuf>,
+    /// Directory to `mtime_ns:ctime_ns` for every directory that decides a
+    /// placement: the driver's library search directories and the parent of
+    /// each placed file.
+    stamps: BTreeMap<PathBuf, String>,
+}
+
+/// Variables that change where a GCC or Clang driver looks for files.
+const CRT_SEARCH_ENV: &[&str] = &["LIBRARY_PATH", "GCC_EXEC_PREFIX", "COMPILER_PATH"];
+
+fn crt_memo_material(driver: &Path, env: &InvocationEnv) -> Option<(PathBuf, String)> {
+    let canonical = std::fs::canonicalize(driver).ok()?;
+    let metadata = std::fs::metadata(&canonical).ok()?;
+    let mut material = Material::new("linux-crt-placements-v2");
+    // Both spellings: a driver that dispatches on its own name (`ccache`,
+    // `clang` via `aarch64-linux-gnu-clang`) canonicalizes to one binary and
+    // places differently under each name.
+    material.push(driver.as_os_str().as_encoded_bytes());
+    material.push(canonical.as_os_str().as_encoded_bytes());
+    material.push(&metadata.len().to_le_bytes());
+    material.push(&metadata_mtime_ns(&metadata).to_le_bytes());
+    for name in CRT_SEARCH_ENV {
+        material.push(name.as_bytes());
+        material.push(
+            &env.var_os(name)
+                .map(|value| value.as_encoded_bytes().to_vec())
+                .unwrap_or_default(),
+        );
+    }
+    // Relative search paths are interpreted in the requesting client's cwd.
+    material.push(env.cwd()?.as_os_str().as_encoded_bytes());
+    material.push(env.var_os("PATH").unwrap_or_default().as_encoded_bytes());
+    Some((canonical, material.digest()))
+}
+
+fn directory_stamp(directory: &Path) -> Option<String> {
+    let metadata = std::fs::metadata(directory).ok()?;
+    let stamp = format!(
+        "{}:{}",
+        metadata_mtime_ns(&metadata),
+        metadata_ctime_ns(&metadata)
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(format!("{stamp}:{}", metadata.mode()))
+    }
+    #[cfg(not(unix))]
+    Some(stamp)
+}
+
+fn crt_placement_memo_for(
+    memo_dir: &Path,
+    driver: &Path,
+    env: &InvocationEnv,
+) -> Option<BTreeMap<String, PathBuf>> {
+    let (_, digest) = crt_memo_material(driver, env)?;
+    let path = probe_memo::memo_path(memo_dir, "crt-placements", "json", &digest);
+    let body = probe_memo::read_verified(&path, &digest)?;
+    let memo: CrtPlacementMemo = serde_json::from_str(&body).ok()?;
+    if memo.stamps.is_empty() {
+        return None;
+    }
+    for (directory, stamp) in &memo.stamps {
+        if directory_stamp(directory).as_ref() != Some(stamp) {
+            return None;
+        }
+    }
+    memo.placed
+        .values()
+        .all(|path| path.is_file())
+        .then_some(memo.placed)
+}
+
+fn record_crt_placement_memo(
+    memo_dir: &Path,
+    driver: &Path,
+    placed: &BTreeMap<String, PathBuf>,
+    env: &InvocationEnv,
+) {
+    let Some((canonical, digest)) = crt_memo_material(driver, env) else {
+        return;
+    };
+    let mut directories: Vec<PathBuf> = driver_library_search_dirs_for(&canonical, env);
+    directories.extend(
+        placed
+            .values()
+            .filter_map(|path| path.parent().map(Path::to_path_buf)),
+    );
+    let mut stamps = BTreeMap::new();
+    for directory in directories {
+        let Ok(directory) = std::fs::canonicalize(&directory) else {
+            continue;
+        };
+        if let Some(stamp) = directory_stamp(&directory) {
+            stamps.insert(directory, stamp);
+        }
+    }
+    if stamps.is_empty() {
+        return;
+    }
+    let memo = CrtPlacementMemo {
+        placed: placed.clone(),
+        stamps,
+    };
+    if let Ok(body) = serde_json::to_string(&memo) {
+        probe_memo::write_verified(
+            &probe_memo::memo_path(memo_dir, "crt-placements", "json", &digest),
+            &digest,
+            &body,
+        );
+    }
+}
+
+/// The `libraries:` line of `cc -print-search-dirs`, as directories that exist.
+fn driver_library_search_dirs_for(driver: &Path, env: &InvocationEnv) -> Vec<PathBuf> {
+    driver_search_dirs_for(driver, "libraries:", env)
+        .into_iter()
+        .filter(|dir| dir.is_dir())
+        .collect()
+}
+
+/// One line of `cc -print-search-dirs` (`libraries:` or `programs:`), as the
+/// absolute directories it lists, whether or not they exist yet.
+fn driver_search_dirs_for(driver: &Path, line_prefix: &str, env: &InvocationEnv) -> Vec<PathBuf> {
+    let Ok(mut command) = env.command(driver) else {
+        return Vec::new();
+    };
+    let output = match command
+        .arg("-print-search-dirs")
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .invocation_output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            tracing::debug!(
+                driver = %driver.display(),
+                %error,
+                "could not run the driver for -print-search-dirs"
+            );
+            return Vec::new();
+        }
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let Some(line) = text.lines().find_map(|line| line.strip_prefix(line_prefix)) else {
+        return Vec::new();
+    };
+    let line = line.trim().trim_start_matches('=');
+    std::env::split_paths(line)
+        .filter(|dir| dir.is_absolute())
+        .collect()
+}
+
+/// Resolve each probe, hash what came back, and insist on the ones a key
+/// cannot describe a link without.
+///
+/// A probe that does not resolve is left out, so a host that resolves a
+/// different set keys differently. That alone is not enough: two hosts
+/// failing the *same* probe would agree on a key without ever pinning what
+/// that probe stood for. Startup and libc therefore have to resolve.
+fn probe_files_with_hash(
+    probes: FileProbes,
+    place: impl Fn(&str) -> Option<PathBuf>,
+    hash: impl Fn(&Path) -> Result<String>,
+) -> Result<BTreeMap<String, String>> {
+    let mut resolved = BTreeMap::new();
+    for name in probes
+        .startup
+        .iter()
+        .chain(probes.libc)
+        .chain(probes.rest)
+        .copied()
+    {
+        let Some(path) = place(name) else {
+            continue;
+        };
+        let _trace = crate::phase_trace::phase("native_crt_hash");
+        let digest = hash(&path)
+            .with_context(|| format!("hashing linker-placed {name} at {}", path.display()))?;
+        resolved.insert(name.to_string(), digest);
+    }
+    for (required, what) in [(probes.startup, "startup object"), (probes.libc, "libc")] {
+        if !required.is_empty() && !required.iter().any(|name| resolved.contains_key(*name)) {
+            bail!("the linker driver resolved no {what}, so its links cannot be identified");
+        }
+    }
+    Ok(resolved)
+}
+
+fn print_file_name_for(driver: &Path, name: &str, env: &InvocationEnv) -> Option<PathBuf> {
+    let _trace = crate::phase_trace::phase("native_crt_resolve");
+    let output = env
+        .command(driver)
+        .ok()?
+        .arg(format!("-print-file-name={name}"))
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .invocation_output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let reported = String::from_utf8_lossy(&output.stdout);
+    let reported = reported.trim();
+    if reported.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(reported);
+    // The driver echoes the name back when it cannot place it.
+    path.is_absolute()
+        .then_some(path)
+        .filter(|path| path.is_file())
+}
+
+/// The driver arguments of a link that choose which linker the driver runs.
+///
+/// Read from `-C link-arg` and `-C link-args` in the order the driver sees
+/// them: the last `-fuse-ld=` and `--ld-path=` win, and `-B` directories are
+/// searched in the order given. `cc --version` names the driver only, so
+/// this is what tells two links through the same driver apart.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct LinkerSelection {
+    /// `-B<dir>`, `-B <dir>`, `--prefix=<dir>` and `--prefix <dir>`, in order.
+    search_dirs: Vec<String>,
+    /// The last `-fuse-ld=` value.
+    fuse_ld: Option<String>,
+    /// The last `--ld-path=` value. Clang lets it override `-fuse-ld`.
+    ld_path: Option<String>,
+    /// rustc's own `gcc-ld` directory when rustc links through its bundled
+    /// `rust-lld`. rustc then passes `-B<dir>` and `-fuse-ld=lld` ahead of the
+    /// link arguments, so the directory is searched first and `lld` is what a
+    /// link without its own `-fuse-ld` uses.
+    bundled_lld: Option<PathBuf>,
+}
+
+/// What to ask the driver for: a linker it names, or one given by path.
+#[derive(Debug, PartialEq, Eq)]
+enum LinkerQuery {
+    Named(String),
+    Path(PathBuf),
+}
+
+impl LinkerSelection {
+    pub(crate) fn of(args: &crate::args::RustcArgs) -> Result<Self> {
+        let mut words = Vec::new();
+        for (key, value) in &args.codegen_opts {
+            let Some(value) = value.as_deref() else {
+                continue;
+            };
+            match key.as_str() {
+                "link-arg" => words.push(value.to_string()),
+                "link-args" => words.extend(value.split_whitespace().map(str::to_string)),
+                _ => {}
+            }
+        }
+        Self::from_words(&words)
+    }
+
+    fn from_words(words: &[String]) -> Result<Self> {
+        let mut selection = Self::default();
+        let mut words = words.iter();
+        while let Some(word) = words.next() {
+            if let Some(value) = word.strip_prefix("-fuse-ld=") {
+                selection.fuse_ld = Some(value.to_string());
+            } else if let Some(value) = word.strip_prefix("--ld-path=") {
+                selection.ld_path = Some(value.to_string());
+            } else if word == "-B" || word == "--prefix" {
+                let dir = words
+                    .next()
+                    .with_context(|| format!("`{word}` link argument has no directory"))?;
+                selection.search_dirs.push(dir.clone());
+            } else if let Some(dir) = word.strip_prefix("--prefix=") {
+                selection.search_dirs.push(dir.to_string());
+            } else if let Some(dir) = word.strip_prefix("-B") {
+                selection.search_dirs.push(dir.to_string());
+            }
+        }
+        Ok(selection)
+    }
+
+    /// The selection when rustc links through the `rust-lld` in `gcc_ld`.
+    pub(crate) fn with_bundled_lld(mut self, gcc_ld: PathBuf) -> Self {
+        self.bundled_lld = Some(gcc_ld);
+        self
+    }
+
+    /// `-B` directories in the order the driver searches them.
+    fn driver_search_dirs(&self) -> impl Iterator<Item = &str> {
+        self.bundled_lld
+            .iter()
+            .filter_map(|dir| dir.to_str())
+            .chain(self.search_dirs.iter().map(String::as_str))
+    }
+
+    /// Clang's rules, which GCC's `-fuse-ld=<name>` follows: a value with a
+    /// directory is a path, a bare `--ld-path` name is searched like any
+    /// program, and `-fuse-ld=<name>` means the program `ld.<name>`.
+    fn query(&self) -> Result<LinkerQuery> {
+        if let Some(value) = &self.ld_path {
+            if value.is_empty() {
+                bail!("an empty `--ld-path` names no linker");
+            }
+            return Ok(if Path::new(value).components().count() > 1 {
+                LinkerQuery::Path(PathBuf::from(value))
+            } else {
+                LinkerQuery::Named(value.clone())
+            });
+        }
+        match self.fuse_ld.as_deref() {
+            Some("") => bail!("an empty `-fuse-ld` names no linker"),
+            Some(value) if Path::new(value).components().count() > 1 => {
+                Ok(LinkerQuery::Path(PathBuf::from(value)))
+            }
+            Some(name) => Ok(LinkerQuery::Named(format!("ld.{name}"))),
+            None if self.bundled_lld.is_some() => Ok(LinkerQuery::Named("ld.lld".to_string())),
+            None => Ok(LinkerQuery::Named("ld".to_string())),
+        }
+    }
+}
+
+/// The file a native link's driver runs as its linker.
+///
+/// A linker given by path is that file, relative to the client's working
+/// directory. A named one is placed by the driver (`-print-prog-name`, with
+/// the link's `-B` directories): a path it reports is used, relative ones
+/// rooted at the working directory, and a bare name it echoes back is
+/// searched on the client's PATH, as collect2 and Clang do. A linker that
+/// cannot be placed is an error: the caller then treats the link as
+/// uncacheable.
+pub(crate) fn place_linker(
+    driver: &Path,
+    selection: &LinkerSelection,
+    env: &InvocationEnv,
+) -> Result<PathBuf> {
+    let _trace = crate::phase_trace::phase("native_linker_resolve");
+    let name = match selection.query()? {
+        LinkerQuery::Path(path) => {
+            return env
+                .resolve(&path)
+                .filter(|path| path.is_file())
+                .with_context(|| format!("linker {} does not exist", path.display()));
+        }
+        LinkerQuery::Named(name) => name,
+    };
+    let mut command = env
+        .command(driver)
+        .context("running the native linker driver")?;
+    for dir in selection.driver_search_dirs() {
+        command.arg(format!("-B{dir}"));
+    }
+    let output = command
+        .arg(format!("-print-prog-name={name}"))
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .invocation_output()
+        .context("asking the native linker driver for its linker")?;
+    if !output.status.success() {
+        bail!("the native linker driver could not place `{name}`");
+    }
+    let reported = String::from_utf8_lossy(&output.stdout);
+    let reported = Path::new(reported.trim());
+    let placed = if reported.components().count() > 1 {
+        env.resolve(reported)
+    } else {
+        env.resolve_program(Path::new(&name))
+    };
+    placed
+        .filter(|path| path.is_file())
+        .with_context(|| format!("the native linker driver runs `{name}`, which is not installed"))
+}
+
+/// [`place_linker`] with the placement remembered.
+///
+/// A placement depends on the driver, the selection, the variables that
+/// steer the driver's search, and what the searched locations hold. The
+/// memo is keyed by the first three and validated against the last: every
+/// directory the search could look in (the driver's program directories,
+/// each `-B` directory, every PATH entry, the placed linker's directory)
+/// and the linker's name inside each of them must look as they did. See
+/// [`location_stamp`]. The caller hashes the placed file's content on every
+/// call. A linker given by path needs no driver and is not memoised.
+pub(crate) fn place_linker_memoized_for(
+    memo_dir: &Path,
+    driver: &Path,
+    selection: &LinkerSelection,
+    env: &InvocationEnv,
+) -> Result<PathBuf> {
+    let driver = env
+        .resolve_program(driver)
+        .context("resolving native linker driver")?;
+    let LinkerQuery::Named(name) = selection.query()? else {
+        return place_linker(&driver, selection, env);
+    };
+    let memo_dir = env
+        .resolve(memo_dir)
+        .context("resolving linker memo directory")?;
+    if let Some(placed) = linker_placement_memo_for(&memo_dir, &driver, selection, env) {
+        return Ok(placed);
+    }
+    let placed = place_linker(&driver, selection, env)?;
+    record_linker_placement_memo(&memo_dir, &driver, selection, &name, &placed, env);
+    Ok(placed)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LinkerPlacementMemo {
+    placed: PathBuf,
+    /// Searched location to its [`location_stamp`] when the memo was written.
+    locations: BTreeMap<PathBuf, String>,
+}
+
+/// What a search location looks like, so a memo can tell it changed.
+///
+/// An existing path is its canonical target with that target's modification
+/// and change times: renaming a file in or out of a directory, retargeting a
+/// symlink on the way, or changing a file's mode all change it. A missing
+/// path is just absent, so creating it changes the stamp too.
+fn location_stamp(path: &Path) -> Option<String> {
+    match std::fs::canonicalize(path) {
+        Ok(target) => Some(format!(
+            "{}\n{}",
+            target.display(),
+            directory_stamp(&target)?
+        )),
+        Err(_) => Some("absent".to_string()),
+    }
+}
+
+fn linker_memo_digest(
+    driver: &Path,
+    selection: &LinkerSelection,
+    env: &InvocationEnv,
+) -> Option<(PathBuf, String)> {
+    let (canonical, crt_digest) = crt_memo_material(driver, env)?;
+    let mut material = Material::new("linux-linker-placement-v1");
+    material.push(crt_digest.as_bytes());
+    for dir in selection.driver_search_dirs() {
+        material.push(b"-B");
+        material.push(dir.as_bytes());
+    }
+    material.push(selection.fuse_ld.as_deref().unwrap_or("").as_bytes());
+    material.push(selection.ld_path.as_deref().unwrap_or("").as_bytes());
+    Some((canonical, material.digest()))
+}
+
+fn linker_placement_memo_for(
+    memo_dir: &Path,
+    driver: &Path,
+    selection: &LinkerSelection,
+    env: &InvocationEnv,
+) -> Option<PathBuf> {
+    let (_, digest) = linker_memo_digest(driver, selection, env)?;
+    let path = probe_memo::memo_path(memo_dir, "linker-placement", "json", &digest);
+    let body = probe_memo::read_verified(&path, &digest)?;
+    let memo: LinkerPlacementMemo = serde_json::from_str(&body).ok()?;
+    if memo.locations.is_empty() {
+        return None;
+    }
+    for (location, stamp) in &memo.locations {
+        if location_stamp(location).as_ref() != Some(stamp) {
+            return None;
+        }
+    }
+    memo.placed.is_file().then_some(memo.placed)
+}
+
+fn record_linker_placement_memo(
+    memo_dir: &Path,
+    driver: &Path,
+    selection: &LinkerSelection,
+    name: &str,
+    placed: &Path,
+    env: &InvocationEnv,
+) {
+    let Some((canonical, digest)) = linker_memo_digest(driver, selection, env) else {
+        return;
+    };
+    let mut directories = driver_search_dirs_for(&canonical, "programs:", env);
+    directories.extend(
+        selection
+            .driver_search_dirs()
+            .filter_map(|dir| env.resolve(Path::new(dir))),
+    );
+    if let Some(path) = env.var_os("PATH") {
+        directories.extend(std::env::split_paths(&path).filter_map(|dir| env.resolve(&dir)));
+    }
+    directories.extend(placed.parent().map(Path::to_path_buf));
+    let mut locations = BTreeMap::new();
+    for directory in directories {
+        for location in [directory.join(name), directory] {
+            let Some(stamp) = location_stamp(&location) else {
+                // A location that cannot be described cannot validate a memo.
+                return;
+            };
+            locations.insert(location, stamp);
+        }
+    }
+    let memo = LinkerPlacementMemo {
+        placed: placed.to_path_buf(),
+        locations,
+    };
+    if let Ok(body) = serde_json::to_string(&memo) {
+        probe_memo::write_verified(
+            &probe_memo::memo_path(memo_dir, "linker-placement", "json", &digest),
+            &digest,
+            &body,
+        );
+    }
+}
+
+/// Identity of the SDK a macOS link builds against.
+///
+/// Version + build version pin the libraries. The path is not folded: Command
+/// Line Tools vs Xcode spell the same SDK differently and would over-key.
+/// `SDKROOT`, when set, is the SDK that is queried — reporting the default
+/// SDK's version beside another SDK's root would describe an SDK no link used.
+///
+/// Apple's `xcrun` accepts a filesystem path as `--sdk`. xcbuild's `xcrun`
+/// only accepts a name such as `macosx`. When `xcrun` rejects a path that is
+/// still a real SDK directory, read the same version and build from
+/// `SystemVersion.plist` inside that root. For a named or default SDK, ask
+/// `xcrun` for its selected path before reading that manifest.
+#[cfg(target_os = "macos")]
+pub(crate) fn sdk_identity_for_invocation(
+    root: Option<String>,
+    env: &InvocationEnv,
+) -> Result<Option<String>> {
+    sdk_identity_with_queries(root.as_deref(), env, |arguments| xcrun(arguments, env)).map(Some)
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn sdk_identity_with_queries(
+    root: Option<&str>,
+    env: &InvocationEnv,
+    mut query: impl FnMut(&[&str]) -> Result<String>,
+) -> Result<String> {
+    let sdk = root.unwrap_or("macosx");
+    let metadata = (|| -> Result<String> {
+        let version = query(&["--sdk", sdk, "--show-sdk-version"])?;
+        let build = query(&["--sdk", sdk, "--show-sdk-build-version"])?;
+        Ok(format!("{version} ({build})"))
+    })();
+    let probe_error = match metadata {
+        Ok(identity) => return Ok(identity),
+        Err(error) => error,
+    };
+    if let Some(root) = root {
+        let path = env
+            .resolve(Path::new(root))
+            .context("resolving selected SDK root")?;
+        if path.is_dir() {
+            return identity_from_sdk_root(&path);
+        }
+    }
+    let selected = query(&["--sdk", sdk, "--show-sdk-path"]).with_context(|| {
+        format!("locating SDK {sdk} after metadata query failed: {probe_error:#}")
+    })?;
+    let path = env
+        .resolve(Path::new(&selected))
+        .context("resolving located SDK path")?;
+    identity_from_sdk_root(&path)
+}
+
+/// `ProductVersion` / `ProductBuildVersion` as `xcrun --show-sdk-version` and
+/// `--show-sdk-build-version` report them for this root.
+///
+/// Compiled in tests on every OS so the Linux mutation lane can kill mutants
+/// in the plist fallback (`#[cfg(any(test, target_os = "macos"))]`).
+#[cfg(any(test, target_os = "macos"))]
+fn identity_from_sdk_root(root: &Path) -> Result<String> {
+    let plist = root.join("System/Library/CoreServices/SystemVersion.plist");
+    let body = std::fs::read_to_string(&plist)
+        .with_context(|| format!("reading SDK identity from {}", plist.display()))?;
+    let version = plist_string(&body, "ProductVersion").ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} has no ProductVersion; not a usable macOS SDK",
+            plist.display()
+        )
+    })?;
+    let build = plist_string(&body, "ProductBuildVersion").ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} has no ProductBuildVersion; not a usable macOS SDK",
+            plist.display()
+        )
+    })?;
+    Ok(format!("{version} ({build})"))
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn plist_string(body: &str, key: &str) -> Option<String> {
+    let needle = format!("<key>{key}</key>");
+    let rest = body.split(&needle).nth(1)?;
+    let rest = rest.trim_start().strip_prefix("<string>")?;
+    let (value, _) = rest.split_once("</string>")?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn sdk_identity_for_invocation(
+    _root: Option<String>,
+    _env: &InvocationEnv,
+) -> Result<Option<String>> {
+    Ok(None)
+}
+
+#[cfg(target_os = "macos")]
+fn xcrun(arguments: &[&str], env: &InvocationEnv) -> Result<String> {
+    let description = format!("xcrun {}", arguments.join(" "));
+    let output = env
+        .command("xcrun")
+        .with_context(|| format!("resolving {description}"))?
+        .args(arguments)
+        .invocation_output()
+        .with_context(|| format!("running {description}"))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "{description} failed ({}): {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim(),
+    );
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    anyhow::ensure!(
+        !value.is_empty(),
+        "{description} returned an empty SDK identity"
+    );
+    Ok(value)
+}
+
+/// Encode resolved CRT objects as a stable `name=digest` list.
+pub(crate) fn encode_crt_objects(objects: &BTreeMap<String, String>) -> String {
+    let mut encoded = String::new();
+    for (name, digest) in objects {
+        if !encoded.is_empty() {
+            encoded.push('\n');
+        }
+        encoded.push_str(name);
+        encoded.push('=');
+        encoded.push_str(digest);
+    }
+    encoded
+}
+
+/// A bare or option-value token whose extension marks a linker input file.
+fn link_token_names_input_file(token: &str) -> bool {
+    ends_with_ignore_ascii_case(token, ".lib")
+        || ends_with_ignore_ascii_case(token, ".a")
+        || ends_with_ignore_ascii_case(token, ".obj")
+        || ends_with_ignore_ascii_case(token, ".o")
+        || ends_with_ignore_ascii_case(token, ".res")
+        || ends_with_ignore_ascii_case(token, ".def")
+        || ends_with_ignore_ascii_case(token, ".exp")
+        || ends_with_ignore_ascii_case(token, ".manifest")
+}
+
+fn ends_with_ignore_ascii_case(token: &str, suffix: &str) -> bool {
+    token
+        .len()
+        .checked_sub(suffix.len())
+        .and_then(|start| token.get(start..))
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+}
+
+/// What a `-C link-arg`/`link-args` value hands a Unix linker driver besides
+/// flags: input files named by path, `-L` search directories and `-l`
+/// libraries.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct LinkArgInputs {
+    /// Linker inputs named by path, in argument order.
+    pub files: Vec<PathBuf>,
+    /// `-L` search directories, in argument order.
+    pub dirs: Vec<PathBuf>,
+    /// `-l` libraries as `(name, verbatim)`, in argument order. `-l:file`
+    /// names the file itself.
+    pub libs: Vec<(String, bool)>,
+}
+
+/// Parse one `link-arg` or `link-args` value (`key`) for a Unix link.
+///
+/// A `link-arg` is one driver argument and `link-args` splits on whitespace;
+/// a `-Wl,` argument carries comma-separated linker tokens. A token that names
+/// an input file by extension (see [`link_token_names_input_file`]), bare or
+/// as the value of a `--option=value`, must be an absolute path, so the key
+/// can hash the file the linker reads. The value of an option that names an
+/// output or a pattern is skipped (see [`takes_non_input_value`]). `-L<dir>`
+/// and `-L <dir>` add a search directory; any other search-path spelling
+/// (`-L=`, `--library-path`, a dangling `-L`) is an error rather than a
+/// directory we would not search. `-l<name>`, `-l <name>`, `--library=<name>`,
+/// `--library <name>` and ld64's `-hidden-l<name>` and its kin (see
+/// [`ld64_library_option`]) add a library for the caller to resolve.
+pub(crate) fn unix_link_arg_inputs(key: &str, value: &str) -> Result<LinkArgInputs> {
+    let arguments: Vec<&str> = if key == "link-args" {
+        value.split_whitespace().collect()
+    } else {
+        vec![value]
+    };
+    let mut tokens = Vec::new();
+    for argument in arguments {
+        match argument.strip_prefix("-Wl,") {
+            Some(payload) => tokens.extend(payload.split(',')),
+            None => tokens.push(argument),
+        }
+    }
+    let mut inputs = LinkArgInputs::default();
+    let mut tokens = tokens.into_iter();
+    let value_of = |option: &str, next: Option<&str>| {
+        next.filter(|next| !next.is_empty())
+            .map(str::to_string)
+            .with_context(|| format!("`{option}` without a value in linker argument {value:?}"))
+    };
+    while let Some(token) = tokens.next() {
+        if token == "-L" {
+            inputs
+                .dirs
+                .push(PathBuf::from(value_of(token, tokens.next())?));
+        } else if token.starts_with("-L=") || token.starts_with("--library-path") {
+            bail!("unmodeled library search path {token:?} in linker argument {value:?}");
+        } else if let Some(dir) = token.strip_prefix("-L") {
+            inputs.dirs.push(PathBuf::from(dir));
+        } else if token == "-l" || token == "--library" {
+            inputs
+                .libs
+                .push(library_request(&value_of(token, tokens.next())?));
+        } else if let Some(name) = token
+            .strip_prefix("--library=")
+            .or_else(|| token.strip_prefix("-l"))
+            .or_else(|| ld64_library_option(token))
+        {
+            if name.is_empty() {
+                bail!("`{token}` without a library in linker argument {value:?}");
+            }
+            inputs.libs.push(library_request(name));
+        } else if takes_non_input_value(token) {
+            if !token.contains('=') {
+                tokens.next();
+            }
+        } else {
+            let operand = match token.strip_prefix("--") {
+                Some(_) => token.split_once('=').map_or(token, |(_, value)| value),
+                None => token,
+            };
+            if link_token_names_input_file(operand) {
+                if !Path::new(operand).is_absolute() {
+                    bail!("linker input {operand:?} is not an absolute path");
+                }
+                inputs.files.push(PathBuf::from(operand));
+            }
+        }
+    }
+    Ok(inputs)
+}
+
+/// The name an ld64 `-<modifier>-l<name>` option asks for: `man ld` says each
+/// of these looks the library up like `-l`, and `-hidden-l` and `-force-l`
+/// take only an archive. `None` for any other token, `-rpath-link` included.
+/// A token that starts with `-l` is a plain `-l`, as GNU ld reads it.
+fn ld64_library_option(token: &str) -> Option<&str> {
+    let (modifier, name) = token.strip_prefix('-')?.split_once("-l")?;
+    matches!(
+        modifier,
+        "hidden"
+            | "force"
+            | "needed"
+            | "reexport"
+            | "upward"
+            | "weak"
+            | "assert-weak"
+            | "delay"
+            | "merge"
+    )
+    .then_some(name)
+}
+
+/// A `-l` name as `(name, verbatim)`: `:file` names the file itself.
+fn library_request(name: &str) -> (String, bool) {
+    match name.strip_prefix(':') {
+        Some(file) => (file.to_string(), true),
+        None => (name.to_string(), false),
+    }
+}
+
+/// Whether `token` is a linker option whose value names an output or a
+/// pattern, though it may end like an input: `--exclude-libs libssl.a`,
+/// `--out-implib foo.dll.a`, `-object_path_lto lto.o`. Either dash count, with
+/// the value after `=` or in the next token.
+fn takes_non_input_value(token: &str) -> bool {
+    let option = token.split_once('=').map_or(token, |(option, _)| option);
+    option.strip_prefix('-').is_some_and(|option| {
+        matches!(
+            option.trim_start_matches('-'),
+            "exclude-libs" | "out-implib" | "object_path_lto"
+        )
+    })
+}
 /// Fold hashed CRT/startup/libc objects (Linux) and SDK identity (macOS)
 /// into linked-output keys. Injected probes keep the gating testable without
 /// running host tools.
@@ -10622,7 +11226,7 @@ where
         let driver = resolve_link_driver_for(args, invocation)
             .context("native Linux link has no cc/linker driver; cannot key CRT objects")?;
         let objects = crt_probe(&driver).context("determining native Linux CRT/libc identity")?;
-        let encoded = crate::native_link_key::encode_crt_objects(&objects);
+        let encoded = encode_crt_objects(&objects);
         fold_field(hasher, b"host_crt.v1:", encoded.as_bytes());
         tracing::trace!(
             "[key:{}] host_crt={}",
@@ -10663,285 +11267,19 @@ where
     Ok(())
 }
 
-/// Extract the effective native library search directories that can shadow
-/// the MSVC/SDK defaults. `-L native/all` entries are already parsed by rustc;
-/// `/LIBPATH` is accepted only in an unambiguous single-argument form.
-#[derive(Debug, PartialEq, Eq)]
-struct WindowsNativeLinkSearchDirs {
-    /// Directories rustc searches before passing a library name to LINK.
-    rustc: Vec<PathBuf>,
-    /// Directories emitted to LINK before the LIB environment paths.
-    linker: Vec<PathBuf>,
-    /// Files `-C link-arg` hands LINK by absolute path, which the key hashes
-    /// (see `windows_link_argument_input_files`), in argument order.
-    files: Vec<PathBuf>,
-    default_libraries: Vec<crate::native_link_key::WindowsDefaultLibrary>,
-}
-
-fn windows_native_link_search_dirs(args: &RustcArgs) -> Result<WindowsNativeLinkSearchDirs> {
-    const KNOWN_L_KINDS: [&str; 5] = ["dependency", "crate", "native", "framework", "all"];
-    let mut rustc = Vec::new();
-    for spec in &args.link_search {
-        let (kind, path) = match spec.split_once('=') {
-            Some((kind, path)) if KNOWN_L_KINDS.contains(&kind) => (Some(kind), path),
-            _ => (None, spec.as_str()),
-        };
-        if matches!(kind, Some("dependency") | Some("crate")) {
-            continue;
-        }
-        if matches!(kind, None | Some("native") | Some("all")) {
-            rustc.push(PathBuf::from(path));
-        }
-    }
-    let mut linker = rustc.clone();
-    let mut files = Vec::new();
-    let mut default_libraries = Vec::new();
-    for (key, value) in &args.codegen_opts {
-        if !matches!(key.as_str(), "link-arg" | "link-args") {
-            continue;
-        }
-        let Some(value) = value.as_deref() else {
-            continue;
-        };
-        // A file in this carrier must not hide an accompanying /LIBPATH.
-        // Its existing parser refuses mixed/ambiguous values until both can
-        // be modeled together without changing library search order.
-        if let Some(path) = windows_libpath_argument(value)? {
-            linker.push(PathBuf::from(path));
-        }
-        let Some(inputs) = crate::native_link_key::windows_link_argument_input_files(key, value)
-        else {
-            anyhow::bail!(
-                "Windows linker input files other than absolute compiled resources, and unmodeled file-carrying LINK options, are not cacheable"
-            );
-        };
-        let crate::native_link_key::WindowsLinkArgumentInputs {
-            files: argument_files,
-            default_libraries: argument_libraries,
-        } = inputs;
-        files.extend(argument_files);
-        default_libraries.extend(argument_libraries);
-    }
-    Ok(WindowsNativeLinkSearchDirs {
-        rustc,
-        linker,
-        files,
-        default_libraries,
-    })
-}
-
-/// Add compiled-resource digests to the MSVC identity in argument order.
-/// Missing inputs or unsupported formats make the link uncacheable.
-fn windows_link_identity_with_argument_files(
-    mut identity: String,
-    files: &[PathBuf],
-    file_hasher: &FileHasher<'_>,
-) -> Result<String> {
-    for (index, file) in files.iter().enumerate() {
-        let resolved = file_hasher.resolve_path(file)?;
-        if !resolved.is_file() {
-            anyhow::bail!("linker input {} is not a regular file", file.display());
-        }
-        let digest = file_hasher
-            .hash_windows_resource(file)
-            .with_context(|| format!("hashing linker input {}", file.display()))?;
-        identity.push_str(&format!("\nlink_arg_input.v1={index}={digest}"));
-    }
-    Ok(identity)
-}
-
-fn windows_libpath_argument(value: &str) -> Result<Option<String>> {
-    let value = value.trim();
-    let value = value.strip_prefix("-Wl,").unwrap_or(value);
-    let upper = value.to_ascii_uppercase();
-    let marker = ["/LIBPATH:", "/LIBPATH=", "-LIBPATH:", "-LIBPATH="]
-        .into_iter()
-        .find(|marker| upper.starts_with(*marker));
-    let Some(marker) = marker else {
-        if upper.contains("/LIBPATH") || upper.contains("-LIBPATH") {
-            anyhow::bail!("ambiguous Windows /LIBPATH linker argument");
-        }
-        return Ok(None);
-    };
-    let path = value[marker.len()..].trim();
-    let path = if let Some(quoted) = path.strip_prefix('"') {
-        let closing = quoted
-            .find('"')
-            .context("unterminated quoted Windows /LIBPATH linker argument")?;
-        if !quoted[closing + 1..].trim().is_empty() {
-            anyhow::bail!("ambiguous Windows /LIBPATH linker argument");
-        }
-        quoted[..closing].trim()
-    } else {
-        if path.contains('"') || path.chars().any(char::is_whitespace) {
-            anyhow::bail!("ambiguous Windows /LIBPATH linker argument");
-        }
-        path
-    };
-    if path.is_empty() {
-        anyhow::bail!("empty Windows /LIBPATH linker argument");
-    }
-    Ok(Some(path.to_string()))
-}
-
-fn fold_generic_linker_identity<H, Get>(
-    hasher: &mut H,
-    args: &RustcArgs,
-    native_windows_msvc: bool,
-    get_identity: Get,
-) where
+fn fold_generic_linker_identity<H, Get>(hasher: &mut H, args: &RustcArgs, get_identity: Get)
+where
     H: KeyFold,
     Get: FnOnce(&RustcArgs) -> Option<String>,
 {
     if args.is_executable_output()
         && args.emits_link()
-        && !native_windows_msvc
         && let Some(linker_id) = get_identity(args)
     {
         hasher.update(b"linker:");
         hasher.update(linker_id.as_bytes());
         hasher.update(b"\n");
     }
-}
-
-/// Native Windows MSVC links use the complete toolchain/runtime identity below
-/// as their sole linker signal. Folding the generic `cc --version` probe too
-/// would make the key depend on an unrelated Unix-style driver that happens to
-/// be on PATH.
-fn is_native_windows_msvc_link<Load>(
-    args: &RustcArgs,
-    rustc_version: &str,
-    running_on_windows: bool,
-    load_version: Load,
-) -> Result<bool>
-where
-    Load: FnOnce(&Path) -> Result<String>,
-{
-    if !running_on_windows || !args.is_executable_output() || !args.emits_link() {
-        return Ok(false);
-    }
-    let rustc_version = rustc_version_for_native_link(args, rustc_version, load_version)?;
-    let host = rustc_host_triple(&rustc_version)
-        .context("wrapped rustc -vV output has no host triple; cannot key native Windows link")?;
-    let effective_target = args.target.as_deref().unwrap_or(host);
-    Ok(effective_target == host && crate::native_link_key::is_windows_msvc_target(host))
-}
-
-/// Fold the selected native Windows MSVC link identity into a linked-output
-/// key. The probe is injected so the admission gate can be tested without a
-/// Windows toolchain; production supplies the real tool/library discovery.
-/// Argument admission and resource hashing stay in the shared fold.
-#[cfg(test)]
-fn fold_native_windows_msvc_identity<H, Probe>(
-    hasher: &mut H,
-    args: &RustcArgs,
-    rustc_version: &str,
-    running_on_windows: bool,
-    probe: Probe,
-) -> Result<()>
-where
-    H: KeyFold,
-    Probe: FnOnce(Option<&Path>, &str, &str) -> Result<String>,
-{
-    let invocation = InvocationEnv::capture();
-    fold_native_windows_msvc_identity_for(
-        hasher,
-        args,
-        rustc_version,
-        running_on_windows,
-        &FileHasher::new_for(&invocation),
-        |linker, architecture, host, _| {
-            Ok(crate::native_link_key::WindowsMsvcIdentity {
-                linker: probe(linker, architecture, host)?,
-                compiler: "cl".into(),
-                toolset: "14".into(),
-                sdk: "10".into(),
-                ucrt: "10".into(),
-                architecture: architecture.into(),
-                wrapper: None,
-                libraries: BTreeMap::new(),
-            })
-        },
-        &invocation,
-    )
-}
-
-fn fold_native_windows_msvc_identity_for<H, Probe>(
-    hasher: &mut H,
-    args: &RustcArgs,
-    rustc_version: &str,
-    running_on_windows: bool,
-    file_hasher: &FileHasher<'_>,
-    probe: Probe,
-    invocation: &InvocationEnv,
-) -> Result<()>
-where
-    H: KeyFold,
-    Probe: FnOnce(
-        Option<&Path>,
-        &str,
-        &str,
-        &WindowsNativeLinkSearchDirs,
-    ) -> Result<crate::native_link_key::WindowsMsvcIdentity>,
-{
-    if !running_on_windows || !args.is_executable_output() || !args.emits_link() {
-        return Ok(());
-    }
-    let rustc_version = rustc_version_for_native_link(args, rustc_version, |rustc| {
-        get_rustc_version_for(rustc, invocation)
-    })?;
-    let host = rustc_host_triple(&rustc_version)
-        .context("wrapped rustc -vV output has no host triple; cannot key native Windows link")?;
-    let effective_target = args.target.as_deref().unwrap_or(host);
-    if effective_target != host {
-        if crate::native_link_key::is_windows_msvc_target(effective_target) {
-            anyhow::bail!(
-                "cross-target Windows MSVC link identity is not modeled; passing through"
-            );
-        }
-        return Ok(());
-    }
-    if !crate::native_link_key::is_windows_msvc_target(host) {
-        return Ok(());
-    }
-    let architecture = crate::native_link_key::windows_msvc_architecture(host)
-        .context("native Windows MSVC host has an unsupported architecture")?;
-    let linker = args.get_codegen_opt("linker").map(Path::new);
-    // rustc runs `rust-lld` as lld-link only for an lld-link flavor: one
-    // given with `-C linker-flavor`, or inferred from the file stem, which
-    // rustc compares case-sensitively. Otherwise it runs it without
-    // `-flavor` and the link fails. The identity is the banner, the same as
-    // a real lld-link's, so such a unit must not borrow that key.
-    // `-C linker-features` can turn LLD off and is not modeled.
-    if let Some(linker) = linker
-        && crate::native_link_key::is_rust_lld(linker)
-    {
-        let as_lld_link = match args.get_codegen_opt("linker-flavor") {
-            Some(flavor) => matches!(flavor, "lld-link" | "msvc-lld"),
-            None => linker.file_stem().is_some_and(|stem| stem == "rust-lld"),
-        };
-        if !as_lld_link || args.get_codegen_opt("linker-features").is_some() {
-            anyhow::bail!(
-                "rustc may not run {} as lld-link; passing through",
-                linker.display()
-            );
-        }
-    }
-    let search_dirs = windows_native_link_search_dirs(args)?;
-    let identity = probe(linker, architecture, host, &search_dirs)
-        .context("determining native Windows MSVC link identity")?;
-    let identity = identity
-        .with_default_libraries(&search_dirs.default_libraries)?
-        .encode();
-    let identity =
-        windows_link_identity_with_argument_files(identity, &search_dirs.files, file_hasher)?;
-    fold_field(&mut *hasher, b"host_windows_msvc.v1:", identity.as_bytes());
-    tracing::trace!(
-        "[key:{}] host_windows_msvc={}",
-        args.crate_name.as_deref().unwrap_or("unknown"),
-        identity.replace('\n', ",")
-    );
-    Ok(())
 }
 
 pub(crate) fn resolve_link_driver_for(args: &RustcArgs, env: &InvocationEnv) -> Option<PathBuf> {
@@ -11069,17 +11407,15 @@ pub(crate) fn native_linker_for(
     memo_dir: Option<&Path>,
     env: &InvocationEnv,
 ) -> Result<PathBuf> {
-    let mut selection = crate::native_link_key::LinkerSelection::of(args)?;
+    let mut selection = LinkerSelection::of(args)?;
     if rustc_defaults_to_bundled_lld(args, rustc_version)
         && let Some(gcc_ld) = bundled_gcc_ld_dir(args, rustc_version, env)
     {
         selection = selection.with_bundled_lld(gcc_ld);
     }
     match memo_dir {
-        Some(memo_dir) => {
-            crate::native_link_key::place_linker_memoized_for(memo_dir, driver, &selection, env)
-        }
-        None => crate::native_link_key::place_linker(driver, &selection, env),
+        Some(memo_dir) => place_linker_memoized_for(memo_dir, driver, &selection, env),
+        None => place_linker(driver, &selection, env),
     }
 }
 
@@ -11184,9 +11520,7 @@ fn runnable_file(path: &Path) -> bool {
 /// `path_var` as `execvp` would, anything with a directory is left as it is.
 /// Cargo hands the wrapper a bare `rustc` when a toolchain's `bin` directory
 /// is on PATH without rustup's proxy, and canonicalizing that name against
-/// the working directory fails. Windows searches the wrapper's own directory
-/// and adds `.exe` first, so a bare name there is not resolved and the
-/// caller runs the tool as before.
+/// the working directory fails.
 #[cfg(all(test, unix))]
 fn program_path<'a>(binary: &'a Path, path_var: Option<&OsStr>) -> Option<Cow<'a, Path>> {
     let mut components = binary.components();

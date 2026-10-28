@@ -8,7 +8,6 @@ const PLIST_NAME: &str = "ninja.kunobi.kache.plist";
 const LEGACY_LABEL: &str = "com.zondax.kache";
 const LEGACY_PLIST_NAME: &str = "com.zondax.kache.plist";
 const UNIT_NAME: &str = "kache.service";
-const TASK_NAME: &str = "kache-daemon";
 
 // ── Path helpers ─────────────────────────────────────────────────
 
@@ -33,24 +32,12 @@ fn unit_path() -> PathBuf {
         .join(UNIT_NAME)
 }
 
-/// Path to the local copy of the Task Scheduler XML definition (Windows).
-/// The authoritative copy lives inside the Task Scheduler database; this
-/// file is kept as a reference for exe-path mismatch checks in `doctor`.
-fn task_xml_path() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("kache")
-        .join("kache-task.xml")
-}
-
 /// Returns the service file path for the current platform, or None on unsupported OS.
 pub fn service_file_path() -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
         Some(plist_path())
     } else if cfg!(target_os = "linux") {
         Some(unit_path())
-    } else if cfg!(windows) {
-        Some(task_xml_path())
     } else {
         None
     }
@@ -221,8 +208,6 @@ pub fn install() -> Result<()> {
         install_launchd(&exe)
     } else if cfg!(target_os = "linux") {
         install_systemd(&exe)
-    } else if cfg!(windows) {
-        install_task_scheduler(&exe)
     } else {
         anyhow::bail!("unsupported platform");
     }
@@ -468,141 +453,6 @@ fn run_systemctl_user(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// Render the Windows Task Scheduler XML that runs `exe daemon run` at logon and
-/// restarts it on crash. Pure (no I/O) so the generated XML is unit-testable
-/// without touching `schtasks` — mirrors [`launchd_plist_content`] /
-/// [`systemd_unit_content`]. The exe path is backslash-normalized for Windows.
-fn task_scheduler_xml_content(exe: &std::path::Path, username: &str) -> String {
-    let exe_str = exe.display().to_string().replace('/', "\\");
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo>
-    <Description>kache build cache daemon — starts at login, restarts on crash</Description>
-  </RegistrationInfo>
-  <Triggers>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-      <UserId>{username}</UserId>
-    </LogonTrigger>
-  </Triggers>
-  <Principals>
-    <Principal id="Author">
-      <UserId>{username}</UserId>
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>LeastPrivilege</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <RestartOnFailure>
-      <Interval>PT1M</Interval>
-      <Count>999</Count>
-    </RestartOnFailure>
-    <Hidden>false</Hidden>
-  </Settings>
-  <Actions Context="Author">
-    <Exec>
-      <Command>conhost.exe</Command>
-      <Arguments>--headless "{exe_str}" daemon run</Arguments>
-    </Exec>
-  </Actions>
-</Task>
-"#,
-    )
-}
-
-fn install_task_scheduler(exe: &std::path::Path) -> Result<()> {
-    let xml_path = task_xml_path();
-
-    // If already installed, remove old task first
-    if task_scheduler_installed() {
-        println!("Existing task found — upgrading in place...");
-        let _ = std::process::Command::new("schtasks")
-            .args(["/delete", "/tn", TASK_NAME, "/f"])
-            .output();
-    }
-
-    // Ensure directory for the reference XML copy exists
-    if let Some(parent) = xml_path.parent() {
-        std::fs::create_dir_all(parent).context("creating kache data directory")?;
-    }
-
-    let username = std::env::var("USERNAME").unwrap_or_else(|_| "".into());
-    let log_path = crate::config::Config::load()
-        .map(|c| c.socket_path().with_extension("log"))
-        .unwrap_or_else(|_| {
-            dirs::data_local_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("kache")
-                .join("daemon.log")
-        });
-
-    let content = task_scheduler_xml_content(exe, &username);
-
-    // Write the XML task definition
-    // schtasks /create /xml requires UTF-16 LE with BOM for reliable parsing
-    let utf16: Vec<u16> = content.encode_utf16().collect();
-    let mut bytes = vec![0xFF, 0xFE]; // UTF-16 LE BOM
-    for word in &utf16 {
-        bytes.extend_from_slice(&word.to_le_bytes());
-    }
-    std::fs::write(&xml_path, &bytes).context("writing task XML")?;
-
-    // Create the scheduled task from the XML file
-    let create = std::process::Command::new("schtasks")
-        .args([
-            "/create",
-            "/tn",
-            TASK_NAME,
-            "/xml",
-            &xml_path.display().to_string(),
-            "/f",
-        ])
-        .output()
-        .context("running schtasks /create")?;
-
-    if !create.status.success() {
-        let stderr = String::from_utf8_lossy(&create.stderr);
-        if stderr.contains("Access") || stderr.contains("acceso") || stderr.contains("denied") {
-            anyhow::bail!(
-                "schtasks requires administrator privileges.\n\
-                 Run this command from an elevated (admin) terminal:\n\n\
-                 kache daemon install"
-            );
-        }
-        anyhow::bail!("schtasks /create failed: {stderr}");
-    }
-
-    // Start the task immediately
-    let _ = std::process::Command::new("schtasks")
-        .args(["/run", "/tn", TASK_NAME])
-        .output();
-
-    println!("Service installed and started.");
-    println!("  task: {TASK_NAME}");
-    println!("  xml:  {}", xml_path.display());
-    println!("  logs: {}", log_path.display());
-    println!("\nThe daemon will now start automatically on login and restart on crash.");
-    println!("Use `kache daemon` to verify, `kache daemon log` to stream logs.");
-    Ok(())
-}
-
-fn task_scheduler_installed() -> bool {
-    if !cfg!(windows) {
-        return false;
-    }
-    std::process::Command::new("schtasks")
-        .args(["/query", "/tn", TASK_NAME])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
-}
-
 /// Whether the installed login service owns this configured runtime instance.
 /// Login services load user/host configuration, not a build's KACHE_* overrides.
 pub(crate) fn manages_instance(config: &crate::config::Config) -> Result<bool> {
@@ -626,8 +476,6 @@ pub(crate) enum StartupLog {
     File(PathBuf),
     /// The systemd journal of the user unit.
     Journal,
-    /// The Task Scheduler task runs headless and keeps no stderr.
-    Discarded,
 }
 
 impl StartupLog {
@@ -645,10 +493,6 @@ impl std::fmt::Display for StartupLog {
         match self {
             Self::File(path) => write!(f, "{}", path.display()),
             Self::Journal => write!(f, "journalctl --user -u {UNIT_NAME}"),
-            Self::Discarded => write!(
-                f,
-                "not kept by the scheduled task; run `kache daemon run` to see it"
-            ),
         }
     }
 }
@@ -669,8 +513,6 @@ fn startup_log_for(managed: bool, runtime_log: PathBuf) -> StartupLog {
     }
     if cfg!(target_os = "macos") {
         StartupLog::File(log_dir().join("err.log"))
-    } else if cfg!(windows) {
-        StartupLog::Discarded
     } else {
         StartupLog::Journal
     }
@@ -757,25 +599,6 @@ pub fn kickstart(deadline: std::time::Instant) -> Result<bool> {
         }
         Ok(true)
     }
-    #[cfg(windows)]
-    {
-        let installed = command_output_until(
-            std::process::Command::new("schtasks").args(["/query", "/tn", TASK_NAME]),
-            deadline,
-        )?;
-        start_scheduled_task(installed, || {
-            command_output_until(
-                std::process::Command::new("schtasks").args(["/run", "/tn", TASK_NAME]),
-                deadline,
-            )
-            .context("running schtasks /run")
-        })
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-    {
-        let _ = deadline;
-        Ok(false)
-    }
 }
 
 /// `launchctl kickstart` exits with this when launchd has no job by that
@@ -815,26 +638,6 @@ fn start_launchd_job(
     Ok(true)
 }
 
-/// Interpret Task Scheduler results independently of the Windows command adapter.
-#[cfg(any(windows, test))]
-fn start_scheduled_task(
-    query: std::process::Output,
-    start: impl FnOnce() -> Result<std::process::Output>,
-) -> Result<bool> {
-    if !query.status.success() {
-        return Ok(false);
-    }
-    let started = start()?;
-    anyhow::ensure!(
-        started.status.success(),
-        "schtasks /run {TASK_NAME} failed: {}",
-        String::from_utf8_lossy(&started.stderr)
-    );
-    Ok(true)
-}
-
-/// Bound the manager client process, preserving a capped diagnostic on failure.
-/// Killing a timed-out client does not undo a manager operation already accepted.
 fn command_output_until(
     command: &mut std::process::Command,
     deadline: std::time::Instant,
@@ -870,8 +673,6 @@ pub fn uninstall() -> Result<()> {
         uninstall_launchd()
     } else if cfg!(target_os = "linux") {
         uninstall_systemd()
-    } else if cfg!(windows) {
-        uninstall_task_scheduler()
     } else {
         anyhow::bail!("unsupported platform");
     }
@@ -933,39 +734,6 @@ fn uninstall_systemd() -> Result<()> {
     Ok(())
 }
 
-fn uninstall_task_scheduler() -> Result<()> {
-    if !task_scheduler_installed() {
-        println!("Service is not installed (no scheduled task found).");
-        return Ok(());
-    }
-
-    // Stop the running task
-    let _ = std::process::Command::new("schtasks")
-        .args(["/end", "/tn", TASK_NAME])
-        .output();
-
-    // Delete the task
-    let delete = std::process::Command::new("schtasks")
-        .args(["/delete", "/tn", TASK_NAME, "/f"])
-        .output()
-        .context("running schtasks /delete")?;
-
-    if !delete.status.success() {
-        let stderr = String::from_utf8_lossy(&delete.stderr);
-        anyhow::bail!("schtasks /delete failed: {stderr}");
-    }
-
-    // Remove the reference XML copy
-    let xml_path = task_xml_path();
-    if xml_path.exists() {
-        let _ = std::fs::remove_file(&xml_path);
-    }
-
-    println!("Service stopped and removed.");
-    println!("  task: {TASK_NAME}");
-    Ok(())
-}
-
 // ── Status ───────────────────────────────────────────────────────
 
 pub fn status(json: bool) -> Result<()> {
@@ -973,14 +741,7 @@ pub fn status(json: bool) -> Result<()> {
     let service_path = service_file_path();
     let installed_service_path = service_path
         .as_ref()
-        .and_then(|path| {
-            if cfg!(windows) {
-                // On Windows, check the Task Scheduler directly
-                task_scheduler_installed().then(|| path.clone())
-            } else {
-                path.exists().then(|| path.clone())
-            }
-        })
+        .and_then(|path| path.exists().then(|| path.clone()))
         .or_else(|| {
             if cfg!(target_os = "macos") {
                 let legacy_path = legacy_plist_path();
@@ -1230,19 +991,6 @@ pub(crate) fn parse_exe_from_service_file(path: &std::path::Path) -> Option<Path
         let start = after_prog.find("<string>")? + "<string>".len();
         let end = after_prog[start..].find("</string>")? + start;
         Some(PathBuf::from(after_prog[start..end].trim()))
-    } else if cfg!(windows) {
-        // The task wraps kache via conhost --headless, so the exe path is
-        // in <Arguments>: --headless "C:\path\to\kache.exe" daemon run
-        let args_start = content.find("<Arguments>")? + "<Arguments>".len();
-        let args_end = content[args_start..].find("</Arguments>")? + args_start;
-        let args = content[args_start..args_end].trim();
-        // Extract the quoted path after --headless
-        let exe = args
-            .strip_prefix("--headless ")?
-            .split("\" ")
-            .next()?
-            .trim_matches('"');
-        Some(PathBuf::from(exe))
     } else {
         // ExecStart=<exe> daemon
         for line in content.lines() {
@@ -1287,31 +1035,6 @@ pub fn log() -> Result<()> {
             .status()
             .context("running journalctl")?;
         std::process::exit(status.code().unwrap_or(1));
-    } else if cfg!(windows) {
-        let diag_log = crate::diagnostic_log_path();
-        let fallback_log = crate::config::Config::load()
-            .map(|c| c.socket_path().with_extension("log"))
-            .ok();
-
-        let log_file = if diag_log.exists() {
-            diag_log
-        } else if let Some(ref fb) = fallback_log
-            && fb.exists()
-        {
-            fb.clone()
-        } else {
-            anyhow::bail!("no log files found.\nIs the daemon running? Run `kache daemon start`");
-        };
-
-        eprintln!("Streaming {}", log_file.display());
-        let status = std::process::Command::new("powershell")
-            .args([
-                "-Command",
-                &format!("Get-Content -Wait -Tail 50 '{}'", log_file.display()),
-            ])
-            .status()
-            .context("running powershell Get-Content -Wait")?;
-        std::process::exit(status.code().unwrap_or(1));
     } else {
         anyhow::bail!("unsupported platform");
     }
@@ -1354,8 +1077,6 @@ mod tests {
         let managed = startup_log_for(true, runtime_log.clone());
         if cfg!(target_os = "macos") {
             assert_eq!(managed, StartupLog::File(log_dir().join("err.log")));
-        } else if cfg!(windows) {
-            assert_eq!(managed, StartupLog::Discarded);
         } else {
             assert_eq!(managed, StartupLog::Journal);
         }
@@ -1366,97 +1087,6 @@ mod tests {
         assert_eq!(
             StartupLog::Journal.to_string(),
             "journalctl --user -u kache.service"
-        );
-        assert!(
-            StartupLog::Discarded
-                .to_string()
-                .contains("kache daemon run")
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn task_scheduler_start_distinguishes_absent_started_and_failed() {
-        use std::os::unix::process::ExitStatusExt;
-        let output = |success| std::process::Output {
-            status: std::process::ExitStatus::from_raw(if success { 0 } else { 256 }),
-            stdout: Vec::new(),
-            stderr: b"scheduler refused".to_vec(),
-        };
-        assert!(
-            !start_scheduled_task(output(false), || panic!("missing task must not start")).unwrap()
-        );
-        assert!(start_scheduled_task(output(true), || Ok(output(true))).unwrap());
-        let error = start_scheduled_task(output(true), || Ok(output(false))).unwrap_err();
-        assert!(error.to_string().contains("scheduler refused"));
-        assert!(
-            start_scheduled_task(output(true), || Err(anyhow::anyhow!("manager unavailable")))
-                .is_err()
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_launchd_job_that_is_not_loaded_is_bootstrapped_instead() {
-        use std::os::unix::process::ExitStatusExt;
-        let output = |code: i32, stderr: &str| std::process::Output {
-            status: std::process::ExitStatus::from_raw(code << 8),
-            stdout: Vec::new(),
-            stderr: stderr.as_bytes().to_vec(),
-        };
-        // What launchctl returned for an unknown label on macOS 26.
-        assert_eq!(LAUNCHCTL_NO_SUCH_SERVICE, 113);
-        let target = "gui/501/ninja.kunobi.kache";
-
-        // A loaded job starts through kickstart alone.
-        assert!(
-            start_launchd_job(
-                target,
-                || Ok(output(0, "")),
-                || panic!("a loaded job is not bootstrapped")
-            )
-            .unwrap()
-        );
-
-        // An unknown job is loaded, which starts it.
-        let bootstrapped = std::cell::Cell::new(false);
-        assert!(
-            start_launchd_job(
-                target,
-                || Ok(output(LAUNCHCTL_NO_SUCH_SERVICE, "Could not find service")),
-                || {
-                    bootstrapped.set(true);
-                    Ok(output(0, ""))
-                }
-            )
-            .unwrap()
-        );
-        assert!(bootstrapped.get());
-
-        // Any other kickstart failure is reported as is.
-        let error = start_launchd_job(
-            target,
-            || Ok(output(LAUNCHCTL_NO_SUCH_SERVICE - 1, "refused")),
-            || panic!("only a missing job is bootstrapped"),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            error.contains("kickstart") && error.contains("refused"),
-            "{error}"
-        );
-
-        // A bootstrap that fails says both what was wrong and what failed.
-        let error = start_launchd_job(
-            target,
-            || Ok(output(LAUNCHCTL_NO_SUCH_SERVICE, "")),
-            || Ok(output(5, "Input/output error")),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            error.contains("not loaded") && error.contains("Input/output error"),
-            "{error}"
         );
     }
 
@@ -1513,7 +1143,6 @@ mod tests {
         assert!(configured_instance_matches(&store.join("daemon.sock"), store, [file]).is_err());
     }
 
-    #[cfg(unix)]
     #[test]
     fn manager_command_deadline_bounds_wait_and_caps_diagnostics() {
         use std::{
@@ -1668,7 +1297,6 @@ WantedBy=default.target
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn recorded_exe_problems_are_told_apart() {
         use std::os::unix::fs::PermissionsExt;
@@ -1722,7 +1350,6 @@ WantedBy=default.target
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn services_accept_the_paired_frontend_but_not_another_installation() {
         use kache_shims::Fs;
@@ -1939,21 +1566,5 @@ WantedBy=default.target
             term::home_path(&path)
         );
         assert_eq!(StartupLog::Journal.human(), StartupLog::Journal.to_string());
-    }
-
-    #[test]
-    fn test_task_scheduler_xml_content_runs_daemon_via_conhost() {
-        // Forward-slash exe path is backslash-normalized; the daemon runs under
-        // conhost --headless, restarts on failure, and triggers at logon.
-        let content = task_scheduler_xml_content(
-            std::path::Path::new("C:/Program Files/kache/kache.exe"),
-            "alice",
-        );
-        assert!(content.contains(r#"--headless "C:\Program Files\kache\kache.exe" daemon run"#));
-        assert!(content.contains("<Command>conhost.exe</Command>"));
-        assert!(content.contains("<UserId>alice</UserId>"));
-        assert!(content.contains("<LogonTrigger>"));
-        assert!(content.contains("<RestartOnFailure>"));
-        assert!(content.contains(r#"encoding="UTF-16""#));
     }
 }

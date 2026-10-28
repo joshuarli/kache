@@ -1046,7 +1046,7 @@ fn is_windows_absolute_path(path: &str) -> bool {
 }
 
 fn is_native_configured_path(path: &str) -> bool {
-    is_native_configured_path_for(path, cfg!(windows))
+    is_native_configured_path_for(path, false)
 }
 
 fn is_native_configured_path_for(path: &str, windows_host: bool) -> bool {
@@ -1452,38 +1452,17 @@ fn push_rule_with_variants_target_and_source(
         return;
     }
 
-    // Always push the canonical form first.
+    // Always push the canonical form first. Slash/case variants only
+    // mattered on a Windows host, where cargo / rustc / env vars produce
+    // several spellings of one path; the host is Unix-only now, so the
+    // canonical form is the only rule. (Configured base dirs still expand
+    // Windows-shaped entries via `push_configured_base_dir_rule`.)
     rules.push(Rule {
         prefix: prefix.clone(),
         key_sentinel: sentinel.to_string(),
         source_sentinel: source_sentinel.to_string(),
         flag_target: flag_target.to_string(),
     });
-
-    // Variants only matter on Windows. On unix the canonical form
-    // is the only one cargo / rustc / env vars produce, so adding
-    // variants would just be dead rules.
-    if !cfg!(windows) {
-        return;
-    }
-
-    push_slash_and_case_variants(rules, &prefix, sentinel, source_sentinel, flag_target);
-
-    // 8.3 short-name form (issue #126). Resolved once at rule-build
-    // time; `None` when the path doesn't exist, has no short name, or
-    // 8.3 generation is disabled on the volume — in which case there's
-    // nothing to add. The short form gets the same slash/case crosses.
-    if let Some(short) = short_path_name(&prefix)
-        && short != prefix
-    {
-        rules.push(Rule {
-            prefix: short.clone(),
-            key_sentinel: sentinel.to_string(),
-            source_sentinel: source_sentinel.to_string(),
-            flag_target: flag_target.to_string(),
-        });
-        push_slash_and_case_variants(rules, &short, sentinel, source_sentinel, flag_target);
-    }
 }
 
 /// Push the forward-slash, lower-case-drive, and combined variants of a
@@ -1546,46 +1525,8 @@ fn push_slash_and_case_variants(
     }
 }
 
-/// Resolve a path's Windows 8.3 short name (e.g. `C:\Program Files` →
-/// `C:\PROGRA~1`) via `GetShortPathNameW`. Returns `None` when the path
-/// doesn't exist, the volume has 8.3 generation disabled, or the call
-/// otherwise fails — all of which simply mean "no short-name variant to
-/// add". Off Windows this is always `None`.
-#[cfg(windows)]
-fn short_path_name(path: &str) -> Option<String> {
-    use std::ffi::{OsStr, OsString};
-    use std::os::windows::ffi::{OsStrExt, OsStringExt};
-    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
-
-    let wide: Vec<u16> = OsStr::new(path)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-
-    // First call with a zero-length buffer returns the required length
-    // INCLUDING the terminating NUL (0 on error).
-    let needed = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
-    if needed == 0 {
-        return None;
-    }
-
-    let mut buf = vec![0u16; needed as usize];
-    // On success the buffer is large enough, so this returns the length
-    // EXCLUDING the NUL (i.e. < needed). 0 = error; >= needed = a race
-    // where the path grew between calls — treat both as "no variant".
-    let written = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), needed) };
-    if written == 0 || written >= needed {
-        return None;
-    }
-
-    Some(
-        OsString::from_wide(&buf[..written as usize])
-            .to_string_lossy()
-            .into_owned(),
-    )
-}
-
-#[cfg(not(windows))]
+/// 8.3 short-name lookup. The host is Unix-only, so there is never a
+/// short-name variant to add.
 fn short_path_name(_path: &str) -> Option<String> {
     None
 }
@@ -2117,14 +2058,12 @@ mod tests {
         assert!(n.remap_args().is_empty());
     }
 
-    // ── Windows-shape variants ──────────────────────────────────
+    // ── Windows-shape variant helpers ─────────────────────────────
     //
-    // These tests exercise the "store multiple variants per rule"
-    // strategy that handles Windows separator + drive-case
-    // differences without transforming the input string. Each test
-    // can run on any host; the cfg!(windows) gates select the
-    // expected behavior (variants are added on Windows, skipped
-    // elsewhere).
+    // These tests exercise the pure string helpers that describe Windows
+    // separator + drive-case spellings without transforming the input
+    // string. Host rules only store the canonical form; configured base
+    // dirs still expand Windows-shaped entries.
 
     fn rules_for(n: &PathNormalizer) -> Vec<(String, String)> {
         n.rules
@@ -2161,14 +2100,9 @@ mod tests {
 
     #[test]
     fn push_rule_with_variants_adds_only_canonical_form_on_unix() {
-        // On unix the canonical form is the only one cargo / rustc
-        // produce, so variants would be dead rules. This test pins
-        // that contract (would fail loudly if someone changed the
-        // gate to add variants unconditionally — wasted memory and
-        // a tiny risk of unexpected matches).
-        if cfg!(windows) {
-            return;
-        }
+        // The canonical form is the only one cargo / rustc produce on
+        // this host, so variants would be dead rules. This test pins
+        // that contract.
         let mut rules = Vec::new();
         push_rule_with_variants(
             &mut rules,
@@ -2178,81 +2112,6 @@ mod tests {
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].prefix, "/Users/alice/.cargo");
         assert_eq!(rules[0].key_sentinel, "<CARGO_HOME>");
-    }
-
-    #[test]
-    fn push_rule_with_variants_expands_on_windows() {
-        // The contract: a single Windows-shaped prefix expands to
-        // up to four variants — canonical, forward-slash,
-        // lowercase-drive, and both. Each variant maps to the
-        // SAME sentinel so any of the input forms gets normalized.
-        if !cfg!(windows) {
-            return;
-        }
-        let mut rules = Vec::new();
-        push_rule_with_variants(
-            &mut rules,
-            Some("C:\\Users\\Alice\\.cargo".to_string()),
-            "<CARGO_HOME>",
-        );
-        // All variants present, all map to <CARGO_HOME>.
-        let prefixes: Vec<&str> = rules.iter().map(|r| r.prefix.as_str()).collect();
-        assert!(prefixes.contains(&"C:\\Users\\Alice\\.cargo"));
-        assert!(prefixes.contains(&"C:/Users/Alice/.cargo"));
-        assert!(prefixes.contains(&"c:\\Users\\Alice\\.cargo"));
-        assert!(prefixes.contains(&"c:/Users/Alice/.cargo"));
-        assert!(rules.iter().all(|r| r.key_sentinel == "<CARGO_HOME>"));
-    }
-
-    /// Issue #126: a path's legacy 8.3 short name (`...\LONGPR~1`) must
-    /// normalize to the same sentinel as its long form. Windows-only and
-    /// dependent on the volume having 8.3 generation enabled, so it
-    /// resolves the real short name for an existing dir and skips if the
-    /// volume has short names disabled (rather than flaking).
-    #[cfg(windows)]
-    #[test]
-    fn push_rule_with_variants_adds_8dot3_short_name() {
-        // A name with a space and >8 chars forces an 8.3 alias when the
-        // volume supports it (e.g. "Long Program Dir" -> "LONGPR~1").
-        let tmp = TempDir::new().unwrap();
-        let long_dir = tmp.path().join("Long Program Dir");
-        fs::create_dir(&long_dir).unwrap();
-        let canonical = canonical_string(&long_dir).expect("canonicalize long dir");
-
-        // No short name (8.3 disabled on this volume) -> nothing to test.
-        let Some(short) = short_path_name(&canonical) else {
-            return;
-        };
-        if short == canonical {
-            return;
-        }
-
-        let mut rules = Vec::new();
-        push_rule_with_variants(&mut rules, Some(canonical), "<BASE_DIR>");
-        let n = PathNormalizer {
-            rules,
-            configured_base_dir_count: 0,
-            configured_source_root_groups: Vec::new(),
-            source_restore_roots: Vec::new(),
-            path_only_env_vars: Vec::new(),
-        };
-
-        let input = format!("{short}\\src\\main.rs");
-        let out = n.normalize(&input);
-        assert!(
-            out.contains("<BASE_DIR>"),
-            "8.3 short-name input {input:?} should normalize via the short variant, got {out:?}"
-        );
-        assert_eq!(
-            n.source_path_identity(Path::new(&input)).unwrap(),
-            b"<BASE_DIR>/src\\main.rs"
-        );
-        assert!(
-            n.depinfo_source_roots()
-                .iter()
-                .any(|root| root.root.as_path() == Path::new(short.as_str())),
-            "the same short spelling must be accepted while relativizing dep-info"
-        );
     }
 
     #[test]
@@ -2287,14 +2146,13 @@ mod tests {
             path_only_env_vars: Vec::new(),
         };
 
-        // On unix only the canonical form is in the rule set, so
-        // only that input is matched; on Windows any of the four
-        // forms should match.
+        // Only the canonical form is in the rule set, so only that
+        // input is matched; the other spellings pass through.
         let inputs_and_expectations: &[(&str, bool)] = &[
             ("C:\\Users\\Alice\\.cargo\\registry\\foo", true), // canonical
-            ("C:/Users/Alice/.cargo/registry/foo", cfg!(windows)),
-            ("c:\\Users\\Alice\\.cargo\\registry\\foo", cfg!(windows)),
-            ("c:/Users/Alice/.cargo/registry/foo", cfg!(windows)),
+            ("C:/Users/Alice/.cargo/registry/foo", false),
+            ("c:\\Users\\Alice\\.cargo\\registry\\foo", false),
+            ("c:/Users/Alice/.cargo/registry/foo", false),
             ("/Users/alice/.cargo/registry/foo", false), // unix path, never matches
         ];
         for (input, should_match) in inputs_and_expectations {
@@ -2695,67 +2553,6 @@ mod tests {
         assert_eq!(lowercase_drive_letter("D:/"), Some("d:/".to_string()));
     }
 
-    #[test]
-    fn windows_variants_are_distinct_for_distinct_canonical_forms() {
-        // Sanity: the four-variant expansion produces FOUR distinct
-        // strings only when each form differs. If the canonical form
-        // already has lowercase drive + forward slashes, no extra
-        // variants are added (they'd be exact duplicates that dedup
-        // would strip anyway).
-        if !cfg!(windows) {
-            return;
-        }
-        let mut rules = Vec::new();
-        push_rule_with_variants(
-            &mut rules,
-            Some("c:/users/alice/.cargo".to_string()),
-            "<CARGO_HOME>",
-        );
-        // The "canonical" we passed is already in the
-        // lowercase-drive forward-slash form; backslash variant
-        // should be added but not the lowercase-drive variant
-        // (it's already lowercase).
-        let prefixes: Vec<&str> = rules.iter().map(|r| r.prefix.as_str()).collect();
-        assert!(prefixes.contains(&"c:/users/alice/.cargo"));
-        assert!(prefixes.contains(&"c:\\users\\alice\\.cargo"));
-        // No uppercase-drive variant — we didn't construct one.
-        assert!(!prefixes.iter().any(|p| p.starts_with("C:")));
-    }
-
-    #[test]
-    fn remap_args_emits_all_windows_variants_with_same_target() {
-        // Each Windows shape variant becomes its own --remap-path-prefix flag,
-        // all mapping to the same resolvable TARGET. rustc applies them with
-        // last-match-wins; whichever variant the actual build path matches, the
-        // target is identical.
-        if !cfg!(windows) {
-            return;
-        }
-        let mut rules = Vec::new();
-        push_rule_with_variants(
-            &mut rules,
-            Some("C:\\Users\\Alice\\.cargo".to_string()),
-            "<CARGO_HOME>",
-        );
-        let n = PathNormalizer {
-            rules,
-            configured_base_dir_count: 0,
-            configured_source_root_groups: Vec::new(),
-            source_restore_roots: Vec::new(),
-            path_only_env_vars: Vec::new(),
-        };
-        let args = n.remap_args();
-        // 4 variants, all mapping to the CARGO_HOME target (/kache/.cargo).
-        assert_eq!(args.len(), 4);
-        let target = flag_target_for("<CARGO_HOME>");
-        for arg in &args {
-            assert!(
-                arg.ends_with(&format!("={target}")),
-                "every variant maps to the same target {target:?}; got {arg:?}"
-            );
-        }
-    }
-
     // ── Unicode safety ──────────────────────────────────────────
     //
     // The substring-match design uses byte-literal `String::replace`
@@ -2821,62 +2618,6 @@ mod tests {
         // Symmetric: NFC input also matches.
         let nfc_input = "/Users/Jos\u{00E9}/.cargo/registry/bar";
         assert_eq!(n.normalize(nfc_input), "<CARGO_HOME>/registry/bar");
-    }
-
-    #[test]
-    fn strip_verbatim_prefix_removes_extended_length_marker() {
-        // The #201 bug: canonicalize returns `\\?\C:\...` on Windows, so
-        // a rule prefix never substring-matched the plain `C:\...` paths
-        // cargo emits → OUT_DIR leaked into the cache key.
-        assert_eq!(strip_verbatim_prefix(r"\\?\C:\proj\out"), r"C:\proj\out");
-        // UNC verbatim collapses back to its `\\server\share` form.
-        assert_eq!(
-            strip_verbatim_prefix(r"\\?\UNC\server\share\x"),
-            r"\\server\share\x"
-        );
-        // Plain paths (and all Unix paths) pass through untouched.
-        assert_eq!(strip_verbatim_prefix(r"C:\proj\out"), r"C:\proj\out");
-        assert_eq!(strip_verbatim_prefix("/home/u/proj"), "/home/u/proj");
-    }
-
-    #[test]
-    fn filesystem_root_prefix_distinguishes_unc_share_roots() {
-        for root in [
-            "//server/share",
-            "//server/share/",
-            r"\\server\share",
-            r"\\server\share\",
-            r"\\?\UNC\server\share",
-        ] {
-            assert!(is_filesystem_root_prefix(root), "{root:?}");
-        }
-        for narrower_or_incomplete in [
-            "//server",
-            "//server/",
-            "///share",
-            "//server/share/app",
-            r"\\server\share\app",
-        ] {
-            assert!(
-                !is_filesystem_root_prefix(narrower_or_incomplete),
-                "{narrower_or_incomplete:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn os_path_spellings_keep_raw_and_plain_verbatim_windows_forms() {
-        assert_eq!(
-            os_path_spellings(Path::new(r"\\?\C:\Work\Root")),
-            vec![r"\\?\C:\Work\Root".to_string(), r"C:\Work\Root".to_string()]
-        );
-        assert_eq!(
-            os_path_spellings(Path::new(r"\\?\UNC\server\share\Root")),
-            vec![
-                r"\\?\UNC\server\share\Root".to_string(),
-                r"\\server\share\Root".to_string()
-            ]
-        );
     }
 
     #[test]
@@ -2971,11 +2712,7 @@ mod tests {
             format!("<BASE_DIR_0>/src {root}space/src /opt{root}/src")
         );
         let backslash_path = format!(r"{root}\src");
-        let expected_backslash_path = if cfg!(windows) {
-            r"<BASE_DIR_0>\src".to_string()
-        } else {
-            backslash_path.clone()
-        };
+        let expected_backslash_path = backslash_path.clone();
         assert_eq!(
             normalizer.normalize(&backslash_path),
             expected_backslash_path
@@ -3017,193 +2754,6 @@ mod tests {
         assert!(!is_native_configured_path_for("/work", true));
         assert!(is_native_configured_path_for("C:/work", true));
         assert!(is_native_configured_path_for(r"\\server\share", true));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn configured_plain_root_owns_verbatim_canonical_sources_and_depinfo() {
-        let producer = TempDir::new().unwrap();
-        let consumer = TempDir::new().unwrap();
-        let producer_root = producer.path().join("Configured Root");
-        let consumer_root = consumer.path().join("Configured Root");
-        std::fs::create_dir_all(producer_root.join("src")).unwrap();
-        std::fs::create_dir_all(consumer_root.join("src")).unwrap();
-        std::fs::write(producer_root.join("src/value.rs"), "pub const V: u8 = 1;").unwrap();
-
-        let producer_cfg = producer_root.to_string_lossy().into_owned();
-        let consumer_cfg = consumer_root.to_string_lossy().into_owned();
-        let producer_normalizer =
-            PathNormalizer::empty().with_base_dirs(std::slice::from_ref(&producer_cfg));
-        let consumer_normalizer =
-            PathNormalizer::empty().with_base_dirs(std::slice::from_ref(&consumer_cfg));
-        let canonical_source = producer_root.join("src/value.rs").canonicalize().unwrap();
-
-        assert_eq!(
-            producer_normalizer
-                .source_path_identity(&canonical_source)
-                .unwrap(),
-            b"<BASE_DIR_0>/src\\value.rs"
-        );
-        assert_eq!(
-            apply_last_match(
-                &producer_normalizer.remap_args(),
-                canonical_source.to_str().unwrap()
-            ),
-            "/kache/base-dir-0\\src\\value.rs"
-        );
-
-        let producer_roots = producer_normalizer
-            .depinfo_source_roots()
-            .into_iter()
-            .map(|root| (root.root, root.depinfo_sentinel, root.priority))
-            .collect::<Vec<_>>();
-        let consumer_roots = consumer_normalizer
-            .depinfo_source_roots()
-            .into_iter()
-            .map(|root| (root.root, root.depinfo_sentinel, root.priority))
-            .collect::<Vec<_>>();
-        let raw = format!(r"C:\target\demo.d: {}", canonical_source.display());
-        let stored = crate::link::rewrite_rustc_depinfo_content_with_configured_roots(
-            &raw,
-            Path::new(r"C:\target"),
-            Path::new(r"C:\work"),
-            None,
-            &producer_roots,
-            crate::link::DepInfoMode::Relativize,
-        );
-        assert!(
-            stored.contains("__kache_base_dir_0__/src\\value.rs"),
-            "{stored}"
-        );
-        let restored = crate::link::rewrite_rustc_depinfo_content_with_configured_roots(
-            &stored,
-            Path::new(r"C:\target"),
-            Path::new(r"C:\work"),
-            None,
-            &consumer_roots,
-            crate::link::DepInfoMode::Expand,
-        );
-        let expected = format!(r"{}\src\value.rs", consumer_root.display()).replace(' ', "\\ ");
-        assert!(restored.contains(&expected), "{restored}");
-        assert!(!restored.contains(&producer_root.to_string_lossy().into_owned()));
-    }
-
-    #[test]
-    fn configured_root_wins_consistently_in_key_and_rustc_remap() {
-        let cargo_home = "/sandbox/.cargo";
-        let path = "/sandbox/.cargo/registry/src/pkg/lib.rs";
-        let normalizer = pn_with_rules(vec![(cargo_home, "<CARGO_HOME>")])
-            .with_base_dirs(&["/sandbox".to_string()]);
-
-        assert_eq!(
-            normalizer.normalize(path),
-            "<BASE_DIR_0>/.cargo/registry/src/pkg/lib.rs"
-        );
-        assert_eq!(
-            apply_last_match(&normalizer.remap_args(), path),
-            "/kache/base-dir-0/.cargo/registry/src/pkg/lib.rs"
-        );
-        assert_eq!(
-            normalizer.source_path_identity(Path::new(path)).unwrap(),
-            b"<BASE_DIR_0>/.cargo/registry/src/pkg/lib.rs"
-        );
-    }
-
-    #[test]
-    fn legacy_base_dir_is_a_complete_owner_and_rejects_empty_or_root() {
-        let dir = TempDir::new().unwrap();
-        let base = dir.path().join("legacy");
-        let source = base.join("src/lib.rs");
-        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-        std::fs::write(&source, "pub const VALUE: u8 = 1;").unwrap();
-
-        let mut rules = Vec::new();
-        let mut source_restore_roots = Vec::new();
-        push_legacy_base_dir_rules(
-            &mut rules,
-            &mut source_restore_roots,
-            Some(base.as_os_str()),
-        );
-        let normalizer = PathNormalizer {
-            rules,
-            configured_base_dir_count: 0,
-            configured_source_root_groups: Vec::new(),
-            source_restore_roots,
-            path_only_env_vars: Vec::new(),
-        };
-        let relative = source.strip_prefix(&base).unwrap().to_string_lossy();
-        assert_eq!(
-            normalizer.source_path_identity(&source).unwrap(),
-            format!("<BASE_DIR>/{relative}").as_bytes()
-        );
-        assert_eq!(
-            apply_last_match(&normalizer.remap_args(), source.to_str().unwrap()),
-            format!(
-                "{}{}",
-                flag_target_for("<BASE_DIR>"),
-                source
-                    .to_str()
-                    .unwrap()
-                    .strip_prefix(base.to_str().unwrap())
-                    .unwrap()
-            )
-        );
-        assert!(normalizer.depinfo_source_roots().iter().any(|root| {
-            root.root == base
-                && root.key_sentinel == "<BASE_DIR>"
-                && root.depinfo_sentinel == "__kache_base_dir__/"
-        }));
-
-        let filesystem_root = if cfg!(windows) {
-            Path::new(r"C:\")
-        } else {
-            Path::new("/")
-        };
-        for invalid in [std::ffi::OsStr::new(""), filesystem_root.as_os_str()] {
-            let mut rules = Vec::new();
-            let mut restore_roots = Vec::new();
-            push_legacy_base_dir_rules(&mut rules, &mut restore_roots, Some(invalid));
-            assert!(rules.is_empty());
-            assert!(restore_roots.is_empty());
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn legacy_base_dir_owns_verbatim_canonical_sources() {
-        let dir = TempDir::new().unwrap();
-        let base = dir.path().join("Legacy Root");
-        let source = base.join("src/value.rs");
-        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-        std::fs::write(&source, "pub const VALUE: u8 = 1;").unwrap();
-
-        let mut rules = Vec::new();
-        let mut source_restore_roots = Vec::new();
-        push_legacy_base_dir_rules(
-            &mut rules,
-            &mut source_restore_roots,
-            Some(base.as_os_str()),
-        );
-        let normalizer = PathNormalizer {
-            rules,
-            configured_base_dir_count: 0,
-            configured_source_root_groups: Vec::new(),
-            source_restore_roots,
-            path_only_env_vars: Vec::new(),
-        };
-        let canonical_source = source.canonicalize().unwrap();
-        assert_eq!(
-            normalizer.source_path_identity(&canonical_source).unwrap(),
-            b"<BASE_DIR>/src\\value.rs"
-        );
-        assert_eq!(
-            apply_last_match(&normalizer.remap_args(), canonical_source.to_str().unwrap()),
-            "/kache/base-dir\\src\\value.rs"
-        );
-        let canonical_base = base.canonicalize().unwrap();
-        assert!(normalizer.depinfo_source_roots().iter().any(|root| {
-            root.root == canonical_base && root.depinfo_sentinel == "__kache_base_dir__/"
-        }));
     }
 
     #[test]

@@ -171,6 +171,7 @@ fn cc_available() -> bool {
 /// `kache login` / `kache logout` are dispatched before the config is loaded;
 /// without a planner they stop with a pointer to the setting instead of
 /// trying to reach an identity provider.
+#[cfg(feature = "remote")]
 #[test]
 fn login_and_logout_need_a_planner() {
     let e = env();
@@ -3889,18 +3890,9 @@ fn init_adds_native_caching_to_an_existing_rust_setup() {
         config["env"]["CC_KNOWN_WRAPPER_CUSTOM"].as_str(),
         Some("kache")
     );
-    #[cfg(unix)]
-    {
-        assert_eq!(config["env"]["HOST_CC"].as_str(), Some("kache cc"));
-        assert_eq!(config["env"]["HOST_CXX"].as_str(), Some("kache c++"));
-        assert!(config["build"].get("rustdoc").is_none());
-    }
-    #[cfg(windows)]
-    {
-        // Init leaves the choice between MSVC and clang-cl to the user.
-        assert!(config["env"].get("HOST_CC").is_none());
-        assert!(config["env"].get("HOST_CXX").is_none());
-    }
+    assert_eq!(config["env"]["HOST_CC"].as_str(), Some("kache cc"));
+    assert_eq!(config["env"]["HOST_CXX"].as_str(), Some("kache c++"));
+    assert!(config["build"].get("rustdoc").is_none());
 }
 
 #[cfg(unix)]

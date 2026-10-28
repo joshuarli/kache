@@ -14,13 +14,10 @@ enum Source {
     Process,
     Owned(Arc<Streams>),
     Borrowed(Weak<Streams>),
-    #[cfg(unix)]
     Unix {
         streams: Arc<Streams>,
         broker: Arc<super::unix_broker::Broker>,
     },
-    #[cfg(windows)]
-    Windows(Arc<super::windows_broker::Broker>),
 }
 
 struct Streams {
@@ -53,7 +50,6 @@ impl Output {
 }
 
 impl InvocationIo {
-    #[cfg(unix)]
     pub(crate) fn with_unix_broker(
         self,
         broker: Arc<super::unix_broker::Broker>,
@@ -64,22 +60,9 @@ impl InvocationIo {
         Ok(Self(Source::Unix { streams, broker }))
     }
 
-    #[cfg(unix)]
     pub(crate) fn unix_broker(&self) -> Option<Arc<super::unix_broker::Broker>> {
         match &self.0 {
             Source::Unix { broker, .. } => Some(Arc::clone(broker)),
-            _ => None,
-        }
-    }
-    #[cfg(windows)]
-    pub(crate) fn from_broker(broker: Arc<super::windows_broker::Broker>) -> Self {
-        Self(Source::Windows(broker))
-    }
-
-    #[cfg(windows)]
-    pub(crate) fn broker(&self) -> Option<Arc<super::windows_broker::Broker>> {
-        match &self.0 {
-            Source::Windows(broker) => Some(Arc::clone(broker)),
             _ => None,
         }
     }
@@ -115,10 +98,7 @@ impl InvocationIo {
             Source::Process => Self::process(),
             Source::Owned(streams) => Self(Source::Borrowed(Arc::downgrade(streams))),
             Source::Borrowed(_) => self.clone(),
-            #[cfg(unix)]
             Source::Unix { streams, .. } => Self(Source::Borrowed(Arc::downgrade(streams))),
-            #[cfg(windows)]
-            Source::Windows(_) => self.clone(),
         }
     }
 
@@ -126,19 +106,13 @@ impl InvocationIo {
         match &self.0 {
             Source::Process => Ok(None),
             Source::Owned(streams) => Ok(Some(Arc::clone(streams))),
-            #[cfg(unix)]
             Source::Unix { streams, .. } => Ok(Some(Arc::clone(streams))),
             Source::Borrowed(streams) => streams.upgrade().map(Some).ok_or_else(|| {
                 io::Error::new(io::ErrorKind::BrokenPipe, "compiler invocation finished")
             }),
-            #[cfg(windows)]
-            Source::Windows(_) => Err(io::Error::other(
-                "frontend-owned Windows streams require a native IO plan",
-            )),
         }
     }
 
-    #[cfg(unix)]
     pub(crate) fn transfer_files(&self) -> io::Result<(Vec<File>, bool)> {
         let streams = self.streams()?.ok_or_else(|| {
             io::Error::new(
@@ -191,14 +165,8 @@ pub(crate) struct InvocationIoScope {
 
 impl InvocationIoScope {
     pub(crate) fn enter(io: InvocationIo) -> Self {
-        #[cfg(unix)]
         let workspace = kache_store::workspace::Scope::enter(
             io.unix_broker()
-                .map(|broker| broker as Arc<dyn kache_store::workspace::Workspace>),
-        );
-        #[cfg(windows)]
-        let workspace = kache_store::workspace::Scope::enter(
-            io.broker()
                 .map(|broker| broker as Arc<dyn kache_store::workspace::Workspace>),
         );
         let previous = CURRENT.with(|slot| slot.replace(Some(io)));
@@ -230,11 +198,6 @@ enum Sink {
     Error,
     File(Arc<Output>),
     Closed,
-    #[cfg(windows)]
-    Windows(
-        Arc<super::windows_broker::Broker>,
-        kache_protocol::execution::windows::Output,
-    ),
 }
 
 pub(crate) struct InvocationWriter(Sink);
@@ -246,11 +209,6 @@ impl Write for InvocationWriter {
             Sink::Error => io::stderr().write(bytes),
             Sink::File(output) => output.with_writer(|file| file.write(bytes)),
             Sink::Closed => Err(io::ErrorKind::BrokenPipe.into()),
-            #[cfg(windows)]
-            Sink::Windows(broker, output) => {
-                broker.write(*output, bytes)?;
-                Ok(bytes.len())
-            }
         }
     }
 
@@ -260,8 +218,6 @@ impl Write for InvocationWriter {
             Sink::Error => io::stderr().write_all(bytes),
             Sink::File(output) => output.with_writer(|file| file.write_all(bytes)),
             Sink::Closed => Err(io::ErrorKind::BrokenPipe.into()),
-            #[cfg(windows)]
-            Sink::Windows(broker, output) => broker.write(*output, bytes),
         }
     }
 
@@ -271,8 +227,6 @@ impl Write for InvocationWriter {
             Sink::Error => io::stderr().write_fmt(args),
             Sink::File(output) => output.with_writer(|file| file.write_fmt(args)),
             Sink::Closed => Err(io::ErrorKind::BrokenPipe.into()),
-            #[cfg(windows)]
-            Sink::Windows(broker, output) => broker.write(*output, args.to_string().as_bytes()),
         }
     }
 
@@ -282,20 +236,11 @@ impl Write for InvocationWriter {
             Sink::Error => io::stderr().flush(),
             Sink::File(output) => output.with_writer(|file| file.flush()),
             Sink::Closed => Err(io::ErrorKind::BrokenPipe.into()),
-            #[cfg(windows)]
-            Sink::Windows(broker, output) => broker.flush(*output),
         }
     }
 }
 
 pub(crate) fn stdout() -> InvocationWriter {
-    #[cfg(windows)]
-    if let Some(broker) = current().broker() {
-        return InvocationWriter(Sink::Windows(
-            broker,
-            kache_protocol::execution::windows::Output::Stdout,
-        ));
-    }
     InvocationWriter(match current().streams() {
         Ok(Some(streams)) => Sink::File(Arc::clone(&streams.output)),
         Ok(None) => Sink::Output,
@@ -304,13 +249,6 @@ pub(crate) fn stdout() -> InvocationWriter {
 }
 
 pub(crate) fn stderr() -> InvocationWriter {
-    #[cfg(windows)]
-    if let Some(broker) = current().broker() {
-        return InvocationWriter(Sink::Windows(
-            broker,
-            kache_protocol::execution::windows::Output::Stderr,
-        ));
-    }
     InvocationWriter(match current().streams() {
         Ok(Some(streams)) => Sink::File(Arc::clone(&streams.error)),
         Ok(None) => Sink::Error,
@@ -327,7 +265,6 @@ pub(crate) fn terminal() -> Option<InvocationWriter> {
     output.map(|output| InvocationWriter(Sink::File(output)))
 }
 
-#[cfg(unix)]
 fn process_terminal() -> Option<File> {
     std::fs::OpenOptions::new()
         .write(true)
@@ -335,23 +272,10 @@ fn process_terminal() -> Option<File> {
         .ok()
 }
 
-#[cfg(not(unix))]
-fn process_terminal() -> Option<File> {
-    None
-}
-
 /// Only inherited-stream executions use this. Captured-output probes and
 /// compiles keep their explicit pipe/null setup and replay through the writers.
 pub(crate) fn status(command: &mut Command) -> io::Result<ExitStatus> {
-    #[cfg(unix)]
     if current().unix_broker().is_some() {
-        use super::process::CommandExt as _;
-        return command
-            .invocation_spawn_with_io(kache_protocol::execution::process::Stdio::INHERIT)?
-            .wait();
-    }
-    #[cfg(windows)]
-    if current().broker().is_some() {
         use super::process::CommandExt as _;
         return command
             .invocation_spawn_with_io(kache_protocol::execution::process::Stdio::INHERIT)?
@@ -361,11 +285,10 @@ pub(crate) fn status(command: &mut Command) -> io::Result<ExitStatus> {
     super::process::status(command)
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     fn files(root: &std::path::Path, name: &str, tty: bool) -> InvocationIo {
         let input = root.join(format!("{name}.input"));
         std::fs::write(&input, format!("{name}-input\n")).unwrap();
@@ -377,7 +300,6 @@ mod tests {
         )
     }
 
-    #[cfg(unix)]
     #[test]
     fn concurrent_requests_replay_and_inherit_only_their_own_streams() {
         let first = tempfile::tempdir().unwrap();
@@ -427,7 +349,6 @@ mod tests {
         });
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_late_monitor_does_not_keep_output_pipes_open_or_use_process_streams() {
         use std::io::Read;
@@ -480,7 +401,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn captured_parent_descriptors_are_close_on_exec() {
         use std::os::fd::AsRawFd;

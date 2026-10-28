@@ -618,26 +618,6 @@ fn prune_event_archive(
     }
 }
 
-#[cfg(windows)]
-fn get_file_identity(file: &std::fs::File) -> Option<(u32, u32, u32)> {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
-    };
-    let handle = file.as_raw_handle();
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    let ok = unsafe { GetFileInformationByHandle(handle as _, &mut info) };
-    if ok != 0 {
-        Some((
-            info.dwVolumeSerialNumber,
-            info.nFileIndexHigh,
-            info.nFileIndexLow,
-        ))
-    } else {
-        None
-    }
-}
-
 /// Rotation marker sidecar (kunobi-ninja/kache#528): written by
 /// [`rotate_log_impl`] under the exclusive sidecar lock, read by
 /// [`EventTailer::poll_records`] under the shared lock. A byte position alone
@@ -791,23 +771,11 @@ impl EventTailer {
         // rotator, or a crash between the log replace and the marker write).
         let mut rotated = handled_rotation;
         if !handled_rotation && let Some(file) = &self.file {
-            #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt;
                 if let Ok(m1) = file.metadata()
                     && let Ok(m2) = std::fs::metadata(&self.path)
                     && (m1.dev() != m2.dev() || m1.ino() != m2.ino())
-                {
-                    rotated = true;
-                    self.position = 0;
-                }
-            }
-            #[cfg(windows)]
-            {
-                if let Some(id1) = get_file_identity(file)
-                    && let Ok(f2) = std::fs::File::open(&self.path)
-                    && let Some(id2) = get_file_identity(&f2)
-                    && id1 != id2
                 {
                     rotated = true;
                     self.position = 0;

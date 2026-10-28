@@ -20,11 +20,11 @@ When an installed service manages this cache, `start`, `restart` and automatic s
 
 The service restarts the daemon only when it fails. After `kache daemon stop`, an idle timeout or a config change, the daemon exits cleanly and stays stopped until something starts it through the service, such as the next build that uses a remote, `kache stats`, `kache monitor` or `kache daemon start`.
 
-Every daemon, and every other `kache` command, appends info-level lines to a diagnostic log: `~/Library/Logs/kache/kache.log` on macOS, and `kache.log` in the default cache directory elsewhere (`~/.cache/kache/kache.log` on Linux, `%LOCALAPPDATA%\kache\kache.log` on Windows). The log stays there when `cache.local_store` or `KACHE_CACHE_DIR` moves the store. `KACHE_LOG_FILE` changes its filter. A daemon that Kache starts without the service also writes its stderr to `<runtime_dir>/daemon.log`: warnings, errors and the reason a start failed.
+Every daemon, and every other `kache` command, appends info-level lines to a diagnostic log: `~/Library/Logs/kache/kache.log` on macOS, and `kache.log` in the default cache directory elsewhere (`~/.cache/kache/kache.log` on Linux). The log stays there when `cache.local_store` or `KACHE_CACHE_DIR` moves the store. `KACHE_LOG_FILE` changes its filter. A daemon that Kache starts without the service also writes its stderr to `<runtime_dir>/daemon.log`: warnings, errors and the reason a start failed.
 
-`kache daemon log` follows the diagnostic log on macOS and Windows. Until that file exists, it follows the service's `~/Library/Logs/kache/err.log` on macOS and `<runtime_dir>/daemon.log` on Windows. On Linux it follows the `kache.service` journal only, which is empty for a daemon started without the service.
+`kache daemon log` follows the diagnostic log. Until that file exists, it follows the service's `~/Library/Logs/kache/err.log` on macOS and `<runtime_dir>/daemon.log` otherwise. On Linux it follows the `kache.service` journal only, which is empty for a daemon started without the service.
 
-On Unix, a daemon that a build starts runs in its own session, so Ctrl-C in the build's terminal does not stop it. On Windows, a daemon started under Cargo stays in Cargo's job object and stops when the build is interrupted. Install the service to avoid that.
+A daemon that a build starts runs in its own session, so Ctrl-C in the build's terminal does not stop it. Install the service to keep it running after you log out.
 
 ## Install a login service
 
@@ -34,7 +34,7 @@ kache daemon install
 
 `kache init` installs this service unless you pass `--no-service` or, on Linux, no systemd user session is available. Without the service, it starts the daemon directly. Init waits for the daemon to become ready after registration and returns an error if startup fails or times out.
 
-On macOS it writes `~/Library/LaunchAgents/ninja.kunobi.kache.plist` and sends the service's output to `~/Library/Logs/kache/`. On Linux it writes and enables the `kache.service` user unit in `~/.config/systemd/user/` and tries to enable lingering, so the daemon keeps running after you log out. This needs a systemd user session. Containers and most CI runners have none; start the daemon there with `kache daemon start`. On Windows it registers the Task Scheduler task `kache-daemon`, which runs `kache daemon run` at logon. If `schtasks` is denied access, run the install from an elevated terminal.
+On macOS it writes `~/Library/LaunchAgents/ninja.kunobi.kache.plist` and sends the service's output to `~/Library/Logs/kache/`. On Linux it writes and enables the `kache.service` user unit in `~/.config/systemd/user/` and tries to enable lingering, so the daemon keeps running after you log out. This needs a systemd user session. Containers and most CI runners have none; start the daemon there with `kache daemon start`.
 
 The service records the same upgrade-safe path as the [C/C++ shims](/docs/getting-started/c-cpp#upgrades), such as Homebrew's `opt` link or a Nix profile, rather than a versioned path that an upgrade removes. The install prints the path it recorded. When no such path reaches the running binary, it records the binary's own path and says to rerun `kache daemon install` after each upgrade. `kache doctor` reports a service whose binary is missing, not executable, or a different file from the running Kache.
 
@@ -126,4 +126,4 @@ When the daemon cannot be reached:
 
 The monitor falls back to direct store and event-log reads. When the daemon stays offline, run `kache daemon status`: it shows where the daemon logs and where a failed start left its error.
 
-If `kache daemon start` launches a daemon itself and that daemon exits before it is ready, the command prints what the daemon wrote to `<runtime_dir>/daemon.log`, up to 2 KiB, and exits with status 1. If no daemon is ready within 8 seconds, it prints `daemon did not start within timeout` and exits with status 1. Later, `kache daemon status` says where the reason is: the file `<runtime_dir>/daemon.log` for `daemon start` and automatic starts, the file `~/Library/Logs/kache/err.log` under launchd, or the command `journalctl --user -u kache.service` under systemd. The Windows task keeps no startup output, so run `kache daemon run` to see the error.
+If `kache daemon start` launches a daemon itself and that daemon exits before it is ready, the command prints what the daemon wrote to `<runtime_dir>/daemon.log`, up to 2 KiB, and exits with status 1. If no daemon is ready within 8 seconds, it prints `daemon did not start within timeout` and exits with status 1. Later, `kache daemon status` says where the reason is: the file `<runtime_dir>/daemon.log` for `daemon start` and automatic starts, the file `~/Library/Logs/kache/err.log` under launchd, or the command `journalctl --user -u kache.service` under systemd.

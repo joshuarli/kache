@@ -51,7 +51,7 @@ kache stats --full --last-build --format markdown --output kache-report.md
 
 A passthrough means the invocation was outside the caching policy. It is
 counted separately from a miss. Rust executables, including test binaries and
-build scripts, are not cached by default on Windows; C/C++ flags and compiler
+build scripts, are cached by default; C/C++ flags and compiler
 modes also affect eligibility. Check [current support](/docs#current-support)
 and the relevant compiler guide.
 

@@ -617,16 +617,11 @@ fn rustflags_environment_is_explicit() -> bool {
         let Some(key) = key.to_str() else {
             return false;
         };
-        rustflags_env_name(key, cfg!(windows))
+        rustflags_env_name(key)
     })
 }
 
-fn rustflags_env_name(key: &str, case_insensitive: bool) -> bool {
-    let key = if case_insensitive {
-        key.to_ascii_uppercase()
-    } else {
-        key.to_string()
-    };
+fn rustflags_env_name(key: &str) -> bool {
     key == "RUSTFLAGS"
         || key == "CARGO_ENCODED_RUSTFLAGS"
         || (key.starts_with("CARGO_") && key.ends_with("RUSTFLAGS"))
@@ -882,13 +877,7 @@ fn configured_build_dir_in_sources(sources: &[ConfigSource]) -> std::result::Res
             let env = env
                 .as_table()
                 .ok_or_else(|| format!("{}.env is not a table", source.logical_path.display()))?;
-            if env.keys().any(|key| {
-                if cfg!(windows) {
-                    key.eq_ignore_ascii_case("CARGO_BUILD_BUILD_DIR")
-                } else {
-                    key == "CARGO_BUILD_BUILD_DIR"
-                }
-            }) {
+            if env.contains_key("CARGO_BUILD_BUILD_DIR") {
                 return Ok(true);
             }
         }
@@ -1005,7 +994,7 @@ fn config_env_rustflags_present(table: &toml::map::Map<String, toml::Value>) -> 
     table
         .get("env")
         .and_then(toml::Value::as_table)
-        .is_some_and(|env| env.keys().any(|key| rustflags_env_name(key, cfg!(windows))))
+        .is_some_and(|env| env.keys().any(|key| rustflags_env_name(key)))
 }
 
 fn plan_is_current(plan: &NormalizationPlan) -> bool {
@@ -1674,17 +1663,12 @@ mod tests {
     }
 
     #[test]
-    fn windows_rustflags_environment_names_are_case_insensitive() {
-        assert!(rustflags_env_name("RUSTFLAGS", false));
-        assert!(!rustflags_env_name("rustflags", false));
-        assert!(rustflags_env_name("rustflags", true));
-        assert!(rustflags_env_name(
-            "cargo_target_x86_64_unknown_linux_gnu_rustflags",
-            true
-        ));
-        assert!(!rustflags_env_name("CARGO_BUILD_TARGET", false));
-        assert!(!rustflags_env_name("MY_RUSTFLAGS", false));
-        assert!(!rustflags_env_name("CARGO_RUSTFLAGS_EXTRA", false));
+    fn rustflags_environment_names_are_case_sensitive() {
+        assert!(rustflags_env_name("RUSTFLAGS"));
+        assert!(!rustflags_env_name("rustflags"));
+        assert!(!rustflags_env_name("CARGO_BUILD_TARGET"));
+        assert!(!rustflags_env_name("MY_RUSTFLAGS"));
+        assert!(!rustflags_env_name("CARGO_RUSTFLAGS_EXTRA"));
     }
 
     #[test]

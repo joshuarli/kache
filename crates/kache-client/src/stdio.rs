@@ -2,12 +2,7 @@
 
 use std::fs::File;
 use std::io;
-#[cfg(unix)]
 use std::os::fd::FromRawFd;
-
-#[cfg(windows)]
-#[path = "stdio_windows.rs"]
-mod windows;
 
 pub struct Stdio {
     pub input: File,
@@ -18,38 +13,24 @@ pub struct Stdio {
 
 impl Stdio {
     pub fn capture() -> io::Result<Self> {
-        #[cfg(unix)]
-        {
-            fn duplicate(fd: libc::c_int) -> io::Result<File> {
-                // Closed standard descriptors are errors, without creating a
-                // borrowed handle for an invalid descriptor.
-                let owned = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
-                if owned == -1 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(unsafe { File::from_raw_fd(owned) })
+        fn duplicate(fd: libc::c_int) -> io::Result<File> {
+            // Closed standard descriptors are errors, without creating a
+            // borrowed handle for an invalid descriptor.
+            let owned = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+            if owned == -1 {
+                return Err(io::Error::last_os_error());
             }
-            Ok(Self {
-                input: duplicate(0)?,
-                output: duplicate(1)?,
-                error: duplicate(2)?,
-                terminal: std::fs::OpenOptions::new()
-                    .write(true)
-                    .open("/dev/tty")
-                    .ok(),
-            })
+            Ok(unsafe { File::from_raw_fd(owned) })
         }
-        #[cfg(windows)]
-        {
-            windows::capture()
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "standard handle capture unavailable",
-            ))
-        }
+        Ok(Self {
+            input: duplicate(0)?,
+            output: duplicate(1)?,
+            error: duplicate(2)?,
+            terminal: std::fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/tty")
+                .ok(),
+        })
     }
 
     pub fn into_files(self) -> (Vec<File>, bool) {
@@ -60,7 +41,7 @@ impl Stdio {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod unix_tests {
     use super::*;
     use std::io::{Read, Seek, Write};
@@ -154,56 +135,5 @@ mod unix_tests {
                 assert_eq!(actual, expected);
             }
         }
-    }
-}
-
-#[cfg(all(test, windows))]
-mod windows_tests {
-    use super::*;
-    use std::io::{Read, Write};
-
-    #[test]
-    #[ignore = "child process for captured_streams_keep_input_output_and_inheritance_separate"]
-    fn capture_fixture() {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT};
-        let mut captured = Stdio::capture().unwrap();
-        for file in [&captured.input, &captured.output, &captured.error] {
-            let mut flags = 0;
-            assert_ne!(
-                unsafe { GetHandleInformation(file.as_raw_handle(), &mut flags) },
-                0
-            );
-            assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
-        }
-        let mut input = String::new();
-        captured.input.read_to_string(&mut input).unwrap();
-        assert_eq!(input, "compiler input");
-        captured.output.write_all(b"owned compiler stdout").unwrap();
-        captured.error.write_all(b"owned compiler stderr").unwrap();
-    }
-
-    #[test]
-    fn captured_streams_keep_input_output_and_inheritance_separate() {
-        let root = tempfile::tempdir().unwrap();
-        let input = root.path().join("input");
-        std::fs::write(&input, "compiler input").unwrap();
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--ignored",
-                "--exact",
-                "stdio::windows_tests::capture_fixture",
-            ])
-            .stdin(File::open(input).unwrap())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("owned compiler stdout"));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("owned compiler stderr"));
-        assert!(!String::from_utf8_lossy(&output.stdout).contains("owned compiler stderr"));
     }
 }

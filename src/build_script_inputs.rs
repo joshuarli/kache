@@ -49,9 +49,7 @@ const MAX_STDOUT_BYTES: u64 = 16 << 20;
 pub(crate) const MAX_ENTRIES: usize = crate::cache_key::CRATE_TREE_MAX_ENTRIES;
 
 /// The search path Cargo sets on rustc for proc macros' dynamic libraries.
-const DYLIB_PATH: &str = if cfg!(windows) {
-    "PATH"
-} else if cfg!(target_os = "macos") {
+const DYLIB_PATH: &str = if cfg!(target_os = "macos") {
     "DYLD_FALLBACK_LIBRARY_PATH"
 } else if cfg!(target_os = "aix") {
     "LIBPATH"
@@ -134,7 +132,7 @@ pub(crate) fn cargo_home(var: &dyn Fn(&str) -> Option<OsString>) -> Option<PathB
 }
 
 /// Where Cargo's home defaults to, below the user's home.
-const HOME: &str = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+const HOME: &str = "HOME";
 
 /// Whether `path` is under the registry or the Git sources in `home`, which
 /// Cargo takes to be immutable.
@@ -527,12 +525,7 @@ fn env_state(name: &str, var: &dyn Fn(&str) -> Option<OsString>, located: &Locat
 /// Whether Cargo sets `name` on the rustc command of every unit of the
 /// package, so rustc's value is Cargo's own.
 fn set_by_cargo(name: &str) -> bool {
-    let name = if cfg!(windows) {
-        name.to_ascii_uppercase()
-    } else {
-        name.to_string()
-    };
-    SET_BY_CARGO.contains(&name.as_str())
+    SET_BY_CARGO.contains(&name)
         || name.starts_with("CARGO_PKG_")
         || name.starts_with("CARGO_BIN_EXE_")
 }
@@ -542,11 +535,7 @@ fn set_by_cargo(name: &str) -> bool {
 /// feature): another `OUT_DIR` of the package in the same profile. Any other
 /// variable named that way is the user's, and counts by its value.
 fn is_script_out_dir(name: &str, value: &OsStr, located: &Located) -> bool {
-    let suffixed = if cfg!(windows) {
-        name.to_ascii_uppercase().ends_with("_OUT_DIR")
-    } else {
-        name.ends_with("_OUT_DIR")
-    };
+    let suffixed = name.ends_with("_OUT_DIR");
     let value = Path::new(value);
     suffixed
         && crate::cargo_layout::out_dir_unit_name(value, &located.package).is_some()

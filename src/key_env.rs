@@ -122,17 +122,13 @@ impl KeyEnv {
     }
 }
 
-/// The [`KEY_ENV_VARS`] entry `name` refers to. Windows variable names are
-/// case-insensitive, as `std::env::var_os` treats them there.
+/// The [`KEY_ENV_VARS`] entry `name` refers to. Names match case-sensitively.
 fn declared_name(name: &OsStr) -> Option<&'static str> {
     let name = name.to_str()?;
-    KEY_ENV_VARS.iter().copied().find(|declared| {
-        if cfg!(windows) {
-            declared.eq_ignore_ascii_case(name)
-        } else {
-            *declared == name
-        }
-    })
+    KEY_ENV_VARS
+        .iter()
+        .copied()
+        .find(|declared| *declared == name)
 }
 
 #[cfg(test)]
@@ -169,7 +165,6 @@ mod tests {
         assert_eq!(env.cwd(), None);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_non_unicode_value_is_unset_as_text() {
         use std::os::unix::ffi::OsStringExt;
@@ -179,14 +174,6 @@ mod tests {
         assert_eq!(env.var("RUSTFLAGS"), None);
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn windows_names_match_without_case() {
-        let env = KeyEnv::from_parts([("RustFlags", "-a")], None);
-        assert_eq!(env.var("RUSTFLAGS").as_deref(), Some("-a"));
-    }
-
-    #[cfg(not(windows))]
     #[test]
     fn unix_names_match_with_case() {
         let env = KeyEnv::from_parts([("RustFlags", "-a")], None);

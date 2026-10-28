@@ -257,16 +257,18 @@ impl V3Prefetch for V3Remote {
 impl V3Remote {
     /// Prefix for one packed-prefetch catalog's objects. `selector` must be a
     /// lowercase BLAKE3 digest, matching what callers derive it from.
+    #[cfg(feature = "remote")]
     fn catalog_prefix(&self, selector: &str) -> Result<String> {
         crate::remote_pack::catalog_prefix(&self.remote.prefix, selector)
     }
 
+    #[cfg(feature = "remote")]
     pub fn backend(&self) -> &Arc<dyn RemoteBackend> {
         &self.backend
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "remote"))]
 mod tests {
     use super::*;
     use crate::remote_backend::{RemoteBackend, memory_backend};

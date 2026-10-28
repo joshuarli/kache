@@ -1,0 +1,242 @@
+name: release
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.head_ref || github.run_id }}"
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  preflight:
+    name: Validate release ref
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      default_branch: ${{ steps.ref.outputs.default_branch }}
+    steps:
+      - name: Require the default branch
+        id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          default_branch=$(gh api "repos/$REPOSITORY" --jq '.default_branch')
+          if [[ "$EVENT_NAME" != workflow_dispatch || "$REF" != "refs/heads/$default_branch" ]]; then
+            echo "Release dispatch rejected: expected workflow_dispatch on refs/heads/$default_branch, got $EVENT_NAME on $REF" >&2
+            exit 1
+          fi
+          echo "default_branch=$default_branch" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            target: aarch64-apple-darwin
+            docker_platform: ''
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            docker_platform: linux/amd64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            docker_platform: linux/arm64
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: matrix.docker_platform != ''
+      - name: Build Linux release image
+        if: matrix.docker_platform != ''
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: ${{ matrix.docker_platform }}
+          load: true
+          tags: kache-builder:${{ matrix.target }}
+          cache-from: type=gha,scope=kache-${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=kache-${{ matrix.target }}
+      - name: Install Rust toolchain
+        if: matrix.docker_platform == ''
+        run: rustup show active-toolchain
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: matrix.docker_platform == ''
+        with:
+          key: ${{ matrix.runner }}-${{ matrix.target }}
+      - name: Build macOS release
+        if: matrix.docker_platform == ''
+        run: make release TARGET="${{ matrix.target }}"
+      - name: Run macOS tests
+        if: matrix.docker_platform == ''
+        run: make test-ci TARGET="${{ matrix.target }}"
+      - name: Save macOS release
+        if: matrix.docker_platform == ''
+        run: |
+          cp "target/${{ matrix.target }}/dist/kache" "kache-${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/dist/kache-engine" "kache-engine-${{ matrix.target }}"
+      - name: Build and verify Linux releases
+        if: matrix.docker_platform != ''
+        run: |
+          docker run --rm --init \
+            --platform "${{ matrix.docker_platform }}" \
+            -e CI \
+            -v "$GITHUB_WORKSPACE:/kache" \
+            -w /kache \
+            kache-builder:${{ matrix.target }} \
+            sh -ec '
+              make release TARGET=${{ matrix.target }}
+              make verify-release TARGET=${{ matrix.target }}
+              make test-ci TARGET=${{ matrix.target }}
+              cp target/${{ matrix.target }}/dist/kache kache-${{ matrix.target }}-static
+              cp target/${{ matrix.target }}/dist/kache-engine kache-engine-${{ matrix.target }}-static
+            '
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kache-${{ matrix.target }}
+          path: kache-*
+
+  release:
+    name: Create pre-release
+    needs: [preflight, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Recheck release ref and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ needs.preflight.outputs.default_branch }}
+          RELEASE_TAG: release-${{ github.sha }}
+        run: |
+          default_branch=$(gh api "repos/$REPOSITORY" --jq '.default_branch')
+          if [[ "$EVENT_NAME" != workflow_dispatch || "$REF" != "refs/heads/$default_branch" || "$DEFAULT_BRANCH" != "$default_branch" ]]; then
+            echo "Release publication rejected: expected workflow_dispatch on refs/heads/$default_branch, got $EVENT_NAME on $REF" >&2
+            exit 1
+          fi
+          if response=$(gh api "repos/$REPOSITORY/git/ref/tags/$RELEASE_TAG" 2>&1); then
+            echo "Release publication rejected: tag $RELEASE_TAG already exists; inspect it before proceeding" >&2
+            exit 1
+          else
+            if [[ "$response" != *"HTTP 404"* ]]; then
+              printf 'Could not verify that tag %s is absent: %s\n' "$RELEASE_TAG" "$response" >&2
+              exit 1
+            fi
+          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: kache-*
+          path: dist
+
+      - name: Verify Linux ELF artifacts are fully static
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          command -v readelf >/dev/null
+          X86_64_COUNT=0
+          AARCH64_COUNT=0
+          for binary in dist/**/*; do
+            [[ -f "$binary" ]] || continue
+            if ! readelf -h "$binary" >/dev/null 2>&1; then
+              continue
+            fi
+            machine=$(readelf -h "$binary" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')
+            case "$machine" in
+              "Advanced Micro Devices X86-64") X86_64_COUNT=$((X86_64_COUNT + 1)) ;;
+              AArch64) AARCH64_COUNT=$((AARCH64_COUNT + 1)) ;;
+              *) printf '%s has unsupported ELF machine %s\n' "$binary" "$machine" >&2; exit 1 ;;
+            esac
+            program_headers=$(readelf -lW "$binary")
+            if [[ "$program_headers" == *INTERP* ]]; then
+              printf '%s has a dynamic ELF interpreter\n' "$binary" >&2
+              exit 1
+            fi
+            dynamic_section=$(readelf -dW "$binary")
+            if [[ "$dynamic_section" == *NEEDED* ]]; then
+              printf '%s has a dynamic library dependency\n' "$binary" >&2
+              exit 1
+            fi
+          done
+          if [[ "$X86_64_COUNT" -ne 2 || "$AARCH64_COUNT" -ne 2 ]]; then
+            printf 'Expected two x86_64 and two aarch64 Linux ELF artifacts, found x86_64=%s aarch64=%s\n' "$X86_64_COUNT" "$AARCH64_COUNT" >&2
+            exit 1
+          fi
+
+      - name: Validate and package release artifacts
+        run: |
+          expected_artifacts=$'kache-aarch64-apple-darwin\nkache-aarch64-unknown-linux-musl\nkache-x86_64-unknown-linux-musl'
+          actual_artifacts=$(find dist -mindepth 1 -maxdepth 1 -print | sed 's|.*/||' | LC_ALL=C sort)
+          if [[ "$actual_artifacts" != "$expected_artifacts" ]]; then
+            echo "Unexpected release artifact directories:" >&2
+            printf '%s\n' "$actual_artifacts" >&2
+            exit 1
+          fi
+          mkdir dist/zips
+          for file in \
+            dist/kache-aarch64-apple-darwin/kache-aarch64-apple-darwin \
+            dist/kache-aarch64-apple-darwin/kache-engine-aarch64-apple-darwin \
+            dist/kache-aarch64-unknown-linux-musl/kache-aarch64-unknown-linux-musl-static \
+            dist/kache-aarch64-unknown-linux-musl/kache-engine-aarch64-unknown-linux-musl-static \
+            dist/kache-x86_64-unknown-linux-musl/kache-x86_64-unknown-linux-musl-static \
+            dist/kache-x86_64-unknown-linux-musl/kache-engine-x86_64-unknown-linux-musl-static; do
+            zip -9 --junk-paths "dist/zips/$(basename "$file").zip" "$file"
+          done
+          cd dist/zips
+          sha256sum *.zip | LC_ALL=C sort -k2 > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Create release tag at triggering SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: release-${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ needs.preflight.outputs.default_branch }}
+        run: |
+          default_branch=$(gh api "repos/$REPOSITORY" --jq '.default_branch')
+          if [[ "$EVENT_NAME" != workflow_dispatch || "$REF" != "refs/heads/$default_branch" || "$DEFAULT_BRANCH" != "$default_branch" ]]; then
+            echo "Release publication rejected: expected workflow_dispatch on refs/heads/$default_branch, got $EVENT_NAME on $REF" >&2
+            exit 1
+          fi
+          if response=$(gh api "repos/$REPOSITORY/git/refs" -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$GITHUB_SHA" 2>&1); then
+            echo "Created $RELEASE_TAG at $GITHUB_SHA"
+          else
+            printf 'Could not create release tag %s at %s: %s\n' "$RELEASE_TAG" "$GITHUB_SHA" "$response" >&2
+            exit 1
+          fi
+      - name: Create pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: release-${{ github.sha }}
+        run: gh release create "$RELEASE_TAG" dist/zips/*.zip dist/zips/SHA256SUMS --repo "$GITHUB_REPOSITORY" --prerelease --verify-tag --title "$RELEASE_TAG"

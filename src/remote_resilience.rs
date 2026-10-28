@@ -149,6 +149,7 @@ impl RemoteDeadline {
     }
 }
 
+#[cfg(feature = "remote")]
 fn classify_opendal_error(error: &opendal::Error) -> RemoteErrorClass {
     use opendal::ErrorKind;
 
@@ -186,6 +187,7 @@ fn classify_io_error(kind: std::io::ErrorKind) -> RemoteErrorClass {
     }
 }
 
+#[cfg(feature = "remote")]
 fn classify_reqwest_status(status: Option<reqwest::StatusCode>) -> Option<RemoteErrorClass> {
     match status.map(|status| status.as_u16()) {
         Some(401) | Some(403) => Some(RemoteErrorClass::Authentication),
@@ -193,10 +195,12 @@ fn classify_reqwest_status(status: Option<reqwest::StatusCode>) -> Option<Remote
     }
 }
 
+#[cfg(feature = "remote")]
 fn reqwest_transport_is_transient(is_connect: bool, is_request: bool) -> bool {
     matches!((is_connect, is_request), (true, _) | (_, true))
 }
 
+#[cfg(feature = "remote")]
 fn reqwest_payload_is_integrity(is_decode: bool, is_body: bool) -> bool {
     matches!((is_decode, is_body), (true, _) | (_, true))
 }
@@ -220,12 +224,14 @@ pub(crate) fn classify_remote_error(error: &anyhow::Error) -> RemoteErrorClass {
         {
             return RemoteErrorClass::Timeout;
         }
+        #[cfg(feature = "remote")]
         if let Some(opendal_error) = cause.downcast_ref::<opendal::Error>() {
             return classify_opendal_error(opendal_error);
         }
         if let Some(io_error) = cause.downcast_ref::<std::io::Error>() {
             return classify_io_error(io_error.kind());
         }
+        #[cfg(feature = "remote")]
         if let Some(reqwest_error) = cause.downcast_ref::<reqwest::Error>() {
             if reqwest_error.is_timeout() {
                 return RemoteErrorClass::Timeout;
@@ -290,6 +296,7 @@ fn diagnose_remote_failure(detail: &str) -> std::borrow::Cow<'_, str> {
 /// window between attempts.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy)]
+#[cfg(feature = "remote")]
 pub(crate) struct RetryPolicy {
     /// Total attempts, including the first.
     pub max_attempts: u32,
@@ -298,6 +305,7 @@ pub(crate) struct RetryPolicy {
 }
 
 #[cfg(test)]
+#[cfg(feature = "remote")]
 impl RetryPolicy {
     /// Deterministic exponential core: `base * 2^attempt`, capped at
     /// `max_delay`. `attempt` is 0-based (the delay before the first retry).
@@ -310,6 +318,7 @@ impl RetryPolicy {
 /// Add up to +50% random jitter so parallel wrappers spread their retries
 /// instead of hammering a recovering remote in lockstep.
 #[cfg(test)]
+#[cfg(feature = "remote")]
 pub(crate) fn jittered(delay: Duration) -> Duration {
     let jitter_ns = (delay.as_nanos() as u64 / 2).max(1);
     delay + Duration::from_nanos(random_u64() % jitter_ns)
@@ -319,6 +328,7 @@ pub(crate) fn jittered(delay: Duration) -> Duration {
 /// from system entropy, and hashing a fresh monotonic timestamp decorrelates
 /// consecutive draws. Jitter needs spread, not cryptographic quality.
 #[cfg(test)]
+#[cfg(feature = "remote")]
 fn random_u64() -> u64 {
     use std::hash::BuildHasher;
     std::collections::hash_map::RandomState::new().hash_one(Instant::now())
@@ -329,6 +339,7 @@ fn random_u64() -> u64 {
 /// immediately (a miss is an answer; a timeout already burned the transport's
 /// retry budget). Returns the final result and how many attempts were issued.
 #[cfg(test)]
+#[cfg(feature = "remote")]
 pub(crate) async fn retry_transient<T, F, Fut>(
     policy: RetryPolicy,
     mut op: F,
@@ -1193,6 +1204,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "remote")]
     fn classify_opendal_not_found_as_miss() {
         let error = anyhow::Error::new(opendal::Error::new(
             opendal::ErrorKind::NotFound,
@@ -1202,6 +1214,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "remote")]
     fn classify_opendal_kinds_without_collapsing_distinct_policies() {
         use opendal::ErrorKind;
 
@@ -1261,6 +1274,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "remote")]
     fn reqwest_status_and_transport_truth_tables_are_exact() {
         use reqwest::StatusCode;
 
@@ -1334,6 +1348,7 @@ mod tests {
         assert_eq!(class_of(error), RemoteErrorClass::Timeout);
     }
 
+    #[cfg(feature = "remote")]
     fn transient_error() -> anyhow::Error {
         anyhow::Error::new(
             opendal::Error::new(opendal::ErrorKind::RateLimited, "slow down").set_temporary(),
@@ -1345,6 +1360,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "remote")]
     fn classification_is_typed_and_only_availability_failures_poison() {
         assert_eq!(class_of(transient_error()), RemoteErrorClass::Transient);
         assert_eq!(
@@ -1392,6 +1408,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "remote")]
     #[test]
     fn backoff_grows_exponentially_and_caps() {
         let policy = RetryPolicy {
@@ -1407,6 +1424,7 @@ mod tests {
         assert_eq!(policy.backoff_delay(u32::MAX), Duration::from_millis(500));
     }
 
+    #[cfg(feature = "remote")]
     #[test]
     fn jitter_stays_within_half_the_delay() {
         let base = Duration::from_millis(100);
@@ -1418,6 +1436,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "remote")]
     async fn retry_transient_retries_only_transient_failures() {
         let policy = RetryPolicy {
             max_attempts: 3,

@@ -1208,36 +1208,11 @@ fn regular_output_is_owner_writable(meta: &std::fs::Metadata) -> bool {
     }
 }
 
-#[cfg(unix)]
 fn regular_output_is_independent(_path: &Path, meta: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
 
     meta.nlink() == 1
 }
-
-#[cfg(windows)]
-fn regular_output_is_independent_windows(path: &Path, _meta: &std::fs::Metadata) -> bool {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
-    };
-
-    let Ok(file) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
-    ok != 0 && info.nNumberOfLinks == 1
-}
-#[cfg(windows)]
-use self::regular_output_is_independent_windows as regular_output_is_independent;
-
-#[cfg(not(any(unix, windows)))]
-fn regular_output_is_independent_unsupported(_path: &Path, _meta: &std::fs::Metadata) -> bool {
-    true
-}
-#[cfg(not(any(unix, windows)))]
-use self::regular_output_is_independent_unsupported as regular_output_is_independent;
 
 fn parse_cc_arg_at(args: &[String], idx: usize, dialect: Dialect) -> Option<ParsedCcArg> {
     let arg = args.get(idx)?;

@@ -42,7 +42,6 @@ mod machine;
 mod maintenance;
 mod miss_chain;
 mod native_archive;
-mod native_link_key;
 mod notice;
 mod opcounts;
 mod otel;
@@ -50,7 +49,9 @@ mod out_dir_alias;
 mod path_normalizer;
 mod pe_pdb;
 mod phase_trace;
+#[cfg(feature = "remote")]
 mod planner_auth;
+#[cfg(feature = "remote")]
 mod planner_client;
 mod platform;
 mod policy;
@@ -91,6 +92,7 @@ mod test_runner;
 #[cfg(test)]
 mod test_support;
 mod timeline;
+#[cfg(feature = "remote")]
 mod timeline_client;
 mod toolchain_dylib;
 use kache_ipc as transport;
@@ -777,9 +779,24 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
             return config_tui::run_config_editor();
         }
         Some(Commands::Login { device, retrust }) => {
+            #[cfg(feature = "remote")]
             return cli::login::login(*device, *retrust);
+            #[cfg(not(feature = "remote"))]
+            {
+                let _ = (device, retrust);
+                return Err(anyhow::anyhow!(
+                    "kache login needs remote support; rebuild with --features remote"
+                ));
+            }
         }
+        #[cfg(feature = "remote")]
         Some(Commands::Logout) => return cli::login::logout(),
+        #[cfg(not(feature = "remote"))]
+        Some(Commands::Logout) => {
+            return Err(anyhow::anyhow!(
+                "kache logout needs remote support; rebuild with --features remote"
+            ));
+        }
         Some(Commands::Cargo { args }) => return cargo_proxy::run(args.clone()),
         Some(Commands::Completions { shell }) => {
             generate_completions(*shell, &mut std::io::stdout());
@@ -1455,7 +1472,7 @@ fn run_wrapper_mode(args: &[String]) -> Result<()> {
             })
             .unwrap_or_else(|| "kache".to_owned()),
     };
-    #[cfg(any(unix, windows))]
+    #[cfg(unix)]
     let config = if wrappers_above(context.env.var_os(KACHE_ACTIVE_ENV).as_deref()).is_none() {
         let config = config::Config::load_for(&context.env)?;
         if let Some(exit) = invocation::execution::try_execute_with_trust(
@@ -1487,7 +1504,7 @@ fn run_wrapper_mode(args: &[String]) -> Result<()> {
     } else {
         None
     };
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     let config = None;
     let exit = run_compiler_invocation_with_config(args, context, config)?;
     std::process::exit(exit);
@@ -1495,7 +1512,7 @@ fn run_wrapper_mode(args: &[String]) -> Result<()> {
 
 /// Decide whether raw argv can enter the compiler pipeline without probing a
 /// program. Ambiguous entry points remain available to the local engine.
-#[cfg(any(unix, windows))]
+#[cfg(unix)]
 fn original_compiler_request(args: &[String], env: &invocation::InvocationEnv) -> bool {
     if args.is_empty()
         || env.var_os("KACHE_FAMILY_PROBE_ACTIVE").is_some()
@@ -1520,7 +1537,7 @@ fn original_compiler_request(args: &[String], env: &invocation::InvocationEnv) -
         || compiler::cc::CcCompiler::recognizes_family_probe(after)
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(unix)]
 fn run_original_compiler_invocation(
     args: &[String],
     context: invocation::InvocationContext,
@@ -1821,7 +1838,7 @@ fn daemon_restart_message(was_running: bool, ready: bool) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(any(unix, windows))]
+    #[cfg(unix)]
     #[test]
     fn original_compiler_requests_use_only_the_supplied_arguments_and_environment() {
         let root = tempfile::tempdir().unwrap();

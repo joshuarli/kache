@@ -545,11 +545,7 @@ fn by_repository(
 /// tagged `target/` Git ignores in each worktree, within `time`. A custom
 /// target path outside its worktree is known only when a wrapper recorded it.
 pub(crate) fn discover(store: &Store, time: Duration, now: u64) -> Result<usize> {
-    let homes = homes_from(std::env::var_os(if cfg!(windows) {
-        "USERPROFILE"
-    } else {
-        "HOME"
-    }));
+    let homes = homes_from(std::env::var_os("HOME"));
     discover_within(store, Instant::now() + time, &homes, turn_at(now))
 }
 

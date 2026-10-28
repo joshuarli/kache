@@ -1214,16 +1214,9 @@ mod tests {
         use std::fs::File;
         let temp_dir = tempfile::TempDir::new().unwrap();
         let wrapper_name = "custom-wrapper-test-executable";
-        #[cfg(windows)]
-        {
-            let wrapper_path_exe = temp_dir.path().join(format!("{}.exe", wrapper_name));
-            File::create(&wrapper_path_exe).unwrap();
-        }
-        #[cfg(not(windows))]
         {
             let wrapper_path = temp_dir.path().join(wrapper_name);
             File::create(&wrapper_path).unwrap();
-            #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
                 let mut perms = std::fs::metadata(&wrapper_path).unwrap().permissions();
@@ -2087,7 +2080,7 @@ pub(crate) mod shim {
             name,
             path_dirs,
             self_exe,
-            executable_extensions(cfg!(windows)),
+            executable_extensions(false),
             is_candidate,
             resolve,
             is_marked,

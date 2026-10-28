@@ -77,7 +77,6 @@ mod tests {
             input_predictions: false,
             record_sessions: false,
             volume_stores: Vec::new(),
-            windows_hardlink: false,
             shared_hardlink_restores: false,
             deferred_discovery: true,
             out_dir_alias: true,

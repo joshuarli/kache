@@ -68,5 +68,4 @@ The scan also reads `include_str!` and `include_bytes!` inputs, so a matching
 macro invocation in included data can cause passthrough. Setting
 `cache.key_env_vars` does not override this refusal.
 
-Windows has no Kache compiler shim generator, so this setup does not cache
-`cargo doc` there.
+Without the rustdoc shim this setup does not cache `cargo doc`.

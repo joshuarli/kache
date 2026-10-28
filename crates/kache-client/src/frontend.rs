@@ -2,10 +2,6 @@ use anyhow::{Context, Result};
 use std::ffi::OsString;
 use std::process::Command;
 
-#[cfg(windows)]
-#[path = "frontend_windows.rs"]
-mod windows;
-
 /// Run the thin compiler client, or replace it with the companion CLI engine.
 pub fn run(version: &str) -> Result<i32> {
     let started_at = std::time::Instant::now();
@@ -27,7 +23,6 @@ pub fn run(version: &str) -> Result<i32> {
     {
         return forward_engine(&executable, version, &args, started_at);
     }
-    #[cfg(any(unix, windows))]
     {
         let env = kache_config::InvocationEnv::capture();
         if env
@@ -36,10 +31,7 @@ pub fn run(version: &str) -> Result<i32> {
         {
             let prepared = (|| -> Result<_> {
                 let config = kache_config::Config::load_for(&env)?;
-                #[cfg(unix)]
                 let (files, terminal) = crate::Stdio::capture()?.into_files();
-                #[cfg(windows)]
-                let (files, terminal) = (Vec::new(), false);
                 Ok((config, files, terminal))
             })();
             if let Ok((config, files, terminal)) = prepared {
@@ -59,15 +51,6 @@ pub fn run(version: &str) -> Result<i32> {
                 {
                     return Ok(exit);
                 }
-                #[cfg(windows)]
-                if let Some(exit) = windows::try_bootstrap(
-                    &execution,
-                    &socket,
-                    config.disabled,
-                    config.trust_daemon_execution,
-                )? {
-                    return Ok(exit);
-                }
             }
         }
     }
@@ -81,16 +64,8 @@ fn forward_engine(
     started_at: std::time::Instant,
 ) -> Result<i32> {
     let mut command = engine_command(executable, version, args, started_at)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        Err(command.exec()).context("starting the Kache engine")
-    }
-    #[cfg(not(unix))]
-    {
-        let status = command.status().context("starting the Kache engine")?;
-        Ok(status.code().unwrap_or(1))
-    }
+    use std::os::unix::process::CommandExt;
+    Err(command.exec()).context("starting the Kache engine")
 }
 
 fn engine_command(
@@ -178,6 +153,6 @@ mod tests {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 #[path = "frontend/tests.rs"]
 mod boundary_tests;

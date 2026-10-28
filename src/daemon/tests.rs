@@ -1,9 +1,9 @@
+#[cfg(feature = "remote")]
 mod post_upload_gc;
 use super::*;
 use std::fs;
 use std::sync::mpsc;
 
-#[cfg(any(unix, windows))]
 #[test]
 fn compiler_request_capacity_handles_bursts_and_recovers_after_drop() {
     let root = tempfile::tempdir().unwrap();
@@ -730,9 +730,7 @@ fn active_session_updates_in_place_and_summarizes_on_replacement() {
     assert_eq!(summaries[0].plan_source, "none");
 }
 
-// Tests use the same cross-platform transport as production. On Unix
-// this resolves to UDS; on Windows (when tests are eventually enabled
-// there) it resolves to named pipes.
+// Tests use the same transport as production, which resolves to UDS.
 #[cfg(test)]
 use crate::transport::ListenerOptions;
 use crate::transport::{TokioListener, TokioStream, socket_name};
@@ -740,13 +738,8 @@ use crate::transport::{TokioListener, TokioStream, socket_name};
 /// A sibling of `socket_path` that no earlier bind in this process has
 /// used.
 ///
-/// On Unix the endpoint is a filesystem path and rebinding the same name
-/// after the listener is gone is harmless. On Windows `socket_name` hashes
-/// the path into the machine-wide `\\.\pipe\` namespace, and
-/// `CreateNamedPipe` refuses a name any instance of the previous listener
-/// still holds — with `ERROR_ACCESS_DENIED`, not `ERROR_ALREADY_EXISTS`.
-/// Those instances go away when the OS closes the old handles, which is
-/// not ordered against the next bind, so two binds on one name race
+/// The endpoint is a filesystem path and rebinding the same name
+/// after the listener is gone is harmless. Two binds on one name could race
 /// (kunobi-ninja/kache#1107). The process-wide counter keeps every bind on
 /// its own name; the caller's temp dir keeps it off the names concurrent
 /// nextest processes use.
@@ -757,10 +750,9 @@ fn fresh_endpoint(socket_path: &Path) -> std::path::PathBuf {
 }
 
 /// #1107: two binds derived from one socket path must be live at the same
-/// time. Binding both proves it on every platform — a repeated name is
-/// `EADDRINUSE` on Unix and `ERROR_ACCESS_DENIED` on Windows, and either
-/// way `bind_listener` panics here instead of intermittently in whichever
-/// test happened to ask for a second roundtrip.
+/// time. A repeated name is `EADDRINUSE`, so `bind_listener` panics here
+/// instead of intermittently in whichever test happened to ask for a second
+/// roundtrip.
 #[tokio::test]
 async fn each_bind_gets_an_endpoint_name_of_its_own() {
     let dir = tempfile::tempdir().unwrap();
@@ -794,9 +786,8 @@ async fn connect_stream(path: &Path) -> TokioStream {
 }
 
 /// Bind a *synchronous* listener at `path` so `transport::is_reachable`
-/// reports the endpoint as live. Cross-platform (UDS file on Unix, named
-/// pipe on Windows) and, unlike the tokio listener, needs no async runtime
-/// — so it can be created inside a plain `std::thread`.
+/// reports the endpoint as live. Unlike the tokio listener, it needs no
+/// async runtime — so it can be created inside a plain `std::thread`.
 fn bind_sync_listener(path: &Path) -> interprocess::local_socket::Listener {
     let name = socket_name(path).expect("socket name");
     ListenerOptions::new()
@@ -1414,7 +1405,6 @@ pub(super) fn test_config(dir: &Path) -> Config {
         input_predictions: false,
         record_sessions: false,
         volume_stores: Vec::new(),
-        windows_hardlink: false,
         shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
@@ -1615,6 +1605,7 @@ async fn the_periodic_refresh_survives_flaky_listings_and_stops_when_refused() {
     assert_eq!(calls, 4);
 }
 
+#[cfg(feature = "remote")]
 #[test]
 fn only_a_refused_listing_stops_the_refresher() {
     let s3 = Some(test_remote_config());
@@ -2345,9 +2336,8 @@ fn existing_run_lock_probe_separates_missing_from_unreadable() {
 /// doctor would report a host as clean precisely when it could not tell.
 ///
 /// A directory where the file belongs is the portable way to fail an open
-/// with something that is not `NotFound` (EISDIR on unix, access-denied on
-/// Windows) without depending on running as an unprivileged user, which
-/// chmod-based variants do.
+/// with something that is not `NotFound` (EISDIR) without depending on
+/// running as an unprivileged user, which chmod-based variants do.
 #[test]
 fn existing_run_lock_probe_propagates_an_unreadable_lock() {
     let dir = tempfile::tempdir().unwrap();
@@ -2412,14 +2402,7 @@ fn starting_daemon_epoch_reports_only_a_live_starting_daemon() {
     // Fresh record, dead PID: the starter died between writing the file and
     // binding the socket. Use a reaped child rather than a made-up PID so
     // the process really is gone.
-    let mut child = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" })
-        .args(if cfg!(windows) {
-            vec!["/C", "exit"]
-        } else {
-            vec![]
-        })
-        .spawn()
-        .unwrap();
+    let mut child = std::process::Command::new("true").spawn().unwrap();
     let dead_pid = child.id();
     child.wait().unwrap();
 
@@ -5496,10 +5479,6 @@ fn hash_files_response_parser_handles_results_error_and_malformed() {
     assert!(err.to_string().contains("key must be a string"));
 }
 
-// Unix-only: send_hash_files_request guards on `socket_path.exists()`, which
-// is false for a Windows named pipe (no filesystem `.sock` entry), so the
-// round-trip can't run there. The client logic is covered here on Linux/macOS.
-#[cfg(unix)]
 #[tokio::test]
 async fn send_hash_files_request_client_roundtrip() {
     // CLIENT side: send_hash_files_request connects to a live in-process
@@ -5969,6 +5948,8 @@ async fn test_send_shutdown_request_client_roundtrip() {
     assert!(result.is_ok(), "shutdown request should round-trip ok");
 }
 
+#[cfg(feature = "remote")]
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_socket_gc_roundtrip_evicts_populated_store() {
     // GC with max_age 0h over a populated store exercises the daemon's
@@ -5999,12 +5980,14 @@ fn test_remote_config() -> crate::config::RemoteConfig {
     crate::config::RemoteConfig::test_s3("bucket", "prefix")
 }
 
+#[cfg(feature = "remote")]
 fn test_remote_backend() -> Arc<dyn crate::remote_backend::RemoteBackend> {
     Arc::new(crate::remote_backend::memory_backend())
 }
 
 const ROW_IDENTITY: &str = "shared-workspace-v1:0123";
 
+#[cfg(feature = "remote")]
 fn test_prediction_row() -> crate::prediction_share::SharedPrediction {
     crate::prediction_share::SharedPrediction::Portable(crate::cache_key::PortablePrediction {
         schema: crate::cache_key::PORTABLE_PREDICTION_SCHEMA,
@@ -6015,6 +5998,7 @@ fn test_prediction_row() -> crate::prediction_share::SharedPrediction {
 }
 
 /// A daemon on `config` whose remote is the in-memory `backend`.
+#[cfg(feature = "remote")]
 fn daemon_on(
     config: Config,
     backend: &Arc<dyn crate::remote_backend::RemoteBackend>,
@@ -6030,6 +6014,7 @@ fn fetch_request(identity: &str) -> PredictionFetchRequest {
     }
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn a_prediction_row_published_by_one_daemon_is_fetched_by_another() {
     let dir = tempfile::tempdir().unwrap();
@@ -6067,6 +6052,7 @@ async fn a_prediction_row_published_by_one_daemon_is_fetched_by_another() {
     assert_eq!(other.prediction, None, "no row for another identity");
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn a_read_only_or_absent_remote_takes_no_prediction_row() {
     let dir = tempfile::tempdir().unwrap();
@@ -6114,6 +6100,7 @@ async fn a_read_only_or_absent_remote_takes_no_prediction_row() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn a_malformed_prediction_row_or_identity_is_refused() {
     let dir = tempfile::tempdir().unwrap();
@@ -6227,6 +6214,7 @@ async fn prediction_fetch_failures_open_the_read_breaker_and_stop_later_gets() {
     }
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn prediction_fetch_answers_clear_prior_read_failures() {
     for body in [
@@ -6349,6 +6337,7 @@ fn a_prediction_identity_is_portable_and_bounded() {
     assert!(!prediction_identity_is_acceptable("0123"));
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn cache_remote_wraps_the_injected_backend() {
     let dir = tempfile::tempdir().unwrap();
@@ -6377,6 +6366,7 @@ async fn cache_remote_wraps_the_injected_backend() {
     ));
 }
 
+#[cfg(feature = "remote")]
 struct BlockingIdentityBackend {
     inner: Arc<dyn crate::remote_backend::RemoteBackend>,
     identity_gets: AtomicU64,
@@ -6387,10 +6377,12 @@ struct BlockingIdentityBackend {
     block_identity: AtomicBool,
 }
 
+#[cfg(feature = "remote")]
 struct PendingIdentityGuard<'a> {
     cancellations: &'a AtomicU64,
 }
 
+#[cfg(feature = "remote")]
 impl Drop for PendingIdentityGuard<'_> {
     fn drop(&mut self) {
         self.cancellations.fetch_add(1, Ordering::Relaxed);
@@ -6398,6 +6390,7 @@ impl Drop for PendingIdentityGuard<'_> {
 }
 
 #[async_trait::async_trait]
+#[cfg(feature = "remote")]
 impl crate::remote_backend::RemoteBackend for BlockingIdentityBackend {
     async fn head(&self, key: &str) -> Result<bool> {
         self.inner.head(key).await
@@ -6446,6 +6439,7 @@ impl crate::remote_backend::RemoteBackend for BlockingIdentityBackend {
     }
 }
 
+#[cfg(feature = "remote")]
 struct FailingIdentityBackend {
     inner: Arc<dyn crate::remote_backend::RemoteBackend>,
     kind: std::io::ErrorKind,
@@ -6453,6 +6447,7 @@ struct FailingIdentityBackend {
 }
 
 #[async_trait::async_trait]
+#[cfg(feature = "remote")]
 impl crate::remote_backend::RemoteBackend for FailingIdentityBackend {
     async fn head(&self, key: &str) -> Result<bool> {
         self.inner.head(key).await
@@ -6483,6 +6478,7 @@ impl crate::remote_backend::RemoteBackend for FailingIdentityBackend {
     }
 }
 
+#[cfg(feature = "remote")]
 async fn wait_for_test_condition(mut condition: impl FnMut() -> bool) {
     tokio::time::timeout(Duration::from_secs(1), async {
         while !condition() {
@@ -6493,14 +6489,17 @@ async fn wait_for_test_condition(mut condition: impl FnMut() -> bool) {
     .expect("test condition must become true");
 }
 
+#[cfg(feature = "remote")]
 fn test_manifest_object_key(cache_key: &str, crate_name: &str) -> String {
     format!("prefix/v3/manifests/{crate_name}/{cache_key}.json")
 }
 
+#[cfg(feature = "remote")]
 fn test_pack_object_key(cache_key: &str, crate_name: &str) -> String {
     format!("prefix/v3/packs/{crate_name}/{cache_key}.tar.zst")
 }
 
+#[cfg(feature = "remote")]
 fn test_build_manifest_object_key() -> String {
     format!(
         "prefix/_manifests/{}.json",
@@ -6508,6 +6507,7 @@ fn test_build_manifest_object_key() -> String {
     )
 }
 
+#[cfg(feature = "remote")]
 async fn put_test_object(
     backend: &Arc<dyn crate::remote_backend::RemoteBackend>,
     key: &str,
@@ -6548,6 +6548,7 @@ impl crate::remote_backend::RemoteBackend for PutFailBackend {
     }
 }
 
+#[cfg(feature = "remote")]
 struct BlockingPackBackend {
     inner: Arc<dyn crate::remote_backend::RemoteBackend>,
     pack_started: Arc<Notify>,
@@ -6556,6 +6557,7 @@ struct BlockingPackBackend {
 }
 
 #[async_trait::async_trait]
+#[cfg(feature = "remote")]
 impl crate::remote_backend::RemoteBackend for BlockingPackBackend {
     async fn head(&self, key: &str) -> Result<bool> {
         self.inner.head(key).await
@@ -6594,6 +6596,7 @@ impl crate::remote_backend::RemoteBackend for BlockingPackBackend {
     }
 }
 
+#[cfg(feature = "remote")]
 struct BlockingV3Backend {
     inner: Arc<dyn crate::remote_backend::RemoteBackend>,
     v3_get_started: tokio::sync::mpsc::UnboundedSender<u64>,
@@ -6601,6 +6604,7 @@ struct BlockingV3Backend {
     v3_gets: AtomicU64,
 }
 
+#[cfg(feature = "remote")]
 struct ReorderedPackBackend {
     inner: Arc<dyn crate::remote_backend::RemoteBackend>,
     first_key: String,
@@ -6608,6 +6612,7 @@ struct ReorderedPackBackend {
 }
 
 #[async_trait::async_trait]
+#[cfg(feature = "remote")]
 impl crate::remote_backend::RemoteBackend for ReorderedPackBackend {
     async fn head(&self, key: &str) -> Result<bool> {
         self.inner.head(key).await
@@ -6642,6 +6647,7 @@ impl crate::remote_backend::RemoteBackend for ReorderedPackBackend {
 }
 
 #[async_trait::async_trait]
+#[cfg(feature = "remote")]
 impl crate::remote_backend::RemoteBackend for BlockingV3Backend {
     async fn head(&self, key: &str) -> Result<bool> {
         self.inner.head(key).await
@@ -6697,6 +6703,7 @@ async fn wait_for_download_waiter(daemon: &Daemon, key: &str) {
     .expect("same-key request must attach to the active download claim");
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_socket_remote_check_miss_with_injected_mock_client() {
     // Remote configured + an empty in-memory backend: handle_remote_check
@@ -6733,6 +6740,7 @@ async fn test_socket_remote_check_miss_with_injected_mock_client() {
     assert_eq!(resp.found, Some(false), "missing remote key -> found=false");
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn planner_shard_download_returns_the_remote_payload() {
     let dir = tempfile::tempdir().unwrap();
@@ -6766,6 +6774,7 @@ async fn planner_shard_download_returns_the_remote_payload() {
     assert_eq!(downloaded.entries, shard.entries);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_socket_prefetch_empty_keys_lists_remote_then_no_op() {
     // Empty prefetch keys + an empty backend: handle_prefetch lists the
@@ -6798,6 +6807,7 @@ async fn test_socket_prefetch_empty_keys_lists_remote_then_no_op() {
     assert!(resp.ok, "prefetch over empty remote should be ok: {resp:?}");
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_do_upload_skips_when_entry_already_in_remote() {
     // A seeded manifest makes do_upload see that the entry already exists,
@@ -6831,6 +6841,7 @@ async fn test_do_upload_skips_when_entry_already_in_remote() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_do_upload_uploads_when_not_in_remote_records_v3_transfer_timestamps() {
     // Injected mock 404s the HEAD then 200s the pack + manifest PUTs, so
@@ -6918,6 +6929,7 @@ async fn test_do_upload_failure_records_v3_transfer_timestamps() {
     assert_v3_transfer_timestamps(&latest_transfer(&daemon));
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_handle_build_started_falls_back_to_local_planning() {
     // With a remote configured but no planner endpoint (resolve_prefetch_plan
@@ -6960,6 +6972,7 @@ async fn test_handle_build_started_falls_back_to_local_planning() {
     assert!(plan.candidates.is_empty());
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_batch_remote_check_remote_path_with_injected_mock() {
     // Two checks against an empty backend: the batch
@@ -7015,6 +7028,7 @@ async fn test_batch_remote_check_remote_path_with_injected_mock() {
     assert!(results.iter().all(|r| r.found == Some(false)));
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_remote_check_failure_records_v3_transfer_timestamps() {
     // Injected mock: a garbage pack GET, so download_entry fails. Covers handle_remote_check's HIT branch +
@@ -7076,6 +7090,7 @@ fn test_prefetch_concurrency_cap_reserves_interactive_permits() {
 /// the check straight to GET (no HEAD); when the object is gone the
 /// response must be a miss (found=false), NOT an error, and the stale key
 /// must be evicted from the key cache so the next check doesn't repeat it.
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_remote_check_known_positive_get_404_is_clean_miss() {
     let dir = tempfile::tempdir().unwrap();
@@ -7125,6 +7140,7 @@ async fn test_remote_check_known_positive_get_404_is_clean_miss() {
 }
 
 /// Build a valid v3 entry pack for `key` from a throwaway store.
+#[cfg(feature = "remote")]
 fn build_entry_pack_with_meta(key: &str, crate_name: &str) -> (Vec<u8>, String) {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = test_config(tmp.path());
@@ -7155,6 +7171,7 @@ fn build_entry_pack_with_meta(key: &str, crate_name: &str) -> (Vec<u8>, String) 
     (packed, blake3::hash(&meta_bytes).to_hex().to_string())
 }
 
+#[cfg(feature = "remote")]
 fn build_entry_pack(key: &str, crate_name: &str) -> Vec<u8> {
     build_entry_pack_with_meta(key, crate_name).0
 }
@@ -7175,6 +7192,7 @@ fn packed_prefetch_context_is_derived_from_a_complete_build_intent() {
     assert!(crate::cache_key::is_valid_cache_key(&context.selector));
 }
 
+#[cfg(feature = "remote")]
 async fn seed_packed_catalog(
     backend: &Arc<dyn crate::remote_backend::RemoteBackend>,
     context: &PackPrefetchContext,
@@ -7224,6 +7242,7 @@ async fn seed_packed_catalog(
     built
 }
 
+#[cfg(feature = "remote")]
 async fn wait_for_store_entry(daemon: &Arc<Daemon>, key: &str) {
     for _ in 0..200 {
         if daemon
@@ -7237,6 +7256,7 @@ async fn wait_for_store_entry(daemon: &Arc<Daemon>, key: &str) {
     panic!("timed out waiting for imported entry {}", key_prefix(key));
 }
 
+#[cfg(feature = "remote")]
 fn traversal_entry_payload() -> Vec<u8> {
     let body = b"escape";
     let mut header = [0u8; 512];
@@ -7775,6 +7795,7 @@ async fn packed_receipt_overflow_and_writer_panic_remain_incomplete() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn packed_receipt_distinguishes_queued_and_inflight_cancellation() {
     for queued in [true, false] {
@@ -7864,6 +7885,7 @@ async fn packed_receipt_log_failure_marks_accounting_incomplete() {
     assert_eq!(daemon.recent_transfers.lock().unwrap().len(), 1);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn packed_receipt_survives_cancellation_after_body_before_import() {
     let dir = tempfile::tempdir().unwrap();
@@ -7913,6 +7935,7 @@ async fn packed_receipt_survives_cancellation_after_body_before_import() {
 
 /// Entries imported from a seeded pack catalog. The catalog is found by
 /// a LIST, so none are imported when listing is off or was refused.
+#[cfg(feature = "remote")]
 async fn packed_imports_with_listing(listing: bool, refused: bool) -> usize {
     let dir = tempfile::tempdir().unwrap();
     let mut config = test_config(dir.path());
@@ -7963,6 +7986,7 @@ async fn packed_imports_with_listing(listing: bool, refused: bool) -> usize {
         .len()
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn packed_prefetch_skips_the_catalog_when_listing_is_off_or_refused() {
     assert_eq!(packed_imports_with_listing(true, false).await, 1);
@@ -7989,6 +8013,7 @@ fn only_a_refused_listing_marks_the_daemon() {
     assert!(daemon.listing_refused.load(Ordering::Relaxed));
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn packed_prefetch_discovers_one_pack_and_batch_imports_all_entries() {
     let dir = tempfile::tempdir().unwrap();
@@ -8173,6 +8198,7 @@ async fn packed_prefetch_discovers_one_pack_and_batch_imports_all_entries() {
     assert!(prefetched.contains(&key_b));
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn packed_prefetch_drains_bodies_with_room_for_only_one_object() {
     let dir = tempfile::tempdir().unwrap();
@@ -8284,6 +8310,7 @@ async fn packed_prefetch_drains_bodies_with_room_for_only_one_object() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn packed_prefetch_response_returns_before_blocked_pack_get() {
     let dir = tempfile::tempdir().unwrap();
@@ -8352,6 +8379,7 @@ async fn packed_prefetch_response_returns_before_blocked_pack_get() {
     wait_for_store_entry(&daemon, &key).await;
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn demand_v3_read_completes_while_a_prefetch_pack_is_blocked() {
     let dir = tempfile::tempdir().unwrap();
@@ -8464,6 +8492,7 @@ async fn demand_v3_read_completes_while_a_prefetch_pack_is_blocked() {
     assert!(packed.await.unwrap().ok);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn corrupt_pack_falls_back_only_to_the_existing_v3_entry() {
     let dir = tempfile::tempdir().unwrap();
@@ -8549,6 +8578,7 @@ async fn corrupt_pack_falls_back_only_to_the_existing_v3_entry() {
     assert!(pack.accounting.as_ref().unwrap().entries.is_empty());
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn catalog_filename_timestamp_mismatch_rejects_context_and_uses_v3() {
     let dir = tempfile::tempdir().unwrap();
@@ -8648,6 +8678,7 @@ async fn catalog_filename_timestamp_mismatch_rejects_context_and_uses_v3() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn traversal_in_one_pack_entry_preserves_valid_batch_and_falls_back_per_entry() {
     let dir = tempfile::tempdir().unwrap();
@@ -8762,6 +8793,7 @@ async fn traversal_in_one_pack_entry_preserves_valid_batch_and_falls_back_per_en
     assert_eq!(bad.outcome, "validation_error");
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn packed_receipt_keeps_cancelled_entries_when_claim_is_blocked() {
     let dir = tempfile::tempdir().unwrap();
@@ -8851,6 +8883,7 @@ async fn packed_receipt_keeps_cancelled_entries_when_claim_is_blocked() {
     assert_eq!(entry.outcome, "cancelled");
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn packed_import_error_marks_the_pack_failed_without_entry_validation_errors() {
     let dir = tempfile::tempdir().unwrap();
@@ -9047,6 +9080,7 @@ fn packed_import_cleanup_preserves_committed_entries_after_a_strict_flush_failur
     assert_eq!(strict.pending_durability().unwrap(), 0);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_remote_check_success_records_v3_transfer_timestamps() {
     // a VALID pack GET: handle_remote_check downloads, extracts,
@@ -9090,6 +9124,7 @@ async fn test_remote_check_success_records_v3_transfer_timestamps() {
     assert_v3_transfer_timestamps(&latest_transfer(&daemon));
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn remote_check_with_configured_shard_dir_imports_into_the_shard() {
     let dir = tempfile::tempdir().unwrap();
@@ -9162,6 +9197,7 @@ async fn remote_check_rejects_unconfigured_shard_dir() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn remote_check_import_failure_is_not_reported_as_hit() {
     // The v3 GET/extraction can succeed while local publication fails. A
@@ -9231,6 +9267,7 @@ async fn remote_check_import_failure_is_not_reported_as_hit() {
     assert!(!Store::open(&config).unwrap().contains(&key));
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn concurrent_remote_check_waiter_retries_after_leader_import_failure() {
     let dir = tempfile::tempdir().unwrap();
@@ -9386,6 +9423,7 @@ async fn remote_check_waiter_rejects_uncommitted_meta_after_leader_import_failur
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn stale_meta_json_does_not_short_circuit_a_first_claim_leader() {
     // The under-claim meta.json re-check (#620) applies ONLY to a waiter
@@ -9427,6 +9465,7 @@ async fn stale_meta_json_does_not_short_circuit_a_first_claim_leader() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_handle_prefetch_disabled_ignores_explicit_keys() {
     let dir = tempfile::tempdir().unwrap();
@@ -9461,6 +9500,7 @@ async fn test_handle_prefetch_disabled_ignores_explicit_keys() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_handle_prefetch_success_records_v3_transfer_timestamps() {
     // handle_prefetch with an explicit key spawns the background download
@@ -9540,6 +9580,7 @@ async fn test_handle_prefetch_success_records_v3_transfer_timestamps() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_handle_prefetch_failure_records_v3_transfer_timestamps() {
     // The in-memory backend serves garbage for the pack GET, so the coordinator's
@@ -9580,7 +9621,7 @@ async fn test_handle_prefetch_failure_records_v3_transfer_timestamps() {
 
     // The download runs in the background. downloads_failed is bumped
     // before the TransferEvent is pushed, so waiting on the counter
-    // alone races on Windows. Wait for both, same as
+    // alone races. Wait for both, same as
     // prefetch_import_failure_is_counted_as_failure.
     let completed = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -9629,6 +9670,7 @@ async fn test_handle_prefetch_failure_records_v3_transfer_timestamps() {
     assert!(!config.store_dir().join(key).join("meta.json").exists());
 }
 
+#[cfg(feature = "remote")]
 #[test]
 fn plan_downloads_reject_a_different_origin() {
     let origin = PrefetchOrigin {
@@ -9665,6 +9707,7 @@ fn plan_downloads_reject_a_different_origin() {
     assert_eq!(plan.downloaded, HashMap::from([("key".to_string(), 42)]));
 }
 
+#[cfg(feature = "remote")]
 async fn shutdown_prefetch_fixture(
     key_count: usize,
 ) -> (
@@ -9731,6 +9774,7 @@ async fn shutdown_prefetch_fixture(
     (dir, daemon, backend, received, keys, first_bytes)
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn shutdown_prefetch_drains_started_child_before_summary_and_rejects_queued_work() {
     let (_dir, daemon, backend, mut started, keys, bytes) = shutdown_prefetch_fixture(2).await;
@@ -9800,6 +9844,7 @@ async fn shutdown_prefetch_drains_started_child_before_summary_and_rejects_queue
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn shutdown_prefetch_rejects_a_child_waiting_for_the_download_claim() {
     let (_dir, daemon, backend, _started, _keys, _bytes) = shutdown_prefetch_fixture(2).await;
@@ -9849,6 +9894,7 @@ async fn shutdown_prefetch_rejects_a_child_waiting_for_the_download_claim() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn prefetch_receipt_skipped_claim_records_no_backend_get() {
     let (_dir, daemon, backend, mut started, keys, _bytes) = shutdown_prefetch_fixture(2).await;
@@ -9918,6 +9964,7 @@ async fn shutdown_prefetch_marks_an_unstarted_request_cancelled() {
     assert_eq!(summaries[0].downloaded_keys, 0);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn shutdown_prefetch_timeout_drops_and_joins_the_actual_download_child() {
     let (_dir, daemon, backend, mut started, _keys, _bytes) = shutdown_prefetch_fixture(2).await;
@@ -9972,6 +10019,7 @@ async fn shutdown_prefetch_timeout_drops_and_joins_the_actual_download_child() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn prefetch_receipt_keeps_received_body_when_cancelled_before_import() {
     let (_dir, daemon, backend, mut started, keys, bytes) = shutdown_prefetch_fixture(2).await;
@@ -10173,6 +10221,7 @@ async fn shutdown_prefetch_rejected_child_counts_current_and_remaining_candidate
     }
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn shutdown_prefetch_adaptive_cancel_rejects_queued_keys_before_shutdown() {
     let (_dir, daemon, backend, mut started, keys, _bytes) = shutdown_prefetch_fixture(3).await;
@@ -10325,6 +10374,7 @@ fn shutdown_prefetch_drop_records_are_bounded_and_only_record_cancelled_tasks() 
     assert!(queue.overflowed);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn prefetch_not_found_keeps_its_origin_and_attempt() {
     let dir = tempfile::tempdir().unwrap();
@@ -10387,6 +10437,7 @@ async fn prefetch_not_found_keeps_its_origin_and_attempt() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn prefetch_import_failure_is_counted_as_failure() {
     let dir = tempfile::tempdir().unwrap();
@@ -10499,6 +10550,7 @@ async fn prefetch_import_failure_is_counted_as_failure() {
     assert!(!Store::open(&config).unwrap().contains(&key));
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_populate_key_cache_lists_and_populates() {
     // Injected mock returns a 2-key manifest listing -> populate_key_cache
@@ -10541,6 +10593,7 @@ async fn test_populate_key_cache_lists_and_populates() {
     assert_eq!(transfer.prefetch.as_ref().unwrap().source, "unscoped");
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn index_list_receipt_snapshots_origin_and_counts_only_backend_admission() {
     let dir = tempfile::tempdir().unwrap();
@@ -10609,6 +10662,7 @@ async fn index_list_receipt_snapshots_origin_and_counts_only_backend_admission()
     assert!(!summaries[1].incomplete);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn index_list_receipt_cancelled_in_queue_has_no_physical_attempt() {
     let dir = tempfile::tempdir().unwrap();
@@ -10641,6 +10695,7 @@ async fn index_list_receipt_cancelled_in_queue_has_no_physical_attempt() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn index_list_receipt_keeps_backend_completion_when_bookkeeping_is_cancelled() {
     let dir = tempfile::tempdir().unwrap();
@@ -10692,6 +10747,7 @@ async fn index_list_receipt_keeps_backend_completion_when_bookkeeping_is_cancell
     assert!(!transfer.accounting.as_ref().unwrap().bytes_complete);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_monolithic_manifest_prefetch_downloads_and_filters() {
     // Serve a build manifest whose single entry is below the prefetch cost
@@ -10724,6 +10780,7 @@ async fn test_monolithic_manifest_prefetch_downloads_and_filters() {
     assert_eq!(identity_manifest_prefetch(&daemon, None).await, 0);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_manifest_prefetch_skips_when_no_manifest() {
     // The mock 404s the manifest GET, so identity lookup finds nothing
@@ -10741,6 +10798,7 @@ async fn test_manifest_prefetch_skips_when_no_manifest() {
     assert_eq!(queued, 0, "a missing manifest must queue no entries");
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_manifest_prefetch_dispatches_expensive_entries() {
     // A manifest with an entry above the cost threshold is kept, so the
@@ -10778,6 +10836,7 @@ async fn test_manifest_prefetch_dispatches_expensive_entries() {
     assert_eq!(queued, 1, "the expensive manifest entry must be dispatched");
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_shard_prefetch_all_shards_missing_returns_zero() {
     // A Cargo.lock with two deps -> compute_shards -> one shard GET per
@@ -10809,6 +10868,7 @@ async fn test_shard_prefetch_all_shards_missing_returns_zero() {
 /// Seed one local store entry per dep and a remote shard object listing
 /// those entries under `prefix`/`namespace`. Returns the memory backend
 /// and the number of shard entries seeded.
+#[cfg(feature = "remote")]
 async fn seed_prefetch_shards(
     config: &Config,
     dir: &Path,
@@ -10848,6 +10908,7 @@ async fn seed_prefetch_shards(
     (client, seeded)
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn shard_prefetch_for_deps_returns_seeded_shard_entries() {
     let dir = tempfile::tempdir().unwrap();
@@ -10870,6 +10931,7 @@ async fn shard_prefetch_for_deps_returns_seeded_shard_entries() {
     assert_eq!(queued, 3, "one queued key per seeded shard entry");
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn shard_prefetch_reads_cargo_lock_and_returns_seeded_shard_entries() {
     let dir = tempfile::tempdir().unwrap();
@@ -11152,6 +11214,7 @@ async fn test_wait_for_warming_multiple_waiters() {
 // `remote_resilience`; the tests here cover the daemon paths that
 // consult it.
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_handle_remote_check_skips_get_when_probe_circuit_is_open() {
     let dir = tempfile::tempdir().unwrap();
@@ -11237,6 +11300,7 @@ async fn test_handle_remote_check_authoritative_key_cache_skips_s3() {
 }
 
 // A restore backend with no manifest lookup and a gate for concurrent demand.
+#[cfg(feature = "remote")]
 struct DirectRestoreBackend {
     inner: Arc<dyn crate::remote_backend::RemoteBackend>,
     gets: std::sync::atomic::AtomicU64,
@@ -11245,6 +11309,7 @@ struct DirectRestoreBackend {
 }
 
 #[async_trait::async_trait]
+#[cfg(feature = "remote")]
 impl crate::remote_backend::RemoteBackend for DirectRestoreBackend {
     async fn head(&self, _key: &str) -> Result<bool> {
         panic!("exact-key restore must not issue HEAD");
@@ -11276,6 +11341,7 @@ impl crate::remote_backend::RemoteBackend for DirectRestoreBackend {
     }
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn direct_restore_fetches_one_pack_without_a_listing_manifest() {
     for knowledge in [None, Some(true), Some(false)] {
@@ -11341,6 +11407,8 @@ async fn direct_restore_fetches_one_pack_without_a_listing_manifest() {
     }
 }
 
+#[cfg(feature = "remote")]
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn direct_restore_coalesces_simultaneous_unknown_key_hits() {
     let dir = tempfile::tempdir().unwrap();
@@ -11471,10 +11539,10 @@ impl crate::remote_backend::RemoteBackend for FailingGetBackend {
                 "connect timed out",
             )))
         } else {
-            Err(anyhow::Error::new(
-                opendal::Error::new(opendal::ErrorKind::RateLimited, "503 Service Unavailable")
-                    .set_temporary(),
-            ))
+            Err(anyhow::Error::new(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "connection reset",
+            )))
         }
     }
 
@@ -11520,6 +11588,7 @@ fn check_request(dir: &Path, key: &str) -> RemoteCheckRequest {
 /// #564: the second check for the same definitively-missing key must be
 /// answered from the negative cache — one S3 round trip, one negative
 /// hit — and a successful upload of the key must clear the entry.
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_negative_cache_second_check_skips_s3_and_upload_invalidates() {
     let dir = tempfile::tempdir().unwrap();
@@ -11608,6 +11677,7 @@ async fn test_degraded_breaker_gates_the_download_path() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn demand_queue_timeouts_do_not_suppress_recovery_after_permits_are_released() {
     let dir = tempfile::tempdir().unwrap();
@@ -11942,6 +12012,7 @@ async fn test_handle_prefetch_no_remote() {
 /// The budget applies AFTER the already-local / already-in-flight filters,
 /// so it bounds work actually to be done. Three remote keys, budget of one:
 /// one is admitted and two are counted as dropped over budget.
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_prefetch_key_budget_truncates_and_reports() {
     let dir = tempfile::tempdir().unwrap();
@@ -12035,6 +12106,7 @@ fn test_prefetch_byte_budget_exhausted() {
 
 /// `prefetch_deadline_secs = 0` disables the deadline rather than dropping
 /// the plan immediately (#616).
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_prefetch_deadline_stops_the_plan() {
     let dir = tempfile::tempdir().unwrap();
@@ -12091,6 +12163,7 @@ async fn test_prefetch_deadline_stops_the_plan() {
 ///
 /// The remote here holds an entry that is missing locally, so the old
 /// empty-list sentinel would have LISTed the bucket and queued it.
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_empty_prefetch_request_does_not_warm_the_bucket() {
     let dir = tempfile::tempdir().unwrap();
@@ -12148,6 +12221,7 @@ async fn test_empty_prefetch_request_does_not_warm_the_bucket() {
 }
 
 /// Whole-remote warming still works, but only when asked for (#615).
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_warm_all_prefetch_request_downloads_missing_keys() {
     let dir = tempfile::tempdir().unwrap();
@@ -12209,6 +12283,7 @@ async fn test_warm_all_prefetch_request_downloads_missing_keys() {
 /// gate a single permit, and holding that permit stalls every prefetch
 /// download before it starts. The demanded key is the one the coordinator
 /// has NOT reached.
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn test_demand_does_not_wait_behind_unstarted_prefetch_candidates() {
     let dir = tempfile::tempdir().unwrap();
@@ -13323,6 +13398,7 @@ async fn test_handle_build_started_prefetch_disabled_is_a_no_op() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn do_nothing_cancels_identity_resolution_started_with_planner_lookup() {
     let dir = tempfile::tempdir().unwrap();
@@ -13387,6 +13463,7 @@ async fn do_nothing_cancels_identity_resolution_started_with_planner_lookup() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn execute_cancels_pending_identity_before_artifact_prefetch_runs() {
     let dir = tempfile::tempdir().unwrap();
@@ -13462,6 +13539,7 @@ async fn execute_cancels_pending_identity_before_artifact_prefetch_runs() {
     assert_eq!(origin.source, "advisory");
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::await_holding_lock)]
 async fn execute_failure_retries_cancelled_identity_through_ordinary_fallback() {
@@ -13558,6 +13636,7 @@ async fn execute_failure_retries_cancelled_identity_through_ordinary_fallback() 
     assert_eq!(backend.artifact_gets.load(Ordering::Relaxed), 0);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn speculative_identity_does_not_consume_half_open_read_probe() {
     let dir = tempfile::tempdir().unwrap();
@@ -13619,6 +13698,7 @@ async fn speculative_identity_does_not_consume_half_open_read_probe() {
     probe.success();
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn open_breaker_rejects_speculative_identity_before_saturated_gate() {
     let dir = tempfile::tempdir().unwrap();
@@ -13660,6 +13740,7 @@ async fn open_breaker_rejects_speculative_identity_before_saturated_gate() {
     drop(held_gate);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn aborting_build_started_cancels_identity_lookup_and_releases_permit() {
     let dir = tempfile::tempdir().unwrap();
@@ -13708,6 +13789,7 @@ async fn aborting_build_started_cancels_identity_lookup_and_releases_permit() {
     assert_eq!(daemon.prefetch_gate.available_permits(), 1);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::await_holding_lock)]
 async fn planner_selected_fallback_uses_reserve_while_lookahead_is_saturated() {
@@ -13814,6 +13896,7 @@ async fn planner_selected_fallback_uses_reserve_while_lookahead_is_saturated() {
     assert_eq!(daemon.prefetch_gate.available_permits(), 3);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::await_holding_lock)]
 async fn fallback_reuses_early_identity_candidates_without_second_manifest_get() {
@@ -13871,6 +13954,7 @@ async fn fallback_reuses_early_identity_candidates_without_second_manifest_get()
     assert_eq!(plan.candidates[0].cache_key, "a".repeat(64));
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn queued_speculative_identity_rechecks_breaker_before_dispatch() {
     let dir = tempfile::tempdir().unwrap();
@@ -13930,6 +14014,7 @@ async fn queued_speculative_identity_rechecks_breaker_before_dispatch() {
     assert_eq!(daemon.prefetch_gate.available_permits(), 1);
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::await_holding_lock)]
 async fn denied_speculative_identity_is_retried_by_ordinary_fallback_lookup() {
@@ -14002,6 +14087,7 @@ async fn denied_speculative_identity_is_retried_by_ordinary_fallback_lookup() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn speculative_error_class_controls_retry_without_repeating_permanent_failures() {
     let intent = kache_core::BuildIntent {
@@ -14106,6 +14192,7 @@ async fn speculative_error_class_controls_retry_without_repeating_permanent_fail
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::await_holding_lock)]
 async fn speculative_timeout_is_not_retried_within_build_started() {
@@ -14148,6 +14235,7 @@ async fn speculative_timeout_is_not_retried_within_build_started() {
     );
 }
 
+#[cfg(feature = "remote")]
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::await_holding_lock)]
 async fn identity_first_handler_fallback_reuses_manifest_candidates() {
@@ -15200,12 +15288,14 @@ fn an_unconnected_request_can_be_retried_safely() {
     );
 }
 
+#[cfg(feature = "remote")]
 struct ReadOnlyConsumerBackend {
     inner: Arc<dyn crate::remote_backend::RemoteBackend>,
     writes: AtomicU64,
 }
 
 #[async_trait::async_trait]
+#[cfg(feature = "remote")]
 impl crate::remote_backend::RemoteBackend for ReadOnlyConsumerBackend {
     async fn head(&self, key: &str) -> Result<bool> {
         self.inner.head(key).await
@@ -15238,12 +15328,15 @@ impl crate::remote_backend::RemoteBackend for ReadOnlyConsumerBackend {
     }
 }
 
+#[cfg(feature = "remote")]
+#[cfg(feature = "remote")]
 #[tokio::test]
 async fn a_stopped_read_only_gcs_consumer_starts_for_reads_without_uploading() {
     assert_read_only_consumer_can_restore(true).await;
     assert_read_only_consumer_can_restore(false).await;
 }
 
+#[cfg(feature = "remote")]
 async fn assert_read_only_consumer_can_restore(daemon_readonly: bool) {
     let donor = tempfile::tempdir().unwrap();
     let consumer = tempfile::tempdir().unwrap();
@@ -15527,28 +15620,6 @@ async fn gc_retries_when_the_probed_daemon_disappears_before_send() {
         send_gc_request_with_timeout(&config, Some(17), Duration::from_secs(2), || {
             starter_calls.fetch_add(1, Ordering::SeqCst);
             closed_rx.recv_timeout(Duration::from_secs(2))?;
-            // Windows may still hold the old named-pipe instance while its
-            // asynchronous close finishes. The old handler has exited above.
-            #[cfg(windows)]
-            let deadline = Instant::now() + Duration::from_secs(2);
-            #[cfg(windows)]
-            let listener = loop {
-                match ListenerOptions::new()
-                    .name(socket_name(&socket)?)
-                    .create_tokio()
-                {
-                    Ok(listener) => break listener,
-                    #[cfg(windows)]
-                    Err(error)
-                        if error.kind() == std::io::ErrorKind::PermissionDenied
-                            && Instant::now() < deadline =>
-                    {
-                        std::thread::sleep(Duration::from_millis(1));
-                    }
-                    Err(error) => return Err(error.into()),
-                }
-            };
-            #[cfg(not(windows))]
             let listener = bind_listener(&socket);
             let daemon = daemon.clone();
             let server = runtime.spawn(async move {
@@ -15609,65 +15680,6 @@ fn daemon_stats_include_rotated_events() {
     assert_eq!(snapshot.events.misses, 1);
 }
 
-/// Run `work` on a thread and fail the test if it has not finished in 20 s:
-/// the hang these tests guard against must fail them, not stall the run.
-#[cfg(windows)]
-fn within_20s<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
-    let (done, finished) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = done.send(work());
-    });
-    finished
-        .recv_timeout(Duration::from_secs(20))
-        .expect("the request hung on a stalled daemon pipe")
-}
-
-/// A daemon that stopped accepting: its only pipe instance is taken. A
-/// fire-and-forget request gives up within its wait instead of holding the
-/// wrapper until the pipe frees.
-#[cfg(windows)]
-#[test]
-fn a_fire_and_forget_request_to_a_busy_pipe_gives_up_within_its_wait() {
-    let dir = tempfile::tempdir().unwrap();
-    let socket = dir.path().join("daemon.sock");
-    let _listener = ListenerOptions::new()
-        .name(socket_name(&socket).unwrap())
-        .create_sync()
-        .expect("bind listener");
-    let _first =
-        crate::transport::connect_sync(&socket, Duration::from_millis(300)).expect("first client");
-
-    let started = std::time::Instant::now();
-    let result = within_20s(move || {
-        send_line_fire_and_forget(&socket, "{}\n".to_owned(), Duration::from_millis(500))
-    });
-    let waited = started.elapsed();
-    assert!(result.is_err(), "a busy pipe cannot take the request");
-    assert!(waited < Duration::from_secs(5), "{waited:?}");
-}
-
-/// A daemon that accepted the pipe but never reads it: a request larger than
-/// the pipe's buffer cannot be written in full. Windows pipes have no send
-/// timeout, so the wait bounds the whole hand-off.
-#[cfg(windows)]
-#[test]
-fn a_fire_and_forget_request_to_a_daemon_that_never_reads_gives_up_within_its_wait() {
-    let dir = tempfile::tempdir().unwrap();
-    let socket = dir.path().join("daemon.sock");
-    let _listener = ListenerOptions::new()
-        .name(socket_name(&socket).unwrap())
-        .create_sync()
-        .expect("bind listener");
-
-    let line = format!("{}\n", "x".repeat(4 << 20));
-    let started = std::time::Instant::now();
-    let result =
-        within_20s(move || send_line_fire_and_forget(&socket, line, Duration::from_millis(500)));
-    let waited = started.elapsed();
-    assert!(result.is_err(), "4 MiB cannot fit in a pipe nobody reads");
-    assert!(waited < Duration::from_secs(5), "{waited:?}");
-}
-
 /// The same hand-off still delivers its line to a daemon that reads it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fire_and_forget_request_reaches_a_daemon_that_reads_it() {
@@ -15685,8 +15697,6 @@ async fn a_fire_and_forget_request_reaches_a_daemon_that_reads_it() {
     let reader = tokio::spawn(async move {
         tokio::time::timeout(Duration::from_secs(20), async {
             let stream = listener.accept().await.expect("accept");
-            #[cfg(windows)]
-            let _discard = crate::transport::discard_pipe_writes_on_drop(&stream);
             let mut received = String::new();
             tokio::io::BufReader::new(&stream)
                 .read_line(&mut received)
@@ -15706,46 +15716,4 @@ async fn a_fire_and_forget_request_reaches_a_daemon_that_reads_it() {
     .expect("send");
     release.send(()).unwrap();
     assert_eq!(reader.await.unwrap(), expected);
-}
-
-/// Measure the actual request, including creation and destruction of its
-/// runtime, against a pipe whose only instance remains occupied.
-#[cfg(windows)]
-#[test]
-fn a_busy_windows_request_honors_its_short_timeout() {
-    let dir = tempfile::tempdir().unwrap();
-    let socket = dir.path().join("request-busy.sock");
-    let _listener = ListenerOptions::new()
-        .name(socket_name(&socket).unwrap())
-        .create_sync()
-        .unwrap();
-    let _first = crate::transport::connect_sync(&socket, Duration::ZERO).unwrap();
-    let started = Instant::now();
-    let result = within_20s(move || {
-        send_request_with_timeout(&socket, &Request::Health, Duration::from_millis(75))
-    });
-    assert!(result.is_err());
-    assert!(started.elapsed() < Duration::from_millis(750));
-}
-
-/// Even a short write that fits in the kernel buffer must not escape into
-/// interprocess's unbounded background flush when the peer never reads.
-#[cfg(windows)]
-#[test]
-fn a_buffered_fire_and_forget_request_is_bounded_through_flush() {
-    let dir = tempfile::tempdir().unwrap();
-    let socket = dir.path().join("buffered-write.sock");
-    let _listener = ListenerOptions::new()
-        .name(socket_name(&socket).unwrap())
-        .create_sync()
-        .unwrap();
-    let started = Instant::now();
-    let result = within_20s(move || {
-        send_line_fire_and_forget(&socket, "{}\n".to_owned(), Duration::from_millis(500))
-    });
-    assert!(
-        result.is_err(),
-        "a peer that never reads cannot finish a flush"
-    );
-    assert!(started.elapsed() < Duration::from_secs(5));
 }

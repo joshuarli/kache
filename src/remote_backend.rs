@@ -5,64 +5,141 @@
 //! supplies S3, GCS, and shared-filesystem transports. The OCI transport uses
 //! a native registry client behind the same interface.
 
+#[cfg(feature = "remote")]
 mod download_memory;
+#[cfg(feature = "remote")]
 mod oci;
+#[cfg(feature = "remote")]
 mod s3_credentials;
 
+#[cfg(feature = "remote")]
 use download_memory::{BudgetedBody, DOWNLOAD_MEMORY, DownloadMemory};
-pub(crate) use s3_credentials::CredentialFailure;
+
+/// Why the S3 credential chain stopped instead of trying the next source.
+/// Transport-free: the daemon and doctor report it without remote support.
+/// Construction lives behind `remote`; matching and display do not.
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CredentialFailure {
+    /// One of `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` without the other.
+    PartialEnvironmentKeys {
+        present: &'static str,
+        missing: &'static str,
+    },
+    /// The selected profile supplied no credentials, or failed to.
+    Profile {
+        name: String,
+        selected_by: &'static str,
+        problem: String,
+    },
+}
+
+impl std::fmt::Display for CredentialFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PartialEnvironmentKeys { present, missing } => {
+                write!(f, "{present} is set without {missing}")
+            }
+            Self::Profile {
+                name,
+                selected_by,
+                problem,
+            } => write!(
+                f,
+                "cannot load AWS profile \"{name}\" (selected by {selected_by}): {problem}"
+            ),
+        }
+    }
+}
+
+impl CredentialFailure {
+    /// What to change so the remote can sign requests again.
+    pub(crate) fn fix(&self) -> String {
+        match self {
+            Self::PartialEnvironmentKeys { .. } => {
+                "set both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or neither".to_string()
+            }
+            Self::Profile { selected_by, .. } => format!(
+                "fix the profile, or unset {selected_by} so kache can use web identity, ECS or \
+                 EC2 instance credentials"
+            ),
+        }
+    }
+}
+#[cfg(feature = "remote")]
 use s3_credentials::{CredentialStatus, KacheCredentialProvider};
 
-use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
+#[cfg(feature = "remote")]
 use futures::TryStreamExt;
-#[cfg(test)]
+#[cfg(all(test, feature = "remote"))]
 use opendal::services::Memory;
+#[cfg(feature = "remote")]
 use opendal::{ErrorKind, HttpTransporter, OperationContext, Operator};
+#[cfg(feature = "remote")]
 use opendal_http_transport_reqwest::ReqwestTransport;
+#[cfg(feature = "remote")]
 use opendal_service_fs::Fs;
+#[cfg(feature = "remote")]
 use opendal_service_gcs::Gcs;
+#[cfg(feature = "remote")]
 use opendal_service_s3::S3;
+#[cfg(feature = "remote")]
 use reqsign_aws_v4::Credential;
+#[cfg(feature = "remote")]
 use reqsign_core::{CommandExecute, ProvideCredential, ProvideCredentialChain};
+#[cfg(feature = "remote")]
+use std::collections::HashSet;
+#[cfg(feature = "remote")]
+use std::path::PathBuf;
+#[cfg(feature = "remote")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "remote")]
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use crate::config::{
-    FilesystemRemoteConfig, GcsRemoteConfig, RemoteBackendConfig, RemoteConfig, S3RemoteConfig,
-};
+#[cfg(feature = "remote")]
+use anyhow::Context;
+
+use crate::config::RemoteConfig;
+#[cfg(feature = "remote")]
+use crate::config::{FilesystemRemoteConfig, GcsRemoteConfig, RemoteBackendConfig, S3RemoteConfig};
 
 /// Abort a LIST that cannot yield an entry or completion. Repeated entries are
 /// detected separately because a malformed continuation response can keep
 /// yielding the first page without ever stalling.
+#[cfg(feature = "remote")]
 const LIST_PROGRESS_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Matches the AWS SDK's former default (`SDK_DEFAULT_CONNECT_TIMEOUT`), so a
 /// black-holed endpoint fails fast instead of stalling a compile.
+#[cfg(feature = "remote")]
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(3100);
 
 /// Per-read inactivity deadline. Not a total-request timeout: a large pack on a
 /// slow link is legitimate, a stalled socket is not.
+#[cfg(feature = "remote")]
 const READ_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Ceiling on a single LIST. `LIST_PROGRESS_TIMEOUT` only catches a *stalled*
 /// lister; an endpoint that keeps emitting fresh entries just under that timeout
 /// would otherwise run unbounded while both `entries` and `seen` grow.
+#[cfg(feature = "remote")]
 const LIST_TOTAL_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Ceiling on entries returned by a single LIST, so a pathological or hostile
 /// listing cannot exhaust memory in a compiler process. A DoS backstop, not a
 /// tuning knob: set far above any plausible real cache.
+#[cfg(feature = "remote")]
 const LIST_MAX_ENTRIES: usize = 1_000_000;
 
 /// Companion byte ceiling on retained key text, because entry count alone does not
 /// bound memory when keys are long.
+#[cfg(feature = "remote")]
 const LIST_MAX_KEY_BYTES: usize = 256 * 1024 * 1024;
 
 /// A fetched object plus the timing split callers report as transfer telemetry.
@@ -86,6 +163,8 @@ pub struct GetTransfer {
 }
 
 /// Outcome of an atomic create-only remote publication.
+/// Local-only builds never construct these; the layout still matches on them.
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PutIfAbsentResult {
     Created,
@@ -95,6 +174,8 @@ pub enum PutIfAbsentResult {
 }
 
 /// Outcome of [`RemoteBackend::put_if_match`].
+/// Local-only builds never construct these; the layout still matches on them.
+#[cfg_attr(not(feature = "remote"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConditionalPut {
     Stored,
@@ -200,6 +281,7 @@ pub trait RemoteBackend: Send + Sync {
 }
 
 /// OpenDAL-backed object transport.
+#[cfg(feature = "remote")]
 pub struct OpenDalBackend {
     operator: Operator,
     root_description: String,
@@ -220,6 +302,7 @@ pub struct OpenDalBackend {
     credentials: Option<Arc<CredentialStatus>>,
 }
 
+#[cfg(feature = "remote")]
 impl OpenDalBackend {
     pub(crate) fn new(operator: Operator, root_description: String) -> Self {
         Self {
@@ -386,20 +469,21 @@ impl OpenDalBackend {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "remote"))]
 pub(crate) fn memory_backend() -> OpenDalBackend {
     ensure_rustls_provider();
     let operator = Operator::new(Memory::default()).expect("memory operator");
     OpenDalBackend::new(operator, "memory://test".to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "remote"))]
 pub(crate) fn memory_backend_with_download_budget(kib: u32) -> OpenDalBackend {
     let mut backend = memory_backend();
     backend.download_memory = Arc::new(DownloadMemory::new(kib));
     backend
 }
 
+#[cfg(feature = "remote")]
 impl OpenDalBackend {
     /// [`RemoteBackend::get_into`], also returning the entity tag the read
     /// response carried. The filesystem backend has none to give.
@@ -507,6 +591,7 @@ impl OpenDalBackend {
 }
 
 #[async_trait]
+#[cfg(feature = "remote")]
 impl RemoteBackend for OpenDalBackend {
     async fn head(&self, key: &str) -> Result<bool> {
         self.validate_key("HEAD", key, false)?;
@@ -734,6 +819,7 @@ impl RemoteBackend for OpenDalBackend {
 
 /// Whether `error` came from signing the request, which happens before it is
 /// sent.
+#[cfg(feature = "remote")]
 fn signing_failed(error: &opendal::Error) -> bool {
     std::iter::successors(std::error::Error::source(error), |cause| cause.source())
         .any(|cause| cause.is::<reqsign_core::Error>())
@@ -746,6 +832,7 @@ fn signing_failed(error: &opendal::Error) -> bool {
 /// this branch. It exists for the case the transport cannot see — a backend that
 /// ends the stream cleanly, such as the filesystem `stat`-then-read race where
 /// another process truncates the file in between.
+#[cfg(feature = "remote")]
 fn verify_complete_body(advertised: Option<u64>, read: u64, description: &str) -> Result<()> {
     if let Some(advertised) = advertised
         && read != advertised
@@ -758,6 +845,7 @@ fn verify_complete_body(advertised: Option<u64>, read: u64, description: &str) -
 /// Only failed create preconditions mean that an immutable object already won
 /// the publication race. Authentication, transport, and storage failures must
 /// remain errors rather than being reported as a harmless duplicate.
+#[cfg(feature = "remote")]
 fn classify_create_error(error: &opendal::Error) -> Option<PutIfAbsentResult> {
     match error.kind() {
         // S3 answers a create racing another conditional write with 409
@@ -780,6 +868,7 @@ fn classify_create_error(error: &opendal::Error) -> Option<PutIfAbsentResult> {
 /// OpenDAL reports as an unexpected error; nothing was written then either.
 /// Every other failure stays an error: after a timeout the write may have
 /// landed, so it must not be retried unconditionally.
+#[cfg(feature = "remote")]
 fn classify_conditional_error(error: &opendal::Error, replacing: bool) -> Option<ConditionalPut> {
     match error.kind() {
         ErrorKind::ConditionNotMatch | ErrorKind::AlreadyExists | ErrorKind::Conflict => {
@@ -796,6 +885,7 @@ fn classify_conditional_error(error: &opendal::Error, replacing: bool) -> Option
 
 /// Whether an S3-compatible store rejected a request because it does not
 /// implement part of it.
+#[cfg(feature = "remote")]
 fn lacks_conditional_writes(error: &opendal::Error) -> bool {
     error.message().contains("\"NotImplemented\"") || error.to_string().contains("status: 501")
 }
@@ -803,6 +893,7 @@ fn lacks_conditional_writes(error: &opendal::Error) -> bool {
 /// Whether S3 rejected the request's credentials themselves, rather than
 /// refusing one object. These codes arrive in an error body, so a `HEAD` never
 /// carries them.
+#[cfg(feature = "remote")]
 pub(crate) fn credentials_rejected(error: &opendal::Error) -> bool {
     const CODES: [&str; 7] = [
         "InvalidAccessKeyId",
@@ -820,6 +911,7 @@ pub(crate) fn credentials_rejected(error: &opendal::Error) -> bool {
 }
 
 /// The S3 endpoint in use: the configured one, else `AWS_ENDPOINT_URL_S3`.
+#[cfg(feature = "remote")]
 pub(crate) fn s3_endpoint(config: &S3RemoteConfig) -> Option<String> {
     config
         .endpoint
@@ -829,11 +921,13 @@ pub(crate) fn s3_endpoint(config: &S3RemoteConfig) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+#[cfg(feature = "remote")]
 pub(crate) const PLAIN_HTTP_ENDPOINT: &str = "plain http to another machine: request \
     signatures and cached objects travel unencrypted, and anyone on the path can \
     replace an object. Use https://, or keep plain http to a loopback address";
 
 /// A plain `http://` endpoint on another machine.
+#[cfg(feature = "remote")]
 pub(crate) fn plain_http_remote_endpoint(endpoint: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(endpoint) else {
         return false;
@@ -857,12 +951,21 @@ pub(crate) fn explain_remote_failure(
     if let Some(failure) = error.downcast_ref::<CredentialFailure>() {
         return Some(failure.fix());
     }
-    error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<opendal::Error>())
-        .and_then(|error| explain_opendal_failure(error, region))
+    #[cfg(feature = "remote")]
+    {
+        error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<opendal::Error>())
+            .and_then(|error| explain_opendal_failure(error, region))
+    }
+    #[cfg(not(feature = "remote"))]
+    {
+        let _ = region;
+        None
+    }
 }
 
+#[cfg(feature = "remote")]
 fn explain_opendal_failure(error: &opendal::Error, region: Option<&str>) -> Option<String> {
     let text = error.to_string();
     let code = |name: &str| text.contains(&format!("\"{name}\""));
@@ -894,6 +997,7 @@ fn explain_opendal_failure(error: &opendal::Error, region: Option<&str>) -> Opti
 
 /// The bucket's real region, from the `x-amz-bucket-region` header S3 sends
 /// with a redirect, or from the message of a request signed for the wrong one.
+#[cfg(feature = "remote")]
 fn bucket_region(text: &str) -> Option<&str> {
     let quoted = |start: &str, end: char| {
         let from = text.find(start)? + start.len();
@@ -904,6 +1008,7 @@ fn bucket_region(text: &str) -> Option<&str> {
     quoted("\"x-amz-bucket-region\": \"", '"').or_else(|| quoted("expecting '", '\''))
 }
 
+#[cfg(feature = "remote")]
 fn create_gcs_operator(config: &GcsRemoteConfig, pool_idle_secs: u64) -> Result<Operator> {
     ensure_rustls_provider();
     // Same connection and inactivity bounds as S3; see create_s3_operator.
@@ -926,6 +1031,7 @@ fn create_gcs_operator(config: &GcsRemoteConfig, pool_idle_secs: u64) -> Result<
     Ok(without_retry_layer(operator))
 }
 
+#[cfg(feature = "remote")]
 fn without_retry_layer(operator: Operator) -> Operator {
     // Retry ownership lives at the daemon operation boundary. Layering an
     // opaque transport retry underneath daemon retries multiplied deadlines,
@@ -934,6 +1040,7 @@ fn without_retry_layer(operator: Operator) -> Operator {
     operator
 }
 
+#[cfg(feature = "remote")]
 fn ensure_rustls_provider() {
     // Kache's reqwest client is compiled with rustls-no-provider. Install ring
     // before constructing the S3 transport; the operation is process-wide and
@@ -956,6 +1063,7 @@ fn ensure_rustls_provider() {
 /// Under `cmd.exe` it is worse still — single quotes are not quoting characters
 /// there, so `'a b'` would not regroup. The AWS SDKs deliberately do shlex-style
 /// splitting and never invoke a shell; match that instead.
+#[cfg(feature = "remote")]
 fn relex_credential_command(program: &str, args: &[&str]) -> Result<(String, Vec<String>)> {
     let mut command = program.to_string();
     for arg in args {
@@ -977,6 +1085,7 @@ fn relex_credential_command(program: &str, args: &[&str]) -> Result<(String, Vec
 /// Deliberately does NOT implement expansion of any kind — this exists to undo
 /// reqsign's whitespace split, not to emulate a shell. Returns `None` on
 /// unterminated quotes rather than guessing where the argument ended.
+#[cfg(feature = "remote")]
 fn shlex_split(input: &str) -> Option<Vec<String>> {
     let mut tokens = Vec::new();
     let mut current = String::new();
@@ -1023,13 +1132,8 @@ fn shlex_split(input: &str) -> Option<Vec<String>> {
             }
             '\\' => {
                 has_token = true;
-                // POSIX shells escape with backslash; Windows uses it as a path
-                // separator, so `C:\tools\creds.exe` must survive intact.
-                if cfg!(windows) {
-                    current.push('\\');
-                } else {
-                    current.push(chars.next()?);
-                }
+                // POSIX shells escape with backslash.
+                current.push(chars.next()?);
             }
             c => {
                 has_token = true;
@@ -1044,11 +1148,13 @@ fn shlex_split(input: &str) -> Option<Vec<String>> {
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg(feature = "remote")]
 struct KacheCommandExecute {
     /// `AWS_PROFILE` for the child. `None` keeps the inherited value.
     profile: Option<String>,
 }
 
+#[cfg(feature = "remote")]
 impl CommandExecute for KacheCommandExecute {
     async fn command_execute(
         &self,
@@ -1088,6 +1194,7 @@ impl CommandExecute for KacheCommandExecute {
 }
 
 /// `KACHE_S3_ACCESS_KEY` and `KACHE_S3_SECRET_KEY`, when both are set.
+#[cfg(feature = "remote")]
 fn kache_s3_keys() -> Option<Credential> {
     let access_key = std::env::var("KACHE_S3_ACCESS_KEY").ok();
     let secret_key = std::env::var("KACHE_S3_SECRET_KEY").ok();
@@ -1116,6 +1223,7 @@ fn kache_s3_keys() -> Option<Credential> {
 
 /// The S3 backend, signing with `kache_keys` when given and otherwise with
 /// the credential chain.
+#[cfg(feature = "remote")]
 fn s3_backend(
     config: &S3RemoteConfig,
     pool_idle_secs: u64,
@@ -1137,6 +1245,7 @@ fn s3_backend(
     Ok(backend)
 }
 
+#[cfg(feature = "remote")]
 fn create_s3_operator(
     config: &S3RemoteConfig,
     pool_idle_secs: u64,
@@ -1206,7 +1315,7 @@ fn create_s3_operator(
 /// A heuristic, not a proof: device ids can match across boundaries that still
 /// reject a cross-boundary rename, and paths created later may be mounted
 /// elsewhere. Being wrong here just means the clearer error comes from the write.
-#[cfg(unix)]
+#[cfg(feature = "remote")]
 fn verify_same_filesystem(
     root: &std::path::Path,
     atomic_write_dir: &std::path::Path,
@@ -1231,15 +1340,7 @@ fn verify_same_filesystem(
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn verify_same_filesystem(
-    _root: &std::path::Path,
-    _atomic_write_dir: &std::path::Path,
-) -> Result<()> {
-    // No portable device id without extra syscalls; the write's own error stands.
-    Ok(())
-}
-
+#[cfg(feature = "remote")]
 fn create_filesystem_operator(config: &FilesystemRemoteConfig) -> Result<Operator> {
     ensure_rustls_provider();
     verify_same_filesystem(&config.root, &config.atomic_write_dir)?;
@@ -1260,6 +1361,7 @@ fn create_filesystem_operator(config: &FilesystemRemoteConfig) -> Result<Operato
 ///
 /// `Arc` rather than `Box`: the prefetch path fans shard downloads out across
 /// `tokio::spawn`, which needs an owned `'static` handle per task.
+#[cfg(feature = "remote")]
 pub async fn create_backend(
     remote: &RemoteConfig,
     pool_idle_secs: u64,
@@ -1297,7 +1399,7 @@ pub async fn create_backend(
 }
 
 /// An S3 backend that sends unsigned requests, as an anonymous reader does.
-#[cfg(test)]
+#[cfg(all(test, feature = "remote"))]
 pub(crate) fn anonymous_s3_backend_for_bucket(endpoint: &str, bucket: &str) -> OpenDalBackend {
     ensure_rustls_provider();
     let client = reqwest::Client::builder().build().unwrap();
@@ -1311,6 +1413,19 @@ pub(crate) fn anonymous_s3_backend_for_bucket(endpoint: &str, bucket: &str) -> O
         .with_http_transport(HttpTransporter::new(ReqwestTransport::new(client)));
     let operator = Operator::new(builder).unwrap().with_context(context);
     OpenDalBackend::new(operator, format!("s3://{bucket}"))
+}
+
+/// Local-only builds have no transports: every backend construction fails
+/// with a rebuild hint, so a configured remote can never silently go unused.
+#[cfg(not(feature = "remote"))]
+pub async fn create_backend(
+    remote: &RemoteConfig,
+    pool_idle_secs: u64,
+) -> Result<Arc<dyn RemoteBackend>> {
+    let _ = (remote, pool_idle_secs);
+    Err(anyhow::anyhow!(
+        "remote cache configured but this build has no remote support; rebuild with --features remote"
+    ))
 }
 
 /// [`create_backend`], wrapped in a [`PullRequestBackend`] when this pull
@@ -1447,7 +1562,7 @@ impl RemoteBackend for PullRequestBackend {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "remote"))]
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2870,7 +2985,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn credential_process_executor_preserves_quoted_arguments() {
         // reqsign splits on whitespace without stripping quotes, so the quote
@@ -2921,7 +3035,6 @@ mod tests {
     /// Reads the ambient value rather than setting one: mutating process env from a
     /// test races every other test in the binary, and CI may already export
     /// `AWS_PROFILE`.
-    #[cfg(unix)]
     #[tokio::test]
     async fn credential_process_child_sees_the_configured_profile() {
         let selected = KacheCommandExecute {
@@ -2965,7 +3078,6 @@ mod tests {
         assert!(verify_complete_body(Some(4), 5, "obj").is_err());
     }
 
-    #[cfg(not(windows))]
     #[test]
     fn credential_command_relexing_keeps_posix_backslash_escapes() {
         // reqsign splits `helper --path /opt/a\ b` into these tokens.
@@ -2975,17 +3087,6 @@ mod tests {
         assert_eq!(args, vec!["--path", "/opt/a b"]);
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn credential_command_relexing_keeps_windows_paths_intact() {
-        // A backslash is a path separator on Windows, not an escape.
-        let (program, args) =
-            relex_credential_command("C:\\tools\\aws-creds.exe", &["--profile", "ci"]).unwrap();
-        assert_eq!(program, "C:\\tools\\aws-creds.exe");
-        assert_eq!(args, vec!["--profile", "ci"]);
-    }
-
-    #[cfg(unix)]
     #[tokio::test]
     async fn filesystem_put_refuses_an_existing_symlinked_destination() {
         let root = tempfile::tempdir().unwrap();
@@ -3017,7 +3118,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn cross_device_staging_dir_is_rejected_at_backend_build() {
         // /dev/shm (Linux) or /Volumes (macOS) would be needed for a true
@@ -3059,7 +3159,6 @@ mod tests {
         assert!(error.contains("s3://bucket/key"), "{error}");
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn filesystem_put_refuses_to_follow_a_symlink_out_of_the_root() {
         let root = tempfile::tempdir().unwrap();

@@ -774,472 +774,6 @@ fn native_macos_linked_outputs_key_sdk_identity() {
     assert_eq!(old, empty_dt, "an empty MACOSX_DEPLOYMENT_TARGET is unset");
 }
 
-const WINDOWS_RUSTC_VERSION: &str = "rustc 1.90.0\nhost: x86_64-pc-windows-msvc\nrelease: 1.90.0\n";
-const WINDOWS_GNU_RUSTC_VERSION: &str =
-    "rustc 1.90.0\nhost: x86_64-pc-windows-gnu\nrelease: 1.90.0\n";
-
-fn windows_fold_key_on_host(
-    args: &RustcArgs,
-    version: &str,
-    identity: &str,
-    running_on_windows: bool,
-) -> Result<String> {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"base-key");
-    fold_native_windows_msvc_identity(
-        &mut hasher,
-        args,
-        version,
-        running_on_windows,
-        |_, _, _| Ok(identity.to_string()),
-    )?;
-    Ok(hasher.finalize().to_hex().to_string())
-}
-
-fn windows_fold_key(args: &RustcArgs, version: &str, identity: &str) -> Result<String> {
-    windows_fold_key_on_host(args, version, identity, true)
-}
-
-#[test]
-fn native_windows_msvc_identity_keys_only_native_link_outputs() {
-    let bin = parsed_crate_type("bin", None);
-    let old = windows_fold_key(&bin, WINDOWS_RUSTC_VERSION, "toolset=14.4").unwrap();
-    let new = windows_fold_key(&bin, WINDOWS_RUSTC_VERSION, "toolset=14.5").unwrap();
-    assert_ne!(old, new);
-
-    let mut metadata = bin.clone();
-    metadata.emit = vec!["metadata".into()];
-    assert_eq!(
-        windows_fold_key(&metadata, WINDOWS_RUSTC_VERSION, "probe must not run").unwrap(),
-        windows_fold_key(&metadata, WINDOWS_RUSTC_VERSION, "anything").unwrap()
-    );
-
-    let cross = parsed_crate_type("bin", Some("aarch64-pc-windows-msvc"));
-    assert!(
-        windows_fold_key(&cross, WINDOWS_RUSTC_VERSION, "probe must not run").is_err(),
-        "cross-target Windows MSVC links must pass through until target identity is modeled"
-    );
-
-    let gnu = parsed_crate_type("bin", Some("x86_64-pc-windows-gnu"));
-    assert_eq!(
-        windows_fold_key(&gnu, WINDOWS_RUSTC_VERSION, "probe must not run").unwrap(),
-        windows_fold_key(&gnu, WINDOWS_RUSTC_VERSION, "anything").unwrap()
-    );
-
-    let rlib = parsed_crate_type("rlib", None);
-    assert_eq!(
-        windows_fold_key(&rlib, WINDOWS_RUSTC_VERSION, "probe must not run").unwrap(),
-        windows_fold_key(&rlib, WINDOWS_RUSTC_VERSION, "anything").unwrap()
-    );
-
-    assert_eq!(
-        windows_fold_key_on_host(&bin, WINDOWS_RUSTC_VERSION, "probe must not run", false).unwrap(),
-        windows_fold_key_on_host(&bin, WINDOWS_RUSTC_VERSION, "anything", false).unwrap(),
-        "a non-Windows host must not probe native MSVC inputs"
-    );
-}
-
-#[test]
-fn native_windows_msvc_detection_requires_a_windows_linked_executable() {
-    let bin = parsed_crate_type("bin", None);
-    let mut metadata = bin.clone();
-    metadata.emit = vec!["metadata".into()];
-    let rlib = parsed_crate_type("rlib", None);
-
-    for (args, running_on_windows) in [(&bin, false), (&metadata, true), (&rlib, true)] {
-        assert!(
-            !is_native_windows_msvc_link(
-                args,
-                WINDOWS_RUSTC_VERSION,
-                running_on_windows,
-                |_| unreachable!("the supplied rustc version must be reused"),
-            )
-            .unwrap()
-        );
-    }
-
-    // Both halves of the admission must hold: the target must be the host
-    // and the host must be MSVC. A cross target on an MSVC host and a
-    // native build on a GNU host each fail one half.
-    let cross = parsed_crate_type("bin", Some("x86_64-unknown-linux-gnu"));
-    for (args, version) in [
-        (&cross, WINDOWS_RUSTC_VERSION),
-        (&bin, WINDOWS_GNU_RUSTC_VERSION),
-    ] {
-        assert!(
-            !is_native_windows_msvc_link(args, version, true, |_| unreachable!(
-                "the supplied rustc version must be reused"
-            ))
-            .unwrap(),
-            "{version:?} must not admit {:?}",
-            args.target
-        );
-    }
-}
-
-#[test]
-fn native_windows_msvc_ignores_unrelated_generic_cc_identity() {
-    let bin = parsed_crate_type("bin", None);
-    assert!(
-        is_native_windows_msvc_link(&bin, WINDOWS_RUSTC_VERSION, true, |_| unreachable!(
-            "non-nested rustc must use the supplied version"
-        ),)
-        .unwrap()
-    );
-
-    let fold = |identity: &str| {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(b"base-key");
-        fold_generic_linker_identity(&mut hasher, &bin, true, |_| Some(identity.to_string()));
-        hasher.finalize()
-    };
-    assert_eq!(
-        fold("unrelated MinGW cc"),
-        fold("no cc installed"),
-        "native MSVC keys must not depend on an unrelated generic cc probe"
-    );
-
-    let mut generic = blake3::Hasher::new();
-    generic.update(b"base-key");
-    fold_generic_linker_identity(&mut generic, &bin, false, |_| {
-        Some("actual generic linker".into())
-    });
-    assert_ne!(generic.finalize(), fold("anything"));
-}
-
-/// The probe gets the linker `-C linker` names, the MSVC architecture and
-/// rustc's host, whose tool directory rustc searches for that linker.
-#[test]
-fn native_windows_msvc_probe_gets_linker_architecture_and_host() {
-    let bin = RustcArgs::parse(&[
-        "rustc".into(),
-        "--crate-type=bin".into(),
-        "src/main.rs".into(),
-        "-Clinker=rust-lld.exe".into(),
-    ])
-    .unwrap();
-    let mut seen = None;
-    fold_native_windows_msvc_identity(
-        &mut blake3::Hasher::new(),
-        &bin,
-        WINDOWS_RUSTC_VERSION,
-        true,
-        |linker, architecture, host| {
-            seen = Some((
-                linker.map(Path::to_path_buf),
-                architecture.to_string(),
-                host.to_string(),
-            ));
-            Ok("identity".into())
-        },
-    )
-    .unwrap();
-    assert_eq!(
-        seen,
-        Some((
-            Some(PathBuf::from("rust-lld.exe")),
-            "x64".to_string(),
-            "x86_64-pc-windows-msvc".to_string()
-        ))
-    );
-}
-
-#[test]
-fn rust_lld_keys_only_with_a_flavor_that_runs_it_as_lld_link() {
-    let fold = |flags: &[&str]| {
-        let mut argv: Vec<String> = ["rustc", "--crate-type=bin", "src/main.rs"]
-            .map(String::from)
-            .to_vec();
-        argv.extend(flags.iter().map(|flag| flag.to_string()));
-        let args = RustcArgs::parse(&argv).unwrap();
-        let mut probed = false;
-        let result = fold_native_windows_msvc_identity(
-            &mut blake3::Hasher::new(),
-            &args,
-            WINDOWS_RUSTC_VERSION,
-            true,
-            |_, _, _| {
-                probed = true;
-                Ok("identity".into())
-            },
-        );
-        (result, probed)
-    };
-    for flags in [
-        &["-Clinker=rust-lld.exe"][..],
-        &["-Clinker=rust-lld"],
-        &["-Clinker=rust-lld.exe", "-Clinker-flavor=lld-link"],
-        &["-Clinker=rust-lld.exe", "-Clinker-flavor=msvc-lld"],
-        &["-Clinker=RUST-LLD.EXE", "-Clinker-flavor=lld-link"],
-        &["-Clinker-flavor=msvc"],
-    ] {
-        let (result, probed) = fold(flags);
-        assert!(result.is_ok() && probed, "{flags:?}");
-    }
-    for flags in [
-        &["-Clinker=rust-lld.exe", "-Clinker-flavor=msvc"][..],
-        &["-Clinker=rust-lld.exe", "-Clinker-flavor=gcc"],
-        // rustc infers the flavor from the stem case-sensitively.
-        &["-Clinker=RUST-LLD.EXE"],
-        &[
-            "-Clinker=rust-lld.exe",
-            "-Clinker-flavor=lld-link",
-            "-Clinker-features=-lld",
-        ],
-    ] {
-        let (result, probed) = fold(flags);
-        let error = format!("{:#}", result.unwrap_err());
-        assert!(error.contains("as lld-link"), "{flags:?}: {error}");
-        assert!(!probed, "{flags:?}");
-    }
-}
-
-#[test]
-fn native_windows_msvc_identity_probe_failure_is_cache_failure() {
-    let bin = parsed_crate_type("bin", None);
-    let mut hasher = blake3::Hasher::new();
-    let error = fold_native_windows_msvc_identity(
-        &mut hasher,
-        &bin,
-        WINDOWS_RUSTC_VERSION,
-        true,
-        |_, _, _| anyhow::bail!("ambiguous toolchain"),
-    )
-    .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("native Windows MSVC link identity")
-    );
-}
-
-#[test]
-fn windows_native_link_search_dirs_include_l_and_libpath_and_reject_ambiguity() {
-    let dir = tempfile::tempdir().unwrap();
-    let native = dir.path().join("native");
-    let libpath = dir.path().join("libpath");
-    std::fs::create_dir_all(&native).unwrap();
-    std::fs::create_dir_all(&libpath).unwrap();
-    // `-l static=foo` resolves to `foo.lib` through the modeled search
-    // dirs and is hashed by the identity; only `-C link-arg` inputs are
-    // classified.
-    let args = RustcArgs::parse(&[
-        "rustc".into(),
-        "--crate-type=bin".into(),
-        "-l".into(),
-        "static=foo".into(),
-        "-L".into(),
-        format!("native={}", native.display()),
-        format!("-Clink-arg=/LIBPATH:{}", libpath.display()),
-    ])
-    .unwrap();
-    assert_eq!(args.link_libs, vec!["static=foo".to_string()]);
-    assert_eq!(
-        windows_native_link_search_dirs(&args).unwrap(),
-        WindowsNativeLinkSearchDirs {
-            rustc: vec![native.clone()],
-            linker: vec![native, libpath],
-            files: vec![],
-            default_libraries: vec![],
-        }
-    );
-
-    let ambiguous = RustcArgs::parse(&[
-        "rustc".into(),
-        "--crate-type=bin".into(),
-        "-Clink-args=/DEFAULTLIB:foo /LIBPATH".into(),
-    ])
-    .unwrap();
-    assert!(windows_native_link_search_dirs(&ambiguous).is_err());
-
-    for linker_arg in [
-        "foo.lib",
-        "/DEFAULTLIB:foo",
-        "-defaultlib:foo",
-        "/DEFAULTLIB:foo.lib",
-        "app.res",
-        "APP.RES",
-        r"C:\",
-        "Z:/",
-        r"\\",
-        "extra.obj",
-        "exports.exp",
-        "/DEF:exports.def",
-        "-def:exports.def",
-        "-Wl,/def:exports.def",
-        "/MANIFESTINPUT:extra.manifest",
-        "/MANIFESTFILE:app.exe.manifest",
-        "/PDBSTRIPPED:app.public.pdb",
-    ] {
-        let args = RustcArgs::parse(&[
-            "rustc".into(),
-            "--crate-type=bin".into(),
-            format!("-Clink-arg={linker_arg}"),
-        ])
-        .unwrap();
-        let error = windows_native_link_search_dirs(&args).unwrap_err();
-        assert!(
-            error.to_string().contains("not cacheable"),
-            "unmodeled Windows link input must fail closed: {linker_arg}: {error:#}"
-        );
-    }
-}
-
-#[test]
-fn windows_defaultlib_requests_are_not_rustc_libraries() {
-    use crate::native_link_key::WindowsDefaultLibrary;
-
-    for carrier in ["link-arg", "link-args"] {
-        let args = RustcArgs::parse(&[
-            "rustc".into(),
-            "--crate-type=bin".into(),
-            format!("-C{carrier}=/DEFAULTLIB:ucrt.lib"),
-            "-Clink-args=/DEBUG -defaultlib:MSVCRT /NODEFAULTLIB:libucrt.lib".into(),
-        ])
-        .unwrap();
-        let inputs = windows_native_link_search_dirs(&args).unwrap();
-        assert_eq!(
-            inputs.default_libraries,
-            [
-                WindowsDefaultLibrary::parse("/DEFAULTLIB:ucrt.lib").unwrap(),
-                WindowsDefaultLibrary::parse("/DEFAULTLIB:msvcrt.lib").unwrap(),
-            ]
-        );
-        assert!(args.link_libs.is_empty());
-        assert!(inputs.files.is_empty());
-    }
-    for value in [
-        "/DEFAULTLIB",
-        "/DEFAULTLIB:",
-        "/DEFAULTLIB=ucrt.lib",
-        "/DEFAULTLIB:helper.lib",
-        r"/DEFAULTLIB:C:\sdk\ucrt.lib",
-        "/DEFAULTLIB:../ucrt.lib",
-        "/DEFAULTLIB:ucrt.lib,helper.lib",
-        "/DEFAULTLIB:ucrt.lib /DEBUG",
-        r#"/DEFAULTLIB:"ucrt.lib""#,
-        "-Wl,/DEFAULTLIB:ucrt.lib",
-    ] {
-        let args = RustcArgs::parse(&[
-            "rustc".into(),
-            "--crate-type=bin".into(),
-            format!("-Clink-arg={value}"),
-        ])
-        .unwrap();
-        assert!(windows_native_link_search_dirs(&args).is_err(), "{value}");
-    }
-}
-
-#[test]
-fn windows_defaultlib_requests_change_the_folded_identity_and_require_runtime() {
-    let dir = tempfile::tempdir().unwrap();
-    let invocation = client_invocation(dir.path(), &[]);
-    let file_hasher = FileHasher::new_for(&invocation);
-    let key = |arguments: &[&str]| -> Result<String> {
-        let mut argv = vec!["rustc".into(), "--crate-type=bin".into()];
-        argv.extend(arguments.iter().map(|argument| argument.to_string()));
-        let args = RustcArgs::parse_for(&argv, &invocation).unwrap();
-        let mut hasher = blake3::Hasher::new();
-        fold_native_windows_msvc_identity_for(
-            &mut hasher,
-            &args,
-            WINDOWS_RUSTC_VERSION,
-            true,
-            &file_hasher,
-            |_, _, _, _| {
-                Ok(crate::native_link_key::WindowsMsvcIdentity {
-                    linker: "LINK 14".into(),
-                    compiler: "cl".into(),
-                    toolset: "14".into(),
-                    sdk: "10".into(),
-                    ucrt: "10".into(),
-                    architecture: "x64".into(),
-                    wrapper: None,
-                    libraries: BTreeMap::from([
-                        ("ucrt.lib".into(), "ucrt-digest".into()),
-                        ("msvcrt.lib".into(), "msvcrt-digest".into()),
-                    ]),
-                })
-            },
-            &invocation,
-        )?;
-        Ok(hasher.finalize().to_hex().to_string())
-    };
-    let requested = key(&["-Clink-arg=/DEFAULTLIB:ucrt.lib"]).unwrap();
-    assert_ne!(key(&[]).unwrap(), requested, "explicit request presence");
-    assert_eq!(
-        key(&["-Clink-args=-defaultlib:UCRT"]).unwrap(),
-        requested,
-        "both carriers use canonical runtime names"
-    );
-    assert_ne!(
-        key(&["-Clink-args=/DEFAULTLIB:ucrt /DEFAULTLIB:msvcrt"]).unwrap(),
-        key(&["-Clink-args=/DEFAULTLIB:msvcrt /DEFAULTLIB:ucrt"]).unwrap(),
-        "request order must survive identity encoding"
-    );
-    assert_ne!(
-        key(&["-Clink-args=/DEFAULTLIB:ucrt /DEFAULTLIB:ucrt"]).unwrap(),
-        requested,
-        "repeated requests retain their indices"
-    );
-    let error = key(&[
-        "-Clink-arg=/DEFAULTLIB:ucrtd",
-        "-Clink-arg=/NODEFAULTLIB:ucrtd.lib",
-    ])
-    .unwrap_err();
-    assert!(
-        format!("{error:#}").contains("DEFAULTLIB:ucrtd.lib has no selected runtime library"),
-        "{error:#}"
-    );
-}
-
-#[test]
-fn windows_nodefaultlib_admission_does_not_hide_other_inputs() {
-    let _lock = process_state_test_lock();
-    let invocation = InvocationEnv::capture();
-    let parse = |carrier: &str, value: &str| {
-        RustcArgs::parse_for(
-            &[
-                "rustc".into(),
-                "--crate-type=proc-macro".into(),
-                "src/lib.rs".into(),
-                format!("-C{carrier}={value}"),
-            ],
-            &invocation,
-        )
-        .unwrap()
-    };
-    for carrier in ["link-arg", "link-args"] {
-        for value in [
-            "/NODEFAULTLIB",
-            "/NODEFAULTLIB:libcmt.lib",
-            r#"/NODEFAULTLIB:"libcmt.lib""#,
-        ] {
-            let args = parse(carrier, value);
-            let inputs = windows_native_link_search_dirs(&args).unwrap();
-            assert!(inputs.files.is_empty(), "{carrier}={value}");
-            assert!(args.link_libs.is_empty(), "{carrier}={value}");
-        }
-        for value in [
-            "NODEFAULTLIB:helper.lib",
-            "/NODEFAULTLIBRARY:helper.lib",
-            r#""/NODEFAULTLIB:libcmt.lib""#,
-            r#"/NODEFAULTLIB:"vendor lib\helper.lib""#,
-            "/NODEFAULTLIB:libcmt.lib helper.lib",
-            "/NODEFAULTLIB:libcmt.lib\t/DEF:exports",
-            "/NODEFAULTLIB:libcmt.lib,/DEF:exports",
-        ] {
-            let error = windows_native_link_search_dirs(&parse(carrier, value)).unwrap_err();
-            assert!(
-                error.to_string().contains("not cacheable"),
-                "{carrier}={value}: {error:#}"
-            );
-        }
-    }
-    let combined = parse("link-args", "/DEBUG /NODEFAULTLIB:libcmt.lib /OPT:REF");
-    assert!(windows_native_link_search_dirs(&combined).is_ok());
-}
-
 #[test]
 fn nodefaultlib_exclusion_values_remain_in_the_cache_key() {
     let _lock = key_test_lock();
@@ -1292,602 +826,6 @@ fn nodefaultlib_exclusion_values_remain_in_the_cache_key() {
         );
     }
 }
-
-#[cfg(unix)]
-#[test]
-fn windows_defaultlib_fold_validates_the_selected_runtime_through_the_real_probe() {
-    let _lock = key_test_lock();
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().canonicalize().unwrap();
-    let tools = root.join("tools");
-    let priority = root.join("priority");
-    let fallback = root.join("fallback");
-    let cache = root.join("cache");
-    for path in [&tools, &priority, &fallback, &cache] {
-        std::fs::create_dir(path).unwrap();
-    }
-    for (file, banner) in [
-        (
-            "link.exe",
-            "Microsoft (R) Incremental Linker Version 14.44.35207.0",
-        ),
-        (
-            "cl.exe",
-            "Microsoft (R) C/C++ Optimizing Compiler Version 19.44.35207 for x64",
-        ),
-    ] {
-        kache_fs::testutil::write_executable(
-            &tools.join(file),
-            format!("#!/bin/sh\nprintf '%s\\n' '{banner}'\n"),
-        );
-    }
-    let invocation = InvocationEnv::from_parts(
-        [
-            ("PATH", tools.as_os_str()),
-            ("LIB", fallback.as_os_str()),
-            ("KACHE_CACHE_DIR", cache.as_os_str()),
-            ("VCToolsVersion", std::ffi::OsStr::new("14.44.35207")),
-            ("WindowsSDKVersion", std::ffi::OsStr::new("10.0.26100.0")),
-            ("UCRTVersion", std::ffi::OsStr::new("10.0.26100.0")),
-        ],
-        Some(root.clone()),
-        None,
-        root.clone(),
-    );
-    for library in ["libcmt.lib", "libvcruntime.lib"] {
-        std::fs::write(fallback.join(library), b"legacy unrequested runtime").unwrap();
-    }
-    let original = crate::native_archive::closed_coff_archive_for_tests(b"\xc3");
-    let changed = crate::native_archive::closed_coff_archive_for_tests(b"\x90\xc3");
-    let selected_path = priority.join("ucrt.lib");
-    std::fs::write(&selected_path, &original).unwrap();
-    std::fs::write(fallback.join("ucrt.lib"), &changed).unwrap();
-    let file_hasher = FileHasher::new_for(&invocation);
-    let fold = |extra: &[&str]| -> Result<(String, String)> {
-        let mut argv = vec![
-            "rustc".into(),
-            "--crate-type=bin".into(),
-            format!("-Lnative={}", priority.display()),
-        ];
-        argv.extend(extra.iter().map(|argument| argument.to_string()));
-        let args = RustcArgs::parse_for(&argv, &invocation).unwrap();
-        let mut hasher = blake3::Hasher::new();
-        let mut selected_digest = None;
-        fold_native_windows_msvc_identity_for(
-            &mut hasher,
-            &args,
-            WINDOWS_RUSTC_VERSION,
-            true,
-            &file_hasher,
-            |linker, architecture, _, search_dirs| {
-                // Only tool banners are fixtures. This is the production
-                // request forwarding, runtime selection/read and hash path.
-                let identity =
-                    crate::native_link_key::probe_windows_msvc_identity_with_library_dirs_for(
-                        linker,
-                        architecture,
-                        &[],
-                        &search_dirs.rustc,
-                        &search_dirs.linker,
-                        &args.link_libs,
-                        &search_dirs.default_libraries,
-                        |path| file_hasher.hash_static_lib(path),
-                        &invocation,
-                    )?;
-                selected_digest = identity.libraries.get("ucrt.lib").cloned();
-                Ok(identity)
-            },
-            &invocation,
-        )?;
-        Ok((
-            hasher.finalize().to_hex().to_string(),
-            selected_digest.unwrap(),
-        ))
-    };
-    let request = ["-Clink-arg=/DEFAULTLIB:ucrt.lib"];
-    let without_request = fold(&[]).unwrap();
-    let requested = fold(&request).unwrap();
-    assert_eq!(requested.1, blake3::hash(&original).to_hex().to_string());
-    assert_eq!(
-        without_request.1, requested.1,
-        "closed-runtime validation keeps the existing raw-byte digest"
-    );
-    assert_ne!(
-        without_request.0, requested.0,
-        "request presence stays folded"
-    );
-    std::fs::write(fallback.join("ucrt.lib"), &original).unwrap();
-    assert_eq!(
-        requested,
-        fold(&request).unwrap(),
-        "shadowed bytes are unused"
-    );
-    std::fs::write(&selected_path, &changed).unwrap();
-    let rebuilt = fold(&request).unwrap();
-    assert_eq!(rebuilt.1, blake3::hash(&changed).to_hex().to_string());
-    assert_ne!(
-        requested.0, rebuilt.0,
-        "selected bytes change the final fold"
-    );
-
-    std::fs::write(&selected_path, b"!<thin>\n").unwrap();
-    assert!(
-        fold(&[]).is_ok(),
-        "unrequested legacy hashing stays supported"
-    );
-    for extra in [
-        &request[..],
-        &["-Clink-args=/DEFAULTLIB:ucrt.lib /NODEFAULTLIB:ucrt.lib"][..],
-    ] {
-        let error = fold(extra).unwrap_err();
-        assert!(
-            format!("{error:#}").contains("supported closed COFF archive"),
-            "an invalid selected runtime must not use the valid fallback: {error:#}"
-        );
-    }
-}
-
-/// Compile a resource entry in the documented .res layout. Build the null
-/// header independently of the production format check.
-fn windows_test_resource(payload: &[u8]) -> Vec<u8> {
-    fn entry(bytes: &mut Vec<u8>, kind: u16, name: u16, data: &[u8]) {
-        bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&32_u32.to_le_bytes());
-        for value in [u16::MAX, kind, u16::MAX, name] {
-            bytes.extend_from_slice(&value.to_le_bytes());
-        }
-        bytes.extend_from_slice(&[0; 16]);
-        bytes.extend_from_slice(data);
-        bytes.resize(bytes.len().next_multiple_of(4), 0);
-    }
-    let mut bytes = Vec::new();
-    entry(&mut bytes, 0, 0, &[]);
-    entry(&mut bytes, 10, 1, payload);
-    bytes
-}
-
-#[test]
-fn windows_absolute_paths_distinguish_roots_from_relative_names() {
-    for (path, absolute) in [
-        ("", false),
-        (r"\", false),
-        ("C:", false),
-        (r"C:\", true),
-        ("Z:/", true),
-        (r"C:resource.res", false),
-        (r"\resource.res", false),
-        (r"\\", false),
-        (r"\\server\share", true),
-        (r"\\server\share\resource.res", true),
-        (r"\\?\C:\resource.res", true),
-        ("resource.res", false),
-    ] {
-        assert_eq!(
-            crate::native_link_key::windows_absolute_path(path),
-            absolute,
-            "{path:?}"
-        );
-    }
-}
-
-#[test]
-fn windows_native_link_search_dirs_key_absolute_merged_inputs() {
-    let args = RustcArgs::parse(&[
-        "rustc".into(),
-        "--crate-type=bin".into(),
-        r"-Clink-arg=C:\w\target\debug\build\app-1\out\resource.res".into(),
-        "-Clink-arg=/MANIFEST:EMBED".into(),
-        "-Clink-arg=/WX".into(),
-        r"-Clink-args=/DEBUG C:\w\extra.res".into(),
-        r"-Clink-arg=/LIBPATH:C:\shadow".into(),
-    ])
-    .unwrap();
-    assert_eq!(
-        windows_native_link_search_dirs(&args).unwrap(),
-        WindowsNativeLinkSearchDirs {
-            rustc: vec![],
-            linker: vec![PathBuf::from(r"C:\shadow")],
-            default_libraries: vec![],
-            files: vec![
-                PathBuf::from(r"C:\w\target\debug\build\app-1\out\resource.res"),
-                PathBuf::from(r"C:\w\extra.res"),
-            ],
-        }
-    );
-}
-
-#[test]
-fn windows_resources_do_not_hide_mixed_search_paths_or_unsupported_files() {
-    for value in [
-        r"/LIBPATH:C:\shadow C:\w\a.res",
-        r"C:\w\a.res /LIBPATH:C:\shadow",
-        r"/debug C:\w\a.res -libpath=C:\shadow",
-        r"/LIBPATH:C:\shadow /MANIFESTINPUT:C:\w\app.xml",
-        r"C:\w\a.res /DEF:C:\w\exports.def",
-        r"C:\w\a.res C:\w\extra.obj",
-        r"C:\w\a.res C:\w\opaque.dat",
-        r"C:\w\a.res /MANIFESTINPUT:C:\w\app.xml",
-        r"/MANIFESTINPUT:C:\w\Manifest.xml",
-        r"C:\w\opaque.dat",
-    ] {
-        let args = RustcArgs::parse(&[
-            "rustc".into(),
-            "--crate-type=bin".into(),
-            format!("-Clink-args={value}"),
-        ])
-        .unwrap();
-        assert!(windows_native_link_search_dirs(&args).is_err(), "{value}");
-    }
-    let args = RustcArgs::parse(&[
-        "rustc".into(),
-        "--crate-type=bin".into(),
-        r"-Clink-args=C:\w\a.res @C:\w\more.rsp".into(),
-    ])
-    .unwrap();
-    assert!(native_linker_side_files_are_unmodeled(&args));
-}
-
-#[test]
-fn windows_link_argument_files_change_the_folded_key_and_fail_closed_when_gone() {
-    let dir = tempfile::tempdir().unwrap();
-    // Unix treats C:/ as relative; resolve it within the invocation instead
-    // of changing the process cwd. Windows uses real absolute fixture paths.
-    let first_arg = if cfg!(windows) {
-        dir.path().join("first.res")
-    } else {
-        PathBuf::from("C:/first.res")
-    };
-    let second_arg = if cfg!(windows) {
-        dir.path().join("second.res")
-    } else {
-        PathBuf::from("C:/second.res")
-    };
-    let invocation = client_invocation(dir.path(), &[]);
-    let file_hasher = FileHasher::new_for(&invocation);
-    let first_res = file_hasher.resolve_path(&first_arg).unwrap();
-    let second_res = file_hasher.resolve_path(&second_arg).unwrap();
-    std::fs::create_dir_all(first_res.parent().unwrap()).unwrap();
-    std::fs::write(&first_res, windows_test_resource(b"resource v1")).unwrap();
-    std::fs::write(&second_res, windows_test_resource(b"other")).unwrap();
-    let key = |files: &[&Path], extra: Option<&str>| -> Result<String> {
-        let mut argv = vec![
-            "rustc".into(),
-            "--crate-type=bin".into(),
-            "-Lnative=native-libs".into(),
-            "-lstatic=example".into(),
-            "-Clink-arg=/LIBPATH:C:/sdk-libs".into(),
-        ];
-        argv.extend(
-            files
-                .iter()
-                .map(|path| format!("-Clink-arg={}", path.display())),
-        );
-        argv.extend(extra.map(|argument| format!("-Clink-args={argument}")));
-        let args = RustcArgs::parse_for(&argv, &invocation).unwrap();
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(b"base-key");
-        fold_native_windows_msvc_identity_for(
-            &mut hasher,
-            &args,
-            WINDOWS_RUSTC_VERSION,
-            true,
-            &file_hasher,
-            |linker, architecture, host, search_dirs| {
-                assert_eq!(linker, None);
-                assert_eq!(architecture, "x64");
-                assert_eq!(host, "x86_64-pc-windows-msvc");
-                assert_eq!(args.link_libs, vec!["static=example".to_string()]);
-                assert_eq!(search_dirs.rustc, [PathBuf::from("native-libs")]);
-                assert_eq!(
-                    search_dirs.linker,
-                    [PathBuf::from("native-libs"), PathBuf::from("C:/sdk-libs")]
-                );
-                assert_eq!(
-                    search_dirs.files,
-                    files
-                        .iter()
-                        .map(|path| path.to_path_buf())
-                        .collect::<Vec<_>>()
-                );
-                Ok(crate::native_link_key::WindowsMsvcIdentity {
-                    linker: "LINK 14".into(),
-                    compiler: "cl".into(),
-                    toolset: "14".into(),
-                    sdk: "10".into(),
-                    ucrt: "10".into(),
-                    architecture: architecture.into(),
-                    wrapper: None,
-                    libraries: BTreeMap::new(),
-                })
-            },
-            &invocation,
-        )?;
-        Ok(hasher.finalize().to_hex().to_string())
-    };
-    let files = [first_arg.as_path(), second_arg.as_path()];
-    let first = key(&files, None).unwrap();
-    assert_eq!(
-        key(&files, None).unwrap(),
-        first,
-        "same bytes, same folded key"
-    );
-    assert_ne!(
-        key(&[], None).unwrap(),
-        first,
-        "resources reach the folded key"
-    );
-
-    std::fs::write(&first_res, windows_test_resource(b"resource v2")).unwrap();
-    assert_ne!(key(&files, None).unwrap(), first, "an edit reaches the key");
-    std::fs::write(&first_res, windows_test_resource(b"resource v1")).unwrap();
-    std::fs::write(&second_res, windows_test_resource(b"OTHER")).unwrap();
-    assert_ne!(
-        key(&files, None).unwrap(),
-        first,
-        "every resource reaches the key"
-    );
-    std::fs::write(&second_res, windows_test_resource(b"other")).unwrap();
-    assert_ne!(
-        key(&[second_arg.as_path(), first_arg.as_path()], None).unwrap(),
-        first,
-        "argument order reaches the key"
-    );
-    assert_eq!(
-        key(&files, None).unwrap(),
-        first,
-        "reverting recovers the old key"
-    );
-    for argument in [
-        "C:/extra.obj",
-        "/MANIFESTINPUT:C:/app.xml",
-        "/LIBPATH:C:/other C:/extra.res",
-    ] {
-        assert!(key(&files, Some(argument)).is_err(), "{argument}");
-    }
-
-    std::fs::write(&second_res, b"!<arch>\nrenamed archive").unwrap();
-    assert!(
-        key(&files, None).is_err(),
-        "format admission reaches the same folded-key path"
-    );
-    std::fs::remove_file(&second_res).unwrap();
-    assert!(
-        key(&files, None)
-            .unwrap_err()
-            .to_string()
-            .contains("not a regular file")
-    );
-    std::fs::create_dir(&second_res).unwrap();
-    assert!(
-        key(&files, None).is_err(),
-        "a directory cannot become a resource input"
-    );
-}
-
-#[test]
-fn windows_resource_hash_rejects_truncated_headers_and_renamed_containers() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("renamed.res");
-    let file_hasher = FileHasher::new();
-    let identity = || {
-        windows_link_identity_with_argument_files(
-            "linker=LINK 14".into(),
-            std::slice::from_ref(&path),
-            &file_hasher,
-        )
-    };
-    let valid = windows_test_resource(b"data");
-    assert_eq!(valid.len(), 68);
-    for len in 0..32 {
-        std::fs::write(&path, &valid[..len]).unwrap();
-        assert!(identity().is_err(), "len={len}");
-    }
-    for offset in 0..32 {
-        let mut invalid = valid.clone();
-        invalid[offset] ^= 1;
-        std::fs::write(&path, invalid).unwrap();
-        assert!(identity().is_err(), "offset={offset}");
-    }
-    for bytes in [
-        b"!<thin>\nexternal.obj".as_slice(),
-        b"!<arch>\nopaque archive".as_slice(),
-        b"\x64\x86COFF .drectve /DEFAULTLIB:helper.lib".as_slice(),
-        b"BC\xc0\xdeLLVM bitcode".as_slice(),
-        b"<assembly/>".as_slice(),
-    ] {
-        std::fs::write(&path, bytes).unwrap();
-        assert!(identity().is_err(), "{bytes:?}");
-    }
-    std::fs::write(&path, &valid).unwrap();
-    assert_eq!(
-        file_hasher.hash_windows_resource(&path).unwrap(),
-        blake3::hash(&valid).to_hex().to_string(),
-        "accepted bytes are exactly the bytes hashed"
-    );
-}
-
-#[test]
-fn windows_resources_stream_all_bytes_without_trusting_a_whole_file_memo() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("large.res");
-    let bytes = windows_test_resource(&b"a".repeat(70_000));
-    std::fs::write(&path, &bytes).unwrap();
-    let db = rusqlite::Connection::open_in_memory().unwrap();
-    ensure_file_hash_cache_schema(&db).unwrap();
-    let stamp = FileFingerprint::from_path(&path).unwrap();
-    let stale = "0".repeat(64);
-    FileHashCache::Borrowed(&db).put(&stamp, &stale).unwrap();
-    let file_hasher = FileHasher::from_cache(FileHashCache::Borrowed(&db));
-    assert_eq!(
-        file_hasher.hash_windows_resource(&path).unwrap(),
-        blake3::hash(&bytes).to_hex().to_string()
-    );
-    assert_eq!(file_hasher.stats().cache_hits, 0);
-    assert_eq!(file_hasher.stats().bytes_hashed, bytes.len() as u64);
-    assert!(file_hasher.pending_memo.borrow().is_empty());
-}
-
-#[test]
-fn windows_resource_validation_reads_after_the_guarded_stat() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("resource.res");
-    let original = windows_test_resource(b"original");
-    std::fs::write(&path, &original).unwrap();
-    let mut file_hasher = FileHasher::new();
-    file_hasher.arm_too_new_guard(1, 0);
-    set_before_read(Some(Box::new(|path| {
-        let mut thin = b"!<thin>\n".to_vec();
-        thin.resize(64, b'x');
-        std::fs::write(path, thin).unwrap();
-    })));
-    let result = file_hasher.hash_windows_resource(&path);
-    set_before_read(None);
-    assert!(
-        result.is_err(),
-        "validate the bytes read, not an earlier path check"
-    );
-
-    std::fs::write(&path, &original).unwrap();
-    set_before_read(Some(Box::new(|path| {
-        std::fs::write(path, windows_test_resource(b"changed and longer")).unwrap();
-    })));
-    let changed = file_hasher.hash_windows_resource(&path);
-    set_before_read(None);
-    assert_eq!(changed.unwrap(), hash_file(&path).unwrap());
-    assert!(file_hasher.too_new());
-    assert!(file_hasher.inputs_changed_since_keyed());
-    let guarded = file_hasher.take_guarded_inputs();
-    assert!(
-        guarded.len() >= 2,
-        "both sides of a changed read must remain guarded"
-    );
-    assert!(
-        guarded
-            .iter()
-            .any(|input| input.fingerprint.size == original.len() as i64)
-    );
-}
-
-#[test]
-fn windows_libpath_parser_accepts_one_exact_argument() {
-    for (argument, expected) in [
-        (r"/LIBPATH:C:\sdk\lib", r"C:\sdk\lib"),
-        (r"/libpath=C:\sdk\lib", r"C:\sdk\lib"),
-        (r"-LIBPATH:C:\lld\lib", r"C:\lld\lib"),
-        (r"-libpath=C:\lld\lib", r"C:\lld\lib"),
-        (
-            r#"/LIBPATH:"C:\Program Files\SDK\lib""#,
-            r"C:\Program Files\SDK\lib",
-        ),
-        (
-            r#"-Wl,/LIBPATH:"C:\Program Files\SDK\lib""#,
-            r"C:\Program Files\SDK\lib",
-        ),
-        (
-            r#"-Wl,-LiBpAtH:"C:\Program Files\LLVM\lib""#,
-            r"C:\Program Files\LLVM\lib",
-        ),
-    ] {
-        assert_eq!(
-            windows_libpath_argument(argument).unwrap().as_deref(),
-            Some(expected),
-            "{argument}"
-        );
-    }
-    assert_eq!(windows_libpath_argument("/DEBUG").unwrap(), None);
-
-    for argument in [
-        "/LIBPATH:",
-        r#"/LIBPATH:"C:\unterminated"#,
-        r#"/LIBPATH:"C:\sdk\lib" /DEBUG"#,
-        r"/LIBPATH:C:\Program Files\SDK\lib",
-        r"/DEBUG /LIBPATH:C:\sdk\lib",
-        r"/DEBUG -LIBPATH:C:\lld\lib",
-        r"-Wl,/DEBUG,-LIBPATH:C:\lld\lib",
-    ] {
-        assert!(
-            windows_libpath_argument(argument).is_err(),
-            "ambiguous or empty argument must fail closed: {argument}"
-        );
-    }
-}
-
-#[test]
-fn windows_lld_libpath_preserves_shadowing_order() {
-    let directory = tempfile::tempdir().unwrap();
-    let first = directory.path().join("lld-first");
-    let second = directory.path().join("link-second");
-    std::fs::create_dir_all(&first).unwrap();
-    std::fs::create_dir_all(&second).unwrap();
-    std::fs::write(first.join("shadowed.lib"), b"first").unwrap();
-    std::fs::write(second.join("shadowed.lib"), b"second").unwrap();
-    let args = RustcArgs::parse(&[
-        "rustc".into(),
-        "--crate-type=bin".into(),
-        format!("-Clink-arg=-LIBPATH:{}", first.display()),
-        format!("-Clink-arg=/LIBPATH:{}", second.display()),
-    ])
-    .unwrap();
-
-    assert_eq!(
-        windows_native_link_search_dirs(&args).unwrap(),
-        WindowsNativeLinkSearchDirs {
-            rustc: Vec::new(),
-            linker: vec![first, second],
-            files: vec![],
-            default_libraries: vec![],
-        }
-    );
-}
-
-#[test]
-fn windows_native_link_search_dirs_honor_only_linker_visible_l_kinds() {
-    let directory = tempfile::tempdir().unwrap();
-    let native = directory.path().join("native");
-    let all = directory.path().join("all");
-    let bare = directory.path().join("bare");
-    let libpath = directory.path().join("path with spaces");
-    let unknown = format!("custom={}", directory.path().join("unknown").display());
-    for path in [&native, &all, &bare, &libpath] {
-        std::fs::create_dir_all(path).unwrap();
-    }
-    let args = RustcArgs::parse(&[
-        "rustc".into(),
-        "--crate-type=bin".into(),
-        "-L".into(),
-        format!("native={}", native.display()),
-        format!("-Lall={}", all.display()),
-        format!("-L{}", bare.display()),
-        format!("-L{unknown}"),
-        format!(
-            "-Ldependency={}",
-            directory.path().join("dependency").display()
-        ),
-        format!("-Lcrate={}", directory.path().join("crate").display()),
-        format!(
-            "-Lframework={}",
-            directory.path().join("framework").display()
-        ),
-        format!(r#"-Clink-arg=/LIBPATH:"{}""#, libpath.display()),
-        "-Clink-arg=/DEBUG".into(),
-    ])
-    .unwrap();
-    assert_eq!(
-        windows_native_link_search_dirs(&args).unwrap(),
-        WindowsNativeLinkSearchDirs {
-            rustc: vec![
-                native.clone(),
-                all.clone(),
-                bare.clone(),
-                PathBuf::from(unknown.clone())
-            ],
-            linker: vec![native, all, bare, PathBuf::from(unknown), libpath],
-            files: vec![],
-            default_libraries: vec![],
-        }
-    );
-}
-
 #[test]
 fn native_macos_sdk_probe_fails_closed() {
     let bin = parsed_linked_bin(None);
@@ -2145,7 +1083,7 @@ fn sdk_fold_requires_macos_os_and_darwin_rustc_host() {
 }
 
 #[test]
-fn windows_hosts_do_not_key_linux_crt_or_macos_sdk() {
+fn disabled_probes_do_not_key_linux_crt_or_macos_sdk() {
     let bin = parsed_linked_bin(None);
     assert_eq!(
         crt_fold_key(
@@ -2168,7 +1106,7 @@ fn windows_hosts_do_not_key_linux_crt_or_macos_sdk() {
             Some("12.0"),
         )
         .unwrap(),
-        "Windows hosts keep the existing linker --version identity only"
+        "disabled probes keep the existing linker --version identity only"
     );
 }
 
@@ -5032,25 +3970,6 @@ fn external_target_predictions_guard_sources_and_generated_inputs() {
     }
 }
 
-#[cfg(windows)]
-#[test]
-fn external_target_predictions_accept_mixed_manifest_separators() {
-    let dir = tempfile::tempdir().unwrap();
-    let (root, mut args) = workspace_invocation(dir.path(), "source/checkout", "kt");
-    let target = dir.path().join("output/target");
-    std::fs::create_dir_all(target.join("debug/deps")).unwrap();
-    args.out_dir = Some(target.join("debug/deps"));
-    let vars = manifest_vars(&root.join("kt"));
-    // GetCurrentDirectory uses backslashes without canonicalize's verbatim
-    // prefix, while Cargo's manifest path may contain forward slashes.
-    let cwd = PathBuf::from(root.to_str().unwrap().replace('/', "\\"));
-    assert!(suffix_within(cwd.as_os_str(), &root, 0).is_none());
-    let roots = workspace_roots_in(&args, &vars, &cwd).unwrap();
-    assert_eq!(roots.root, root);
-    assert_eq!(roots.cwd, "");
-    assert_eq!(roots.canonical_root, std::fs::canonicalize(&cwd).unwrap());
-}
-
 #[cfg(unix)]
 #[test]
 fn external_target_predictions_keep_cargos_symlinked_source_spelling() {
@@ -7790,7 +6709,7 @@ fn unescape_env_dep_value_undoes_rustc_escaping() {
 }
 
 #[test]
-fn parse_env_dep_info_unescapes_windows_paths() {
+fn parse_env_dep_info_unescapes_backslash_paths() {
     let dep = "# env-dep:OUT_DIR=C:\\\\proj\\\\build\\\\out\n";
     let deps = parse_env_dep_info(dep);
     assert_eq!(
@@ -8365,9 +7284,9 @@ fn native_linker_side_files_fail_closed() {
     // Exact member identity is retained even without a side-file option,
     // because this archive may be bundled into an rlib and linked later.
     std::fs::write(&lib, gnu_ar_named_object("foo.o", b"same object")).unwrap();
-    let named_foo = fh.hash_static_lib(&lib).unwrap();
+    let named_foo = fh.hash_static_lib_for(&lib, StaticLibUse::Linked).unwrap();
     std::fs::write(&lib, gnu_ar_named_object("bar.o", b"same object")).unwrap();
-    let named_bar = fh.hash_static_lib(&lib).unwrap();
+    let named_bar = fh.hash_static_lib_for(&lib, StaticLibUse::Linked).unwrap();
     assert_ne!(named_foo, named_bar);
 
     let source = dir.path().join("lib.rs");
@@ -8470,13 +7389,16 @@ fn hash_static_lib_caches_and_is_namespace_isolated() {
     // >MIN_PERSISTED_HASH_BYTES so it takes the cached path.
     std::fs::write(&lib, gnu_ar_one_object(&vec![0x41u8; 70_000])).unwrap();
 
-    let portable = fh.hash_static_lib(&lib).unwrap();
+    let portable = fh.hash_static_lib_for(&lib, StaticLibUse::Linked).unwrap();
     assert!(
         portable.starts_with("gnu-ar-v2:"),
         "a GNU archive gets the structural member digest"
     );
     // Second call returns the SAME value (cache round-trip, not corruption).
-    assert_eq!(fh.hash_static_lib(&lib).unwrap(), portable);
+    assert_eq!(
+        fh.hash_static_lib_for(&lib, StaticLibUse::Linked).unwrap(),
+        portable
+    );
 
     // Namespace isolation: a whole-file hash of the SAME path is a plain-hex
     // digest under a different cache row — it must not be the static-lib value.
@@ -8484,7 +7406,10 @@ fn hash_static_lib_caches_and_is_namespace_isolated() {
     assert!(!whole.starts_with("gnu-ar-v2:"));
     assert_ne!(whole, portable);
     // And the static-lib digest is still the portable one after `hash` ran.
-    assert_eq!(fh.hash_static_lib(&lib).unwrap(), portable);
+    assert_eq!(
+        fh.hash_static_lib_for(&lib, StaticLibUse::Linked).unwrap(),
+        portable
+    );
 }
 
 #[test]
@@ -8571,7 +7496,7 @@ fn hash_static_lib_ignores_legacy_namespaces() {
         .put(&legacy_v7_key, "legacy-path-bound-bsd-elf-sentinel")
         .unwrap();
 
-    let computed = fh.hash_static_lib(&lib).unwrap();
+    let computed = fh.hash_static_lib_for(&lib, StaticLibUse::Linked).unwrap();
     assert!(computed.starts_with("gnu-ar-v2:"));
     assert_ne!(computed, "legacy-whole-file-sentinel");
     assert_ne!(computed, "legacy-member-sentinel");
@@ -8582,7 +7507,10 @@ fn hash_static_lib_ignores_legacy_namespaces() {
     assert_ne!(computed, "legacy-path-bound-bsd-elf-sentinel");
     fh.flush_memo_as_if_settled();
     assert_eq!(cache.get(&current_key).unwrap(), Some(computed.clone()));
-    assert_eq!(fh.hash_static_lib(&lib).unwrap(), computed);
+    assert_eq!(
+        fh.hash_static_lib_for(&lib, StaticLibUse::Linked).unwrap(),
+        computed
+    );
 }
 
 #[test]
@@ -8602,7 +7530,7 @@ fn hash_static_lib_v3_memo_cannot_bypass_object_gate() {
     let cache = fh.cache.as_ref().expect("persistent cache opens");
     cache.put(&stale_key, "gnu-ar-v2:unguarded").unwrap();
 
-    let computed = fh.hash_static_lib(&lib).unwrap();
+    let computed = fh.hash_static_lib_for(&lib, StaticLibUse::Linked).unwrap();
     assert!(computed.starts_with("path-ar-v1:"));
     assert_ne!(computed, "gnu-ar-v2:unguarded");
 }
@@ -8620,8 +7548,12 @@ fn static_lib_fallback_binds_lexical_archive_path() {
     std::fs::write(&second, b"unsupported but identical archive bytes").unwrap();
 
     let fh = FileHasher::new();
-    let first_hash = fh.hash_static_lib(&first).unwrap();
-    let second_hash = fh.hash_static_lib(&second).unwrap();
+    let first_hash = fh
+        .hash_static_lib_for(&first, StaticLibUse::Linked)
+        .unwrap();
+    let second_hash = fh
+        .hash_static_lib_for(&second, StaticLibUse::Linked)
+        .unwrap();
     assert!(first_hash.starts_with("path-ar-v1:"));
     assert!(second_hash.starts_with("path-ar-v1:"));
     assert_ne!(first_hash, second_hash);
@@ -8761,8 +7693,11 @@ fn linked_dwarf_archive_stays_path_bound() {
     assert_ne!(linked, hash_in("b", &dwarf, StaticLibUse::Linked));
     // The unqualified method is the linked reading.
     assert_eq!(
-        fh.hash_static_lib(&dir.path().join("a").join("libprobe.a"))
-            .unwrap(),
+        fh.hash_static_lib_for(
+            &dir.path().join("a").join("libprobe.a"),
+            StaticLibUse::Linked
+        )
+        .unwrap(),
         linked
     );
 
@@ -8823,7 +7758,7 @@ fn hash_static_lib_memo_threshold_is_exclusive() {
     ] {
         let lib = dir.path().join(name);
         std::fs::write(&lib, vec![b'x'; len]).unwrap();
-        let hash = fh.hash_static_lib(&lib).unwrap();
+        let hash = fh.hash_static_lib_for(&lib, StaticLibUse::Linked).unwrap();
         fh.flush_memo_as_if_settled();
         let fingerprint = FileFingerprint::from_path(&lib).unwrap();
         let key = FileFingerprint {
@@ -8841,7 +7776,9 @@ fn thin_static_archive_is_uncacheable() {
     let archive = dir.path().join("libthin.a");
     std::fs::write(&archive, b"!<thin>\n").unwrap();
 
-    let error = FileHasher::new().hash_static_lib(&archive).unwrap_err();
+    let error = FileHasher::new()
+        .hash_static_lib_for(&archive, StaticLibUse::Linked)
+        .unwrap_err();
     assert!(error.to_string().contains("external members"));
 }
 
@@ -9121,7 +8058,6 @@ fn keys_around_rewrite(argv: &[String], file: &Path) -> (String, String) {
 /// build tree, no system library dirs and no path rules.
 fn unix_context<'a>(target: &'a str, normalizer: &'a PathNormalizer) -> NativeLinkContext<'a> {
     NativeLinkContext {
-        native_windows_msvc: false,
         target,
         default_dirs: Vec::new(),
         out_dir: None,
@@ -10067,7 +9003,7 @@ fn fold_native_dir_archives_names_dir_index_and_file() {
     std::fs::write(first.path().join("libthin.a"), b"!<thin>\n").unwrap();
     let mut hasher = blake3::Hasher::new();
     let thin = fold_native_dir_archives(&mut hasher, &dirs, native_dir_archives, |path| {
-        FileHasher::new().hash_static_lib(path)
+        FileHasher::new().hash_static_lib_for(path, StaticLibUse::Linked)
     });
     assert!(thin.is_err(), "a thin archive refuses the key");
 }
@@ -10307,8 +9243,8 @@ fn default_library_dirs_follow_a_host_native_unix_target() {
     );
     assert!(dirs("aarch64-unknown-linux-gnu", linux, None).is_empty());
     assert!(default_library_dirs(linux, None, None).is_empty());
-    let windows = "x86_64-pc-windows-gnu";
-    assert!(dirs(windows, windows, Some("/opt/a")).is_empty());
+    let other = "x86_64-pc-windows-gnu";
+    assert!(dirs(other, other, Some("/opt/a")).is_empty());
     assert_eq!(
         multiarch_name("aarch64-unknown-linux-gnu"),
         "aarch64-linux-gnu"
@@ -10403,13 +9339,6 @@ fn unresolved_static_lib_refuses_a_linking_unit() {
     let bin = unit_args("bin", &tree.deps, &[&link_search, "-l", "static=nope"]);
     let (before, after) = keys_around_rewrite(&bin, &tree.elsewhere.join("libnope.a"));
     assert_ne!(before, after, "found through the link argument and keyed");
-}
-
-#[test]
-fn unresolved_static_lib_is_an_error_only_for_non_msvc_links() {
-    assert!(unresolved_static_lib_is_error(true, false));
-    assert!(!unresolved_static_lib_is_error(true, true));
-    assert!(!unresolved_static_lib_is_error(false, false));
 }
 
 #[test]
@@ -10780,38 +9709,18 @@ fn diagnostic_width_keeps_unusual_arguments_and_observable_warnings_keyed() {
     }
 }
 
-/// kunobi-ninja/kache#399: lexical `.`/`..` collapse + separator unification.
-/// Output uses the host separator (so it lines up with canonical rule
-/// prefixes); built with MAIN_SEPARATOR so the test is host-independent.
+/// kunobi-ninja/kache#399: lexical `.`/`..` collapse.
 #[test]
 fn lexically_resolve_path_collapses_dot_dot() {
-    let s = std::path::MAIN_SEPARATOR_STR;
-    let j = |parts: &[&str]| parts.join(s);
+    assert_eq!(lexically_resolve_path("/a/b/../c"), "/a/c");
+    assert_eq!(lexically_resolve_path("/a/./b"), "/a/b");
+    assert_eq!(lexically_resolve_path("/../a"), "/a");
 
-    // Unix-style absolute.
-    assert_eq!(lexically_resolve_path("/a/b/../c"), j(&["", "a", "c"]));
-    assert_eq!(lexically_resolve_path("/a/./b"), j(&["", "a", "b"]));
-    // `..` cannot escape the root.
-    assert_eq!(lexically_resolve_path("/../a"), j(&["", "a"]));
-
-    // Windows drive + mixed separators + unresolved `..` (the #399 input
-    // shape: a relative CARGO_TARGET_DIR joined literally with `/`).
-    assert_eq!(
-        lexically_resolve_path(r"C:\proj\pkg\..\oot-target\x"),
-        format!("C:{}", j(&["", "proj", "oot-target", "x"]))
-    );
-    assert_eq!(
-        lexically_resolve_path(r"C:\u\src\../oot-target\rel\deps"),
-        format!("C:{}", j(&["", "u", "oot-target", "rel", "deps"]))
-    );
-
-    // Relative paths keep a leading `..`.
-    assert_eq!(lexically_resolve_path("../a/b"), j(&["..", "a", "b"]));
+    assert_eq!(lexically_resolve_path("../a/b"), "../a/b");
     assert_eq!(lexically_resolve_path("."), ".");
+    assert_eq!(lexically_resolve_path("a/./b/../c"), "a/c");
 
-    // Already-resolved paths are unchanged on the host (the Linux case).
-    let resolved = format!("{}home{}u{}oot{}out", s, s, s, s);
-    assert_eq!(lexically_resolve_path(&resolved), resolved);
+    assert_eq!(lexically_resolve_path("/home/u/oot/out"), "/home/u/oot/out");
 }
 
 /// kunobi-ninja/kache#399 (the core property): two out-of-tree build paths
@@ -10821,22 +9730,13 @@ fn lexically_resolve_path_collapses_dot_dot() {
 /// key converges across build locations.
 #[test]
 fn lexically_resolve_path_makes_out_of_tree_suffix_converge() {
-    // Cold and a relocate (different drive subtree, different package-dir
-    // name) of the same out-of-tree build. The `..` cancels the package dir,
-    // so oot-target attaches directly to the package's parent (= the
-    // workspace root). The segment from oot-target onward is then identical,
-    // which is what survives after the <WORKSPACE> prefix is stripped.
-    let cold = lexically_resolve_path(r"C:\proj\scenario\source\..\oot-target\release\build\x\out");
-    let reloc = lexically_resolve_path(r"C:\Temp\.tmpAB\..\oot-target\release\build\x\out");
+    let cold = lexically_resolve_path("/proj/scenario/source/../oot-target/release/build/x/out");
+    let reloc = lexically_resolve_path("/tmp/.tmpAB/../oot-target/release/build/x/out");
     assert!(!cold.contains(".."), "unresolved .. in {cold}");
     assert!(!reloc.contains(".."), "unresolved .. in {reloc}");
     let from_oot = |p: &str| p[p.find("oot-target").unwrap()..].to_string();
     assert_eq!(from_oot(&cold), from_oot(&reloc));
-    let s = std::path::MAIN_SEPARATOR_STR;
-    assert_eq!(
-        from_oot(&cold),
-        ["oot-target", "release", "build", "x", "out"].join(s)
-    );
+    assert_eq!(from_oot(&cold), "oot-target/release/build/x/out");
 }
 
 /// kunobi-ninja/kache#399 end-to-end at the env-dep layer: an out-of-tree
@@ -10877,8 +9777,9 @@ fn out_of_tree_out_dir_env_dep_converges_across_locations() {
         )
         .unwrap();
 
-        // The value as Windows cargo hands it over: the package dir is
-        // cancelled by a literal `..` rather than pre-resolved.
+        // The value as cargo hands it over for a relative CARGO_TARGET_DIR:
+        // the package dir is cancelled by a literal `..` rather than
+        // pre-resolved.
         let value = root
             .join("pkg")
             .join("..")
@@ -10916,10 +9817,6 @@ fn out_of_tree_out_dir_env_dep_converges_across_locations() {
 /// H1: a build-script native search path must diverge the key, but
 /// cargo's redundant `-L dependency=` (covered by content-hashed
 /// `--extern`) must NOT — else every target-dir move busts the cache.
-/// Generic `-l` keying, checked on hosts that do not probe native MSVC
-/// inputs. On a Windows host the library must exist (fail closed), so the
-/// Windows shape lives in the `windows_*` tests with an injected probe.
-#[cfg(not(windows))]
 #[test]
 fn link_search_native_keys_but_dependency_does_not() {
     let _lock = key_test_lock();
@@ -11349,44 +10246,6 @@ fn rustc_sysroot_prefers_the_explicit_one() {
         own.display()
     );
 }
-
-/// rustc looks for a linker named without a directory in the tool directory
-/// of an explicit `--sysroot`, then in that of its own sysroot. Behind a
-/// workspace wrapper, the sysroot is the inner rustc's.
-#[test]
-fn rustc_tool_dirs_follow_rustcs_sysroot_order() {
-    let _lock = key_test_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let source = dir.path().join("lib.rs");
-    let explicit = dir.path().join("sysroot");
-    let host = "x86_64-pc-windows-msvc";
-    let tools = |sysroot: &Path| sysroot.join("lib").join("rustlib").join(host).join("bin");
-    let args = |extra: &[&str]| RustcArgs::parse(&flag_base(&source, extra)).unwrap();
-    let own = get_rustc_sysroot(&args(&[])).unwrap();
-
-    assert_eq!(rustc_tool_dirs(&args(&[]), host).unwrap(), [tools(&own)]);
-    assert_eq!(
-        rustc_tool_dirs(&args(&["--sysroot", &explicit.to_string_lossy()]), host).unwrap(),
-        [tools(&explicit), tools(&own)]
-    );
-
-    let mut wrapped = args(&[]);
-    wrapped.inner_rustc = Some(wrapped.rustc.clone());
-    wrapped.rustc = dir.path().join("workspace-wrapper");
-    assert_eq!(rustc_tool_dirs(&wrapped, host).unwrap(), [tools(&own)]);
-
-    // Without rustc's own sysroot the lookup could find another linker.
-    wrapped.inner_rustc = Some(dir.path().join("missing-rustc"));
-    let explicit_only = format!("--sysroot={}", explicit.display());
-    let mut with_explicit =
-        RustcArgs::parse(&flag_base(&source, &[explicit_only.as_str()])).unwrap();
-    with_explicit.inner_rustc = wrapped.inner_rustc.clone();
-    for args in [&wrapped, &with_explicit] {
-        let error = rustc_tool_dirs(args, host).unwrap_err();
-        assert!(error.to_string().contains("sysroot"), "{error:#}");
-    }
-}
-
 /// H2: `--sysroot` selects which std rustc links against; with the
 /// same rustc version, a different sysroot must diverge the key.
 #[test]
@@ -15167,16 +14026,11 @@ fn a_file_put_back_under_the_root_with_its_old_times_is_read_again() {
     assert_eq!(read, 1);
     assert_eq!(digest(), (taken.clone(), 0), "the memo answers");
 
-    #[cfg(windows)]
-    let created = std::fs::metadata(&file).unwrap().created().unwrap();
     // Past any timestamp tick, so the file put back gets a new change time.
     std::thread::sleep(std::time::Duration::from_millis(50));
     std::fs::remove_file(&file).unwrap();
     write_file(&file, "b");
     let times = std::fs::FileTimes::new().set_modified(old);
-    // The creation time NTFS gives back within 15 s.
-    #[cfg(windows)]
-    let times = std::os::windows::fs::FileTimesExt::set_created(times, created);
     std::fs::File::options()
         .write(true)
         .open(&file)
@@ -15764,35 +14618,6 @@ fn a_weak_guard_identity_cannot_reuse_a_row_from_before_replacement() {
     assert_eq!(hasher.stats().cache_hits, 0);
     assert_eq!(hasher.stats().cache_misses, 1);
     assert!(hasher.pending_memo.borrow().is_empty());
-}
-
-#[cfg(windows)]
-#[test]
-fn windows_guard_files_stay_fresh_reads_without_queued_memo_rows() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("input.txt");
-    write_file(&path, "before");
-    let metadata = std::fs::metadata(&path).unwrap();
-    let mtime = filetime::FileTime::from_last_modification_time(&metadata);
-    let db = rusqlite::Connection::open_in_memory().unwrap();
-    ensure_file_hash_cache_schema(&db).unwrap();
-    let hasher = FileHasher::from_cache(FileHashCache::Borrowed(&db));
-    let old_hash = hasher.guard_file_hash(&path, &HashMap::new()).unwrap();
-    assert!(hasher.pending_memo.borrow().is_empty());
-    hasher.flush_memo_as_if_settled();
-    write_file(&path, "after!");
-    filetime::set_file_mtime(&path, mtime).unwrap();
-    let hash = hasher.guard_file_hash(&path, &HashMap::new()).unwrap();
-    assert_eq!(hash, hash_file(&path).unwrap());
-    assert_ne!(hash, old_hash);
-    assert_eq!(hasher.stats().cache_misses, 2);
-    assert!(hasher.pending_memo.borrow().is_empty());
-    assert_eq!(
-        FileHashCache::Borrowed(&db)
-            .get(&FileFingerprint::from_path(&path).unwrap())
-            .unwrap(),
-        None
-    );
 }
 
 #[test]
@@ -19616,186 +18441,4 @@ mod build_script_target_paths {
             b.1.fields.unwrap()["sources"]
         );
     }
-}
-
-#[test]
-fn pdb_pairing_admission_is_scoped_to_windows_or_custom_linked_executables() {
-    let _lock = key_test_lock();
-    let invocation = InvocationEnv::capture();
-    let windows = "rustc 1.99.0\nhost: x86_64-pc-windows-msvc\n";
-    let linux = "rustc 1.99.0\nhost: x86_64-unknown-linux-gnu\n";
-    let parse = |extra: &[&str]| {
-        let argv = ["rustc", "src/main.rs"]
-            .into_iter()
-            .chain(extra.iter().copied())
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        RustcArgs::parse_for(&argv, &invocation).unwrap()
-    };
-    assert!(executable_pdb_admission(&parse(&[]), windows, false));
-    assert!(!executable_pdb_admission(&parse(&[]), linux, false));
-    assert!(executable_pdb_admission(
-        &parse(&["--target=x86_64-pc-windows-msvc"]),
-        linux,
-        false
-    ));
-    assert!(executable_pdb_admission(
-        &parse(&["--target=x86_64-pc-windows-gnu"]),
-        linux,
-        false
-    ));
-    assert!(!executable_pdb_admission(
-        &parse(&["--target=x86_64-unknown-linux-gnu"]),
-        windows,
-        false
-    ));
-    assert!(!executable_pdb_admission(
-        &parse(&["--target=aarch64-apple-darwin"]),
-        windows,
-        false
-    ));
-    assert!(executable_pdb_admission(&parse(&[]), linux, true));
-    assert!(executable_pdb_admission(
-        &parse(&[]),
-        "unknown compiler host",
-        false
-    ));
-    assert!(executable_pdb_admission(
-        &parse(&["--crate-type=rlib", "--test"]),
-        windows,
-        false
-    ));
-    for args in [
-        &["--emit=metadata"][..],
-        &["--crate-type=rlib"][..],
-        &["--crate-type=staticlib"][..],
-        &["--crate-type=dylib"][..],
-        &["--crate-type=proc-macro"][..],
-    ] {
-        assert!(
-            !executable_pdb_admission(&parse(args), windows, false),
-            "{args:?}"
-        );
-        assert!(
-            !executable_pdb_admission(&parse(args), linux, true),
-            "custom {args:?}"
-        );
-    }
-}
-
-#[test]
-fn a_windows_executable_full_key_carries_the_pdb_admission_namespace() {
-    let _lock = key_test_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = dir.path().canonicalize().unwrap();
-    let source = workspace.join("main.rs");
-    std::fs::write(&source, "fn main() {}\n").unwrap();
-    let invocation = client_invocation(&workspace, &[("OUT_DIR", None)]);
-    // Native MSVC identity refuses cross-architecture SDK guesses on Windows.
-    // Use that runner's actual Windows host; other hosts exercise cross-target
-    // key admission without invoking a Windows linker.
-    let target = if cfg!(windows) {
-        let version = get_rustc_version_for(Path::new("rustc"), &invocation).unwrap();
-        rustc_host_triple(&version).unwrap().to_string()
-    } else {
-        "x86_64-pc-windows-msvc".to_string()
-    };
-    let args = RustcArgs::parse_for(
-        &[
-            "rustc".into(),
-            source.to_str().unwrap().into(),
-            "--crate-name=app".into(),
-            "--crate-type=bin".into(),
-            format!("--target={target}"),
-        ],
-        &invocation,
-    )
-    .unwrap();
-    provide_dep_info(
-        DepInfo {
-            source_files: vec![source],
-            env_deps: vec![],
-        },
-        None,
-    );
-    let (key, output) = compute_cache_key_with_outputs(
-        &args,
-        &FileHasher::new_for(&invocation),
-        &PathNormalizer::from_invocation(Some(&workspace), &invocation),
-        &KeyEnv::from_invocation(&invocation),
-    );
-    key.unwrap();
-    assert!(
-        output.fields.unwrap().contains_key("pe_pdb_admission"),
-        "legacy producers cannot write this namespace"
-    );
-}
-
-#[test]
-fn custom_target_full_keys_keep_the_pdb_admission_namespace() {
-    let _lock = key_test_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = dir.path().canonicalize().unwrap();
-    let source = workspace.join("main.rs");
-    std::fs::write(&source, "fn main() {}\n").unwrap();
-    let spec_name = format!(
-        "{}-custom.json",
-        workspace.file_name().unwrap().to_str().unwrap()
-    );
-    let spec = workspace.join(&spec_name);
-    std::fs::write(&spec, br#"{"llvm-target":"x86_64","data-layout":"e-m:e"}"#).unwrap();
-    // The relative spec exists in this invocation's cwd, not the daemon's.
-    assert!(!Path::new(&spec_name).is_file());
-    let invocation =
-        client_invocation(&workspace, &[("OUT_DIR", None), ("RUST_TARGET_PATH", None)]);
-    let has_namespace = |target: &str, target_path: Option<&Path>| {
-        let mut invocation = invocation.clone();
-        if let Some(path) = target_path {
-            invocation.set("RUST_TARGET_PATH", path.as_os_str());
-        }
-        let args = RustcArgs::parse_for(
-            &[
-                "rustc".into(),
-                source.to_str().unwrap().into(),
-                "--crate-name=app".into(),
-                "--crate-type=bin".into(),
-                format!("--target={target}"),
-            ],
-            &invocation,
-        )
-        .unwrap();
-        provide_dep_info(
-            DepInfo {
-                source_files: vec![source.clone()],
-                env_deps: vec![],
-            },
-            None,
-        );
-        let (key, output) = compute_cache_key_with_outputs(
-            &args,
-            &FileHasher::new_for(&invocation),
-            &PathNormalizer::from_invocation(Some(&workspace), &invocation),
-            &KeyEnv::from_invocation(&invocation),
-        );
-        key.unwrap();
-        output.fields.unwrap().contains_key("pe_pdb_admission")
-    };
-    assert!(
-        has_namespace(&spec_name, None),
-        "a relative JSON spec can select PE without naming Windows"
-    );
-    let absolute_spec = spec.to_str().unwrap();
-    assert!(
-        has_namespace(absolute_spec, None),
-        "an existing target file keeps the same admission policy"
-    );
-    let target_name = spec_name.strip_suffix(".json").unwrap();
-    assert!(
-        has_namespace(target_name, Some(&workspace)),
-        "RUST_TARGET_PATH can resolve a bare custom target name"
-    );
-    assert!(
-        !has_namespace("x86_64-unknown-linux-gnu", None),
-        "a known non-Windows built-in target keeps its previous namespace"
-    );
 }

@@ -32,9 +32,7 @@ use crate::result::{FixtureResult, Measurement, PhaseResult, VerifyResult, fixtu
 use crate::scenario::MeasureSpec;
 use crate::source;
 
-/// Install PATH compiler-name shims for a masquerade fixture, or refuse on
-/// Windows (no symlink farm). One function on every OS so Linux mutation
-/// testing does not "miss" a `cfg(not(unix))` helper it never compiles.
+/// Install PATH compiler-name shims for a masquerade fixture.
 fn maybe_apply_compiler_shims(
     fixture: &Fixture,
     kache_path: &Path,
@@ -43,15 +41,6 @@ fn maybe_apply_compiler_shims(
     if !fixture.compiler_shims {
         return Ok(None);
     }
-    #[cfg(not(unix))]
-    {
-        let _ = (kache_path, cache_dir);
-        anyhow::bail!(
-            "fixture `{}` sets compiler_shims, which is Unix-only",
-            fixture.name
-        );
-    }
-    #[cfg(unix)]
     {
         let shim_dir = cache_dir.join("compiler-shims");
         let output = Command::new(kache_path)
@@ -1104,8 +1093,7 @@ fn run_verify(spec: &Verify, fixture: &Fixture, cwd: &Path, cache_dir: &Path) ->
     // output-byte path leaks the runtime check can't see (e.g. a
     // path embedded in DWARF that happens to still resolve at the
     // restored location). `strings` is on every macOS / Linux dev
-    // box (part of binutils); on Windows we'd use `dumpbin` (out of
-    // scope until Windows e2e — see #77).
+    // box (part of binutils).
     if let Some(reason) = inspect_binary(&spec.run, cwd, &spec.forbidden_substrings) {
         return VerifyResult {
             exit_code,
@@ -1150,14 +1138,11 @@ fn run_verify(spec: &Verify, fixture: &Fixture, cwd: &Path, cache_dir: &Path) ->
 /// metric assertions and the runtime verify already exist; this just
 /// adds another lens on top.
 ///
-/// LIMITATION: this lens is effectively Unix-only — `strings` (binutils)
-/// is not provisioned on the Windows runner, so it skips there, and the
+/// LIMITATION: this lens uses `strings` (binutils). The
 /// fixtures' `forbidden_substrings` list Unix-form prefixes. The
-/// cross-platform guard against build-path leaks is the byte-equality
-/// `relocate_diff_match` check, which runs everywhere; this `strings`
-/// scan is a redundant Unix lens on top. (A raw-byte scan was tried to
-/// make it work on Windows but false-positived on the toolchain's
-/// embedded std-source path, so it was reverted.)
+/// guard against build-path leaks is the byte-equality
+/// `relocate_diff_match` check; this `strings`
+/// scan is a redundant lens on top.
 fn inspect_binary(run_cmd: &str, cwd: &Path, forbidden: &[String]) -> Option<String> {
     if forbidden.is_empty() {
         return None;
@@ -1257,11 +1242,8 @@ fn inspect_binary_required(run_cmd: &str, cwd: &Path, required: &[String]) -> Op
 }
 
 /// Candidate on-disk paths for an inspected artifact, in priority
-/// order. [`portable_path`](crate::portable_path) first tidies the mixed
-/// `\.`/`/` separators that [`Path::join`] leaves on Windows. Then, when
-/// `exe_suffix` is non-empty and not already present, a suffixed variant
-/// is appended as a fallback (the fixture names `./target/release/foo`
-/// but Windows produces `foo.exe`). Pure — no filesystem access — so the
+/// order. When `exe_suffix` is non-empty and not already present, a suffixed
+/// variant is appended as a fallback. Pure — no filesystem access — so the
 /// suffix logic is testable on any host.
 fn artifact_candidates(path: &Path, exe_suffix: &str) -> Vec<PathBuf> {
     let portable = crate::portable_path(path);
@@ -1291,9 +1273,7 @@ fn resolve_artifact(path: &Path) -> Option<PathBuf> {
 /// Read a fixture-declared artifact under `base`, applying the same
 /// platform-exe-suffix resolution as [`resolve_artifact`].
 ///
-/// Fixtures name diff/run artifacts without a suffix (`target/release/foo`);
-/// on Windows the real file is `foo.exe`. Reading the literal joined path
-/// would `ENOENT`. Falls back to the unresolved join so a genuinely missing
+/// Falls back to the unresolved join so a genuinely missing
 /// artifact still produces a meaningful "not found" error.
 fn read_declared_artifact(base: &Path, artifact: &str) -> std::io::Result<Vec<u8>> {
     let raw = base.join(artifact);
@@ -1502,18 +1482,6 @@ mod tests {
     }
 
     #[test]
-    fn artifact_candidates_appends_windows_exe_suffix() {
-        // Windows: try the suffix-less path, then `foo.exe`.
-        assert_eq!(
-            artifact_candidates(Path::new("/proj/target/release/foo"), ".exe"),
-            vec![
-                PathBuf::from("/proj/target/release/foo"),
-                PathBuf::from("/proj/target/release/foo.exe"),
-            ]
-        );
-    }
-
-    #[test]
     fn artifact_candidates_does_not_double_suffix() {
         // A fixture that already names `foo.exe` must not get `foo.exe.exe`.
         assert_eq!(
@@ -1661,7 +1629,6 @@ mod tests {
         assert!(out.is_none(), "must not rewrite a non-shim fixture");
     }
 
-    #[cfg(unix)]
     #[test]
     fn compiler_shims_on_fails_when_kache_cannot_run() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1679,7 +1646,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn compiler_shims_on_prepends_path_and_drops_cc() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1700,15 +1666,5 @@ mod tests {
             "CC must be dropped so Make uses PATH"
         );
         assert!(!out.env.contains_key("CXX"));
-    }
-
-    #[cfg(not(unix))]
-    #[test]
-    fn compiler_shims_on_windows_is_refused() {
-        let tmp = tempfile::tempdir().unwrap();
-        let fixture = dummy_shim_fixture(true);
-        let err = super::maybe_apply_compiler_shims(&fixture, Path::new("kache"), tmp.path())
-            .expect_err("Windows has no symlink farm");
-        assert!(format!("{err:#}").contains("Unix-only"));
     }
 }

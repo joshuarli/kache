@@ -2161,7 +2161,6 @@ mod tests {
                 modified_input_guard: None,
                 input_predictions: None,
                 record_sessions: None,
-                windows_hardlink: None,
                 shared_hardlink_restores: None,
                 deferred_discovery: None,
                 out_dir_alias: None,

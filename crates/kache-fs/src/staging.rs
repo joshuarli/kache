@@ -124,11 +124,11 @@ impl StagedFile {
     /// A private sibling directory supplies the absent pathname required by APFS.
     pub fn try_clone_from(&mut self, source: &Path) -> io::Result<()> {
         let in_place = crate::try_clone_extents_into(source, self.file_mut());
-        #[cfg(not(any(target_os = "macos", windows)))]
+        #[cfg(not(target_os = "macos"))]
         {
             in_place
         }
-        #[cfg(any(target_os = "macos", windows))]
+        #[cfg(target_os = "macos")]
         {
             if in_place.is_ok() {
                 return Ok(());

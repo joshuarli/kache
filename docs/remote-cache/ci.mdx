@@ -140,7 +140,7 @@ kache daemon stop
 
 Kache reads one config file: `KACHE_CONFIG` if set, else the nearest `.kache.toml` in or above the working directory, else `$XDG_CONFIG_HOME/kache/config.toml` or `~/.config/kache/config.toml`. If the repository has a `.kache.toml`, the file written above is ignored. Point `KACHE_CONFIG` at the file you write instead (it then replaces the repository's file for this job), or put the remote in the runner's `/etc/kache/config.toml`, which applies when the `.kache.toml` declares no `[cache.remote]`. See [Config file](/docs/getting-started/configuration#config-file).
 
-`--no-service` keeps the daemon out of a login service. Without it, `init` installs one on macOS, on Windows and on Linux hosts with a systemd user session, and that daemon runs with the service's environment instead of the job's credentials.
+`--no-service` keeps the daemon out of a login service. Without it, `init` installs one on macOS and on Linux hosts with a systemd user session, and that daemon runs with the service's environment instead of the job's credentials.
 
 `kache daemon stop` lets the daemon work through its upload queue before it exits, so run it before the runner goes away. The daemon gives the queue 30 seconds. Uploads still queued after that stay in the store's upload queue and go out the next time a daemon starts on that store, so they are lost on a runner that discards its store. The command waits up to 35 seconds and fails if the daemon is still draining. It also fails when no daemon is running.
 
@@ -167,7 +167,7 @@ On a trusted builder that keeps a disk across jobs, point `KACHE_CACHE_DIR` at t
 
 ## Progress and reports
 
-Kache is quiet in compiler-wrapper mode by default because Cargo keeps a compiler's stderr and replays it when the unit is fresh. `KACHE_PROGRESS` turns on progress lines. From a terminal on Linux or macOS they go straight to it, out of Cargo's reach. On Windows and in CI they go to stderr, where Cargo keeps them, so a later Cargo command can replay a line for a unit Kache did not run again.
+Kache is quiet in compiler-wrapper mode by default because Cargo keeps a compiler's stderr and replays it when the unit is fresh. `KACHE_PROGRESS` turns on progress lines. From a terminal on Linux or macOS they go straight to it, out of Cargo's reach. In CI they go to stderr, where Cargo keeps them, so a later Cargo command can replay a line for a unit Kache did not run again.
 
 ```yaml
 env:

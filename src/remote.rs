@@ -443,7 +443,7 @@ pub async fn upload_shard(
     .await
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "remote"))]
 mod tests {
     use super::*;
 

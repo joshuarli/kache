@@ -609,7 +609,6 @@ mod tests {
         let mut client = fixture(root.path());
         for program in [
             NativeString::capture("sh".as_ref()),
-            NativeString::Windows(vec![65]),
             NativeString::Unix(vec![0]),
         ] {
             let Command::Spawn {

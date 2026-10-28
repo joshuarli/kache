@@ -7,9 +7,6 @@ use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Ou
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-#[cfg(windows)]
-mod windows;
-
 #[derive(Clone, Default)]
 pub(crate) struct Cancellation(Arc<Request>);
 
@@ -104,18 +101,10 @@ pub(crate) fn check() -> io::Result<()> {
 }
 
 struct Running {
-    #[cfg(not(any(windows, unix)))]
-    child: std::process::Child,
-    #[cfg(unix)]
     child: super::unix_broker::Child,
-    #[cfg(windows)]
-    child: windows::Child,
     controlled: bool,
     status: Option<ExitStatus>,
-    #[cfg(unix)]
     rss: Option<crate::opcounts::ChildRss>,
-    #[cfg(windows)]
-    tree: Option<windows::Job>,
 }
 
 impl Running {
@@ -123,17 +112,11 @@ impl Running {
         if self.status.is_some() {
             return Ok(());
         }
-        #[cfg(unix)]
         if self.child.remote() {
             return self.child.kill();
         }
         if self.controlled {
-            #[cfg(unix)]
             crate::platform::kill_process_group(self.child.id());
-            #[cfg(windows)]
-            if let Some(tree) = &self.tree {
-                return tree.kill();
-            }
         }
         // Also handle a child that changed its own process group.
         self.child.kill()
@@ -143,7 +126,6 @@ impl Running {
         if self.status.is_some() {
             return Ok(self.status);
         }
-        #[cfg(unix)]
         if self.child.remote() {
             let (status, max_rss) = self.child.try_wait_remote()?;
             self.status = status;
@@ -155,7 +137,6 @@ impl Running {
             }
             return Ok(status);
         }
-        #[cfg(unix)]
         {
             use std::os::unix::process::ExitStatusExt;
             let mut status = 0;
@@ -190,15 +171,6 @@ impl Running {
                     return Err(error);
                 }
             }
-        }
-        #[cfg(not(unix))]
-        {
-            self.status = if blocking {
-                Some(self.child.wait()?)
-            } else {
-                self.child.try_wait()?
-            };
-            Ok(self.status)
         }
     }
 }
@@ -240,7 +212,6 @@ impl Child {
             .running
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        #[cfg(unix)]
         if running.child.remote() {
             drop(running);
             loop {
@@ -256,7 +227,6 @@ impl Child {
         }
         // Observe exit without reaping or holding the cancellation lock. The
         // child retains its PID until reap() takes that lock below.
-        #[cfg(unix)]
         {
             drop(running);
             let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
@@ -278,15 +248,6 @@ impl Child {
                 }
             }
         }
-        #[cfg(windows)]
-        {
-            use std::os::windows::io::AsRawHandle;
-            let handle = running.child.as_raw_handle();
-            drop(running);
-            windows::wait_for_exit(handle)?;
-        }
-        #[cfg(not(any(unix, windows)))]
-        drop(running);
         self.reap()
     }
 
@@ -323,7 +284,7 @@ pub(crate) trait CommandExt {
     /// Captured-output compiler commands use null stdin and two output pipes.
     fn invocation_output(&mut self) -> io::Result<Output>;
     /// Collect only streams the caller explicitly configured as pipes.
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     fn invocation_capture(&mut self) -> io::Result<Output>;
     fn invocation_capture_with_io(&mut self, io: ChildIo) -> io::Result<Output>;
 }
@@ -348,7 +309,7 @@ impl CommandExt for Command {
         capture(self, Some(ChildIo::OUTPUT))
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     fn invocation_capture(&mut self) -> io::Result<Output> {
         capture(self, None)
     }
@@ -403,7 +364,6 @@ pub(crate) fn status(command: &mut Command) -> io::Result<ExitStatus> {
 }
 
 fn spawn(command: &mut Command, force_group: bool, io: Option<ChildIo>) -> io::Result<Child> {
-    #[cfg(unix)]
     kache_ipc::jobserver::configure(command);
     let cancellation = CURRENT.with(|slot| slot.borrow().clone());
     let mut children = cancellation.as_ref().map(|token| {
@@ -431,27 +391,9 @@ fn spawn(command: &mut Command, force_group: bool, io: Option<ChildIo>) -> io::R
             .stdout(stream(io.stdout))
             .stderr(stream(io.stderr));
     }
-    #[cfg(unix)]
     if controlled {
         crate::platform::configure_process_group(command);
     }
-    #[cfg(windows)]
-    let (mut child, tree) = if let Some(broker) = crate::invocation::io::current().broker() {
-        let (id, pid, handles) = broker.spawn(
-            command,
-            io.ok_or_else(|| {
-                io::Error::other("delegated compiler command requires an explicit IO plan")
-            })?,
-        )?;
-        let (child, job) = windows::Child::remote(id, pid, handles, broker);
-        (child, Some(job))
-    } else if controlled {
-        let (child, job) = windows::spawn(command)?;
-        (windows::Child::local(child), Some(job))
-    } else {
-        (windows::Child::local(command.spawn()?), None)
-    };
-    #[cfg(unix)]
     let mut child = if let Some(broker) = crate::invocation::io::current().unix_broker() {
         broker.spawn(
             command,
@@ -465,8 +407,6 @@ fn spawn(command: &mut Command, force_group: bool, io: Option<ChildIo>) -> io::R
         let _admission = kache_ipc::descriptors::spawn_guard();
         super::unix_broker::Child::local(command.spawn()?)
     };
-    #[cfg(not(any(windows, unix)))]
-    let mut child = command.spawn()?;
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -475,10 +415,7 @@ fn spawn(command: &mut Command, force_group: bool, io: Option<ChildIo>) -> io::R
         child,
         controlled,
         status: None,
-        #[cfg(unix)]
         rss: crate::opcounts::child_rss_recorder(),
-        #[cfg(windows)]
-        tree,
     }));
     if let Some(children) = children.as_mut() {
         children.retain(|child| child.strong_count() != 0);
@@ -551,14 +488,12 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     fn shell(script: &str) -> Command {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", script]).env("PATH", env!("PATH"));
         command
     }
 
-    #[cfg(unix)]
     #[test]
     fn spawning_another_child_discards_completed_registrations() {
         let request = Cancellation::default();
@@ -578,7 +513,6 @@ mod tests {
         assert_eq!(second.wait().unwrap().code(), Some(9));
     }
 
-    #[cfg(unix)]
     fn wait_for_file(path: &std::path::Path) {
         let started = std::time::Instant::now();
         while !path.exists() {
@@ -590,7 +524,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn cancelling_one_request_kills_its_descendants_and_keeps_another_running() {
         let root = tempfile::tempdir().unwrap();
@@ -629,7 +562,6 @@ mod tests {
         });
     }
 
-    #[cfg(unix)]
     #[test]
     fn child_memory_belongs_to_its_spawning_invocation_when_reaped_elsewhere() {
         let _parent = crate::opcounts::InvocationScope::enter(std::time::Instant::now());
@@ -651,7 +583,6 @@ mod tests {
         assert!(crate::opcounts::invocation_child_rss().unwrap().unwrap() > 1024);
     }
 
-    #[cfg(unix)]
     #[test]
     fn child_id_matches_the_native_process_before_and_after_reaping() {
         let _scope = CancellationScope::enter(Some(Cancellation::default()));
@@ -674,7 +605,6 @@ mod tests {
         assert_eq!(child.id(), native_id);
     }
 
-    #[cfg(unix)]
     #[test]
     fn dropping_an_uncontrolled_child_leaves_it_running() {
         use std::io::Write;
@@ -701,7 +631,6 @@ mod tests {
         assert_eq!(std::fs::read(&finished).unwrap(), b"survived");
     }
 
-    #[cfg(unix)]
     #[test]
     fn polling_and_blocking_waits_return_unrecoverable_errors() {
         for mode in ["poll", "blocking"] {
@@ -735,7 +664,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     #[ignore = "subprocess fixture for bounded native wait-error coverage"]
     fn externally_reaped_child_fixture() {
@@ -759,7 +687,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn polling_a_running_child_does_not_record_a_memory_sample() {
         let root = tempfile::tempdir().unwrap();
@@ -791,7 +718,6 @@ mod tests {
         assert_eq!(child.wait().unwrap().code(), Some(6));
     }
 
-    #[cfg(unix)]
     #[test]
     fn dropping_a_child_kills_and_reaps_it_without_cancelling_the_request() {
         let _counts = crate::opcounts::InvocationScope::enter(std::time::Instant::now());
@@ -816,7 +742,6 @@ mod tests {
         assert!(status(&mut shell("exit 0")).unwrap().success());
     }
 
-    #[cfg(unix)]
     #[test]
     fn cancellation_interrupts_a_blocking_wait() {
         let root = tempfile::tempdir().unwrap();
@@ -837,7 +762,6 @@ mod tests {
         });
     }
 
-    #[cfg(unix)]
     #[test]
     fn controlled_output_preserves_bytes_and_wait_closes_stdin() {
         let _scope = CancellationScope::enter(Some(Cancellation::default()));
@@ -863,7 +787,6 @@ mod tests {
         assert_eq!(output.stderr, b"retained");
     }
 
-    #[cfg(unix)]
     #[test]
     fn completed_children_keep_their_exit_status_after_late_cancellation() {
         let token = Cancellation::default();

@@ -12,27 +12,12 @@ pub fn file_identity(path: &Path) -> io::Result<InodeId> {
 /// now. Compared with [`file_identity`] it tells whether the path was unlinked
 /// or replaced after the handle was opened.
 pub fn handle_identity(file: &fs::File) -> io::Result<InodeId> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let metadata = file.metadata()?;
-        Ok(InodeId {
-            dev: metadata.dev(),
-            ino: metadata.ino(),
-        })
-    }
-    #[cfg(windows)]
-    {
-        windows_handle_identity(file).map(|(id, _)| id)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = file;
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "file identity is unavailable",
-        ))
-    }
+    use std::os::unix::fs::MetadataExt;
+    let metadata = file.metadata()?;
+    Ok(InodeId {
+        dev: metadata.dev(),
+        ino: metadata.ino(),
+    })
 }
 
 /// Identity of a directory. A symlink at the final component is rejected.
@@ -52,97 +37,21 @@ pub(crate) fn metadata_identity(
     metadata: &fs::Metadata,
     follow: bool,
 ) -> io::Result<(InodeId, u64)> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let _ = (path, follow);
-        Ok((
-            InodeId {
-                dev: metadata.dev(),
-                ino: metadata.ino(),
-            },
-            metadata.nlink(),
-        ))
-    }
-    #[cfg(windows)]
-    {
-        let _ = metadata;
-        windows_metadata_identity(path, follow)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (path, metadata, follow);
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "file identity is unavailable",
-        ))
-    }
-}
-
-#[cfg(windows)]
-fn windows_metadata_identity(path: &Path, follow: bool) -> io::Result<(InodeId, u64)> {
-    use std::os::windows::fs::OpenOptionsExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    };
-    let flags = FILE_FLAG_BACKUP_SEMANTICS
-        | if follow {
-            0
-        } else {
-            FILE_FLAG_OPEN_REPARSE_POINT
-        };
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(flags)
-        .open(path)?;
-    windows_handle_identity(&file)
-}
-
-#[cfg(windows)]
-fn windows_handle_identity(file: &fs::File) -> io::Result<(InodeId, u64)> {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
-    };
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    // SAFETY: the handle and output buffer are valid for this call.
-    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
+    use std::os::unix::fs::MetadataExt;
+    let _ = (path, follow);
     Ok((
-        windows_identity(
-            info.dwVolumeSerialNumber,
-            info.nFileIndexHigh,
-            info.nFileIndexLow,
-        ),
-        u64::from(info.nNumberOfLinks),
+        InodeId {
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+        },
+        metadata.nlink(),
     ))
-}
-
-#[cfg(any(windows, test))]
-fn windows_identity(volume: u32, high: u32, low: u32) -> InodeId {
-    InodeId {
-        dev: u64::from(volume),
-        ino: (u64::from(high) << 32) | u64::from(low),
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testutil::TempDir;
-
-    #[test]
-    fn windows_file_index_preserves_both_halves() {
-        assert_eq!(
-            windows_identity(0x1020_3040, 0x1122_3344, 0x5566_7788),
-            InodeId {
-                dev: 0x1020_3040,
-                ino: 0x1122_3344_5566_7788
-            }
-        );
-    }
 
     #[test]
     fn hardlinks_share_identity_but_copies_do_not() {
@@ -195,7 +104,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn directory_identity_rejects_a_symlink() {
         let dir = TempDir::new("directory-symlink");

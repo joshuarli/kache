@@ -1,49 +1,38 @@
-//! Cross-platform helpers for process management and signal handling.
+//! Unix helpers for process management and signal handling.
 //!
 //! The daemon needs to:
 //!   - probe whether a recorded PID is still alive (recovery from crashes)
 //!   - politely ask another process to exit, then force-kill if it didn't
 //!   - wait for an OS-level shutdown signal to flush state and exit cleanly
 //!
-//! On Unix these all map to libc primitives (kill(2), signal(2)).
-//! On Windows they map to OpenProcess/TerminateProcess and the Windows
-//! console-control events surfaced by tokio::signal::windows.
+//! These all map to libc primitives (kill(2), signal(2)).
 
 static FRONTEND_IMAGE: std::sync::OnceLock<kache_shims::FrontendImage> = std::sync::OnceLock::new();
 
 pub(crate) fn process_context() -> kache_protocol::ProcessContext {
     kache_protocol::ProcessContext {
         pid: std::process::id(),
-        #[cfg(unix)]
         // SAFETY: geteuid has no preconditions.
         effective_uid: Some(unsafe { libc::geteuid() }),
-        #[cfg(not(unix))]
-        effective_uid: None,
         open_file_limits: open_file_limits(),
     }
 }
 
 fn open_file_limits() -> Option<kache_protocol::OpenFileLimits> {
-    #[cfg(unix)]
-    {
-        let mut limits = libc::rlimit {
-            rlim_cur: 0,
-            rlim_max: 0,
-        };
-        // SAFETY: limits is a valid output slot.
-        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) } != 0 {
-            return None;
-        }
-        Some(kache_protocol::OpenFileLimits {
-            soft: finite_file_limit(limits.rlim_cur),
-            hard: finite_file_limit(limits.rlim_max),
-        })
+    let mut limits = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: limits is a valid output slot.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) } != 0 {
+        return None;
     }
-    #[cfg(not(unix))]
-    None
+    Some(kache_protocol::OpenFileLimits {
+        soft: finite_file_limit(limits.rlim_cur),
+        hard: finite_file_limit(limits.rlim_max),
+    })
 }
 
-#[cfg(unix)]
 fn finite_file_limit(limit: libc::rlim_t) -> Option<u64> {
     (limit != libc::RLIM_INFINITY).then_some(limit)
 }
@@ -66,28 +55,16 @@ pub(crate) fn frontend_selection() -> Result<kache_shims::Selection, kache_shims
     kache_shims::select_frontend(&env, FRONTEND_IMAGE.get(), &kache_shims::RealFs)
 }
 
-/// Release the build directory after daemon configuration has been resolved.
-#[cfg(windows)]
-pub(crate) fn release_daemon_working_directory(
-    runtime: &std::path::Path,
-) -> std::io::Result<std::path::PathBuf> {
-    let manifest = std::env::current_dir()?.join("Cargo.lock");
-    std::fs::create_dir_all(runtime)?;
-    std::env::set_current_dir(runtime)?;
-    Ok(manifest)
-}
-
 pub(crate) fn host_spawn(
     command: &mut std::process::Command,
 ) -> std::io::Result<std::process::Child> {
-    #[cfg(unix)]
     let _admission = kache_ipc::descriptors::spawn_guard();
     command.spawn()
 }
 
 /// Run a host utility independently of compiler cancellation and jobserver
 /// state. Descriptor admission is excluded only while creating the process.
-#[cfg(all(unix, test))]
+#[cfg(test)]
 pub(crate) fn host_output(
     command: &mut std::process::Command,
 ) -> std::io::Result<std::process::Output> {
@@ -109,7 +86,6 @@ pub(crate) async fn host_output_async(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let child = {
-        #[cfg(unix)]
         let _admission = kache_ipc::descriptors::spawn_guard();
         command.spawn()?
     };
@@ -131,7 +107,6 @@ pub(crate) async fn host_output_async(
 /// Note that `u32::MAX` casts to `-1`, so a "definitely dead, made-up PID"
 /// fixture is exactly the value that wipes the session. Reject anything that
 /// is not an ordinary positive PID.
-#[cfg(unix)]
 fn is_single_process_pid(pid: u32) -> bool {
     pid > 1 && i32::try_from(pid).is_ok()
 }
@@ -141,7 +116,6 @@ fn is_single_process_pid(pid: u32) -> bool {
 /// Production logs and carries on — a corrupt pidfile must not take the daemon
 /// down. Tests panic instead: a fixture that reaches here is the exact bug this
 /// module exists to prevent, and silently no-oping would let it pass green.
-#[cfg(unix)]
 fn refuse_unsafe_pid(pid: u32, what: &str) {
     tracing::error!(pid, action = what, "refusing to signal a non-process PID");
 
@@ -155,7 +129,7 @@ fn refuse_unsafe_pid(pid: u32, what: &str) {
 
 /// Parent of `pid`, or None when that cannot be established — no usable `ps`,
 /// or the process is already gone.
-#[cfg(all(unix, test))]
+#[cfg(test)]
 fn parent_pid(pid: u32) -> Option<u32> {
     let out =
         host_output(std::process::Command::new("ps").args(["-o", "ppid=", "-p", &pid.to_string()]))
@@ -187,7 +161,7 @@ fn parent_pid(pid: u32) -> Option<u32> {
 /// their own children. The value guard above still rejects the broadcast
 /// selectors there, which is the catastrophic class; this one is the finer
 /// limit and correctly declines to judge without evidence.
-#[cfg(all(unix, test))]
+#[cfg(test)]
 fn assert_test_owns_process(pid: u32, what: &str) -> bool {
     let me = std::process::id();
     let mut cursor = pid;
@@ -221,43 +195,30 @@ fn assert_test_owns_process(pid: u32, what: &str) -> bool {
 }
 
 /// Kill the Unix process group owned by a compiler invocation.
-#[cfg(unix)]
 pub fn kill_process_group(pid: u32) {
-    #[cfg(unix)]
-    {
-        // `-pid` is the group selector, so pid 1 would negate into the `-1`
-        // "signal everything" broadcast and pid 0 into the caller's own group.
-        if !is_single_process_pid(pid) {
-            refuse_unsafe_pid(pid, "kill_process_group");
-            return;
-        }
-        #[cfg(test)]
-        assert_test_owns_process(pid, "SIGKILL the process group of");
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
-        }
+    // `-pid` is the group selector, so pid 1 would negate into the `-1`
+    // "signal everything" broadcast and pid 0 into the caller's own group.
+    if !is_single_process_pid(pid) {
+        refuse_unsafe_pid(pid, "kill_process_group");
+        return;
+    }
+    #[cfg(test)]
+    assert_test_owns_process(pid, "SIGKILL the process group of");
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
     }
 }
 
-/// Current effective UID. Returns `libc::getuid()` on Unix. On Windows
-/// there is no equivalent — UIDs are part of macOS launchctl target
-/// strings (`gui/{uid}/...`) and that whole code path is macOS-only, so a
-/// stub returning 0 keeps the rest of `service.rs` compilable.
-#[cfg(unix)]
+/// Current effective UID. UIDs are part of macOS launchctl target
+/// strings (`gui/{uid}/...`).
 pub fn current_uid() -> u32 {
     unsafe { libc::getuid() }
-}
-
-#[cfg(not(unix))]
-pub fn current_uid() -> u32 {
-    0
 }
 
 /// Raise the soft open-file limit as far as the hard limit allows. launchd
 /// starts agents with a soft limit of 256, as does a stock macOS shell, and a
 /// daemon serving a parallel build holds a socket and store files per request
 /// (#1361). Returns the old and new soft limit when it changed.
-#[cfg(unix)]
 pub fn raise_open_file_limit() -> std::io::Result<Option<(libc::rlim_t, libc::rlim_t)>> {
     let mut limit = libc::rlimit {
         rlim_cur: 0,
@@ -287,7 +248,6 @@ pub fn raise_open_file_limit() -> std::io::Result<Option<(libc::rlim_t, libc::rl
 
 /// The soft limit to ask for: the hard limit, capped by what the kernel lets
 /// one process open. `None` when that is no higher than `soft`.
-#[cfg(unix)]
 fn open_file_target(
     soft: libc::rlim_t,
     hard: libc::rlim_t,
@@ -320,65 +280,28 @@ fn macos_max_files_per_proc() -> libc::rlim_t {
     }
 }
 
-/// Resolve when the OS asks the daemon to stop. SIGTERM/SIGINT on Unix,
-/// Ctrl+C / console-close on Windows.
+/// Resolve when the OS asks the daemon to stop: SIGTERM/SIGINT.
 pub async fn wait_for_shutdown() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
-        let mut sigint = signal(SignalKind::interrupt()).expect("SIGINT handler");
-        tokio::select! {
-            _ = sigterm.recv() => {}
-            _ = sigint.recv() => {}
-        }
-    }
-    #[cfg(windows)]
-    {
-        use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_shutdown};
-        let mut cc = ctrl_c().expect("ctrl_c handler");
-        let mut cb = ctrl_break().expect("ctrl_break handler");
-        let mut cl = ctrl_close().expect("ctrl_close handler");
-        let mut cs = ctrl_shutdown().expect("ctrl_shutdown handler");
-        tokio::select! {
-            _ = cc.recv() => {}
-            _ = cb.recv() => {}
-            _ = cl.recv() => {}
-            _ = cs.recv() => {}
-        }
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
+    let mut sigint = signal(SignalKind::interrupt()).expect("SIGINT handler");
+    tokio::select! {
+        _ = sigterm.recv() => {}
+        _ = sigint.recv() => {}
     }
 }
 
-/// Configure a process to be fully detached (in its own process group on Unix,
-/// or with detached creation flags on Windows) so that pressing Ctrl-C on the parent
-/// does not terminate the child.
+/// Configure a process to be fully detached (in its own process group) so that
+/// pressing Ctrl-C on the parent does not terminate the child.
 pub fn configure_detached_process(cmd: &mut std::process::Command) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // CREATE_NEW_PROCESS_GROUP = 0x00000200
-        // DETACHED_PROCESS = 0x00000008
-        cmd.creation_flags(0x00000200 | 0x00000008);
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = cmd;
-    }
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
 }
 
-/// Put a Unix compiler child in its own group for invocation cancellation.
-#[cfg(unix)]
+/// Put a compiler child in its own group for invocation cancellation.
 pub fn configure_process_group(cmd: &mut std::process::Command) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
 }
 
 /// Set on a kache process that kache started for one of its own
@@ -388,18 +311,14 @@ pub const SELF_SPAWN_ENV: &str = "KACHE_SELF_SPAWN";
 /// A command that runs the kache binary at `exe` as `kache <subcommand>`.
 ///
 /// Under a compiler-name shim `exe` can be the shim itself: macOS reports
-/// the symlink it was started through (`.../shims/cc`), and a Windows shim
-/// is a copy named `gcc.exe`. main routes on argv[0] before it parses a
-/// subcommand, so the child would run as the compiler. On Unix argv[0] is
-/// set to `kache`. Windows cannot set it, so [`SELF_SPAWN_ENV`] tells main
-/// which subcommand to expect there, and on Unix as a second guard.
+/// the symlink it was started through (`.../shims/cc`). main routes on
+/// argv[0] before it parses a subcommand, so the child would run as the
+/// compiler. argv[0] is set to `kache`, and [`SELF_SPAWN_ENV`] tells main
+/// which subcommand to expect there as a second guard.
 pub fn self_command(exe: &std::path::Path, subcommand: &str) -> std::process::Command {
     let mut cmd = std::process::Command::new(exe);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.arg0("kache");
-    }
+    use std::os::unix::process::CommandExt;
+    cmd.arg0("kache");
     cmd.arg(subcommand).env(SELF_SPAWN_ENV, subcommand);
     cmd
 }
@@ -416,7 +335,6 @@ pub fn is_self_spawn(argv: &[String], self_spawn: Option<&std::ffi::OsStr>) -> b
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
     #[tokio::test]
     async fn host_utilities_capture_bytes_without_request_cancellation() {
         let script = "read ignored; printf '\\377host-out'; printf '\\376host-err' >&2; exit 7";
@@ -441,7 +359,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn host_utility_wait_does_not_hold_descriptor_admission() {
         let root = tempfile::tempdir().unwrap();
@@ -479,13 +396,11 @@ mod tests {
     /// Deliberately does not call `parent_pid`: this is the skip condition for
     /// tests that pin `parent_pid` itself, so routing through it would let a
     /// mutant that stubs it out downgrade those tests to silent skips.
-    #[cfg(unix)]
     fn ps_available() -> bool {
         std::env::var_os("PATH")
             .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join("ps").is_file()))
     }
 
-    #[cfg(unix)]
     #[test]
     fn reported_process_context_preserves_finite_and_unlimited_limits() {
         assert_eq!(super::finite_file_limit(256), Some(256));
@@ -499,7 +414,6 @@ mod tests {
     /// launchd's 256/unlimited must land on the per-process cap, never on
     /// RLIM_INFINITY (which macOS rejects), and a limit that is already as
     /// high as allowed is left alone.
-    #[cfg(unix)]
     #[test]
     fn open_file_target_takes_the_hard_limit_up_to_the_cap() {
         use super::open_file_target;
@@ -520,7 +434,6 @@ mod tests {
     /// Lowering the soft limit is always allowed, so setting it one below
     /// the target gives the raise something to do on any host. A soft limit
     /// already above the target (a shell's `ulimit -n`) is never lowered.
-    #[cfg(unix)]
     #[test]
     fn raise_open_file_limit_restores_a_lowered_limit_once() {
         let current = || {
@@ -587,7 +500,6 @@ mod tests {
     /// Prints this process's argv[0] when run as a child of
     /// [`self_command_runs_as_kache_on_unix`]. On stderr: with one test
     /// thread, libtest puts its own progress text on the same stdout line.
-    #[cfg(unix)]
     #[test]
     #[ignore = "child fixture for self_command_runs_as_kache_on_unix"]
     fn print_argv0_fixture() {
@@ -599,7 +511,6 @@ mod tests {
     /// std has no getter for argv[0], so a real child reports it. The child
     /// is this test binary: a shell can be a multi-call binary (busybox in
     /// the Nix build) that picks its applet from argv[0].
-    #[cfg(unix)]
     #[test]
     fn self_command_runs_as_kache_on_unix() {
         let exe = std::env::current_exe().unwrap();
@@ -641,7 +552,6 @@ mod tests {
         assert!(!super::is_self_spawn(&[], gc));
     }
 
-    #[cfg(unix)]
     #[test]
     fn broadcast_pids_are_not_single_process_targets() {
         // The kill(2) broadcast selectors. `u32::MAX` is the dangerous one:
@@ -655,7 +565,6 @@ mod tests {
         assert!(super::is_single_process_pid(std::process::id()));
     }
 
-    #[cfg(unix)]
     #[test]
     fn signalling_a_process_the_test_does_not_own_panics() {
         // Needs a working `ps`: without one the guard deliberately allows
@@ -686,7 +595,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn owning_a_process_is_not_claimed_without_evidence() {
         // The complement of the test above: where the parent chain cannot be
@@ -707,7 +615,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     #[should_panic(expected = "broadcast")]
     fn a_broadcast_pid_fails_the_test_that_supplied_it() {
@@ -725,16 +632,9 @@ mod tests {
     // early return over `is_single_process_pid`, so pinning the predicate
     // above pins the behaviour without arming a live round.
 
-    #[cfg(unix)]
     #[test]
     fn current_uid_matches_libc_getuid() {
         let expected = unsafe { libc::getuid() };
         assert_eq!(super::current_uid(), expected);
-    }
-
-    #[cfg(not(unix))]
-    #[test]
-    fn current_uid_is_stub_zero_off_unix() {
-        assert_eq!(super::current_uid(), 0);
     }
 }

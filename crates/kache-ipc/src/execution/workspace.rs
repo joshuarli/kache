@@ -4,7 +4,6 @@ use kache_protocol::execution::{
     NativeString,
     workspace::{Command as Workspace, Reply},
 };
-#[cfg(unix)]
 use std::os::{
     fd::AsRawFd,
     unix::fs::{OpenOptionsExt, PermissionsExt},
@@ -16,11 +15,6 @@ use std::{
     io::{self, Seek},
     path::{Path, PathBuf},
 };
-
-#[cfg(windows)]
-mod windows;
-#[cfg(windows)]
-use windows::touch;
 
 #[derive(Default)]
 pub(super) struct Files {
@@ -158,15 +152,8 @@ fn permissions(mode: u32, file: &File) -> io::Result<fs::Permissions> {
     if mode & !0o777 != 0 {
         return Err(invalid("unsupported workspace file mode"));
     }
-    #[cfg(unix)]
-    {
-        let _ = file;
-        Ok(fs::Permissions::from_mode(mode))
-    }
-    #[cfg(windows)]
-    {
-        windows::permissions(mode, file)
-    }
+    let _ = file;
+    Ok(fs::Permissions::from_mode(mode))
 }
 
 fn invalid(message: impl ToString) -> io::Error {
@@ -177,7 +164,6 @@ fn unknown() -> io::Error {
     invalid("unknown staged workspace file")
 }
 
-#[cfg(unix)]
 pub(super) fn touch(path: &Path) -> io::Result<()> {
     let file = fs::OpenOptions::new()
         .read(true)
@@ -204,15 +190,6 @@ pub(super) fn touch(path: &Path) -> io::Result<()> {
 
 #[allow(clippy::permissions_set_readonly_false)]
 fn remove(path: &Path) -> io::Result<()> {
-    #[cfg(windows)]
-    if let Ok(metadata) = fs::symlink_metadata(path)
-        && metadata.is_file()
-        && metadata.permissions().readonly()
-    {
-        let mut permissions = metadata.permissions();
-        permissions.set_readonly(false);
-        fs::set_permissions(path, permissions)?;
-    }
     fs::remove_file(path)
 }
 

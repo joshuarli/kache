@@ -1,11 +1,7 @@
-#[cfg(any(unix, windows))]
 pub(crate) mod execution;
 pub(crate) mod io;
 pub(crate) mod process;
-#[cfg(unix)]
 pub(crate) mod unix_broker;
-#[cfg(windows)]
-pub(crate) mod windows_broker;
 mod workspace;
 
 /// Inputs and timing transferred to one synchronous compiler request.
@@ -17,7 +13,6 @@ pub(crate) struct InvocationContext {
     pub(crate) shim_stem: String,
     pub(crate) io: io::InvocationIo,
     pub(crate) cancellation: Option<process::Cancellation>,
-    #[cfg(unix)]
     pub(crate) jobserver: kache_ipc::jobserver::Descriptors,
 }
 

@@ -23,8 +23,6 @@ mod clock;
 pub use clock::sample_write_clock;
 
 mod copy;
-#[cfg(windows)]
-pub use copy::windows_cluster_size;
 pub use copy::{copy_writable, set_writable_permissions, try_clone_extents_into, try_reflink};
 
 mod identity;
@@ -453,23 +451,13 @@ pub fn volume_usage(path: &Path) -> Option<VolumeUsage> {
     if let Some(usage) = testutil::mock_volume_usage(path) {
         return usage;
     }
-    #[cfg(unix)]
-    {
-        volume_usage_unix(path)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        None
-    }
+    volume_usage_unix(path)
 }
 
-#[cfg(unix)]
 fn volume_usage_unix(path: &Path) -> Option<VolumeUsage> {
     volume_stats(path).map(|stats| stats.usage)
 }
 
-#[cfg(any(unix, test))]
 fn volume_bytes(blocks: u64, available: u64, fragment_size: u64, block_size: u64) -> VolumeUsage {
     let unit = if fragment_size > 0 {
         fragment_size
@@ -606,7 +594,6 @@ pub mod testutil {
             let mut file = std::fs::File::create(&p).expect("create file");
             file.write_all(&buf).expect("write");
             // Allocation probes need the writes on disk, including on APFS.
-            // Windows requires the writable handle for this flush.
             file.sync_all().expect("sync");
             p
         }
@@ -639,7 +626,6 @@ pub mod testutil {
     /// and a writer that looked anything up there would fail at random. The
     /// mode is set from here with `chmod(2)` by path, which opens nothing.
     /// Contents must be text without NUL bytes, which a shell cannot carry.
-    #[cfg(unix)]
     pub fn write_executable(path: &Path, contents: impl AsRef<[u8]>) {
         let contents = contents.as_ref();
         assert!(
@@ -652,7 +638,6 @@ pub mod testutil {
 
     /// [`write_executable`] with a hook on the writer's command, so a test
     /// can take `PATH` away from it.
-    #[cfg(unix)]
     pub(crate) fn write_executable_with(
         path: &Path,
         contents: &[u8],
@@ -684,12 +669,6 @@ pub mod testutil {
         );
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
             .expect("mark the script executable");
-    }
-
-    /// Windows has no ETXTBSY and no mode bits, so a plain write is enough.
-    #[cfg(not(unix))]
-    pub fn write_executable(path: &Path, contents: impl AsRef<[u8]>) {
-        std::fs::write(path, contents).expect("write the script");
     }
 }
 
@@ -737,7 +716,6 @@ mod tests {
         let unreadable = VolumeUsageGuard::new(dir.path(), None);
         assert_eq!(volume_usage(dir.path()), None);
         drop(unreadable);
-        #[cfg(unix)]
         assert!(volume_usage(dir.path()).is_some());
     }
 
@@ -760,7 +738,6 @@ mod tests {
         let _guard = VolumeUsageGuard::new(dir.path(), None);
     }
 
-    #[cfg(unix)]
     #[test]
     fn write_executable_writes_the_bytes_and_the_result_runs() {
         use std::os::unix::fs::PermissionsExt;
@@ -798,7 +775,6 @@ mod tests {
     }
 
     /// Tests rewrite the process-wide PATH; the writer must not need it.
-    #[cfg(unix)]
     #[test]
     fn write_executable_needs_nothing_from_path() {
         let dir = TempDir::new("write-executable-no-path");
@@ -811,7 +787,6 @@ mod tests {
         assert_eq!(status.code(), Some(3));
     }
 
-    #[cfg(unix)]
     #[test]
     #[should_panic(expected = "text only")]
     fn write_executable_refuses_nul_bytes() {
@@ -868,7 +843,6 @@ mod tests {
         assert_eq!(blocks.free, 16384);
     }
 
-    #[cfg(unix)]
     #[test]
     fn volume_query_requires_a_real_path() {
         let dir = TempDir::new("volume-usage");
@@ -878,13 +852,6 @@ mod tests {
         assert!(usage.free <= usage.total);
         assert!(volume_usage(&dir.path().join("missing")).is_none());
         assert!(volume_usage(Path::new("\0")).is_none());
-    }
-
-    #[cfg(not(unix))]
-    #[test]
-    fn unavailable_volume_usage_remains_unknown() {
-        let dir = TempDir::new("volume-usage");
-        assert!(volume_usage(dir.path()).is_none());
     }
 
     #[test]
@@ -945,24 +912,16 @@ mod tests {
         std::fs::write(locked.join("payload"), vec![1u8; 8192]).unwrap();
         d.write("visible", 4096);
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-        }
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
 
         let probe = probe_for(d.path());
         let mut ledger = InodeLedger::new();
         let s = probe.measure_dir(d.path(), &mut ledger).unwrap();
 
         // Restore so the TempDir can clean itself up.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
-        }
+        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
 
-        #[cfg(unix)]
         if !nix_running_as_root() {
             assert_eq!(s.unreadable_dirs, 1, "the locked directory must be counted");
             assert!(s.is_partial(), "and the total must admit it is incomplete");
@@ -971,7 +930,6 @@ mod tests {
     }
 
     /// Root can read anything, so the permission test proves nothing there.
-    #[cfg(unix)]
     fn nix_running_as_root() -> bool {
         // SAFETY: getuid is always safe.
         unsafe { libc::getuid() == 0 }
@@ -1042,7 +1000,6 @@ mod tests {
     fn symlinks_are_never_followed() {
         let d = TempDir::new("symlink");
         let _target = d.write("real", BLOCK);
-        #[cfg(unix)]
         std::os::unix::fs::symlink(&_target, d.path().join("link")).expect("symlink");
 
         let probe = probe_for(d.path());

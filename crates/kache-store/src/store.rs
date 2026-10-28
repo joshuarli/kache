@@ -51,15 +51,6 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-#[cfg(all(test, windows))]
-type DurabilityOpenHook = Box<dyn FnOnce(bool)>;
-
-#[cfg(all(test, windows))]
-thread_local! {
-    static DURABILITY_OPEN_HOOK: std::cell::RefCell<Option<DurabilityOpenHook>> =
-        const { std::cell::RefCell::new(None) };
-}
-
 fn sync_durability_file(file: &fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     DURABILITY_SYNC_OBSERVATIONS.with(|observations| -> std::io::Result<()> {
@@ -71,36 +62,8 @@ fn sync_durability_file(file: &fs::File) -> std::io::Result<()> {
     file.sync_all()
 }
 
-/// Open a published file for verification and flushing through the same handle.
-/// Windows needs write access for FlushFileBuffers, even on read-only blobs.
 fn open_published_file(path: &Path) -> std::io::Result<fs::File> {
-    #[cfg(not(windows))]
-    {
-        fs::File::open(path)
-    }
-    #[cfg(windows)]
-    {
-        let permissions = fs::metadata(path)?.permissions();
-        #[cfg(test)]
-        if let Some(hook) = DURABILITY_OPEN_HOOK.with(|slot| slot.borrow_mut().take()) {
-            hook(permissions.readonly());
-        }
-        if permissions.readonly() {
-            let mut writable = permissions.clone();
-            writable.set_readonly(false);
-            fs::set_permissions(path, writable)?;
-        }
-        let opened = fs::OpenOptions::new().read(true).write(true).open(path);
-        if permissions.readonly() {
-            match &opened {
-                Ok(file) => file.set_permissions(permissions)?,
-                Err(_) => {
-                    let _ = fs::set_permissions(path, permissions);
-                }
-            }
-        }
-        opened
-    }
+    fs::File::open(path)
 }
 
 fn verify_durability_file(
@@ -144,12 +107,12 @@ thread_local! {
     /// Forcing the emulation makes the contract testable everywhere.
     ///
     /// Thread-local rather than a process-wide flag (`link.rs`'s
-    /// `WINDOWS_HARDLINK_RESTORE` is the latter, but it is a real feature
+    /// A process-wide flag is the latter, but it is a real feature
     /// switch): `cargo test` runs store tests in parallel, and one test's
     /// emulation must not leak into another's put.
     ///
     /// Unix-only: the tests that construct [`ModeDroppingIngest`] are
-    /// `#[cfg(unix)]`, and Windows test builds fail `-D dead-code` otherwise.
+    /// `#[cfg(unix)]`.
     static FORCE_MODE_DROPPING_INGEST: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
 }
@@ -321,8 +284,7 @@ fn unlink_blob(blob: &Path) {
             let _ = fs::set_permissions(blob, perms);
         }
         if fs::remove_file(blob).is_err() && blob.exists() {
-            // Removal can fail transiently on Windows (sharing violation /
-            // delete-pending). The surviving blob may share an inode with a
+            // Removal can fail transiently. The surviving blob may share an inode with a
             // live build output (insert/restore hardlinks), so re-arm the
             // read-only guard rather than leaving a writable blob behind.
             set_blob_readonly(blob);
@@ -332,10 +294,6 @@ fn unlink_blob(blob: &Path) {
 
 fn hardlink_eligible<P: ArtifactPolicy>(store_name: &str, executable: bool) -> bool {
     if executable {
-        return false;
-    }
-    #[cfg(windows)]
-    if !crate::link::windows_hardlink_enabled() {
         return false;
     }
     P::allow_hardlink(store_name)
@@ -445,8 +403,8 @@ fn materialize_blob_with_durability(
     // source: hashing followed the link, but `hard_link` would link the symlink
     // itself, and a blob must never be a pointer into mutable external state.
     //
-    // Hardlink RO is applied in `after_fsync` (not in the write step): Windows
-    // needs a writable handle to flush (#196). On RO failure we demote to a
+    // Hardlink RO is applied in `after_fsync` (not in the write step).
+    // On RO failure we demote to a
     // full copy rather than publishing a writable shared inode.
     //
     // The hardlink error is captured, not swallowed with `.is_ok()`: EXDEV
@@ -526,8 +484,6 @@ fn materialize_blob_with_durability(
         Err(e) => {
             // Hardlink path may have marked the source RO via the shared temp
             // inode; undo that if we never published a blob that shares it.
-            // On Windows, remove_file_robust may also have cleared RO on a
-            // shared published blob — re-arm if the blob is present.
             if matches!(ingest.get(), StoreIngest::Hardlink) {
                 if blob.is_file() {
                     set_blob_readonly(blob);
@@ -553,7 +509,7 @@ fn materialize_blob_with_durability(
         // Concurrent winner already published. Our temp was removed; if the
         // published blob does not share the source inode, clear the provisional
         // RO bit we applied before the race was lost. If it does share, re-arm
-        // RO in case Windows cleanup cleared the shared attribute.
+        // RO.
         if paths_share_inode(source, blob) {
             set_blob_readonly(blob);
         } else {
@@ -595,7 +551,7 @@ pub const KEY_LOCK_SWEEP_GRACE: Duration = Duration::from_secs(3600);
 
 /// Most key lock files one sweep unlinks. Each costs an open, a lock, two
 /// stats and an unlink under `gc.lock`, tens of microseconds on Linux and a
-/// few hundred on macOS and Windows, so a full batch stays within seconds.
+/// few hundred on macOS, so a full batch stays within seconds.
 /// A store with 84k stale locks converges in five sweeps.
 pub const KEY_LOCK_SWEEP_CAP: usize = 20_000;
 
@@ -633,7 +589,7 @@ fn key_lock_is_stale(
 
 /// Unlink one key lock file if it is a regular file, stale, and not held.
 /// True when the file is gone. Any failure leaves it for a later sweep; on
-/// Windows that includes an unlink refused because another handle is open
+/// That includes an unlink refused because another handle is open
 /// without delete sharing.
 ///
 /// Staleness is judged twice. The listing's mtime keeps the sweep from ever
@@ -713,7 +669,7 @@ enum PublishDest {
     File,
     /// Something that is not a regular file (a directory): no race explains it.
     Obstructed,
-    /// Nothing readable: absent, or a Windows delete-pending name.
+    /// Nothing readable: absent, or a delete-pending name.
     Vacant,
 }
 
@@ -738,7 +694,7 @@ enum PublishRename {
 
 /// Settle one publish rename attempt (#1128).
 ///
-/// A published blob is read-only, and on Windows a rename onto a read-only
+/// A published blob is read-only, and a rename onto a read-only
 /// file fails with ERROR_ACCESS_DENIED, the same code a delete-pending name
 /// gives. The error alone cannot tell "a winner is there" from "a removed
 /// blob is going away", so the destination decides: a winner settles the
@@ -1059,7 +1015,7 @@ fn record_eviction_failure(stats: &mut GcStats, error: &anyhow::Error) {
 /// (kunobi-ninja/kache#608). Denominated in `blobs` TABLE bytes, the same
 /// unit as [`ArtifactStore::physical_size`], so eviction's running budget stays
 /// consistent with its trigger; the file unlink itself is best-effort
-/// (Windows can defer it), so this is not a guarantee about the disk.
+/// (the OS can defer it), so this is not a guarantee about the disk.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RemovalReclaim {
     pub freed_bytes: u64,
@@ -3951,7 +3907,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
     /// [`Self::publish_staged_blob`] or removed by [`discard_staged_blob`].
     ///
     /// Hardlink read-only semantics match `materialize_blob`: the guard is
-    /// applied only after the fsync (Windows needs a writable handle to flush,
+    /// applied only after the fsync (needs a writable handle to flush,
     /// #196), and a failed demotes to a full copy rather than publishing a
     /// writable shared inode.
     ///
@@ -4139,7 +4095,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
     }
 
     /// The rename half of [`Self::publish_staged_blob`], with the rename and
-    /// its transient classifier passed in so a test can stage the Windows
+    /// its transient classifier passed in so a test can stage a transient
     /// failures. The staged file is gone afterwards unless it became the blob.
     fn publish_staged_blob_with(
         &self,
@@ -4160,7 +4116,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         // Keep SQLite's writer lock from this final existence check through
         // the rename. Plain rename would otherwise overwrite a
         // newly published inode on Unix and undo another entry's flush.
-        // `publish_rename` still handles Windows sharing/delete-pending states.
+        // `publish_rename` still handles sharing/delete-pending states.
         let outcome = publish_rename(rename, || publish_dest_state(blob), is_transient);
         if !matches!(outcome, Ok(PublishRename::Published)) {
             tracing::debug!("{} not published by this put: {outcome:?}", blob.display());
@@ -4168,7 +4124,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         }
         let outcome = outcome?;
         if outcome == PublishRename::Published {
-            // Flushers temporarily clear this bit to open a Windows write
+            // Flushers temporarily clear this bit to open a write
             // handle. Finish publication under the same writer guard so a
             // late read-only change cannot interrupt that opening window.
             set_blob_readonly(blob);
@@ -4260,7 +4216,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             let size = meta.len();
             // Staging temps may be hardlinked (and therefore read-only); clear
             // that before unlinking. Counted only when the file is really gone,
-            // so Windows sharing violations don't over-claim reclaimed bytes.
+            // so sharing violations don't over-claim reclaimed bytes.
             let removed = (|| -> std::io::Result<()> {
                 let mut perms = meta.permissions();
                 perms.set_readonly(false);
@@ -4598,20 +4554,6 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         path: &Path,
         writer_guard: Option<&rusqlite::Transaction<'_>>,
     ) -> Result<fs::File> {
-        // Windows needs a writable handle for FlushFileBuffers. Serialize
-        // only the read-only-bit/open/restore window with other flushers and
-        // publishers; hashing and fsync still run after this guard drops.
-        // Large-entry promotion already holds the writer transaction.
-        #[cfg(windows)]
-        let _writer = if writer_guard.is_none() {
-            Some(rusqlite::Transaction::new_unchecked(
-                &self.db,
-                rusqlite::TransactionBehavior::Immediate,
-            )?)
-        } else {
-            None
-        };
-        #[cfg(not(windows))]
         let _ = writer_guard;
         Ok(open_published_file(path)?)
     }
@@ -6253,7 +6195,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                 //
                 // A concurrent remover that already unlinked this meta.json
                 // arrives here too. On Unix that read returns NotFound; on
-                // Windows the name lingers delete-pending and the read fails
+                // the name lingers delete-pending and the read fails
                 // with ERROR_ACCESS_DENIED instead, which used to fall through
                 // to the unreadable-meta arm and report #276 corruption for two
                 // healthy removers. Both shapes mean the same thing — someone
@@ -6270,7 +6212,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                     // The concurrent removal won (or the key never existed);
                     // nothing left to remove, and the meta's state cannot
                     // change that — so decide before probing it, which on
-                    // Windows may still be delete-pending and unstattable.
+                    // It may still be delete-pending and unstattable.
                     return Ok(RemovalAttempt::Done(None));
                 }
                 // fs::metadata, not Path::exists: exists() swallows every
@@ -6490,7 +6432,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
 
         if republished == 0 {
             // Remove the entry directory (just meta.json in new format, may
-            // have artifacts in legacy entries). Windows can surface external
+            // have artifacts in legacy entries). The OS can surface external
             // interference as delete-pending errors (sharing violations from
             // readers mid-hardlink), so on any error re-check whether the
             // directory is actually gone, with a brief bounded retry (worst
@@ -6515,7 +6457,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                     Ok(()) => Ok(()),
                     Err(e) => {
                         // Benign exactly when the directory is gone: NotFound
-                        // is the Unix shape of losing the race, and Windows
+                        // is the Unix shape of losing the race, and the other
                         // surfaces a competitor's in-flight delete as
                         // delete-pending errors instead.
                         if !entry_dir.exists() { Ok(()) } else { Err(e) }

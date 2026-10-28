@@ -6,51 +6,31 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static ATOMIC_TMP_NONCE: AtomicU64 = AtomicU64::new(0);
 
 /// fsync a directory so a rename/create into it survives a crash. Without it,
-/// a file's contents can be durable while its directory entry is not. No-op on non-Unix:
-/// Windows has no directory-handle fsync and `File::open` on a directory fails.
-#[cfg(unix)]
+/// a file's contents can be durable while its directory entry is not.
 pub fn fsync_dir(dir: &Path) -> std::io::Result<()> {
     fs::File::open(dir)?.sync_all()
 }
-#[cfg(not(unix))]
-pub fn fsync_dir(_dir: &Path) -> std::io::Result<()> {
-    Ok(())
-}
 
 /// fsync a file so its bytes are durable on disk.
-/// On Windows, FlushFileBuffers requires write access.
 pub fn fsync_file(path: &Path) -> std::io::Result<()> {
-    #[cfg(windows)]
-    let file = fs::OpenOptions::new().write(true).open(path)?;
-    #[cfg(not(windows))]
     let file = fs::File::open(path)?;
     file.sync_all()
 }
 
-/// Whether a failed rename is a transient Windows state worth retrying.
-/// ERROR_ACCESS_DENIED (5) and ERROR_SHARING_VIOLATION (32) surface when a
-/// concurrent put/remove leaves the destination delete-pending or open; both
-/// clear on their own. No such transient rename error exists off Windows.
+/// Whether a failed rename is a transient state worth retrying.
 pub(crate) fn is_transient_rename_error(e: &std::io::Error) -> bool {
-    #[cfg(windows)]
-    {
-        matches!(e.raw_os_error(), Some(5) | Some(32))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = e;
-        false
-    }
+    let _ = e;
+    false
 }
 
 /// Backoff before the next rename retry: 1, 2, 4, … ms capped at 64 ms
-/// (≈0.3 s total across the retry budget), bounding how long a wedged Windows
+/// (≈0.3 s total across the retry budget), bounding how long a wedged
 /// destination can delay a write.
 fn rename_backoff_ms(attempt: u32) -> u64 {
     (1u64 << attempt.min(6)).min(64)
 }
 
-/// How many times a transient Windows state is waited out before giving up.
+/// How many times a transient state is waited out before giving up.
 pub(crate) const TRANSIENT_ATTEMPTS: u32 = 10;
 
 /// Whether this error should be slept out and tried again. Split from the
@@ -60,19 +40,16 @@ fn should_retry_transient(transient: bool, attempt: u32) -> bool {
     transient && attempt + 1 < TRANSIENT_ATTEMPTS
 }
 
-/// Run a filesystem operation, waiting out a transient Windows sharing or
+/// Run a filesystem operation, waiting out a transient sharing or
 /// delete-pending state.
 ///
-/// On Unix an unlinked file keeps working through open handles and its name is
+/// An unlinked file keeps working through open handles and its name is
 /// free the moment it is removed, so a concurrent put/remove pair never
-/// collides on the name. Windows keeps the directory entry until the last
-/// handle closes and fails anything touching that name meanwhile with
-/// ERROR_ACCESS_DENIED or ERROR_SHARING_VIOLATION. Those clear on their own,
-/// so they are worth waiting out rather than reporting as a fault.
+/// collides on the name.
 ///
 /// Production callers pass [`is_transient_rename_error`] as `is_transient`.
-/// Off Windows that predicate is always false, so `op` runs exactly once. It
-/// is a parameter so the loop is reachable off Windows: with it inlined, the
+/// That predicate is always false, so `op` runs exactly once. It
+/// is a parameter so the loop is reachable: with it inlined, the
 /// retry arm is dead code on the Linux runner that scores mutants, and every
 /// mutation of the bound and the counter survives against a branch nothing
 /// can enter.
@@ -95,9 +72,9 @@ pub(crate) fn retry_transient<T>(
 }
 
 /// Remove a file, clearing the read-only attribute first to ensure deletion
-/// succeeds even on Windows when the file was marked read-only.
+/// succeeds when the file was marked read-only.
 ///
-/// On Unix, when the path is one of several hardlinks (`nlink > 1`), the RO bit
+/// When the path is one of several hardlinks (`nlink > 1`), the RO bit
 /// is left alone: clearing it would make every name on the shared inode
 /// writable (including a published content-addressed blob the temp still
 /// shares). Unlink alone is enough — the remaining names keep their mode.
@@ -105,12 +82,9 @@ fn remove_file_robust(path: &Path) -> std::io::Result<()> {
     if let Ok(meta) = fs::metadata(path) {
         let mut perms = meta.permissions();
         if perms.readonly() {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                if meta.nlink() > 1 {
-                    return fs::remove_file(path);
-                }
+            use std::os::unix::fs::MetadataExt;
+            if meta.nlink() > 1 {
+                return fs::remove_file(path);
             }
             perms.set_readonly(false);
             let _ = fs::set_permissions(path, perms);
@@ -122,7 +96,7 @@ fn remove_file_robust(path: &Path) -> std::io::Result<()> {
 /// Perform an atomic file replacement. This creates a temporary file beside the
 /// destination path, executes `write_fn` to populate it, flushes it (`fsync_file`),
 /// copies permissions from the original destination (if it exists) to preserve file
-/// modes, and atomic renames it with transient error retries on Windows.
+/// modes, and atomic renames it with transient error retries.
 ///
 /// Returns `Ok(true)` if the rename succeeded.
 /// If `allow_concurrent_winner` is `true`, a concurrent writer winning the race to create
@@ -142,7 +116,7 @@ where
 /// Like [`atomic_write_and_replace`], but runs `after_fsync` on the temp path
 /// after the durable flush and before the rename. Used by store hardlink ingest
 /// to enforce the read-only guard on a shared inode only once fsync has
-/// finished (Windows `FlushFileBuffers` needs a writable handle, #196).
+/// finished.
 pub fn atomic_write_and_replace_with<F, A>(
     dest_path: &Path,
     allow_concurrent_winner: bool,
@@ -360,29 +334,16 @@ mod tests {
     }
 
     #[test]
-    fn is_transient_rename_error_only_flags_windows_race_codes() {
+    fn is_transient_rename_error_never_flags() {
         use std::io::Error;
-        let access_denied = Error::from_raw_os_error(5);
-        let sharing_violation = Error::from_raw_os_error(32);
-        let other = Error::from_raw_os_error(2);
-        #[cfg(windows)]
-        {
-            assert!(is_transient_rename_error(&access_denied));
-            assert!(is_transient_rename_error(&sharing_violation));
-            assert!(!is_transient_rename_error(&other));
-        }
-        #[cfg(not(windows))]
-        {
-            assert!(!is_transient_rename_error(&access_denied));
-            assert!(!is_transient_rename_error(&sharing_violation));
-            assert!(!is_transient_rename_error(&other));
+        for code in [5, 32, 2] {
+            assert!(!is_transient_rename_error(&Error::from_raw_os_error(code)));
         }
     }
 
     /// A success and a non-transient failure both settle on the first call.
     ///
-    /// Off Windows this is the whole behaviour, since no error classifies as
-    /// transient there: the retry must never turn a real fault into a delay.
+    /// No error classifies as transient: the retry must never turn a real fault into a delay.
     #[test]
     fn retry_transient_does_not_retry_a_settled_outcome() {
         let mut calls = 0;
@@ -413,8 +374,8 @@ mod tests {
     /// outlast it and then return the eventual success.
     ///
     /// Drives [`retry_transient`] with an always-transient classifier: the
-    /// real one is a compile-time `false` off Windows, which would
-    /// leave this asserting nothing on most runners.
+    /// real one is a compile-time `false`, which would
+    /// leave this asserting nothing on its own.
     #[test]
     fn retry_transient_waits_out_a_transient_failure() {
         let mut calls = 0;
@@ -461,8 +422,8 @@ mod tests {
     }
 
     /// A classifier that rejects the error settles on the first call even when
-    /// the error carries a Windows race code. This is the whole behaviour off
-    /// Windows, where nothing classifies as transient.
+    /// the error carries a race code. This is the whole behaviour
+    /// where nothing classifies as transient.
     #[test]
     fn retry_transient_respects_a_rejecting_classifier() {
         let mut calls = 0;
@@ -478,10 +439,9 @@ mod tests {
         assert_eq!(calls, 1);
     }
 
-    /// With the real classifier it retries a Windows race code there and
-    /// settles at once everywhere else.
+    /// With the real classifier nothing retries: it settles at once.
     #[test]
-    fn retry_transient_with_the_real_classifier_retries_only_on_windows() {
+    fn retry_transient_with_the_real_classifier_settles_at_once() {
         let mut calls: u32 = 0;
         let err = retry_transient(
             || {
@@ -492,9 +452,6 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.raw_os_error(), Some(5));
-        #[cfg(windows)]
-        assert_eq!(calls, TRANSIENT_ATTEMPTS);
-        #[cfg(not(windows))]
         assert_eq!(calls, 1);
     }
 
@@ -627,23 +584,16 @@ mod tests {
         assert!(unrelated.exists());
     }
 
-    // Regression guard for #196: `fsync_file` must durably flush a freshly
-    // written (writable) file. The bug was a read-only handle — fine for Unix
-    // `fsync(2)`, but Windows `FlushFileBuffers` rejects it with
-    // ERROR_ACCESS_DENIED, so every blob store failed ("flushing blob to disk").
-    // Passes on Unix before and after; the real failing→passing signal is on
-    // Windows, where the old read-only-handle form errored here.
     #[test]
     fn fsync_file_flushes_a_writable_blob() {
         let dir = tempfile::tempdir().unwrap();
         let blob = dir.path().join("blob.bin");
         fs::write(&blob, b"some bytes").unwrap();
-        fsync_file(&blob).expect("fsync of a writable file must succeed on all platforms");
+        fsync_file(&blob).expect("fsync of a writable file must succeed");
     }
 
     #[test]
     fn fsync_dir_succeeds_on_a_real_directory() {
-        // On Unix this exercises the open+sync_all path; elsewhere it's a no-op.
         let dir = tempfile::tempdir().unwrap();
         fsync_dir(dir.path()).expect("fsync of a directory must not error");
     }

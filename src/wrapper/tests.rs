@@ -4444,15 +4444,6 @@ fn cc_restore_revalidates_existing_target_before_replacing_it() {
 
     assert!(error.to_string().contains("requires compiler passthrough"));
     assert_eq!(std::fs::read(&output).unwrap(), b"race winner");
-
-    // TempDir cleanup cannot remove a read-only Windows file.
-    #[cfg(windows)]
-    {
-        let mut permissions = std::fs::metadata(&output).unwrap().permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
-        permissions.set_readonly(false);
-        std::fs::set_permissions(&output, permissions).unwrap();
-    }
 }
 
 #[test]
@@ -6297,11 +6288,7 @@ fn parse_cc(args: &[&str]) -> crate::compiler::cc::CcArgs {
 #[test]
 fn cc_event_root_honors_override() {
     let _lock = crate::test_support::process_state_test_lock();
-    let sentinel = if cfg!(windows) {
-        r"C:\cc-root-sentinel"
-    } else {
-        "/cc-root-sentinel"
-    };
+    let sentinel = "/cc-root-sentinel";
     let _guard = TestEnvGuard::set("KACHE_EVENT_ROOT", sentinel);
     let parsed = parse_cc(&["gcc", "-c", "foo.c", "-o", "foo.o"]);
     assert_eq!(
@@ -12989,135 +12976,6 @@ fn explicit_executable_names_keep_pairing_and_copy_ownership() {
             .unwrap()
             .contains("cannot be identified")
     );
-}
-
-/// The native Windows lane produces an actual rustc/LINK pair, then exercises
-/// artifact discovery, store admission, persisted blobs and the common restore.
-/// It is a default test on Windows; it has no compiler-availability skip.
-#[cfg(windows)]
-#[test]
-fn windows_rustc_pairs_survive_json_and_fallback_cache_roundtrips() {
-    let _lock = crate::test_support::process_state_test_lock();
-    let snapshot = crate::invocation::InvocationEnv::capture();
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap();
-    let invocation = crate::invocation::InvocationEnv::from_parts(
-        snapshot.vars_os().filter(|(key, _)| {
-            !["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "OUT_DIR"]
-                .iter()
-                .any(|name| key.to_string_lossy().eq_ignore_ascii_case(name))
-        }),
-        Some(root.clone()),
-        snapshot.home_dir().map(Path::to_owned),
-        snapshot.temp_dir().to_owned(),
-    );
-    let source = root.join("main.rs");
-    std::fs::write(&source, "fn main() { std::hint::black_box(7); }\n").unwrap();
-    let compiler = RustcCompiler::new_for(&invocation);
-    let config = test_config(root.join("cache"));
-    let store = Store::open(&config).unwrap();
-    for (index, (json, name)) in [(true, "app.exe"), (false, "app"), (true, "app.custom")]
-        .into_iter()
-        .enumerate()
-    {
-        let producer = root.join(format!("producer-{index}"));
-        let consumer = root.join(format!("consumer-{index}"));
-        std::fs::create_dir_all(&producer).unwrap();
-        let output = producer.join(name);
-        let mut argv = s(&[
-            "rustc",
-            source.to_str().unwrap(),
-            "--crate-name=app",
-            "--crate-type=bin",
-            "--emit=link",
-            "-Cdebuginfo=2",
-            "-o",
-            output.to_str().unwrap(),
-        ]);
-        if json {
-            argv.extend(s(&["--error-format=json", "--json=artifacts"]));
-        }
-        let args = RustcArgs::parse_for(&argv, &invocation).unwrap();
-        let compiled = compiler.execute(&args).unwrap();
-        assert_eq!(compiled.exit_code, 0, "{}", compiled.stderr);
-        assert_eq!(
-            unpaired_executable_debug_info(&args, &compiled.artifacts),
-            None,
-            "{}",
-            compiled.stderr
-        );
-        let outputs: Vec<_> = compiled
-            .artifacts
-            .outputs()
-            .iter()
-            .map(|artifact| (artifact.path.clone(), artifact.store_name.clone()))
-            .collect();
-        let selected = crate::pe_pdb::executable_output_name(
-            true,
-            Some(&output),
-            outputs.iter().map(|(_, name)| name.as_str()),
-        )
-        .unwrap();
-        assert!(matches!(
-            crate::pe_pdb::check_outputs(
-                outputs
-                    .iter()
-                    .map(|(path, name)| (path.as_path(), name.as_str())),
-                selected.as_deref()
-            )
-            .unwrap()[..],
-            [crate::pe_pdb::Pairing::Paired { .. }]
-        ));
-        let expected: Vec<_> = outputs
-            .iter()
-            .map(|(path, name)| (name.clone(), std::fs::read(path).unwrap()))
-            .collect();
-        let key = format!("windows-pair-{index}");
-        store
-            .put(
-                &key,
-                "app",
-                &["bin".into()],
-                &[],
-                "windows",
-                "dev",
-                &outputs,
-                &compiled.stdout,
-                &compiled.stderr,
-            )
-            .unwrap();
-        let meta = store.get(&key).unwrap().unwrap();
-        let destination = consumer.join(name);
-        let mut restore_argv = s(&[
-            "rustc",
-            source.to_str().unwrap(),
-            "--crate-name=app",
-            "--crate-type=bin",
-            "--emit=link",
-            "-o",
-            destination.to_str().unwrap(),
-        ]);
-        if json {
-            restore_argv.extend(s(&["--error-format=json", "--json=artifacts"]));
-        }
-        let restore_args = RustcArgs::parse_for(&restore_argv, &invocation).unwrap();
-        restore_from_cache(&config, &compiler, &store, &restore_args, &meta, None).unwrap();
-        let restored: Vec<_> = expected
-            .iter()
-            .map(|(name, bytes)| {
-                let path = consumer.join(name);
-                assert_eq!(&std::fs::read(&path).unwrap(), bytes);
-                (path, name.as_str())
-            })
-            .collect();
-        assert!(
-            crate::pe_pdb::check_outputs(
-                restored.iter().map(|(path, name)| (path.as_path(), *name)),
-                selected.as_deref()
-            )
-            .is_ok()
-        );
-    }
 }
 
 #[test]
