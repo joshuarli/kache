@@ -347,7 +347,7 @@ impl Compiler for RustcCompiler {
     }
 
     /// The key for an invocation that ran in this process's environment.
-    /// The trait returns only the key, as it does for cc and nvcc; the
+    /// The trait returns only the key, as it does for cc; the
     /// wrapper keys rustc through [`RustcCompiler::cache_key_in`].
     fn cache_key(&self, parsed: &RustcArgs, ctx: &KeyCtx<'_, '_>) -> Result<String> {
         self.cache_key_in(parsed, ctx, &KeyEnv::from_invocation(ctx.invocation_env))

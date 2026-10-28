@@ -3,7 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/kache-fs.svg)](https://crates.io/crates/kache-fs)
 [![docs.rs](https://img.shields.io/docsrs/kache-fs)](https://docs.rs/kache-fs)
 
-Filesystem measurements, file identity, and native cloning and copying. Built for [Kache](https://github.com/kunobi-ninja/kache), a compiler cache for Rust, C/C++ and CUDA, and usable on its own. You decide where files go and when sharing an inode is acceptable; the crate reports what the filesystem does.
+Filesystem measurements, file identity, and native cloning and copying. Built for [Kache](https://github.com/kunobi-ninja/kache), a compiler cache for Rust and C/C++, and usable on its own. You decide where files go and when sharing an inode is acceptable; the crate reports what the filesystem does.
 
 ## What it provides
 

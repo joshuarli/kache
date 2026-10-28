@@ -3,7 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/kache-shims.svg)](https://crates.io/crates/kache-shims)
 [![docs.rs](https://img.shields.io/docsrs/kache-shims)](https://docs.rs/kache-shims)
 
-Finds the path to record for a running binary so it survives an upgrade, and manages the compiler-name shim farms that point at it. Built for [Kache](https://github.com/kunobi-ninja/kache), a compiler cache for Rust, C/C++ and CUDA, and usable on its own.
+Finds the path to record for a running binary so it survives an upgrade, and manages the compiler-name shim farms that point at it. Built for [Kache](https://github.com/kunobi-ninja/kache), a compiler cache for Rust and C/C++, and usable on its own.
 
 ## What it provides
 

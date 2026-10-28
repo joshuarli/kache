@@ -3,9 +3,9 @@ title: Kache
 description: Install Kache, verify reuse, and find the guide for your workflow
 ---
 
-Kache reuses matching compiler outputs for Rust, C/C++, and CUDA. Keep using your
+Kache reuses matching compiler outputs for Rust and C/C++. Keep using your
 build tools; Kache restores eligible work from a shared local store and compiles
-the rest. Optional remote storage shares that work between machines.
+the rest. Every machine keeps its own local store.
 
 ## Start with a local build
 
@@ -29,11 +29,8 @@ with separate target directories.
 | Task | Guide |
 | --- | --- |
 | Cache Make, CMake, or build-script C/C++ | [C and C++](/docs/getting-started/c-cpp) |
-| Cache CUDA object compilations | [CUDA](/docs/getting-started/cuda) |
 | Cache Rust documentation | [Rustdoc](/docs/getting-started/rustdoc) |
 | Use Kache with cargo-mutants | [Mutation testing](/docs/getting-started/mutation-testing) |
-| Share work between machines | [Remote cache](/docs/remote-cache/overview) |
-| Configure GitHub Actions or another CI | [CI setup](/docs/remote-cache/ci) |
 | Change storage limits or build policy | [Configuration](/docs/getting-started/configuration) |
 
 ## Understand a build
@@ -55,10 +52,8 @@ For the details, read [cache keys](/docs/how-it-works/cache-key),
 | Rust libraries | Linux and macOS |
 | Rust executables, test binaries and build scripts | Cached by default (`cache_executables`). Build-script runs are cached |
 | C and C++ object compilation | GCC, Clang, Apple Clang, and clang-cl. MSVC `cl.exe` is not cached |
-| CUDA object compilation | Single-source `nvcc -c` and `-dc` |
 | Rust documentation | Unix with compatible Cargo versions and [unstable rustdoc flags](/docs/getting-started/rustdoc). Rust 1.99 passes through |
 | Local cache | Content-addressed storage with automatic garbage collection |
-| Remote cache | S3-compatible storage, GCS, filesystems, and OCI registries |
 | Build visibility | Live monitor, stats, miss explanations, and reports |
 
 Kache passes unsupported compiler invocations through unchanged. A passthrough is not a cache hit or miss. Its reason appears in the monitor's Why tab and in the Not cached section of `kache stats --full`.

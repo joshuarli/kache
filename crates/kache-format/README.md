@@ -3,7 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/kache-format.svg)](https://crates.io/crates/kache-format)
 [![docs.rs](https://img.shields.io/docsrs/kache-format)](https://docs.rs/kache-format)
 
-Cache-entry metadata and validation for [Kache](https://github.com/kunobi-ninja/kache), a compiler cache for Rust, C/C++ and CUDA. The local store and the remote readers share these types, so both read and write the same `meta.json`.
+Cache-entry metadata and validation for [Kache](https://github.com/kunobi-ninja/kache), a compiler cache for Rust and C/C++. The local store reads and writes these types as `meta.json`.
 
 ## What it provides
 

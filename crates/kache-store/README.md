@@ -3,7 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/kache-store.svg)](https://crates.io/crates/kache-store)
 [![docs.rs](https://img.shields.io/docsrs/kache-store)](https://docs.rs/kache-store)
 
-Local artifact storage for [Kache](https://github.com/kunobi-ninja/kache), a compiler cache for Rust, C/C++ and CUDA: content-addressed blobs, entry metadata, a SQLite index, file fingerprints, locks, reclamation and linking into build directories.
+Local artifact storage for [Kache](https://github.com/kunobi-ninja/kache), a compiler cache for Rust and C/C++: content-addressed blobs, entry metadata, a SQLite index, file fingerprints, locks, reclamation and linking into build directories.
 
 ## What it provides
 

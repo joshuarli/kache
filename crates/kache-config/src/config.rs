@@ -419,7 +419,7 @@ pub struct Config {
     /// build started; this option extends the check to the other keyed inputs
     /// and to keys taken before the compile, and refuses an input whose size,
     /// write time or inode moved after the key read it. It applies to rustc:
-    /// C/C++ and CUDA compiles always check the files their key hashes, and a
+    /// C/C++ compiles always check the files their key hashes, and a
     /// key taken before such a compile does not count a stamp ahead of the
     /// clock when it read the file as a write. Set via
     /// `KACHE_MODIFIED_INPUT_GUARD=1`/`=true` or `[cache] modified_input_guard`;

@@ -13,7 +13,7 @@
 //! pattern matching). Storage metadata (crate types, features,
 //! target/profile) and the restore loop's path resolution still touch
 //! [`crate::args::RustcArgs`] fields directly in [`crate::wrapper`]; those
-//! remain compiler-specific. Rust, C-family, and CUDA adapters share the
+//! remain compiler-specific. Rust and C-family adapters share the
 //! contract while the wrapper coordinates their cache operations.
 
 use anyhow::Result;
@@ -24,7 +24,6 @@ use crate::link::LinkStrategy;
 
 pub mod cc;
 pub mod flags;
-pub mod nvcc;
 pub mod platform;
 pub mod rustc;
 pub mod rustdoc;
@@ -780,8 +779,7 @@ pub trait Compiler {
 /// Registration is deliberately concrete and local: adding an adapter means
 /// adding its module-owned descriptor here, with no broad enum of possible
 /// future tool kinds.
-pub const COMPILER_ADAPTERS: &[CompilerAdapter] =
-    &[rustc::ADAPTER, rustdoc::ADAPTER, cc::ADAPTER, nvcc::ADAPTER];
+pub const COMPILER_ADAPTERS: &[CompilerAdapter] = &[rustc::ADAPTER, rustdoc::ADAPTER, cc::ADAPTER];
 
 /// Detect which compiler adapter an argv vector is invoking.
 ///
@@ -865,9 +863,7 @@ pub(crate) use kache_shims::resolve_program_on_path_with;
 /// selects it through `RUSTC_WRAPPER`.
 /// Cargo preserves `RUSTC` when it invokes `RUSTC_WRAPPER`, which identifies
 /// custom drivers such as Kani's `kani-compiler` without maintaining a list of
-/// tool names. (`nvcc` used to live here; since kunobi-ninja/kache#1024 it has
-/// its own adapter and dispatches to `run_nvcc`, which passes through with a
-/// recorded reason until the cache path lands.)
+/// tool names.
 #[cfg(test)]
 pub(crate) fn is_passthrough_compiler_invocation(args: &[String]) -> bool {
     is_passthrough_compiler_invocation_for(args, &InvocationEnv::capture())
@@ -1272,16 +1268,6 @@ mod tests {
         assert!(is_passthrough_compiler_invocation_with(
             &s(&["custom-rustc-driver", "--crate-name", "demo"]),
             Some(std::ffi::OsStr::new("custom-rustc-driver")),
-        ));
-        // nvcc has its own adapter since #1024: it dispatches to run_nvcc,
-        // not to the generic passthrough.
-        assert!(!is_passthrough_compiler_invocation_with(
-            &s(&[r"C:\CUDA\bin\nvcc.exe", "-c", "kernel.cu"]),
-            None,
-        ));
-        assert!(!is_passthrough_compiler_invocation_with(
-            &s(&["nvcc", "-c", "kernel.cu"]),
-            None,
         ));
     }
 

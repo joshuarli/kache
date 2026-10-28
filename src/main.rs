@@ -125,8 +125,7 @@ use std::path::PathBuf;
 mod version;
 pub use version::VERSION;
 
-/// Compiler cache for Rust, C/C++ and CUDA, with S3, GCS, shared-filesystem
-/// and OCI remotes
+/// Compiler cache for Rust and C/C++.
 ///
 /// kache runs in front of rustc and the C/C++ compilers, so builds use the
 /// cache without changing how you run them.
@@ -1282,13 +1281,8 @@ fn run_compiler_process_directly_for(
         env.var_os("RUSTC")
             .is_some_and(|rustc| rustc == std::ffi::OsStr::new(program.as_str()))
     });
-    let is_nvcc = args
-        .first()
-        .and_then(|program| compiler::command_basename(program))
-        .map(compiler::strip_windows_exe_suffix)
-        .is_some_and(|name| name.eq_ignore_ascii_case("nvcc"));
     let rustc_invocation =
-        !is_nvcc && (configured_rustc || rustc_args_for_direct_preclean_for(args, env).is_some());
+        configured_rustc || rustc_args_for_direct_preclean_for(args, env).is_some();
     if !rustc_invocation {
         let status = invocation::io::status(env.command(&args[0])?.args(&args[1..]))?;
         return Ok(status.code().unwrap_or(1));
@@ -1440,8 +1434,6 @@ fn wrapper_target(adapter: &compiler::CompilerAdapter) -> Option<WrapperTarget> 
         Some(WrapperTarget::Rustdoc)
     } else if adapter.id() == compiler::cc::CC_ID {
         Some(WrapperTarget::Cc)
-    } else if adapter.id() == compiler::nvcc::NVCC_ID {
-        Some(WrapperTarget::Nvcc)
     } else {
         None
     }
@@ -1452,7 +1444,6 @@ enum WrapperTarget {
     Rustc,
     Rustdoc,
     Cc,
-    Nvcc,
 }
 
 fn run_wrapper_mode(args: &[String]) -> Result<()> {
@@ -1528,7 +1519,6 @@ fn original_compiler_request(args: &[String], env: &invocation::InvocationEnv) -
     let after = &args[1..];
     compiler::rustc::RustcCompiler::recognizes(after)
         || compiler::rustdoc::RustdocCompiler::recognizes(after)
-        || compiler::nvcc::NvccCompiler::recognizes(after)
         || after
             .first()
             .is_some_and(|program| compiler::cc::CcCompiler::recognizes_name(program))
@@ -1696,7 +1686,6 @@ fn run_compiler_invocation_inner(
         }
         Some(WrapperTarget::Rustdoc) => compiler::rustdoc::run_for(&config, args, &env)?,
         Some(WrapperTarget::Cc) => wrapper::run_cc_for(&config, args, &env)?,
-        Some(WrapperTarget::Nvcc) => wrapper::run_nvcc_for(&config, args, &env)?,
         None => anyhow::bail!(
             "detected compiler adapter {} ({}) has no wrapper dispatch",
             adapter.id(),
@@ -1852,7 +1841,6 @@ mod tests {
             vec!["cc", "-c", "source.c"],
             vec!["kache", "rustc", "--version"],
             vec!["kache", "rustdoc", "--version"],
-            vec!["kache", "nvcc", "--version"],
             vec!["kache", "cc", "-c", "source.c"],
             vec!["kache", "/client/workspace-wrapper", "rustc", "--version"],
             vec!["kache", "-E", "probe.c"],
@@ -3172,7 +3160,7 @@ mod tests {
             Some(rustc.as_slice())
         );
 
-        for program in ["cc", "cl.exe", "CL.EXE", "nvcc", "unrecognized-driver"] {
+        for program in ["cc", "cl.exe", "CL.EXE", "unrecognized-driver"] {
             let cc = vec![program.to_string()];
             assert_eq!(rustc_args_for_direct_preclean(&cc), None, "{program}");
         }
@@ -3225,10 +3213,6 @@ mod tests {
         assert_eq!(
             wrapper_target(adapter_for(&["cc", "-c", "foo.c"])),
             Some(WrapperTarget::Cc)
-        );
-        assert_eq!(
-            wrapper_target(adapter_for(&["nvcc", "-c", "kernel.cu"])),
-            Some(WrapperTarget::Nvcc)
         );
         let unknown = compiler::CompilerAdapter::new(
             compiler::CompilerId::new("unwired"),
@@ -3548,20 +3532,6 @@ mod tests {
                 Some(std::ffi::OsStr::new(
                     "/home/user/.kani/kani-0.67.0/bin/kani-compiler",
                 )),
-            ),
-            LogMode::Wrapper
-        );
-        // nvcc dispatches to run_nvcc via its adapter (#1024), which is
-        // wrapper-mode logging like every other compiler path.
-        assert_eq!(
-            detect_log_mode_with_rustc(
-                &[
-                    "kache".into(),
-                    "/usr/local/cuda/bin/nvcc".into(),
-                    "-c".into(),
-                    "kernel.cu".into(),
-                ],
-                None,
             ),
             LogMode::Wrapper
         );

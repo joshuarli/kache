@@ -150,22 +150,6 @@ See [Daemon overview](/docs/daemon/overview) and [Lifecycle](/docs/daemon/lifecy
 
 As `RUSTC_WRAPPER`, Kache sees rustc and workspace-wrapper invocations, and caches the Clippy ones among them. On Unix, after rustc builds a build script, Kache puts a launcher in its place, so Cargo runs the script through Kache too; see [Build scripts](/docs/how-it-works/build-scripts). Rust link work driven by rustc can be cached when the artifact policy allows it (`cache.cache_executables`, on by default on Linux and macOS); an independently invoked linker is outside this path.
 
-On Unix, `kache init` also adds a shim directory to the front of `PATH` and sets `kache test-runner` as Cargo's runner for the host, both through your shell startup files. The `cargo` shim runs the real Cargo and marks its target directories in use while it runs, so cleanup leaves them alone; it caches nothing. The `rustdoc` shim, which init sets as `build.rustdoc` when that is unset, caches the modes described in [Rust documentation](/docs/getting-started/rustdoc). The test runner makes test binaries wait for the compile scheduler's slots. Apart from these and the C, C++ and CUDA compilers below, Kache wraps no other tools.
+On Unix, `kache init` also adds a shim directory to the front of `PATH` and sets `kache test-runner` as Cargo's runner for the host, both through your shell startup files. The `cargo` shim runs the real Cargo and marks its target directories in use while it runs, so cleanup leaves them alone; it caches nothing. The `rustdoc` shim, which init sets as `build.rustdoc` when that is unset, caches the modes described in [Rust documentation](/docs/getting-started/rustdoc). The test runner makes test binaries wait for the compile scheduler's slots. Apart from these and the C and C++ compilers below, Kache wraps no other tools.
 
-C/C++ caching is separate. Kache must be invoked as the compiler wrapper (`kache cc`) or through a compiler-name shim on `PATH` (`kache init --shims`, Unix only). Supported object compilations use the same local store and remote pipeline as rustc. clang-cl debug objects stay machine-local. See [C and C++](/docs/getting-started/c-cpp).
-
-CUDA goes through `kache nvcc` (`CUDACXX="kache nvcc"`, `NVCC="kache nvcc"` or `CMAKE_CUDA_COMPILER_LAUNCHER=kache`). It caches single-source object compiles in the main store and shares them through the remote. It takes no scheduler permit and does not read volume shards or the read-only store. See [CUDA](/docs/getting-started/cuda).
-
-## Planner
-
-Without a planner service, the daemon prefetches from a ranked list: the identity
-manifest for this lockfile, target and profile (or, when none exists, the
-manifest of one of the last three committed revisions of `Cargo.lock`, newest
-first), then lockfile shards, then local history, then other keys stored under
-the same crate names. That last source needs the daemon to list the remote,
-which `cache.remote_key_listing` turns on; it is on by default only for
-filesystem remotes. With `cache.planner.endpoint` or `KACHE_PLANNER_ENDPOINT`,
-the daemon first asks the preview planner for ranked candidates. A fallback
-response returns the client to its local planning path.
-
-The planner does not affect local correctness or exact-key lookup. See [Remote service](/docs/remote-service).
+C/C++ caching is separate. Kache must be invoked as the compiler wrapper (`kache cc`) or through a compiler-name shim on `PATH` (`kache init --shims`, Unix only). Supported object compilations use the same local store as rustc. clang-cl debug objects stay machine-local. See [C and C++](/docs/getting-started/c-cpp).

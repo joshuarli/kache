@@ -7,13 +7,13 @@
 
 **Build once. Reuse the work.**
 
-Kache is a compiler cache for Rust, C/C++, and CUDA on Linux and macOS.
+Kache is a compiler cache for Rust and C/C++ on Linux and macOS.
 It restores matching compiler outputs across worktrees and CI runs, so you spend
 less time rebuilding and less disk space storing the same bytes.
 
 Built by [Kunobi][kunobi-brand].
 
-[Get started][first-reuse] · [Benchmarks][nav-benchmarks] · [Kache vs sccache][nav-comparison] · [CI setup][nav-ci]
+[Get started][first-reuse] · [Benchmarks][nav-benchmarks] · [Kache vs sccache][nav-comparison]
 
 ## Install
 
@@ -52,13 +52,12 @@ and build settings. Unsupported compiler invocations run normally.
 ## Why use Kache?
 
 - Reuse eligible Rust libraries, executables, and build scripts across worktrees.
-  It also caches GCC, Clang, clang-cl, and single-source CUDA object compilations.
+  It also caches GCC, Clang, and clang-cl.
 - Keep identical output bytes once in a cache with a disk budget. On filesystems
   with copy-on-write cloning, restored outputs share disk blocks with the cache.
 - Run builds together. Compiles with the same cache key share one in-flight
   build, while the scheduler paces compiler processes.
-- Share work through S3-compatible storage, Google Cloud Storage, a shared
-  filesystem, or an OCI registry. The local cache works on its own.
+- Work fully offline. The cache lives on the local machine; nothing is uploaded.
 - See what happened. Inspect hits and misses, then ask `kache explain` what changed.
 
 [![Four Firefox worktrees sharing cached outputs through copy-on-write clones.](https://raw.githubusercontent.com/kunobi-ninja/kache/main/assets/store-worktrees.svg)][hero-image]
@@ -130,8 +129,7 @@ For remote storage, credentials, and pull-request policy, follow the [CI guide][
 | I want to… | Guide |
 | --- | --- |
 | Confirm my first cache hits | [Quick start][first-reuse] |
-| Cache Make, CMake, or CUDA builds | [C/C++](https://kunobi.ninja/docs/kache/getting-started/c-cpp) · [CUDA](https://kunobi.ninja/docs/kache/getting-started/cuda) |
-| Share a cache between machines | [Remote cache](https://kunobi.ninja/docs/kache/remote-cache/overview) |
+| Cache Make or CMake builds | [C/C++](https://kunobi.ninja/docs/kache/getting-started/c-cpp) |
 | Change storage limits or build policy | [Configuration](https://kunobi.ninja/docs/kache/getting-started/configuration) |
 | Investigate unexpected misses | [Troubleshooting](https://kunobi.ninja/docs/kache/getting-started/troubleshooting) |
 | Understand cache keys and correctness | [How it works](https://kunobi.ninja/docs/kache/how-it-works/architecture) |
