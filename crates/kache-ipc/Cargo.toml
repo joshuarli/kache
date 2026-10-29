@@ -15,7 +15,6 @@ serde = "1"
 serde_json = "1"
 tracing = "0.1"
 anyhow = "1"
-interprocess = "2.4.7"
 kunobi-daemon = { version = "0.10.3", default-features = false, features = ["local"] }
 
 [target.'cfg(unix)'.dependencies]

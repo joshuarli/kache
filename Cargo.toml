@@ -97,7 +97,6 @@ libc = "0.2"
 mutants = "0.0.4"
 memchr = "2"
 tempfile = "3"
-interprocess = "2.4.7"
 # Unicode tables affect persisted cache-key bytes. Keep Unicode 17 until
 # normalization changes have a reviewed cache-key compatibility migration.
 unicode-normalization = "=0.1.25"

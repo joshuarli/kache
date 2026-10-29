@@ -2702,15 +2702,14 @@ fn send_request_with_socket_timeout(
     req: &Request,
     read_timeout: std::time::Duration,
 ) -> Result<String> {
-    use interprocess::local_socket::traits::Stream as _;
     use std::io::{BufRead, Write};
 
     let mut stream = crate::transport::connect_sync(socket_path, std::time::Duration::from_secs(2))
         .with_context(|| format!("connecting to daemon socket {}", socket_path.display()))
         .context(DaemonConnectionFailure)?;
 
-    let _ = stream.set_recv_timeout(Some(read_timeout));
-    let _ = stream.set_send_timeout(Some(std::time::Duration::from_secs(5)));
+    let _ = stream.set_read_timeout(Some(read_timeout));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
 
     let mut line = serde_json::to_string(req)?;
     line.push('\n');
@@ -2756,14 +2755,13 @@ fn send_line_fire_and_forget(
     line: String,
     send_wait: std::time::Duration,
 ) -> Result<()> {
-    use interprocess::local_socket::traits::Stream as _;
     use std::io::Write;
 
     let mut stream = crate::transport::connect_sync(socket_path, std::time::Duration::from_secs(2))
         .with_context(|| format!("connecting to daemon socket {}", socket_path.display()))
         .context(DaemonConnectionFailure)?;
 
-    let _ = stream.set_send_timeout(Some(send_wait));
+    let _ = stream.set_write_timeout(Some(send_wait));
 
     stream
         .write_all(line.as_bytes())

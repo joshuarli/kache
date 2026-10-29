@@ -1,35 +1,33 @@
 //! Unix socket setup and timeout transitions for compiler handoff.
 
 use super::PREPARE_TIMEOUT;
-use crate::prelude::*;
 use anyhow::Result;
-use interprocess::local_socket::traits::StreamCommon as _;
 use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
 use std::path::Path;
 
 pub(super) struct Connection {
-    inner: crate::SyncStream,
+    inner: UnixStream,
 }
 
 #[cfg(unix)]
 impl std::os::fd::AsFd for Connection {
     fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
-        let crate::SyncStream::UdSocket(socket) = &self.inner;
-        socket.inner().as_fd()
+        self.inner.as_fd()
     }
 }
 
 impl Connection {
     pub(super) fn connect(socket: &Path) -> Result<Self> {
-        let inner = crate::SyncStream::connect(crate::socket_name(socket)?)?;
-        crate::require_self_peer(inner.peer_creds()?.euid())?;
-        inner.set_recv_timeout(Some(PREPARE_TIMEOUT))?;
-        inner.set_send_timeout(Some(PREPARE_TIMEOUT))?;
+        let inner = UnixStream::connect(socket)?;
+        crate::require_self_peer(crate::peer_euid_std(&inner))?;
+        inner.set_read_timeout(Some(PREPARE_TIMEOUT))?;
+        inner.set_write_timeout(Some(PREPARE_TIMEOUT))?;
         Ok(Self { inner })
     }
 
     pub(super) fn prepare_commit(&self) -> Result<()> {
-        self.inner.set_recv_timeout(None)?;
+        self.inner.set_read_timeout(None)?;
         Ok(())
     }
 }
@@ -56,13 +54,12 @@ mod tests {
     use std::os::fd::AsRawFd;
 
     fn timeout(connection: &Connection, option: libc::c_int) -> std::time::Duration {
-        let crate::SyncStream::UdSocket(socket) = &connection.inner;
         let mut value: libc::timeval = unsafe { std::mem::zeroed() };
         let mut length = std::mem::size_of_val(&value) as libc::socklen_t;
         assert_eq!(
             unsafe {
                 libc::getsockopt(
-                    socket.inner().as_raw_fd(),
+                    connection.inner.as_raw_fd(),
                     libc::SOL_SOCKET,
                     option,
                     (&mut value as *mut libc::timeval).cast(),

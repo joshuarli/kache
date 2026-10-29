@@ -50,7 +50,7 @@ allow = [
     "Unlicense",
     # kache's larger tree pulls these permissive licenses that the kunobi
     # repos' smaller graphs never reach:
-    "0BSD",                # doctest-file, recvmsg (via interprocess)
+    "0BSD",
     "CDLA-Permissive-2.0", # webpki-root-certs (via reqwest -> rustls-platform-verifier)
 ]
 confidence-threshold = 0.93

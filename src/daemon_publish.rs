@@ -675,8 +675,8 @@ fn finish_handoff(receipt: &HandoffReceipt, reply: Result<String>) -> Handoff {
 /// daemon client only bounds reads and can spend seconds sending a memo to
 /// a stalled daemon.
 fn send_handoff(socket: &Path, request: &PublishCcRequest, budget: Duration) -> Result<String> {
-    use interprocess::local_socket::{ConnectOptions, traits::Stream as _};
     use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
     let deadline = std::time::Instant::now() + budget;
     let remaining = || -> std::io::Result<Duration> {
         deadline
@@ -688,20 +688,18 @@ fn send_handoff(socket: &Path, request: &PublishCcRequest, budget: Duration) -> 
         request.clone(),
     )))?;
     line.push(b'\n');
-    let mut stream = ConnectOptions::new()
-        .name(crate::transport::socket_name(socket)?)
-        .wait_mode(interprocess::ConnectWaitMode::Timeout(remaining()?))
-        .connect_sync()?;
+    let _ = remaining()?;
+    let mut stream = UnixStream::connect(socket)?;
     let mut pending = line.as_slice();
     while !pending.is_empty() {
-        peer_may_have_closed(stream.set_send_timeout(Some(remaining()?)))?;
+        peer_may_have_closed(stream.set_write_timeout(Some(remaining()?)))?;
         let written = stream.write(pending)?;
         anyhow::ensure!(written != 0, "daemon closed during handoff write");
         pending = &pending[written..];
     }
     let mut response = Vec::new();
     loop {
-        peer_may_have_closed(stream.set_recv_timeout(Some(remaining()?)))?;
+        peer_may_have_closed(stream.set_read_timeout(Some(remaining()?)))?;
         let mut buffer = [0; 1024];
         let read = stream.read(&mut buffer)?;
         anyhow::ensure!(read != 0, "daemon closed before handoff reply");

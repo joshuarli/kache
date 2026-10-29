@@ -1,28 +1,23 @@
 //! Local IPC transport for the daemon.
 //!
 //! The daemon's local socket and the wrapper / CLI clients use Unix domain
-//! sockets over a filesystem path: `interprocess` for message clients and
-//! the standard library for the daemon endpoints.
+//! sockets over a filesystem path: the standard library for both message clients
+//! and the daemon endpoints.
 //!
 //! # Naming
 //!
 //! kache addresses the daemon by a filesystem path (by default
 //! `<runtime_dir>/daemon.sock`), which becomes the literal UDS path.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::Path;
 
 mod deadline_io;
 pub use deadline_io::finish_by;
 
-pub use interprocess::local_socket::ListenerOptions;
-pub use interprocess::local_socket::{Name, Stream as SyncStream};
+pub use std::os::unix::net::{UnixListener as SyncListener, UnixStream as SyncStream};
 
-/// Trait imports needed to call methods on the listener / stream types.
-/// Most users want `use crate::prelude::*;`.
-pub mod prelude {
-    pub use interprocess::local_socket::traits::{Listener as _, Stream as _};
-}
+pub mod prelude {}
 
 /// Why the daemon cannot bind a local socket at `path`, or `None` when it can.
 ///
@@ -47,17 +42,6 @@ pub fn socket_path_problem(path: &Path) -> Option<String> {
 /// an upgrade.
 pub fn daemon_endpoint(path: &Path) -> Box<kunobi_daemon::local::Endpoint> {
     path.into()
-}
-
-/// Build the IPC name for a path.
-///
-/// The path is used directly as a filesystem UDS path via
-/// `GenericFilePath`.
-pub fn socket_name(path: &Path) -> Result<Name<'static>> {
-    use interprocess::local_socket::{GenericFilePath, ToFsName};
-    path.to_fs_name::<GenericFilePath>()
-        .with_context(|| format!("converting {} to local-socket name", path.display()))
-        .map(|n| n.into_owned())
 }
 
 /// Reject a connection whose peer is not the daemon's own user.
@@ -178,9 +162,8 @@ fn peer_uid_is_self(peer_uid: u32) -> bool {
 
 /// Connect a synchronous client to the daemon socket at `socket`.
 pub fn connect_sync(socket: &Path, busy_wait: std::time::Duration) -> std::io::Result<SyncStream> {
-    use interprocess::local_socket::traits::Stream as _;
     let _ = busy_wait;
-    SyncStream::connect(socket_name(socket).map_err(std::io::Error::other)?)
+    SyncStream::connect(socket)
 }
 
 /// Bind a blocking listener through shared ownership. Returns `None` when
@@ -272,13 +255,6 @@ mod tests {
     }
 
     #[test]
-    fn socket_name_builds_for_a_plausible_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("kache-daemon.sock");
-        assert!(socket_name(&path).is_ok());
-    }
-
-    #[test]
     fn is_reachable_is_false_when_nothing_listens() {
         // A path under a fresh temp dir has no listener bound, so a connect
         // attempt must fail and `is_reachable` must report false.
@@ -291,12 +267,8 @@ mod tests {
     fn is_reachable_is_true_for_a_live_listener() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("live.sock");
-        let name = socket_name(&path).unwrap();
         // Hold the listener open for the duration of the probe.
-        let _listener = ListenerOptions::new()
-            .name(name)
-            .create_sync()
-            .expect("bind listener");
+        let _listener = std::os::unix::net::UnixListener::bind(&path).expect("bind listener");
         assert!(is_reachable(&path));
     }
 

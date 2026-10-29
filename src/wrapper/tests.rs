@@ -3,7 +3,6 @@ mod rustc_hit;
 
 use super::*;
 use crate::cache_key::FileHasher;
-use crate::transport::{ListenerOptions, socket_name};
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -6273,10 +6272,7 @@ impl FakeDaemon {
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
-        let name = socket_name(&socket_path).expect("fake daemon socket name");
-        let listener = ListenerOptions::new()
-            .name(name)
-            .create_sync()
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path)
             .expect("bind fake daemon");
         let stop = Arc::new(AtomicBool::new(false));
         let requests = Arc::new(AtomicUsize::new(0));
@@ -6287,10 +6283,9 @@ impl FakeDaemon {
         let stop_thread = Arc::clone(&stop);
         let requests_thread = Arc::clone(&requests);
         let handle = std::thread::spawn(move || {
-            use crate::transport::prelude::*;
             while !stop_thread.load(Ordering::SeqCst) {
                 let mut stream = match listener.accept() {
-                    Ok(stream) => stream,
+                    Ok((stream, _)) => stream,
                     Err(_) => break,
                 };
                 if stop_thread.load(Ordering::SeqCst) {
@@ -9138,12 +9133,9 @@ fn a_pending_entry_waits_for_the_daemon_or_is_flushed_here() {
     );
 
     // A listening socket: the daemon owns the flush, so this leaves the
-    // entry pending and starts nothing. Bound through the same transport
-    // the wrapper probes, which on Windows is a named pipe.
+    // entry pending and starts nothing.
     let socket = dir.path().join("live.sock");
-    let listener = crate::transport::ListenerOptions::new()
-        .name(crate::transport::socket_name(&socket).expect("socket name"))
-        .create_sync()
+    let listener = std::os::unix::net::UnixListener::bind(&socket)
         .expect("bind listener");
     config.socket_path_override = Some(socket);
     put("with_daemon", b"artifact-two");

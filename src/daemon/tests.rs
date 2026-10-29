@@ -303,13 +303,8 @@ fn connect_stream(path: &Path) -> UnixStream {
     stream
 }
 
-fn bind_sync_listener(path: &Path) -> interprocess::local_socket::Listener {
-    use interprocess::local_socket::{GenericFilePath, ListenerOptions, ToFsName as _};
-    let name = path.to_fs_name::<GenericFilePath>().expect("socket name");
-    ListenerOptions::new()
-        .name(name)
-        .create_sync()
-        .expect("create_sync listener")
+fn bind_sync_listener(path: &Path) -> std::os::unix::net::UnixListener {
+    std::os::unix::net::UnixListener::bind(path).expect("bind sync listener")
 }
 
 /// Send one request, read one response, and deliberately keep the socket
