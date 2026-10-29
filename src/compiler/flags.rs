@@ -31,12 +31,12 @@
 //!
 //! # Regex safety
 //!
-//! [`Matcher::Regex`] uses the [`regex`] crate's default engine —
-//! linear-time RE2-style, no backreferences, no lookarounds, no
-//! catastrophic backtracking. Patterns are auto-anchored (`^...$`) so
-//! row authors cannot accidentally match a substring. All regex
-//! patterns in every shipped table are compiled at CI time by
-//! [`assert_table_regexes_compile`], so production lookups never panic.
+//! [`Matcher::Regex`] uses [`regex_lite`] — no backreferences, no
+//! lookarounds, no catastrophic backtracking. Patterns are
+//! auto-anchored (`^...$`) so row authors cannot accidentally match a
+//! substring. All regex patterns in every shipped table are compiled
+//! at CI time by [`assert_table_regexes_compile`], so production
+//! lookups never panic.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -178,33 +178,11 @@ pub fn build_regex_cache(table: &'static [FlagSpec]) -> RegexCache {
 /// or two before it had classified anything.
 pub struct LazyRegex {
     source: &'static str,
-    compiled: OnceLock<regex_automata::meta::Regex>,
-}
-
-/// A flag pattern matches one short argument, anchored at both ends. The
-/// default engine builds a prefilter and lazy and one-pass DFAs for it,
-/// which cost a C compile's wrapper several milliseconds of construction
-/// per process; the PikeVM alone answers the same questions.
-fn flag_regex(
-    anchored: &str,
-) -> Result<regex_automata::meta::Regex, Box<regex_automata::meta::BuildError>> {
-    use regex_automata::{meta, nfa::thompson::WhichCaptures};
-    meta::Regex::builder()
-        .configure(
-            meta::Config::new()
-                .which_captures(WhichCaptures::None)
-                .auto_prefilter(false)
-                .onepass(false)
-                .hybrid(false)
-                .dfa(false)
-                .backtrack(false),
-        )
-        .build(anchored)
-        .map_err(Box::new)
+    compiled: OnceLock<regex_lite::Regex>,
 }
 
 impl LazyRegex {
-    fn get(&self, pat: &str) -> &regex_automata::meta::Regex {
+    fn get(&self, pat: &str) -> &regex_lite::Regex {
         self.compiled.get_or_init(|| {
             // Wrap in `(?:…)` before anchoring so a top-level
             // alternation in the row pattern (e.g. `-O[0-3sz]?|-Og`)
@@ -213,7 +191,7 @@ impl LazyRegex {
             // `(^-O[0-3sz]?) | (-Og$)`, accepting `-Ofast` via the
             // first alternative. With it, both halves are anchored.
             let anchored = format!("^(?:{pat})$");
-            flag_regex(&anchored).unwrap_or_else(|e| {
+            regex_lite::Regex::new(&anchored).unwrap_or_else(|e| {
                 panic!(
                     "compiler/flags: invalid regex `{pat}` from {}: {e}",
                     self.source
@@ -296,13 +274,7 @@ pub fn assert_table_regexes_compile(table: &'static [FlagSpec]) {
             // `(^-O[0-3sz]?) | (-Og$)`, accepting `-Ofast` via the
             // first alternative. With it, both halves are anchored.
             let anchored = format!("^(?:{pat})$");
-            regex::Regex::new(&anchored).unwrap_or_else(|e| {
-                panic!(
-                    "compiler/flags: invalid regex `{pat}` from {}: {e}",
-                    spec.source
-                )
-            });
-            flag_regex(&anchored).unwrap_or_else(|e| {
+            regex_lite::Regex::new(&anchored).unwrap_or_else(|e| {
                 panic!(
                     "compiler/flags: invalid regex `{pat}` from {}: {e}",
                     spec.source
@@ -315,95 +287,6 @@ pub fn assert_table_regexes_compile(table: &'static [FlagSpec]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The PikeVM-only engine answers exactly as the default one for every
-    /// regex row of the C table, over flags either side of each pattern.
-    #[test]
-    fn flag_regexes_match_like_the_default_engine() {
-        let samples = [
-            "-O",
-            "-O0",
-            "-O2",
-            "-O3",
-            "-Os",
-            "-Oz",
-            "-Og",
-            "-Ofast",
-            "-O4",
-            "-g",
-            "-g0",
-            "-g3",
-            "-g4",
-            "-gdwarf-4",
-            "-ggdb",
-            "-W",
-            "-Wall",
-            "-Wextra",
-            "-Wno-error",
-            "-Werror",
-            "-Werror=format",
-            "-Wl,-z,now",
-            "-Wa,--noexecstack",
-            "-Wa,--debug-prefix-map=/a=/b",
-            "-Wa,--debug-prefix-map=/a",
-            "-MD",
-            "-MMD",
-            "-MF",
-            "-MT",
-            "-MQ",
-            "-MP",
-            "-MG",
-            "-M",
-            "-MX",
-            "-xc",
-            "-xc++",
-            "-xobjective-c",
-            "-xobjective-c++",
-            "-xassembler",
-            "-mthumb",
-            "-mno-thumb",
-            "-marm",
-            "-mfpmath=sse",
-            "-mfpmath=avx",
-            "-mtls-dialect=gnu2",
-            "-mtls-dialect=desc",
-            "-mtls-dialect=x",
-            "-fstack-protector",
-            "-fno-stack-protector",
-            "-fstack-protector-strong",
-            "-fstack-protector-some",
-            "-mstack-protector-guard=tls",
-            "/W3",
-            "/Wall",
-            "/O2",
-            "-Ox",
-            "/Zi",
-            "-Z7",
-            "",
-            "-",
-            "-fPIC",
-            "\u{e9}",
-            "-W\u{e9}",
-        ];
-        let mut rows = 0;
-        for spec in crate::compiler::cc::CC_FLAGS {
-            let Matcher::Regex(pat) = spec.matcher else {
-                continue;
-            };
-            rows += 1;
-            let anchored = format!("^(?:{pat})$");
-            let default = regex::Regex::new(&anchored).unwrap();
-            let pikevm = flag_regex(&anchored).unwrap();
-            for sample in samples {
-                assert_eq!(
-                    pikevm.is_match(sample),
-                    default.is_match(sample),
-                    "`{pat}` on `{sample}`"
-                );
-            }
-        }
-        assert!(rows > 10, "the C table's regex rows were all checked");
-    }
 
     static TEST_TABLE: &[FlagSpec] = &[
         FlagSpec {

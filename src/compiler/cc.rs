@@ -46,7 +46,7 @@
 
 use crate::invocation::process::CommandExt as _;
 use anyhow::{Context, Result};
-use regex::Regex;
+use regex_lite::Regex;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
@@ -5855,7 +5855,7 @@ fn cc_header_probe_pastes_are_resolved<'a>(
     }
     let mut pending = Vec::new();
     for (name, pattern) in scans.iter().flat_map(|scan| &scan.pastes) {
-        let pattern = regex::Regex::new(pattern)?;
+        let pattern = Regex::new(pattern)?;
         if aliases.iter().any(|alias| pattern.is_match(alias)) {
             pending.push(name.as_str());
         }
@@ -5914,16 +5914,16 @@ fn cc_paste_use_can_name_probe(
                         if !definitions.contains_key(literal.as_str())
                             && !parameters.contains(literal) =>
                     {
-                        pattern.push_str(&regex::escape(literal))
+                        pattern.push_str(&regex_lite::escape(literal))
                     }
                     _ => pattern.push_str(".*"),
                 }
             } else {
-                pattern.push_str(&regex::escape(part));
+                pattern.push_str(&regex_lite::escape(part));
             }
         }
         pattern.push('$');
-        let pattern = regex::Regex::new(&pattern)?;
+        let pattern = Regex::new(&pattern)?;
         if aliases.iter().any(|alias| pattern.is_match(alias)) {
             return Ok(true);
         }
@@ -6132,7 +6132,7 @@ fn cc_header_macro_pastes(
         if parameters.contains(&word) || word == b"__VA_ARGS__" {
             ".*".to_owned()
         } else {
-            regex::escape(&String::from_utf8_lossy(word))
+            regex_lite::escape(&String::from_utf8_lossy(word))
         }
     };
     let mut scanned_to = 0;

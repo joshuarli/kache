@@ -90,12 +90,12 @@ mutants = "0.0.4"
 memchr = "2"
 tempfile = "3"
 # Used by `src/compiler/flags.rs` (the cc / future Swift / future MSVC
-# flag classifier). The `regex` crate is linear-time by construction
-# (no backtracking, no lookarounds) — matters because the wrapper runs
-# the classifier on every cc compile argument; bounded cost is a design
-# requirement.
-regex = { version = "1", default-features = false, features = ["std", "perf"] }
-regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "meta", "nfa-pikevm"] }
+# flag classifier) and the header-probe paste matcher in
+# `src/compiler/cc.rs`. `regex-lite` covers the used surface
+# (`Regex::new` + `is_match`, `escape`) with no backtracking or
+# lookarounds — matters because the wrapper runs the classifier on
+# every cc compile argument; bounded cost is a design requirement.
+regex-lite = "0.1"
 
 [dev-dependencies]
 kache-core = { version = "2.0.0-rc.2", path = "crates/kache-core" }
