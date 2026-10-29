@@ -19,23 +19,11 @@ struct CargoConfigFile {
 struct CargoBuildConfig {
     #[deser(rename = "rustc-wrapper")]
     rustc_wrapper: Option<String>,
-    /// Missing on every config written before `cargo doc` caching. Without
-    /// the default, a file that only sets `rustc-wrapper` would fail to parse.
-    #[deser(default)]
-    rustdoc: Option<String>,
 }
 
 pub(crate) fn resolve_wrapper_setting() -> Option<WrapperSetting> {
     resolve_wrapper_setting_from(
         std::env::var_os("RUSTC_WRAPPER"),
-        std::env::current_dir().ok().as_deref(),
-        std::env::var_os("CARGO_HOME").map(PathBuf::from),
-        kache_fs::home_dir(),
-    )
-}
-
-pub(crate) fn cargo_rustdoc_setting() -> Option<(String, PathBuf)> {
-    cargo_rustdoc_setting_from(
         std::env::current_dir().ok().as_deref(),
         std::env::var_os("CARGO_HOME").map(PathBuf::from),
         kache_fs::home_dir(),
@@ -81,20 +69,6 @@ fn cargo_wrapper_setting_from(
     resolved
 }
 
-fn cargo_rustdoc_setting_from(
-    current_dir: Option<&Path>,
-    cargo_home: Option<PathBuf>,
-    home: Option<PathBuf>,
-) -> Option<(String, PathBuf)> {
-    let mut resolved = None;
-    for path in cargo_config_candidates(current_dir, cargo_home, home) {
-        if let Some(value) = read_rustdoc_from_config(&path) {
-            resolved = Some((value, path));
-        }
-    }
-    resolved
-}
-
 fn cargo_config_candidates(
     current_dir: Option<&Path>,
     cargo_home: Option<PathBuf>,
@@ -128,10 +102,6 @@ fn push_config_candidates(config_dir: &Path, candidates: &mut Vec<PathBuf>) {
 
 fn read_rustc_wrapper_from_config(path: &Path) -> Option<String> {
     read_build_config(path)?.rustc_wrapper
-}
-
-fn read_rustdoc_from_config(path: &Path) -> Option<String> {
-    read_build_config(path)?.rustdoc
 }
 
 fn read_build_config(path: &Path) -> Option<CargoBuildConfig> {
@@ -258,65 +228,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn cargo_config_without_rustdoc_still_parses() {
-        let dir = tempfile::tempdir().unwrap();
-        let cargo_home = dir.path().join(".cargo");
-        std::fs::create_dir_all(&cargo_home).unwrap();
-        std::fs::write(
-            cargo_home.join("config.toml"),
-            "[build]\nrustc-wrapper = \"kache\"\n",
-        )
-        .unwrap();
-        let home = dir.path().to_path_buf();
-        assert_eq!(
-            cargo_wrapper_setting_from(None, Some(cargo_home.clone()), Some(home.clone()))
-                .unwrap()
-                .0,
-            "kache"
-        );
-        assert!(cargo_rustdoc_setting_from(None, Some(cargo_home), Some(home)).is_none());
-    }
-
-    #[test]
-    fn nearest_rustdoc_setting_overrides_an_earlier_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("home");
-        let project = dir.path().join("workspace/project");
-        std::fs::create_dir_all(home.join(".cargo")).unwrap();
-        std::fs::create_dir_all(project.join(".cargo")).unwrap();
-        std::fs::write(
-            home.join(".cargo/config.toml"),
-            "[build]\nrustc-wrapper = \"kache\"\nrustdoc = \"/home/shim/rustdoc\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            project.join(".cargo/config.toml"),
-            "[build]\nrustdoc = \"/project/shim/rustdoc\"\n",
-        )
-        .unwrap();
-        let setting = cargo_rustdoc_setting_from(Some(&project), None, Some(home)).unwrap();
-        assert_eq!(setting.0, "/project/shim/rustdoc");
-        assert_eq!(setting.1, project.join(".cargo/config.toml"));
-    }
-
-    #[test]
-    fn cargo_rustdoc_setting_reads_the_cargo_home_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let cargo_home = dir.path().join("cargo-home");
-        std::fs::create_dir_all(&cargo_home).unwrap();
-        std::fs::write(
-            cargo_home.join("config.toml"),
-            "[build]\nrustdoc = \"/shim/rustdoc\"\n",
-        )
-        .unwrap();
-        let (value, path) = cargo_rustdoc_setting_from(
-            None,
-            Some(cargo_home.clone()),
-            Some(dir.path().to_path_buf()),
-        )
-        .expect("configured rustdoc");
-        assert_eq!(value, "/shim/rustdoc");
-        assert_eq!(path, cargo_home.join("config.toml"));
-    }
 }

@@ -759,14 +759,11 @@ fn init_check_steps_follow_the_plans() {
     assert!(step("login_service").is_none());
     let shell = step("shell").unwrap();
     assert_eq!(shell["action"], "configure");
-    // The preview shows the build.rustdoc edit the real run makes.
-    assert_eq!(step("rustdoc").unwrap()["action"], "configure");
     assert!(step("free_space_recovery").is_some());
     // Nothing exists yet, so nothing needs a backup.
     assert!(step("backup").is_none(), "{steps:?}");
     assert_eq!(plan["shell_activation_required"], true);
     let text = String::from_utf8(output.stderr).unwrap();
-    assert!(text.contains("Would set build.rustdoc to "), "{text}");
     assert!(
         text.contains("Login service: skipped (--no-service)"),
         "{text}"
@@ -890,12 +887,11 @@ fn init_leaves_shell_setup_alone_when_skipped_or_cancelled() {
     assert!(!cancelled.home.join(".bashrc").exists());
 }
 
-#[cfg(unix)]
-/// With a login shell init cannot set up, it installs no shims, so there is
-/// no rustdoc shim to point Cargo at and no terminal to replace.
+/// With a login shell init cannot set up, it installs no shims and there
+/// is no terminal to replace.
 #[cfg(unix)]
 #[test]
-fn init_preview_for_an_unsupported_shell_plans_no_rustdoc_edit() {
+fn init_preview_for_an_unsupported_shell_plans_no_shell_edit() {
     let e = env();
     let output = e
         .cmd()
@@ -910,13 +906,7 @@ fn init_preview_for_an_unsupported_shell_plans_no_rustdoc_edit() {
         steps.contains(&"shell unsupported".to_string()),
         "{steps:?}"
     );
-    assert!(
-        !steps.iter().any(|step| step.starts_with("rustdoc ")),
-        "{steps:?}"
-    );
     assert_eq!(plan["shell_activation_required"], false, "{plan:?}");
-    let text = String::from_utf8(output.stderr).unwrap();
-    assert!(!text.contains("build.rustdoc"), "{text}");
 }
 
 /// With a login shell init cannot set up, the plan leaves out the shell rows.
@@ -935,7 +925,6 @@ fn init_plan_lists_shell_rows_only_for_a_supported_shell() {
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("Setup plan"), "{text}");
     assert!(!text.contains("  Shell "), "{text}");
-    assert!(!text.contains("  Docs "), "{text}");
     let output = e
         .cmd()
         .args(["init", "--no-service"])
@@ -944,7 +933,6 @@ fn init_plan_lists_shell_rows_only_for_a_supported_shell() {
         .unwrap();
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("  Shell "), "{text}");
-    assert!(text.contains("  Docs "), "{text}");
 }
 
 #[cfg(unix)]
@@ -2929,7 +2917,7 @@ fn init_exports_the_test_runner_for_the_host() {
         "",
     ))
     .unwrap();
-    for component in ["cargo", "shell", "rustdoc", "test_runner"] {
+    for component in ["cargo", "shell", "test_runner"] {
         let step = plan["steps"]
             .as_seq()
             .unwrap()
@@ -3056,19 +3044,8 @@ fn init_saves_shell_setup_preserves_cargo_choices_and_is_idempotent() {
     assert!(configured.contains("rustc-wrapper = \"kache\""));
     assert!(configured.contains("HOST_CC = \"custom-cc\""));
     assert!(configured.contains("HOST_CXX = \"kache c++\""));
-    let parsed: deser_value::Value = deser_toml::from_str(&configured).unwrap();
-    let rustdoc = parsed["build"]["rustdoc"]
-        .as_str()
-        .expect("init sets build.rustdoc when the shim exists");
-    let rustdoc_path = std::path::Path::new(rustdoc);
-    assert!(rustdoc_path.is_absolute(), "{rustdoc}");
-    assert_eq!(
-        rustdoc_path.file_name().and_then(|name| name.to_str()),
-        Some("rustdoc")
-    );
-    assert!(rustdoc_path.is_file(), "{rustdoc}");
-    // One backup before each edit: the wrapper, then build.rustdoc.
-    let mut backups: Vec<String> = std::fs::read_dir(cargo.parent().unwrap())
+    // One backup: the wrapper edit.
+    let backups: Vec<String> = std::fs::read_dir(cargo.parent().unwrap())
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .filter(|path| {
@@ -3079,11 +3056,7 @@ fn init_saves_shell_setup_preserves_cargo_choices_and_is_idempotent() {
         })
         .map(|path| std::fs::read_to_string(path).unwrap())
         .collect();
-    backups.sort_by_key(|backup| backup.contains("rustc-wrapper = \"kache\""));
-    assert_eq!(backups.len(), 2, "{backups:?}");
-    assert_eq!(backups[0], original);
-    assert!(backups[1].contains("rustc-wrapper = \"kache\""));
-    assert!(!backups[1].contains("rustdoc"));
+    assert_eq!(backups, [original]);
     let before = std::fs::read_to_string(e.home.join(".bashrc")).unwrap();
     assert!(before.starts_with("# user rc\n"));
     assert_eq!(before.matches("# >>> kache compiler cache >>>").count(), 1);
@@ -3537,7 +3510,6 @@ fn init_adds_native_caching_to_an_existing_rust_setup() {
     );
     assert_eq!(config["env"]["HOST_CC"].as_str(), Some("kache cc"));
     assert_eq!(config["env"]["HOST_CXX"].as_str(), Some("kache c++"));
-    assert!(config["build"].get("rustdoc").is_none());
 }
 
 #[cfg(unix)]
@@ -3558,94 +3530,8 @@ fn init_preserves_a_commented_cargo_build_table() {
     let edited = std::fs::read_to_string(&cargo).unwrap();
     let parsed: deser_value::Value = deser_toml::from_str(&edited).expect("init preserves valid Cargo config");
     assert_eq!(parsed["build"]["rustc-wrapper"].as_str(), Some("kache"));
-    let rustdoc = parsed["build"]["rustdoc"].as_str().unwrap();
-    let rustdoc = Path::new(rustdoc);
-    assert!(rustdoc.is_absolute());
-    assert_eq!(rustdoc.file_name().unwrap(), "rustdoc");
-    assert!(rustdoc.is_file());
     assert!(edited.contains("[build] # compiler settings"));
     assert_eq!(parsed["env"]["HOST_CC"].as_str(), Some("clang"));
-}
-
-#[cfg(unix)]
-#[test]
-fn init_preserves_cargo_config_when_the_rustdoc_text_edit_is_unsafe() {
-    let e = env();
-    let cargo = e.home.join(".cargo/config.toml");
-    std::fs::create_dir_all(cargo.parent().unwrap()).unwrap();
-    let original = "[ build ]\nrustc-wrapper = \"kache\"\n\
-                    [env]\nHOST_CC = \"clang\"\nHOST_CXX = \"clang++\"\n\
-                    CC_KNOWN_WRAPPER_CUSTOM = \"kache\"\n";
-    deser_toml::from_str::<deser_value::Value>(original).expect("valid original Cargo config");
-    std::fs::write(&cargo, original).unwrap();
-
-    for mode in ["--yes", "--check"] {
-        e.cmd()
-            .args(["init", mode, "--no-service"])
-            .assert()
-            .success()
-            .stdout(
-                predicates::str::contains("could not safely set build.rustdoc")
-                    .and(predicates::str::contains(cargo.display().to_string()))
-                    .and(predicates::str::contains("set it to")),
-            );
-
-        assert_eq!(std::fs::read_to_string(&cargo).unwrap(), original);
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn init_check_does_not_write_build_rustdoc() {
-    let e = env();
-    let cargo = e.home.join(".cargo/config.toml");
-    std::fs::create_dir_all(cargo.parent().unwrap()).unwrap();
-    std::fs::write(&cargo, "[build]\nrustc-wrapper = \"kache\"\n").unwrap();
-    e.cmd().args(["install-shims"]).assert().success();
-    let before = std::fs::read_to_string(&cargo).unwrap();
-    e.cmd()
-        .args(["init", "--check", "--no-service", "--yes"])
-        .assert()
-        .success();
-    assert_eq!(std::fs::read_to_string(&cargo).unwrap(), before);
-    assert!(!before.contains("rustdoc"));
-}
-
-#[cfg(unix)]
-#[test]
-fn init_without_a_shell_edit_leaves_rustdoc_unset_even_when_the_shim_exists() {
-    let e = env();
-    let cargo = e.home.join(".cargo/config.toml");
-    std::fs::create_dir_all(cargo.parent().unwrap()).unwrap();
-    std::fs::write(&cargo, "[build]\nrustc-wrapper = \"kache\"\n").unwrap();
-    e.cmd().args(["install-shims"]).assert().success();
-    e.cmd()
-        .args(["init", "--no-service", "--no-shell", "--yes"])
-        .assert()
-        .success();
-    let config: deser_value::Value = deser_toml::from_str(&std::fs::read_to_string(&cargo).unwrap()).unwrap();
-    assert!(config["build"].get("rustdoc").is_none());
-}
-
-#[cfg(unix)]
-#[test]
-fn init_leaves_an_existing_rustdoc_path_in_place() {
-    let e = env();
-    let cargo = e.home.join(".cargo/config.toml");
-    std::fs::create_dir_all(cargo.parent().unwrap()).unwrap();
-    std::fs::write(
-        &cargo,
-        "[build]\nrustc-wrapper = \"kache\"\nrustdoc = \"/usr/bin/rustdoc\"\n",
-    )
-    .unwrap();
-    e.cmd().args(["install-shims"]).assert().success();
-    e.cmd()
-        .args(["init", "--no-service", "--yes"])
-        .assert()
-        .success();
-    let config = std::fs::read_to_string(&cargo).unwrap();
-    assert!(config.contains("rustdoc = \"/usr/bin/rustdoc\""));
-    assert_eq!(config.matches("rustdoc =").count(), 1);
 }
 
 #[cfg(unix)]

@@ -2531,216 +2531,6 @@ fn test_cargo_wrapper_edit_create() {
 }
 
 #[test]
-fn rustdoc_assignment_ignores_a_longer_key_and_a_comment() {
-    assert!(is_rustdoc_assignment("rustdoc = \"/shim/rustdoc\""));
-    assert!(is_rustdoc_assignment("rustdoc=\"/shim/rustdoc\""));
-    assert!(is_rustdoc_assignment("  rustdoc = \"/shim/rustdoc\""));
-    assert!(!is_rustdoc_assignment("rustdoc-extra = \"/shim/rustdoc\""));
-    assert!(!is_rustdoc_assignment("# rustdoc = \"/shim/rustdoc\""));
-    assert!(!is_rustdoc_assignment("build-rustdoc = \"x\""));
-}
-
-#[test]
-fn rustdoc_edit_decision_writes_only_for_kache_without_a_key() {
-    let shim = "/home/user/.local/lib/kache/shims/rustdoc";
-    assert_eq!(rustdoc_edit_decision(None, None, shim), RustdocEdit::Skip);
-    assert_eq!(
-        rustdoc_edit_decision(Some("sccache"), None, shim),
-        RustdocEdit::Skip
-    );
-    assert_eq!(
-        rustdoc_edit_decision(Some("kache"), None, shim),
-        RustdocEdit::Write
-    );
-    assert_eq!(
-        rustdoc_edit_decision(Some("kache"), Some(shim), shim),
-        RustdocEdit::Already
-    );
-    assert_eq!(
-        rustdoc_edit_decision(Some("kache"), Some("/usr/bin/rustdoc"), shim),
-        RustdocEdit::Leave
-    );
-}
-
-#[test]
-fn apply_rustdoc_edit_inserts_replaces_and_leaves_a_correct_line() {
-    let shim = "/shim/rustdoc";
-    assert_eq!(
-        apply_rustdoc_edit("", shim),
-        "[build]\nrustdoc = \"/shim/rustdoc\"\n"
-    );
-    assert_eq!(
-        apply_rustdoc_edit("[build]\nrustc-wrapper = \"kache\"\n", shim),
-        "[build]\nrustdoc = \"/shim/rustdoc\"\nrustc-wrapper = \"kache\"\n"
-    );
-    assert_eq!(
-        apply_rustdoc_edit(
-            "[build]\nrustdoc = \"/old/rustdoc\"\nrustc-wrapper = \"kache\"\n",
-            shim
-        ),
-        "[build]\nrustdoc = \"/shim/rustdoc\"\nrustc-wrapper = \"kache\"\n"
-    );
-    let correct = "[build]\nrustdoc = \"/shim/rustdoc\"";
-    assert_eq!(apply_rustdoc_edit(correct, shim), correct);
-    assert_eq!(
-        apply_rustdoc_edit(
-            "[build]\nrustc-wrapper = \"kache\"\nrustdoc = \"/old\"\n",
-            shim
-        ),
-        "[build]\nrustc-wrapper = \"kache\"\nrustdoc = \"/shim/rustdoc\"\n"
-    );
-    assert_eq!(
-        apply_rustdoc_edit("[net]\noffline = true\n", shim),
-        "[net]\noffline = true\n\n[build]\nrustdoc = \"/shim/rustdoc\"\n"
-    );
-    let extra = "[build]\nrustdoc-extra = \"keep\"\n# rustdoc = \"no\"\nrustdoc = \"/a\"\nrustdoc = \"/b\"\n";
-    let replaced = apply_rustdoc_edit(extra, shim);
-    assert!(replaced.contains("rustdoc-extra = \"keep\""));
-    assert!(replaced.contains("# rustdoc = \"no\""));
-    assert_eq!(
-        replaced
-            .lines()
-            .filter(|line| is_rustdoc_assignment(line))
-            .count(),
-        1,
-        "{replaced}"
-    );
-    let outside = "[net]\nrustdoc = \"/old\"\n[build]\nrustc-wrapper = \"kache\"\n";
-    let edited = apply_rustdoc_edit(outside, shim);
-    assert!(edited.contains("rustdoc = \"/old\""), "{edited}");
-    assert!(
-        edited.contains("[build]\nrustdoc = \"/shim/rustdoc\"\nrustc-wrapper = \"kache\"\n"),
-        "{edited}"
-    );
-    let later = "[build]\nrustc-wrapper = \"kache\"\n[env]\nrustdoc = \"/keep\"\n";
-    let edited = apply_rustdoc_edit(later, shim);
-    assert_eq!(
-        edited,
-        "[build]\nrustdoc = \"/shim/rustdoc\"\nrustc-wrapper = \"kache\"\n[env]\nrustdoc = \"/keep\"\n",
-        "{edited}"
-    );
-    for distractor in ["note]", "[not-closed"] {
-        let body =
-            format!("[build]\nrustc-wrapper = \"kache\"\n{distractor}\nrustdoc = \"/old\"\n");
-        let edited = apply_rustdoc_edit(&body, shim);
-        assert!(!edited.contains("/old"), "{distractor}: {edited}");
-        assert_eq!(
-            edited.matches("rustdoc =").count(),
-            1,
-            "{distractor}: {edited}"
-        );
-    }
-}
-
-#[test]
-fn apply_rustdoc_edit_preserves_commented_table_boundaries() {
-    let original = "[build] # compiler settings\nrustc-wrapper = \"kache\"\n\
-                    [env] # retained environment\nrustdoc = \"keep\"\n";
-    deser_toml::from_str::<deser_value::Value>(original).expect("valid original Cargo config");
-    let edited = checked_rustdoc_edit(original, "/shim/rustdoc").unwrap();
-    let parsed: deser_value::Value =
-        deser_toml::from_str(&edited).expect("valid Cargo config after rustdoc edit");
-    assert_eq!(parsed["build"]["rustc-wrapper"].as_str(), Some("kache"));
-    assert_eq!(parsed["build"]["rustdoc"].as_str(), Some("/shim/rustdoc"));
-    assert_eq!(parsed["env"]["rustdoc"].as_str(), Some("keep"));
-    assert!(edited.contains("[build] # compiler settings"));
-    assert!(edited.contains("[env] # retained environment"));
-    assert_eq!(
-        checked_rustdoc_edit(&edited, "/shim/rustdoc").unwrap(),
-        edited
-    );
-}
-
-#[test]
-fn checked_rustdoc_edit_refuses_unsupported_layouts_and_changes_to_other_values() {
-    for original in [
-        "[ build ]\nrustc-wrapper = 'kache'\n",
-        "[\"build\"]\nrustc-wrapper = 'kache'\n",
-        "build.rustc-wrapper = 'kache'\n",
-        "build = { rustc-wrapper = 'kache' }\n",
-        "[metadata]\nexample = '''\n[build] # an example, inside a string\n'''\n\
-         [build]\nrustc-wrapper = 'kache'\n",
-    ] {
-        deser_toml::from_str::<deser_value::Value>(original).expect("valid original Cargo config");
-        assert!(
-            checked_rustdoc_edit(original, "/shim/rustdoc").is_err(),
-            "an unsafe text edit must be rejected: {original}"
-        );
-    }
-    for original in ["not TOML", "[env]\nCC = 'cc'\n", "build = 'other'\n"] {
-        assert!(checked_rustdoc_edit(original, "/shim/rustdoc").is_err());
-    }
-}
-
-#[test]
-fn rustdoc_doctor_fix_is_present_only_when_the_check_fails() {
-    assert_eq!(rustdoc_doctor_fix(true), None);
-    assert_eq!(
-        rustdoc_doctor_fix(false).as_deref(),
-        Some("point build.rustdoc at the rustdoc shim from kache init")
-    );
-}
-
-#[test]
-fn rustdoc_doctor_fields_cover_unset_and_a_bad_path() {
-    assert_eq!(rustdoc_doctor_fields(None, false), (true, "not set"));
-    assert_eq!(
-        rustdoc_doctor_fields(Some("/shim/rustdoc"), true),
-        (true, "shim")
-    );
-    assert_eq!(
-        rustdoc_doctor_fields(Some("/usr/bin/rustdoc"), false),
-        (false, "not a rustdoc shim")
-    );
-}
-
-#[test]
-fn rustdoc_shim_path_requires_an_absolute_rustdoc_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let missing = dir.path().join("rustdoc");
-    let missing = missing.to_string_lossy().into_owned();
-    assert!(rustdoc_shim_path_shape(&missing));
-    assert!(!rustdoc_shim_path_ok(&missing));
-    assert!(!rustdoc_shim_path_shape("rustdoc"));
-    assert!(!rustdoc_shim_path_shape(
-        &std::env::temp_dir().join("rustdoc-extra").to_string_lossy()
-    ));
-    assert!(!rustdoc_shim_path_shape(
-        &std::env::temp_dir().join("kache").to_string_lossy()
-    ));
-    let file = dir.path().join("rustdoc");
-    std::fs::write(&file, b"kache").unwrap();
-    assert!(
-        !rustdoc_shim_path_ok(&file.to_string_lossy()),
-        "an absolute file named rustdoc is the real toolchain until it is a shim"
-    );
-    std::fs::write(dir.path().join(".kache-shims"), b"kache shims\n").unwrap();
-    assert!(rustdoc_shim_path_ok(&file.to_string_lossy()));
-    let other = dir.path().join("kache");
-    std::fs::write(&other, b"kache").unwrap();
-    assert!(!rustdoc_shim_path_ok(&other.to_string_lossy()));
-    let as_dir = dir.path().join("nested/rustdoc");
-    std::fs::create_dir_all(&as_dir).unwrap();
-    assert!(!rustdoc_shim_path_ok(&as_dir.to_string_lossy()));
-}
-
-#[cfg(unix)]
-#[test]
-fn rustdoc_shim_path_accepts_a_symlink_to_kache() {
-    let dir = tempfile::tempdir().unwrap();
-    let target = dir.path().join("kache");
-    std::fs::write(&target, b"bin").unwrap();
-    let link = dir.path().join("rustdoc");
-    std::os::unix::fs::symlink(&target, &link).unwrap();
-    assert!(rustdoc_shim_path_ok(&link.to_string_lossy()));
-    std::fs::remove_file(&link).unwrap();
-    let other = dir.path().join("not-kache");
-    std::fs::write(&other, b"bin").unwrap();
-    std::os::unix::fs::symlink(&other, &link).unwrap();
-    assert!(!rustdoc_shim_path_ok(&link.to_string_lossy()));
-}
-
-#[test]
 fn test_cargo_wrapper_edit_replace() {
     let existing = "[build]\nrustc-wrapper = \"sccache\"\n";
     let plan = CargoWrapperPlan::Replace("sccache".into());
@@ -6924,10 +6714,6 @@ fn init_steps_follow_the_plans() {
     ] {
         assert!(!step_changes(action), "{action}");
     }
-    assert_eq!(rustdoc_action(RustdocEdit::Write), Some("configure"));
-    assert_eq!(rustdoc_action(RustdocEdit::Already), Some("keep"));
-    assert_eq!(rustdoc_action(RustdocEdit::Leave), Some("keep"));
-    assert_eq!(rustdoc_action(RustdocEdit::Skip), None);
     assert_eq!(service_action(true, true, true, true), None);
     assert_eq!(
         service_action(false, false, true, true),
@@ -6943,7 +6729,7 @@ fn init_never_backs_up_a_file_it_created() {
     let mut created = Vec::new();
     let config = std::path::Path::new("/home/me/.cargo/config.toml");
     let rc = std::path::Path::new("/home/me/.bashrc");
-    // The run creates the Cargo config, then edits it again for rustdoc.
+    // The run creates the Cargo config, which counts as created.
     assert!(backup_step(&mut created, config, false).is_none());
     assert!(backup_step(&mut created, config, true).is_none());
     assert!(backup_step(&mut created, config, false).is_none());
@@ -6968,7 +6754,6 @@ fn init_steps_list_each_edit_with_the_backup_before_it() {
         cargo_exists,
         shell: Some(SetupStep::new("shell", "configure", vec![rc.clone()])),
         shell_changes: vec![(rc.clone(), rc_exists)],
-        rustdoc: Some("configure"),
         test_runner: Some(SetupStep::new("test_runner", "configure", vec![rc.clone()])),
         test_changes: vec![(rc.clone(), rc_exists)],
         recovery: "keep",
@@ -6995,7 +6780,6 @@ fn init_steps_list_each_edit_with_the_backup_before_it() {
         [
             "cargo configure /home/me/.cargo/config.toml",
             "shell configure /home/me/.bashrc",
-            "rustdoc configure /home/me/.cargo/config.toml",
             "test_runner configure /home/me/.bashrc",
             "free_space_recovery keep /home/me/.config/kache/config.toml",
             "login_service keep /svc",
@@ -7010,8 +6794,6 @@ fn init_steps_list_each_edit_with_the_backup_before_it() {
             "backup create /home/me/.cargo/config.toml",
             "shell configure /home/me/.bashrc",
             "backup create /home/me/.bashrc",
-            "rustdoc configure /home/me/.cargo/config.toml",
-            "backup create /home/me/.cargo/config.toml",
             "test_runner configure /home/me/.bashrc",
             "backup create /home/me/.bashrc",
             "free_space_recovery keep /home/me/.config/kache/config.toml",
@@ -7023,7 +6805,6 @@ fn init_steps_list_each_edit_with_the_backup_before_it() {
     let kept = SetupFacts {
         shell: None,
         shell_changes: Vec::new(),
-        rustdoc: Some("keep"),
         test_runner: None,
         test_changes: Vec::new(),
         recovery: "ask",
@@ -7034,7 +6815,6 @@ fn init_steps_list_each_edit_with_the_backup_before_it() {
         summary(setup_steps(&kept)),
         [
             "cargo keep /home/me/.cargo/config.toml",
-            "rustdoc keep /home/me/.cargo/config.toml",
             "free_space_recovery ask /home/me/.config/kache/config.toml",
             "daemon ensure_running ",
         ]
@@ -7147,7 +6927,6 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
         cargo_exists: true,
         shell: None,
         shell_changes: Vec::new(),
-        rustdoc: Some("configure"),
         test_runner: None,
         test_changes: Vec::new(),
         recovery: "ask",
@@ -7166,20 +6945,17 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
         [
             "cargo configure",
             "backup create",
-            "rustdoc configure",
-            "backup create",
             "free_space_recovery ask",
             "login_service configure",
             "daemon ensure_running",
         ]
     );
-    // The replacement was declined, so rustdoc found no kache wrapper, the
-    // question was answered no and the service did not install.
+    // The replacement was declined, the question was answered no and the
+    // service did not install.
     let declined = run_facts(
         &plan,
         RunOutcome {
             cargo_applied: false,
-            rustdoc: None,
             test_runner: None,
             test_changes: Vec::new(),
             recovery: "keep",
@@ -7199,7 +6975,6 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
         &plan,
         RunOutcome {
             cargo_applied: true,
-            rustdoc: Some("configure"),
             test_runner: None,
             test_changes: Vec::new(),
             recovery: "configure",
@@ -7211,14 +6986,12 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
         [
             "cargo configure",
             "backup create",
-            "rustdoc configure",
-            "backup create",
             "free_space_recovery configure",
             "login_service configure",
             "daemon ensure_running",
         ]
     );
-    // A kept Cargo config stays kept; a failed rustdoc write lists its backup.
+    // A kept Cargo config stays kept.
     let kept = run_facts(
         &SetupFacts {
             cargo: "keep",
@@ -7227,7 +7000,6 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
         },
         RunOutcome {
             cargo_applied: false,
-            rustdoc: Some("failed"),
             test_runner: None,
             test_changes: Vec::new(),
             recovery: "keep",
@@ -7235,15 +7007,13 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
         },
     );
     assert_eq!(
-        components(&kept)[..4],
+        components(&kept)[..3],
         [
             "cargo keep",
-            "rustdoc failed",
-            "backup create",
-            "free_space_recovery keep"
+            "free_space_recovery keep",
+            "login_service keep"
         ]
     );
-    assert_eq!(components(&kept)[4], "login_service keep");
 }
 
 #[test]
@@ -7259,16 +7029,6 @@ fn recovery_steps_say_when_init_asks() {
 }
 
 #[test]
-fn only_a_preview_assumes_the_shims_and_wrapper_it_describes() {
-    assert_eq!(rustdoc_assumes(true, true, true), (true, true));
-    assert_eq!(rustdoc_assumes(true, false, true), (false, true));
-    assert_eq!(rustdoc_assumes(true, true, false), (true, false));
-    // A run looks at the disk: a declined replacement leaves no kache
-    // wrapper for build.rustdoc to follow.
-    assert_eq!(rustdoc_assumes(false, true, true), (false, false));
-}
-
-#[test]
 fn a_run_reports_the_test_runner_it_planned_after_the_shell_edits() {
     use std::path::PathBuf;
     let rc = PathBuf::from("/home/me/.bashrc");
@@ -7278,7 +7038,6 @@ fn a_run_reports_the_test_runner_it_planned_after_the_shell_edits() {
         cargo_exists: true,
         shell: Some(SetupStep::new("shell", "configure", vec![rc.clone()])),
         shell_changes: vec![(rc.clone(), true)],
-        rustdoc: None,
         test_runner: Some(SetupStep::new("test_runner", "unsupported", Vec::new())),
         test_changes: Vec::new(),
         recovery: "keep",
@@ -7290,7 +7049,6 @@ fn a_run_reports_the_test_runner_it_planned_after_the_shell_edits() {
         &plan,
         RunOutcome {
             cargo_applied: false,
-            rustdoc: None,
             test_runner: Some(SetupStep::new("test_runner", "configure", vec![rc.clone()])),
             test_changes: vec![(rc.clone(), true)],
             recovery: "keep",

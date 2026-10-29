@@ -384,7 +384,6 @@ fn versioned_drivers_are_c_and_cxx_drivers_with_a_numeric_version() {
         "x86_64-linux-gnu-gcc-13",
         // Not C or C++ drivers.
         "cargo-1",
-        "rustdoc-1",
         // Not a version.
         "clang-",
         "clang-x",

@@ -439,21 +439,19 @@ fn terminal_formatting_shares_cc_keys_with_cold_and_warm_probes() {
         compiler.parse(&args).unwrap()
     };
     let key = |flags: &[&str], cache: &Path| {
-        compiler
-            .cache_key(
-                &parse(flags),
-                &KeyCtx {
-                    invocation_env: &crate::invocation::InvocationEnv::capture(),
-                    file_hasher: &file_hasher,
-                    path_normalizer: &path_normalizer,
-                    cache_dir: cache,
-                    key_salt: None,
-                    key_env_vars: &[],
-                    extra_inputs_digest: None,
-                    build_script_inputs_digest: None,
-                },
-            )
-            .unwrap()
+        compiler.key_for_test(
+            &parse(flags),
+            &KeyCtx {
+                invocation_env: &crate::invocation::InvocationEnv::capture(),
+                file_hasher: &file_hasher,
+                path_normalizer: &path_normalizer,
+                cache_dir: cache,
+                key_salt: None,
+                key_env_vars: &[],
+                extra_inputs_digest: None,
+                build_script_inputs_digest: None,
+            },
+        )
     };
     let warm = dir.path().join("warm");
     let baseline = key(&[], &warm);
@@ -2977,7 +2975,7 @@ fn opt_in_link_keys_preserve_unicode17_soname_bytes() {
         ];
         let parsed = compiler.parse(&argv).unwrap();
         assert!(compiler.refuse_reasons(&parsed).is_empty());
-        compiler.cache_key(&parsed, &ctx).unwrap()
+        compiler.key_for_test(&parsed, &ctx)
     };
     assert_ne!(key("q\u{1ade}\u{0323}"), key("q\u{0323}\u{1ade}"));
 }
@@ -3018,15 +3016,15 @@ fn cache_key_for_link_changes_when_an_object_changes() {
         extra_inputs_digest: None,
         build_script_inputs_digest: None,
     };
-    let first = compiler.cache_key(&parsed, &ctx).unwrap();
+    let first = compiler.key_for_test(&parsed, &ctx);
     fs::write(&a, b"obj-a-v2").unwrap();
-    let second = compiler.cache_key(&parsed, &ctx).unwrap();
+    let second = compiler.key_for_test(&parsed, &ctx);
     assert_ne!(
         first, second,
         "changing an input object must miss the link cache"
     );
     fs::write(&a, b"obj-a-v1").unwrap();
-    let restored = compiler.cache_key(&parsed, &ctx).unwrap();
+    let restored = compiler.key_for_test(&parsed, &ctx);
     assert_eq!(first, restored, "restoring object bytes must hit again");
 
     let libdir = dir.path().join("libfoo.a");
@@ -3509,8 +3507,8 @@ fn wa_debug_prefix_map_changes_cache_key_issue_644() {
         build_script_inputs_digest: None,
     };
 
-    let key_a = compiler.cache_key(&parse("/mapped-a"), &ctx).unwrap();
-    let key_b = compiler.cache_key(&parse("/mapped-b"), &ctx).unwrap();
+    let key_a = compiler.key_for_test(&parse("/mapped-a"), &ctx);
+    let key_b = compiler.key_for_test(&parse("/mapped-b"), &ctx);
     assert_ne!(key_a, key_b, "different NEW values must not collide");
 }
 
@@ -4099,7 +4097,10 @@ fn cache_key_refuses_probe_captured_flags_without_resolved_invocation() {
             build_script_inputs_digest: None,
         };
 
-        let err = compiler.cache_key(&parsed, &ctx).unwrap_err().to_string();
+        let err = match compiler.cache_key_with(&parsed, &ctx, CcKeyDiscovery::Expansion) {
+            Err(err) => err.to_string(),
+            _ => panic!("expected a cache key error"),
+        };
         assert!(
             err.contains("resolved invocation unavailable"),
             "expected resolved-invocation refusal for {flag}, got: {err}"
@@ -8312,9 +8313,9 @@ fn shadowing_header_changes_cc_cache_key() {
         extra_inputs_digest: None,
         build_script_inputs_digest: None,
     };
-    let before = compiler.cache_key(&parse(), &ctx).unwrap();
+    let before = compiler.key_for_test(&parse(), &ctx);
     fs::write(first.join("header.h"), "#define A 2\n").unwrap();
-    let after = compiler.cache_key(&parse(), &ctx).unwrap();
+    let after = compiler.key_for_test(&parse(), &ctx);
     assert_ne!(
         before, after,
         "a shadowing header must change the cc key even when preprocess output is unchanged"

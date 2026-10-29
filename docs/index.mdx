@@ -29,7 +29,6 @@ with separate target directories.
 | Task | Guide |
 | --- | --- |
 | Cache Make, CMake, or build-script C/C++ | [C and C++](/docs/getting-started/c-cpp) |
-| Cache Rust documentation | [Rustdoc](/docs/getting-started/rustdoc) |
 | Use Kache with cargo-mutants | [Mutation testing](/docs/getting-started/mutation-testing) |
 | Change storage limits or build policy | [Configuration](/docs/getting-started/configuration) |
 
@@ -51,7 +50,6 @@ For the details, read [cache keys](/docs/how-it-works/cache-key),
 | Rust libraries | Linux and macOS |
 | Rust executables, test binaries and build scripts | Cached by default (`cache_executables`). Build-script runs are cached |
 | C and C++ object compilation | GCC, Clang, Apple Clang, and clang-cl. MSVC `cl.exe` is not cached |
-| Rust documentation | Unix with compatible Cargo versions and [unstable rustdoc flags](/docs/getting-started/rustdoc). Rust 1.99 passes through |
 | Local cache | Content-addressed storage with automatic garbage collection |
 | Build visibility | Stats, miss explanations, and reports |
 

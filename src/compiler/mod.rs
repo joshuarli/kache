@@ -5,16 +5,6 @@
 //! descriptor. Detection walks those descriptors instead of returning a closed
 //! enum, so adding an adapter is adding a module-owned descriptor plus wrapper
 //! dispatch, not growing a central taxonomy of future tool kinds.
-//!
-//! **Scope.** The trait covers the operations with a clean generic shape
-//! today: `parse`, `refuse_reasons`, `cache_key`, `execute`, and
-//! `classify_output` (per-file kind classification used by the wrapper to
-//! dispatch link strategy and post-restore processing without filename
-//! pattern matching). Storage metadata (crate types, features,
-//! target/profile) and the restore loop's path resolution still touch
-//! [`crate::args::RustcArgs`] fields directly in [`crate::wrapper`]; those
-//! remain compiler-specific. Rust and C-family adapters share the
-//! contract while the wrapper coordinates their cache operations.
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -26,7 +16,6 @@ pub mod cc;
 pub mod flags;
 pub mod platform;
 pub mod rustc;
-pub mod rustdoc;
 
 pub use platform::{Loadability, Platform};
 
@@ -756,9 +745,6 @@ pub trait Compiler {
     /// Empty Vec = cacheable.
     fn refuse_reasons(&self, parsed: &Self::Parsed) -> Vec<RefuseReason>;
 
-    /// Compute the cache key for a parsed invocation.
-    fn cache_key(&self, parsed: &Self::Parsed, ctx: &KeyCtx<'_, '_>) -> Result<String>;
-
     /// Execute the compilation, capturing exit code, stdout, stderr, and
     /// the list of output files produced.
     fn execute(&self, parsed: &Self::Parsed) -> Result<CompileResult>;
@@ -779,7 +765,7 @@ pub trait Compiler {
 /// Registration is deliberately concrete and local: adding an adapter means
 /// adding its module-owned descriptor here, with no broad enum of possible
 /// future tool kinds.
-pub const COMPILER_ADAPTERS: &[CompilerAdapter] = &[rustc::ADAPTER, rustdoc::ADAPTER, cc::ADAPTER];
+pub const COMPILER_ADAPTERS: &[CompilerAdapter] = &[rustc::ADAPTER, cc::ADAPTER];
 
 /// Detect which compiler adapter an argv vector is invoking.
 ///
@@ -2034,8 +2020,7 @@ pub(crate) mod shim {
 
     fn invoked_as_compiler_for(arg0: &str, env: &super::InvocationEnv) -> bool {
         let argv = [arg0.to_owned()];
-        super::rustdoc::RustdocCompiler::recognizes(&argv)
-            || super::cc::CcCompiler::recognizes_for(&argv, env)
+        super::cc::CcCompiler::recognizes_for(&argv, env)
     }
 
     /// The real compiler behind a shim: the first `name` on `PATH` that is not
@@ -2310,9 +2295,6 @@ mod shim_tests {
             "g++",
             "clang++",
             "/usr/local/bin/gcc",
-            "rustdoc",
-            "/usr/bin/rustdoc",
-            "rustdoc.exe",
         ] {
             assert!(invoked_as_compiler(name), "{name} should look like a shim");
         }

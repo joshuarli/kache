@@ -7671,15 +7671,6 @@ impl Compiler for CcCompiler {
         reasons
     }
 
-    fn cache_key(&self, parsed: &CcArgs, ctx: &KeyCtx<'_, '_>) -> Result<String> {
-        match self.cache_key_with(parsed, ctx, CcKeyDiscovery::Expansion)? {
-            CcKeyOutcome::Key(key) => Ok(key),
-            CcKeyOutcome::Deferred(_) => {
-                anyhow::bail!("cc key deferred without a compile-first caller")
-            }
-        }
-    }
-
     fn execute(&self, parsed: &CcArgs) -> Result<CompileResult> {
         self.execute_with_extra_args(parsed, Vec::new(), false)
             .map(|(result, _)| result)
@@ -7696,6 +7687,14 @@ impl Compiler for CcCompiler {
 }
 
 impl CcCompiler {
+    #[cfg(test)]
+    pub(crate) fn key_for_test(&self, parsed: &CcArgs, ctx: &KeyCtx<'_, '_>) -> String {
+        match self.cache_key_with(parsed, ctx, CcKeyDiscovery::Expansion) {
+            Ok(CcKeyOutcome::Key(key)) => key,
+            _ => panic!("expected a cache key"),
+        }
+    }
+
     /// The key, or the request to compile first when `discovery` allows it
     /// and no memo describes this invocation's read set.
     pub(crate) fn cache_key_with(

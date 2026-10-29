@@ -63,7 +63,7 @@ pub fn is_cc_compiler_name(program: &str) -> bool {
 
 /// Compiler-name shims have priority over CLI-looking compiler arguments.
 pub fn is_compiler_shim_name(program: &str) -> bool {
-    basename(program).eq_ignore_ascii_case("rustdoc") || is_cc_compiler_name(program)
+    is_cc_compiler_name(program)
 }
 
 fn basename(program: &str) -> &str {
@@ -133,16 +133,15 @@ mod tests {
             assert!(is_cc_compiler_name(program), "{program}");
             assert!(is_compiler_shim_name(program), "{program}");
         }
-        for program in ["rustdoc", "RUSTDOC.EXE", r"C:\tools\rustdoc.exe"] {
-            assert!(!is_cc_compiler_name(program), "{program}");
-            assert!(is_compiler_shim_name(program), "{program}");
-        }
         for program in [
             "",
             "c",
             "cl",
             "rustc",
             "cargo",
+            "rustdoc",
+            "RUSTDOC.EXE",
+            r"C:\tools\rustdoc.exe",
             "zig",
             "zigccx",
             "other.exe",

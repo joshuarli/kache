@@ -1235,8 +1235,6 @@ fn rustc_args_for_direct_preclean_for<'a>(
 fn wrapper_target(adapter: &compiler::CompilerAdapter) -> Option<WrapperTarget> {
     if adapter.id() == compiler::rustc::RUSTC_ID {
         Some(WrapperTarget::Rustc)
-    } else if adapter.id() == compiler::rustdoc::RUSTDOC_ID {
-        Some(WrapperTarget::Rustdoc)
     } else if adapter.id() == compiler::cc::CC_ID {
         Some(WrapperTarget::Cc)
     } else {
@@ -1247,7 +1245,6 @@ fn wrapper_target(adapter: &compiler::CompilerAdapter) -> Option<WrapperTarget> 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WrapperTarget {
     Rustc,
-    Rustdoc,
     Cc,
 }
 
@@ -1323,7 +1320,6 @@ fn original_compiler_request(args: &[String], env: &invocation::InvocationEnv) -
     }
     let after = &args[1..];
     compiler::rustc::RustcCompiler::recognizes(after)
-        || compiler::rustdoc::RustdocCompiler::recognizes(after)
         || after
             .first()
             .is_some_and(|program| compiler::cc::CcCompiler::recognizes_name(program))
@@ -1487,7 +1483,6 @@ fn run_compiler_invocation_inner(
             drop(trace);
             exit
         }
-        Some(WrapperTarget::Rustdoc) => compiler::rustdoc::run_for(&config, args, &env)?,
         Some(WrapperTarget::Cc) => wrapper::run_cc_for(&config, args, &env)?,
         None => anyhow::bail!(
             "detected compiler adapter {} ({}) has no wrapper dispatch",
@@ -1643,7 +1638,6 @@ mod tests {
         for arguments in [
             vec!["cc", "-c", "source.c"],
             vec!["kache", "rustc", "--version"],
-            vec!["kache", "rustdoc", "--version"],
             vec!["kache", "cc", "-c", "source.c"],
             vec!["kache", "/client/workspace-wrapper", "rustc", "--version"],
             vec!["kache", "-E", "probe.c"],
@@ -2894,10 +2888,6 @@ mod tests {
         assert_eq!(
             wrapper_target(adapter_for(&["rustc", "--crate-name", "foo"])),
             Some(WrapperTarget::Rustc)
-        );
-        assert_eq!(
-            wrapper_target(adapter_for(&["rustdoc", "--crate-name", "demo"])),
-            Some(WrapperTarget::Rustdoc)
         );
         assert_eq!(
             wrapper_target(adapter_for(&["cc", "-c", "foo.c"])),

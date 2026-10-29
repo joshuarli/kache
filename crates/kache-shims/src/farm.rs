@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 /// The canonical drivers. Versioned drivers ([`is_versioned_driver`]) are
 /// linked when found on `PATH`; target-prefixed compiler names are opt-in.
 pub const SHIM_NAMES: &[&str] = &[
-    "cc", "c++", "gcc", "g++", "clang", "clang++", "cargo", "rustdoc",
+    "cc", "c++", "gcc", "g++", "clang", "clang++", "cargo",
 ];
 
 /// A C or C++ driver from [`SHIM_NAMES`] with a version suffix, as Debian,

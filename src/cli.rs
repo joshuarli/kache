@@ -6938,7 +6938,7 @@ pub fn doctor(
     // Checks `doctor --fix` and `kache init` repair when they fail, for the
     // JSON `next` suggestion. A passing check listed here suggests nothing.
     let mut fix_repairs: Vec<&'static str> = Vec::new();
-    let mut init_repairs: Vec<&'static str> = vec!["cargo doc"];
+    let mut init_repairs: Vec<&'static str> = Vec::new();
     let cargo_home = cargo_home_dir();
 
     // 2. RUSTC_WRAPPER
@@ -6961,18 +6961,7 @@ pub fn doctor(
         fix: wrapper_fix,
     });
 
-    let rustdoc_setting = crate::wrapper_config::cargo_rustdoc_setting();
-    let rustdoc_value = rustdoc_setting.as_ref().map(|(value, _)| value.as_str());
-    let rustdoc_path_ok = rustdoc_value.is_some_and(rustdoc_shim_path_ok);
-    let (doc_pass, doc_class) = rustdoc_doctor_fields(rustdoc_value, rustdoc_path_ok);
-    checks.push(Check {
-        label: "cargo doc",
-        pass: doc_pass,
-        detail: doc_class.to_string(),
-        fix: rustdoc_doctor_fix(doc_pass),
-    });
-
-    // 3a. The kache config file. One that does not parse is ignored
+    // 3. The kache config file. One that does not parse is ignored
     // everywhere, so every command runs on defaults.
     let config_path = crate::config::resolve_config_path();
     let (config_pass, config_detail, config_fix) = doctor_config_file_check(
@@ -6989,7 +6978,7 @@ pub fn doctor(
         fix: config_fix,
     });
 
-    // 3b. Host config layer
+    // 4. Host config layer
     let (host_pass, host_detail, host_fix) =
         doctor_host_config_check(&crate::config::host_config_status());
     checks.push(Check {
@@ -6999,7 +6988,7 @@ pub fn doctor(
         fix: host_fix,
     });
 
-    // 4. Cache directory
+    // 5. Cache directory
     if let Some(ref cfg) = config {
         let exists = cfg.cache_dir.exists();
         checks.push(Check {
@@ -7016,7 +7005,7 @@ pub fn doctor(
             fix: None,
         });
 
-        // 4b. Is that directory on storage the WAL index can actually live on?
+        // Is that directory on storage the WAL index can actually live on?
         // A shared or network mount is the #412 corruption case, and `doctor` is
         // where a user looks when they suspect their setup — so report it here
         // as a real issue rather than only as a build-time advisory (#415).
@@ -7107,7 +7096,7 @@ pub fn doctor(
         });
     }
 
-    // 5. Shell rc sccache remnants
+    // 6. Shell rc sccache remnants
     let mut rc_issues = Vec::new();
     for rc in [".zshrc", ".bashrc", ".bash_profile", ".profile"] {
         let rc_path = home.join(rc);
@@ -7129,7 +7118,7 @@ pub fn doctor(
         });
     }
 
-    // 6. sccache daemon running
+    // 7. sccache daemon running
     if let Ok(output) = std::process::Command::new("pgrep")
         .args(["-x", "sccache"])
         .output()
@@ -7153,7 +7142,7 @@ pub fn doctor(
         }
     }
 
-    // 7. Daemon version match
+    // 8. Daemon version match
     //
     // `send_stats_request_without_restart` skips the client-side stale-daemon
     // restart that `send_stats_request` performs, so an upgrade left half-applied
@@ -7226,7 +7215,7 @@ pub fn doctor(
         }
     }
 
-    // 9. Daemon service installed
+    // 10. Daemon service installed
     if let Some(service_path) = crate::service::service_file_path() {
         let installed = service_path.exists();
         let (pass, fix) = daemon_service_check(installed, healthy_daemon_reachable);
@@ -7250,7 +7239,7 @@ pub fn doctor(
     // Startup and ownership locks are persistent. Never unlink their inodes,
     // even while idle: another process may already have opened the same file.
 
-    // 12. The binary the service runs. After an upgrade removes the version
+    // 11. The binary the service runs. After an upgrade removes the version
     //     it recorded, launchd or systemd has nothing to start.
     if let Some(service_path) = crate::service::service_file_path()
         && service_path.exists()
@@ -8374,181 +8363,6 @@ fn cargo_config_target_path() -> std::path::PathBuf {
     }
 }
 
-/// `build.rustdoc` assignment, not `rustdoc-extra` and not a comment.
-#[cfg(any(test, unix))]
-pub(crate) fn is_rustdoc_assignment(line: &str) -> bool {
-    let Some(rest) = line.trim().strip_prefix("rustdoc") else {
-        return false;
-    };
-    rest.trim_start().starts_with('=')
-}
-
-#[cfg(any(test, unix))]
-fn closes_toml_table(trimmed: &str) -> bool {
-    trimmed.starts_with('[') && deser_toml::from_str::<deser_value::Map>(trimmed).is_ok()
-}
-
-#[cfg(any(test, unix))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RustdocEdit {
-    Skip,
-    Already,
-    Leave,
-    Write,
-}
-
-#[cfg(any(test, unix))]
-pub(crate) fn rustdoc_edit_decision(
-    wrapper: Option<&str>,
-    current: Option<&str>,
-    shim: &str,
-) -> RustdocEdit {
-    if wrapper != Some("kache") {
-        return RustdocEdit::Skip;
-    }
-    match current {
-        None => RustdocEdit::Write,
-        Some(value) if value == shim => RustdocEdit::Already,
-        Some(_) => RustdocEdit::Leave,
-    }
-}
-
-/// Insert or replace `build.rustdoc`. A line that already names `shim_path`
-/// is returned unchanged. `rustdoc-extra` and comments are left in place.
-#[cfg(any(test, unix))]
-pub(crate) fn apply_rustdoc_edit(existing: &str, shim_path: &str) -> String {
-    let assignment = format!("rustdoc = \"{shim_path}\"");
-    if existing.trim().is_empty() {
-        return format!("[build]\n{assignment}\n");
-    }
-    let lines: Vec<&str> = existing.lines().collect();
-    let mut build_header = None;
-    let mut assignments = Vec::new();
-    let mut in_build = false;
-    for (index, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("[build]") {
-            in_build = true;
-            if build_header.is_none() {
-                build_header = Some(index);
-            }
-        } else if closes_toml_table(trimmed) {
-            in_build = false;
-        } else if in_build && is_rustdoc_assignment(trimmed) {
-            assignments.push(index);
-        }
-    }
-    if assignments.len() == 1 && lines[assignments[0]].trim() == assignment {
-        return existing.to_string();
-    }
-    let mut out = String::new();
-    if let Some(header) = build_header {
-        let mut placed = false;
-        for (index, line) in lines.iter().enumerate() {
-            if assignments.contains(&index) {
-                if !placed {
-                    out.push_str(&assignment);
-                    out.push('\n');
-                    placed = true;
-                }
-                continue;
-            }
-            out.push_str(line);
-            out.push('\n');
-            if index == header && assignments.is_empty() && !placed {
-                out.push_str(&assignment);
-                out.push('\n');
-                placed = true;
-            }
-        }
-        assert!(
-            placed,
-            "a [build] section must gain exactly one rustdoc assignment"
-        );
-        return out;
-    }
-    for line in &lines {
-        out.push_str(line);
-        out.push('\n');
-    }
-    if !lines.is_empty() {
-        out.push('\n');
-    }
-    out.push_str("[build]\n");
-    out.push_str(&assignment);
-    out.push('\n');
-    out
-}
-
-/// Check that the text edit changed only the intended Cargo setting.
-#[cfg(any(test, unix))]
-fn checked_rustdoc_edit(existing: &str, shim_path: &str) -> Result<String> {
-    let updated = apply_rustdoc_edit(existing, shim_path);
-    let mut expected: deser_value::Value = deser_toml::from_str(existing)?;
-    let build = expected
-        .get_mut("build")
-        .and_then(|value| value.as_map_mut())
-        .context("Cargo config has no build table")?;
-    build.insert(
-        "rustdoc".to_string(),
-        deser_value::Value::from(shim_path.to_string()),
-    );
-    let actual: deser_value::Value = deser_toml::from_str(&updated)?;
-    anyhow::ensure!(
-        actual == expected,
-        "could not safely set build.rustdoc; edit Cargo config manually"
-    );
-    Ok(updated)
-}
-
-/// Absolute path whose filename is `rustdoc`.
-#[cfg(any(test, unix))]
-pub(crate) fn rustdoc_shim_path_shape(value: &str) -> bool {
-    let path = std::path::Path::new(value);
-    path.is_absolute() && path.file_name().and_then(|name| name.to_str()) == Some("rustdoc")
-}
-
-/// A rustdoc shim: the path is an absolute `rustdoc` file, and it is a kache
-/// shim. The directory marker counts, and so does a link that resolves to this
-/// kache or to a binary named `kache`. The real toolchain `rustdoc` is neither.
-#[cfg(any(test, unix))]
-pub(crate) fn rustdoc_shim_path_ok(value: &str) -> bool {
-    if !rustdoc_shim_path_shape(value) {
-        return false;
-    }
-    let path = std::path::Path::new(value);
-    if !path.is_file() {
-        return false;
-    }
-    if path.parent().is_some_and(kache_shims::farm::has_marker) {
-        return true;
-    }
-    let self_real = crate::platform::frontend_executable()
-        .ok()
-        .and_then(|exe| std::fs::canonicalize(exe).ok());
-    kache_shims::farm::resolves_to_kache(path, self_real.as_deref(), &|candidate| {
-        std::fs::canonicalize(candidate).ok()
-    })
-}
-
-pub(crate) fn rustdoc_doctor_fix(pass: bool) -> Option<String> {
-    (!pass).then(|| "point build.rustdoc at the rustdoc shim from kache init".to_string())
-}
-
-pub(crate) fn rustdoc_doctor_fields(
-    configured: Option<&str>,
-    path_ok: bool,
-) -> (bool, &'static str) {
-    if configured.is_none() {
-        return (true, "not set");
-    }
-    if path_ok {
-        (true, "shim")
-    } else {
-        (false, "not a rustdoc shim")
-    }
-}
-
 /// Refuse an edit that did not leave `build.rustc-wrapper = "kache"`: the
 /// formatting-preserving editor cannot replace every way of writing the old
 /// value.
@@ -8580,90 +8394,6 @@ fn back_up_cargo_config(cargo_path: &std::path::Path, existing: &str) -> Result<
         crate::wrapper_config::display_path(&backup)
     );
     Ok(())
-}
-
-/// What `build.rustdoc` needs, read from the Cargo config now. In a
-/// preview, `shim_coming` and `wrapper_coming` stand for the shim and the
-/// `rustc-wrapper` edit this run would make first. `None` when there is no
-/// shim to point at.
-#[cfg(unix)]
-fn plan_cargo_rustdoc(
-    shim_coming: bool,
-    wrapper_coming: bool,
-) -> Option<(RustdocEdit, std::path::PathBuf)> {
-    let shim = crate::compiler::shim::default_shim_dir()?.join("rustdoc");
-    if !shim_coming && !shim.is_file() {
-        return None;
-    }
-    let shim_path = shim.to_str()?;
-    let existing = std::fs::read_to_string(cargo_config_target_path()).unwrap_or_default();
-    let parsed: Option<deser_value::Value> = deser_toml::from_str(&existing).ok();
-    let build = parsed.as_ref().and_then(|value| value.get("build"));
-    let setting = |key: &str| build.and_then(|build| build.get(key))?.as_str();
-    let wrapper = if wrapper_coming {
-        Some("kache")
-    } else {
-        setting("rustc-wrapper")
-    };
-    let edit = rustdoc_edit_decision(wrapper, setting("rustdoc"), shim_path);
-    Some((edit, shim))
-}
-
-/// Point `build.rustdoc` at the rustdoc shim with a backup,
-/// like the `rustc-wrapper` edit. Only a config whose wrapper is already
-/// `kache`, or is about to be in a preview, is edited. A config in
-/// `created`, which this run made itself, gets no backup. Returns the
-/// `rustdoc` step's action: what a preview would do, or what a run did.
-#[cfg(unix)]
-fn configure_cargo_rustdoc(
-    check: bool,
-    shim_coming: bool,
-    wrapper_coming: bool,
-    created: &mut Vec<std::path::PathBuf>,
-) -> Result<Option<&'static str>> {
-    let Some((edit, shim)) = plan_cargo_rustdoc(shim_coming, wrapper_coming) else {
-        return Ok(None);
-    };
-    match edit {
-        RustdocEdit::Write => {}
-        RustdocEdit::Leave => {
-            println!("  • cargo doc: build.rustdoc is already set");
-            return Ok(rustdoc_action(edit));
-        }
-        RustdocEdit::Skip | RustdocEdit::Already => return Ok(rustdoc_action(edit)),
-    }
-    let cargo_path = cargo_config_target_path();
-    let existing = std::fs::read_to_string(&cargo_path).unwrap_or_default();
-    // A preview runs before the wrapper step writes `[build]`, so it can only
-    // check the edit when that step has nothing to add.
-    if check && wrapper_coming {
-        println!("    Would set build.rustdoc to {}", shim.display());
-        return Ok(rustdoc_action(edit));
-    }
-    let updated = match checked_rustdoc_edit(&existing, &shim.to_string_lossy()) {
-        Ok(updated) => updated,
-        Err(error) => {
-            println!(
-                "  • cargo doc: could not safely set build.rustdoc in {} ({error}); set it to {} manually",
-                cargo_path.display(),
-                shim.display()
-            );
-            return Ok(Some("manual"));
-        }
-    };
-    if check {
-        println!("    Would set build.rustdoc to {}", shim.display());
-        return Ok(rustdoc_action(edit));
-    }
-    if backup_step(created, &cargo_path, true).is_some() {
-        back_up_cargo_config(&cargo_path, &existing)?;
-    }
-    if let Err(error) = std::fs::write(&cargo_path, updated) {
-        println!("  • cargo doc: could not set build.rustdoc ({error})");
-        return Ok(Some("failed"));
-    }
-    println!("  ✓ cargo doc: build.rustdoc set");
-    Ok(rustdoc_action(edit))
 }
 
 #[derive(Debug, Clone, deser::Serialize)]
@@ -8708,8 +8438,6 @@ struct SetupFacts {
     /// exists now.
     shell: Option<SetupStep>,
     shell_changes: Vec<(std::path::PathBuf, bool)>,
-    /// The `rustdoc` step's action.
-    rustdoc: Option<&'static str>,
     test_runner: Option<SetupStep>,
     test_changes: Vec<(std::path::PathBuf, bool)>,
     /// The `free_space_recovery` step's action.
@@ -8741,17 +8469,6 @@ fn setup_steps(facts: &SetupFacts) -> Vec<SetupStep> {
     for (path, exists) in &facts.shell_changes {
         steps.extend(backup_step(&mut created, path, *exists));
     }
-    if let Some(action) = facts.rustdoc {
-        steps.push(SetupStep::new(
-            "rustdoc",
-            action,
-            vec![facts.cargo_path.clone()],
-        ));
-        // A failed write still made its backup first.
-        if step_changes(action) || action == "failed" {
-            steps.extend(backup_step(&mut created, &facts.cargo_path, true));
-        }
-    }
     steps.extend(facts.test_runner);
     for (path, exists) in &facts.test_changes {
         steps.extend(backup_step(&mut created, path, *exists));
@@ -8772,20 +8489,10 @@ fn setup_steps(facts: &SetupFacts) -> Vec<SetupStep> {
     steps
 }
 
-/// What the `build.rustdoc` planner may take as done, as (shims, wrapper):
-/// a preview has made neither the shims nor the `rustc-wrapper` edit it
-/// describes, so it stands in for them; a run reads what is on disk, which
-/// leaves out a declined wrapper replacement. Pure.
-#[cfg(any(test, unix))]
-fn rustdoc_assumes(check: bool, installs_shims: bool, wrapper_coming: bool) -> (bool, bool) {
-    (check && installs_shims, check && wrapper_coming)
-}
-
 /// What a run did, against the plan it started from.
 struct RunOutcome {
     /// Whether the Cargo edit was made; false when it was declined.
     cargo_applied: bool,
-    rustdoc: Option<&'static str>,
     /// The test-runner step as planned after the compiler setup, which may
     /// have written the same startup files.
     test_runner: Option<SetupStep>,
@@ -8808,7 +8515,6 @@ fn run_facts(plan: &SetupFacts, outcome: RunOutcome) -> SetupFacts {
     };
     SetupFacts {
         cargo,
-        rustdoc: outcome.rustdoc,
         test_runner: outcome.test_runner,
         test_changes: outcome.test_changes,
         recovery: outcome.recovery,
@@ -9091,7 +8797,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
     };
     let env_missing = crate::cargo_env::missing_assignments_from_path(&cargo_path)?;
     let mut cargo_ready = plan == CargoWrapperPlan::AlreadySet && env_missing.is_empty();
-    let wrapper_coming = plan != CargoWrapperPlan::AlreadySet;
 
     // Plan every step before asking, so the plan, the preview and the JSON
     // steps all describe what this run does.
@@ -9112,19 +8817,15 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
     let shell_facts = (
         compiler.step(),
         existing_paths(compiler.changed_paths()),
-        (!no_shell)
-            .then(|| plan_cargo_rustdoc(compiler.installs_shims(), wrapper_coming))
-            .flatten()
-            .and_then(|(edit, _)| rustdoc_action(edit)),
         tests.step(),
         existing_paths(tests.changed_paths()),
     );
     #[cfg(not(unix))]
     let shell_facts = {
-        let _ = (no_shell, wrapper_coming, existing_paths);
-        (None, Vec::new(), None, None, Vec::new())
+        let _ = (no_shell, existing_paths);
+        (None, Vec::new(), None, Vec::new())
     };
-    let (shell, shell_changes, rustdoc, test_runner, test_changes) = shell_facts;
+    let (shell, shell_changes, test_runner, test_changes) = shell_facts;
     let (recovery, recovery_path, _) = target_recovery_offer(yes)?;
     // Asking runs the service manager, which --no-service must not touch.
     let service_available = !no_service && crate::service::login_service_available();
@@ -9140,7 +8841,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
         cargo_path: cargo_path.clone(),
         shell,
         shell_changes,
-        rustdoc,
         test_runner,
         test_changes,
         recovery: recovery_action(&recovery),
@@ -9178,11 +8878,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
                 "Shell",
                 "new terminals".into(),
                 "C/C++ caching, Cargo target protection and test pacing".into(),
-            ));
-            plan_rows.push((
-                "Docs",
-                "caching".into(),
-                "cargo doc when build.rustdoc is unset".into(),
             ));
             for step in steps.iter().filter(|step| step.component == "shell") {
                 for path in &step.paths {
@@ -9270,17 +8965,7 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
     }
 
     #[cfg(unix)]
-    let (shell_pending, rustdoc_done) = {
-        let (shims_coming, wrapper_coming) =
-            rustdoc_assumes(check, compiler.installs_shims(), wrapper_coming);
-        let pending = init_compiler_setup(compiler, check, &mut created)?;
-        let rustdoc = if no_shell {
-            None
-        } else {
-            configure_cargo_rustdoc(check, shims_coming, wrapper_coming, &mut created)?
-        };
-        (pending, rustdoc)
-    };
+    let shell_pending = init_compiler_setup(compiler, check, &mut created)?;
     #[cfg(unix)]
     let (tests_pending, tests_done, tests_changes) = {
         // The compiler setup may have just written the same startup files.
@@ -9294,8 +8979,8 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
         (init_test_runner(tests, check, &mut created)?, step, changes)
     };
     #[cfg(not(unix))]
-    let (shell_pending, tests_pending, rustdoc_done, tests_done, tests_changes) =
-        (false, false, None, None, Vec::new());
+    let (shell_pending, tests_pending, tests_done, tests_changes) =
+        (false, false, None, Vec::new());
 
     let recovery_done = offer_target_recovery(yes, check)?;
 
@@ -9426,7 +9111,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
                     &plan_facts,
                     RunOutcome {
                         cargo_applied,
-                        rustdoc: rustdoc_done,
                         test_runner: tests_done,
                         test_changes: tests_changes,
                         recovery: recovery_done,
@@ -9463,16 +9147,6 @@ fn preview_end(changes: bool, no_service: bool, no_shell: bool, yes: bool) -> St
         )
     } else {
         "Nothing to change.".to_string()
-    }
-}
-
-/// The `rustdoc` step for an edit, `None` when there is nothing to say.
-#[cfg(any(test, unix))]
-fn rustdoc_action(edit: RustdocEdit) -> Option<&'static str> {
-    match edit {
-        RustdocEdit::Write => Some("configure"),
-        RustdocEdit::Already | RustdocEdit::Leave => Some("keep"),
-        RustdocEdit::Skip => None,
     }
 }
 
