@@ -180,3 +180,54 @@ mod imp {
         None
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::home_dir;
+    use crate::process_state_test::process_state_test_lock;
+    use std::ffi::{OsStr, OsString};
+    use std::path::PathBuf;
+
+    struct HomeGuard {
+        previous: Option<OsString>,
+    }
+
+    impl HomeGuard {
+        fn set(value: Option<&OsStr>) -> Self {
+            let previous = std::env::var_os("HOME");
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var("HOME", value),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+            Self { previous }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match self.previous.as_ref() {
+                    Some(value) => std::env::set_var("HOME", value),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn home_dir_prefers_non_empty_home() {
+        let _lock = process_state_test_lock();
+        let dir = PathBuf::from("/nonexistent-kache-home-filter-test");
+        let _guard = HomeGuard::set(Some(dir.as_os_str()));
+        assert_eq!(home_dir(), Some(dir));
+    }
+
+    #[test]
+    fn home_dir_ignores_empty_home() {
+        let _lock = process_state_test_lock();
+        let _guard = HomeGuard::set(Some(OsStr::new("")));
+        assert_ne!(home_dir(), Some(PathBuf::from("")));
+    }
+}
