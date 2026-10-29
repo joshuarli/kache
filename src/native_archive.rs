@@ -1349,7 +1349,7 @@ pub(crate) fn gnu_crs_longname_archive_for_tests(payload: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     /// Build a 60-byte GNU `ar` header + data + even padding for one member.
     fn member(name: &str, data: &[u8]) -> Vec<u8> {
@@ -3605,79 +3605,6 @@ mod tests {
             if let Some(hash) = first.as_deref() {
                 assert_portable_hash_shape(hash);
             }
-        }
-    }
-
-    /// Export structurally deep fixtures into a temporary libFuzzer seed
-    /// corpus. The generated files are intentionally not committed: their
-    /// source-of-truth builders already live beside the parser tests.
-    #[test]
-    #[ignore = "seed generator for cargo-fuzz"]
-    fn emit_fuzz_seed_corpus() {
-        let output = PathBuf::from(
-            std::env::var_os("KACHE_FUZZ_SEED_DIR")
-                .expect("KACHE_FUZZ_SEED_DIR must name the output directory"),
-        );
-        std::fs::create_dir_all(&output).unwrap();
-
-        let elf32be = elf32be_object(b"big-endian seed payload");
-        let mut seeds = vec![
-            (
-                "gnu-short.a".to_string(),
-                archive(&[("/", SYMTAB), ("seed.o/", b"seed payload")]),
-                true,
-            ),
-            (
-                "gnu-long-name.a".to_string(),
-                archive(&[
-                    ("/", SYMTAB),
-                    ("//", b"very-long-object-name.o/\n"),
-                    ("/0", b"long-name seed payload"),
-                ]),
-                true,
-            ),
-            (
-                "gnu-elf32be.a".to_string(),
-                raw_archive(&[("sparc.o/", elf32be.as_slice())]),
-                true,
-            ),
-        ];
-
-        for (endian_name, endian) in [("little", MachEndian::Little), ("big", MachEndian::Big)] {
-            for width in [32_u8, 64] {
-                let object = macho_object(
-                    endian,
-                    width == 64,
-                    "__TEXT",
-                    "__text",
-                    0,
-                    N_SECT,
-                    b"Mach-O seed payload",
-                );
-                seeds.push((
-                    format!("bsd-{endian_name}-{width}.a"),
-                    bsd_archive(&[("seed.o", 16, object.as_slice())]),
-                    true,
-                ));
-            }
-        }
-        seeds.push((
-            "truncated-member.a".to_string(),
-            b"!<arch>\nX".to_vec(),
-            false,
-        ));
-
-        for (name, bytes, should_parse) in seeds {
-            let parsed = portable_static_archive_hash(&bytes);
-            assert_eq!(
-                parsed.is_some(),
-                should_parse,
-                "seed {name} did not exercise the expected parser path"
-            );
-            if let Some(hash) = parsed.as_deref() {
-                assert_portable_hash_shape(hash);
-            }
-            std::fs::write(output.join(name), bytes).unwrap();
         }
     }
 }
