@@ -385,9 +385,7 @@ monitor *ARGS:
 
 # Bump the workspace version everywhere in one shot — every publishable
 # workspace crate, local path-dep pins, and Cargo.lock — via `cargo set-version` (NOT a broad
-# `cargo update`, so the pinned kunobi-* git deps and the hand-maintained nix
-# `outputHashes` stay valid; the flake derives `version` from Cargo.toml, so no
-# hash change is needed). The VERSION is the full version, prerelease included:
+# `cargo update`, so the pinned kunobi-* git deps stay valid). The VERSION is the full version, prerelease included:
 # `just bump 0.5.0` for a final, `just bump 0.5.0-rc.4` for a candidate — both
 # publish to crates.io (a prerelease is only served on an explicit --version).
 # Then commit, open a PR, and merge; cut the tag from the merged commit with

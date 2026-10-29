@@ -87,42 +87,6 @@ nix profile install github:NixOS/nixpkgs/nixpkgs-unstable#kache
 
 On NixOS, add `pkgs.kache` to `environment.systemPackages` and set `RUSTC_WRAPPER` to `"${pkgs.kache}/bin/kache"`. The separate `pkgs.kache.shims` output provides C/C++ wrappers in `${pkgs.kache.shims}/bin`; put that directory before the real compilers on `PATH` to cache native compilations.
 
-### Kache flake
-
-Use Kache's flake to follow its releases directly or use its NixOS and nix-darwin modules.
-
-The flake builds for x86_64-linux, aarch64-linux and aarch64-darwin. On Intel macOS, use Homebrew, a release binary or `cargo install`.
-
-The `stable` branch follows released versions:
-
-```bash
-nix run github:kunobi-ninja/kache/stable -- --version
-nix profile install github:kunobi-ninja/kache/stable
-```
-
-Pin a release tag when updates must be explicit:
-
-```bash
-nix profile install github:kunobi-ninja/kache/v1.0.0
-```
-
-The flake also exports `overlays.default`, `nixosModules.default` and `darwinModules.default`. The module's `services.kache` options are defined in [`packaging/nix/module.nix`](https://github.com/kunobi-ninja/kache/blob/main/packaging/nix/module.nix). `enable` installs Kache, writes `settings` to `/etc/kache/config.toml` and sets `KACHE_CONFIG`. `rustcWrapper`, on by default, sets `RUSTC_WRAPPER`. `daemon.enable` runs the daemon as a systemd or launchd user service. The module does not put the shims on `PATH`; use the example below for that.
-
-The package includes `cargo`, `cc`, `c++`, `gcc`, `g++`, `clang`, `clang++`, and `rustdoc` symlinks in `${kache}/shims`. With this flake's `overlays.default` applied, enable them in your NixOS configuration:
-
-```nix
-{ pkgs, ... }:
-{
-  environment.systemPackages = [ pkgs.kache ];
-  environment.sessionVariables = {
-    RUSTC_WRAPPER = "${pkgs.kache}/bin/kache";
-    PATH = [ "${pkgs.kache}/shims" ];
-  };
-}
-```
-
-Keep the real compilers later in `PATH`. The compiler shims cover C and C++; Rust still uses `RUSTC_WRAPPER`. Point `build.rustdoc` at the `rustdoc` link for the [supported rustdoc mode](/docs/getting-started/rustdoc). Plain `cargo doc` passes through. The Cargo shim protects targets while Cargo commands run. Nix builds the symlinks, so no `kache init --shims` step is needed. The existing `${kache}/lib/kache` path remains available.
-
 ## Supported release targets
 
 | Platform | Architectures |
