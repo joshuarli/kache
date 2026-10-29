@@ -390,9 +390,6 @@ fn detect_log_mode_with_rustc(
 }
 
 fn init_logging(mode: LogMode) {
-    // Keep the bridge open to every level. Each request's dispatcher applies
-    // its own filter, which can be more verbose than the daemon's filter.
-    tracing_log::LogTracer::init().expect("install log compatibility bridge");
     tracing::dispatcher::set_global_default(logging_dispatch(
         mode,
         &invocation::InvocationEnv::capture(),
@@ -1849,49 +1846,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    #[ignore = "subprocess fixture for invocation_logging_keeps_log_bridge_request_local"]
-    fn invocation_logging_bridge_fixture() {
-        init_logging(LogMode::Wrapper);
-        assert!(diagnostic_log_path().is_absolute());
-        assert!(diagnostic_log_path().ends_with("kache.log"));
-        let root = PathBuf::from(std::env::var_os("KACHE_TEST_LOG_ROOT").unwrap());
-        let env = invocation::InvocationEnv::from_parts(
-            [("KACHE_LOG", "kache=debug")],
-            Some(root.clone()),
-            None,
-            root.clone(),
-        );
-        let logging = logging_dispatch(LogMode::Wrapper, &env);
-        let _io = invocation::io::InvocationIoScope::enter(logging_test_io(&root, "bridge"));
-        let _logging = tracing::dispatcher::set_default(&logging);
-        tracing_log::log::debug!(target: "kache::request", "request-log-debug");
-        tracing_log::log::trace!(target: "kache::request", "request-log-trace");
-    }
-
-    #[test]
-    fn invocation_logging_keeps_log_bridge_request_local() {
-        let root = tempfile::tempdir().unwrap();
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "tests::invocation_logging_bridge_fixture",
-                "--ignored",
-                "--nocapture",
-            ])
-            .env("KACHE_TEST_LOG_ROOT", root.path())
-            .env("KACHE_LOG", "off")
-            .env_remove("KACHE_LOG_FILE")
-            .env_remove("KACHE_LOG_FILE_PATH")
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{output:?}");
-        assert!(output.stderr.is_empty(), "{output:?}");
-        let logged = std::fs::read_to_string(root.path().join("bridge.err")).unwrap();
-        assert!(logged.contains("request-log-debug"), "{logged}");
-        assert!(!logged.contains("request-log-trace"), "{logged}");
     }
 
     fn logging_test_io(root: &std::path::Path, name: &str) -> invocation::io::InvocationIo {
