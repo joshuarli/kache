@@ -78,11 +78,7 @@ pub(crate) struct Tally {
 fn is_lookup(event: &BuildEvent) -> bool {
     matches!(
         event.result,
-        EventResult::LocalHit
-            | EventResult::PrefetchHit
-            | EventResult::RemoteHit
-            | EventResult::Miss
-            | EventResult::Dup
+        EventResult::LocalHit | EventResult::Miss | EventResult::Dup
     )
 }
 
@@ -93,7 +89,7 @@ fn is_miss(event: &BuildEvent) -> bool {
 impl Tally {
     pub(crate) fn add(&mut self, event: &BuildEvent) {
         match event.result {
-            EventResult::LocalHit | EventResult::PrefetchHit | EventResult::RemoteHit => {
+            EventResult::LocalHit => {
                 self.hits = self.hits.saturating_add(1);
                 self.saved_ms = self.saved_ms.saturating_add(event.compile_time_ms);
             }
@@ -585,7 +581,7 @@ impl<'a> History<'a> {
 /// was stored.
 fn stored_or_served(event: &BuildEvent) -> bool {
     match event.result {
-        EventResult::LocalHit | EventResult::PrefetchHit | EventResult::RemoteHit => true,
+        EventResult::LocalHit => true,
         EventResult::Miss => event.store_error.is_empty(),
         _ => false,
     }
@@ -797,7 +793,7 @@ mod tests {
         e.elapsed_ms = 100;
         e.compile_time_ms = match result {
             EventResult::Miss | EventResult::Dup => 1_000,
-            EventResult::LocalHit | EventResult::PrefetchHit | EventResult::RemoteHit => 5_000,
+            EventResult::LocalHit => 5_000,
             _ => 0,
         };
         e

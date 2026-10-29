@@ -75,13 +75,13 @@ fn log_and_rotate(config: &Config, events: &[BuildEvent], max_size: u64, keep_li
 
 #[test]
 fn from_events_uses_the_stats_definitions() {
-    let mut prefetched = hit(10, "");
-    prefetched.result = EventResult::PrefetchHit;
-    let mut remote = hit(100, "");
-    remote.result = EventResult::RemoteHit;
+    let mut second = hit(10, "");
+    second.result = EventResult::LocalHit;
+    let mut third = hit(100, "");
+    third.result = EventResult::LocalHit;
     let mut miss = hit(1000, "");
     miss.result = EventResult::Miss;
-    let events = [hit(1, ""), prefetched, remote, miss];
+    let events = [hit(1, ""), second, third, miss];
     let t = Totals::from_events(&events).unwrap();
     assert_eq!(t.since, at(1) + std::time::Duration::from_secs(1));
     assert_eq!(t.hits, 3, "a miss is not a hit");

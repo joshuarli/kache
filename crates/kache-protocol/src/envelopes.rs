@@ -96,9 +96,6 @@ pub struct StatsResponse {
     /// figures from its own differently configured store.
     #[deser(default)]
     pub blob_stats: Option<BlobStats>,
-    /// Bounded recent session summaries from the daemon's event directory.
-    #[deser(default)]
-    pub recent_summaries: Vec<BuildSummaryEvent>,
     #[deser(default)]
     pub version: String,
     /// Daemon executable mtime. Clients from 1.0.x and earlier replace a daemon

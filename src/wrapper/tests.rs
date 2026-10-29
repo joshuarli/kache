@@ -6019,14 +6019,6 @@ fn common_path_prefix_none_when_nothing_shared() {
 fn progress_label_gates_by_result_and_verbosity() {
     // Hits always show at level 1+.
     assert_eq!(progress_label(EventResult::LocalHit, 1), Some("local hit"));
-    assert_eq!(
-        progress_label(EventResult::PrefetchHit, 1),
-        Some("prefetch hit")
-    );
-    assert_eq!(
-        progress_label(EventResult::RemoteHit, 1),
-        Some("remote hit")
-    );
     assert_eq!(progress_label(EventResult::Error, 1), Some("error"));
 
     // Dup / Miss are suppressed at level 1 but shown at verbose level 2.
@@ -6774,7 +6766,7 @@ fn cc_direct_passthrough_refuses_legacy_cache_blob_hardlink() {
 }
 
 #[test]
-fn local_hit_demand_reaches_event_without_remote_wait() {
+fn local_hit_demand_reaches_event() {
     let _ = crate::demand::take();
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path().join("cache"));
@@ -6801,7 +6793,7 @@ fn local_hit_demand_reaches_event_without_remote_wait() {
     assert_eq!(demands.len(), 1);
     assert_eq!(demands[0].cache_key, "local-demand-key");
     assert!((before..=after).contains(&demands[0].first_demand_at_ms));
-    assert_eq!(demands[0].remote_wait_ms, 0);
+    assert!(!demands[0].cache_key.is_empty());
     assert!(crate::demand::take().is_empty());
 }
 
@@ -10179,8 +10171,6 @@ fn rebuilt_event_omits_claims_for_hits_failures_and_unobserved_outputs() {
     let artifacts = rebuilt_test_artifacts();
     for (result, success, outputs) in [
         (EventResult::LocalHit, true, &artifacts),
-        (EventResult::RemoteHit, true, &artifacts),
-        (EventResult::PrefetchHit, true, &artifacts),
         (EventResult::Error, true, &artifacts),
         (EventResult::Miss, false, &artifacts),
         (EventResult::Miss, true, &ArtifactSet::default()),

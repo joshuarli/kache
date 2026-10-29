@@ -878,8 +878,7 @@ fn is_keyed(e: &BuildEvent) -> bool {
         && matches!(
             e.result,
             EventResult::LocalHit
-                | EventResult::PrefetchHit
-                | EventResult::RemoteHit
+
                 | EventResult::Miss
                 | EventResult::Dup
         )

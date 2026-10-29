@@ -4,7 +4,6 @@
 //! They perform no I/O and do not depend on the cache store or daemon runtime.
 //! Runtime policy and conversion from live application state stay with callers.
 
-use kache_core::timeline::{PrefetchAccounting, PrefetchOrigin};
 use deser::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -227,9 +226,6 @@ pub struct StatsEntry {
 pub struct EventStatsResponse {
     pub local_hits: usize,
     #[deser(default)]
-    pub prefetch_hits: usize,
-    pub remote_hits: usize,
-    #[deser(default)]
     pub dups: usize,
     pub misses: usize,
     pub errors: usize,
@@ -280,8 +276,6 @@ pub enum TransferDirection {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct TransferEvent {
-    #[deser(default, skip_serializing_if = Option::is_none)]
-    pub accounting: Option<PrefetchAccounting>,
     #[deser(default = default_transfer_schema())]
     pub schema: u32,
     pub crate_name: String,
@@ -292,8 +286,6 @@ pub struct TransferEvent {
     pub cache_key: String,
     #[deser(default)]
     pub object_key: String,
-    #[deser(default, skip_serializing_if = Option::is_none)]
-    pub prefetch: Option<PrefetchOrigin>,
     #[deser(default, skip_serializing_if = String::is_empty)]
     pub outcome: String,
     pub compressed_bytes: u64,
@@ -323,8 +315,8 @@ pub struct TransferEvent {
     /// Time spent reading response bodies across all GET requests (ms).
     #[deser(default)]
     pub body_ms: u64,
-    /// Backend invocation count; accounting specifies GET or LIST. Older
-    /// records report GET counts without completeness metadata.
+    /// Backend invocation count. Older records report GET counts without
+    /// completeness metadata.
     #[deser(default)]
     pub request_count: u32,
     /// Uncompressed size in bytes (0 for older log entries or failed transfers).

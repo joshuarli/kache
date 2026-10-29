@@ -40,20 +40,6 @@ fn doctor_link_layout_uses_the_mapped_store_and_leaves_missing_shards_absent() {
 }
 
 #[test]
-fn shutdown_summary_status_distinguishes_partial_totals_from_cancellation() {
-    assert_eq!(summary_status_suffix(false, false), "");
-    assert_eq!(summary_status_suffix(true, false), ", CANCELLED");
-    assert_eq!(
-        summary_status_suffix(false, true),
-        ", INCOMPLETE (partial totals)"
-    );
-    assert_eq!(
-        summary_status_suffix(true, true),
-        ", CANCELLED, INCOMPLETE (partial totals)"
-    );
-}
-
-#[test]
 fn detail_fields_render_only_nonempty_values() {
     let mut lines = Vec::new();
     push_nonempty_detail(&mut lines, "  Type:     ", "");
@@ -1815,8 +1801,6 @@ fn a_hardlinked_artifact_records_its_link_group() {
 fn zero_event_stats() -> daemon::EventStatsResponse {
     daemon::EventStatsResponse {
         local_hits: 0,
-        prefetch_hits: 0,
-        remote_hits: 0,
         dups: 0,
         misses: 0,
         errors: 0,
@@ -1860,14 +1844,12 @@ fn test_count_hit_rate_zero_total_is_zero() {
 #[test]
 fn test_count_hit_rate_counts_all_hit_kinds() {
     let es = daemon::EventStatsResponse {
-        local_hits: 3,
-        prefetch_hits: 2,
-        remote_hits: 1,
+        local_hits: 6,
         dups: 0,
         misses: 4,
         ..zero_event_stats()
     };
-    // (3+2+1) hits / (6+4) total = 60%
+    // 6 hits / (6+4) total = 60%
     assert!((count_hit_rate(&es) - 60.0).abs() < 1e-9);
 }
 
@@ -3737,40 +3719,17 @@ fn render_stats_cache_shards_use_blob_bytes_and_label_missing_metadata() {
 
 
 #[test]
-fn prefetch_session_lines_follow_the_summaries() {
-    assert!(prefetch_session_lines(&[]).is_empty());
-    let summary: crate::events::BuildSummaryEvent =
-        deser_json::from_str(r#"{"ts":"2026-09-30T12:00:00Z","schema":1,"session_id":"sess"}"#)
-            .unwrap();
-    let lines = prefetch_session_lines(&[summary]);
-    let text = lines.join("\n");
-    assert!(text.contains("Prefetch sessions"), "{text}");
-    assert!(text.contains("sess"), "{text}");
-}
-
-#[test]
 fn stats_summary_shows_every_source_even_when_zero() {
     let dir = tempfile::tempdir().unwrap();
     let config = save_manifest_config(dir.path().join("cache"));
     for (counts, expected) in [
-        (
-            [30, 1, 7, 2, 86],
-            "local 30 · prefetch 1 · remote 7 · dup 2 · miss 86",
-        ),
-        (
-            [4, 0, 0, 0, 0],
-            "local 4 · prefetch 0 · remote 0 · dup 0 · miss 0",
-        ),
-        (
-            [0, 0, 0, 0, 0],
-            "local 0 · prefetch 0 · remote 0 · dup 0 · miss 0",
-        ),
+        ([30, 2, 86], "local 30 · dup 2 · miss 86"),
+        ([4, 0, 0], "local 4 · dup 0 · miss 0"),
+        ([0, 0, 0], "local 0 · dup 0 · miss 0"),
     ] {
         let mut snap = StatsSnapshot::default();
         [
             snap.event_stats.local_hits,
-            snap.event_stats.prefetch_hits,
-            snap.event_stats.remote_hits,
             snap.event_stats.dups,
             snap.event_stats.misses,
         ] = counts;
@@ -3784,32 +3743,25 @@ fn stats_summary_shows_every_source_even_when_zero() {
 
 #[test]
 fn hit_rate_row_adds_every_outcome() {
-    let row = |local, prefetch, remote, dups, misses| {
+    let row = |local, dups, misses| {
         let dir = tempfile::tempdir().unwrap();
         let config = save_manifest_config(dir.path().join("cache"));
         let mut snap = StatsSnapshot::default();
         snap.event_stats.local_hits = local;
-        snap.event_stats.prefetch_hits = prefetch;
-        snap.event_stats.remote_hits = remote;
         snap.event_stats.dups = dups;
         snap.event_stats.misses = misses;
         let lines = render_stats(&snap, &config, SinceWindow::DEFAULT);
         stats_row(&lines, "Hit rate").unwrap_or_default()
     };
     assert!(
-        row(1, 4, 0, 0, 0).contains("5 of 5 crates from cache"),
+        row(5, 0, 0).contains("5 of 5 crates from cache"),
         "{}",
-        row(1, 4, 0, 0, 0)
+        row(5, 0, 0)
     );
     assert!(
-        row(1, 0, 4, 0, 0).contains("5 of 5 crates from cache"),
+        row(3, 2, 0).contains("3 of 5 crates from cache"),
         "{}",
-        row(1, 0, 4, 0, 0)
-    );
-    assert!(
-        row(3, 1, 1, 2, 0).contains("5 of 7 crates from cache"),
-        "{}",
-        row(3, 1, 1, 2, 0)
+        row(3, 2, 0)
     );
 }
 
@@ -3914,32 +3866,6 @@ fn render_stats_handles_zero_limits_and_zero_logical_dedup() {
         None,
         "an empty blob snapshot must not render a dedup row"
     );
-}
-
-#[test]
-fn snapshot_from_direct_reads_returns_only_the_newest_five_summaries() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"));
-    let summary_path = config.summary_log_path();
-    std::fs::create_dir_all(summary_path.parent().unwrap()).unwrap();
-    let mut summaries = (0..7)
-        .map(|index| {
-            format!(
-                "{{\"ts\":\"2026-08-09T00:00:0{index}Z\",\"schema\":1,\"session_id\":\"s{index}\"}}"
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    summaries.push('\n');
-    std::fs::write(summary_path, summaries).unwrap();
-
-    let snap = snapshot_from_direct_reads(&config, SinceWindow::DEFAULT, true);
-    let ids = snap
-        .recent_summaries
-        .iter()
-        .map(|summary| summary.session_id.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(ids, ["s2", "s3", "s4", "s5", "s6"]);
 }
 
 #[test]
@@ -6892,7 +6818,7 @@ fn the_newest_compile_decides_whether_a_crate_is_cached() {
 fn a_crate_without_misses_is_not_called_all_hits_unless_it_is() {
     use events::EventResult;
     let hit = explain_event(EventResult::LocalHit, 1, "k");
-    let remote = explain_event(EventResult::RemoteHit, 2, "k");
+    let remote = explain_event(EventResult::LocalHit, 2, "k");
     let mut pass = explain_event(EventResult::Passthrough, 3, "");
     pass.passthrough_reason = "unsupported|cc link mode".to_string();
     assert_eq!(

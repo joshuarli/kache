@@ -2467,7 +2467,7 @@ fn read_event_log(path: &Path) -> EventLogStats {
         // summary can express coverage by bytes, not just by count.
         let size = ev["size"].as_u64().unwrap_or_default();
         match ev["result"].as_str().unwrap_or_default() {
-            "local_hit" | "prefetch_hit" | "remote_hit" => {
+            "local_hit" => {
                 stats.cached += 1;
                 stats.hit_bytes += size;
             }

@@ -9,7 +9,7 @@ mod build_path;
 use build_path::LogLock;
 pub(crate) use build_path::{lock_for_build, recent_events_for_build};
 
-pub use kache_protocol::{BuildEvent, BuildSummaryEvent, EventResult, MissReason};
+pub use kache_protocol::{BuildEvent, EventResult, MissReason};
 
 /// A liveness ping for an in-flight compile (kunobi-ninja/kache#131),
 /// appended to the same `events.jsonl` stream by the wrapper's monitor thread
@@ -1064,37 +1064,6 @@ pub fn rotate_events_if_needed(
     )
 }
 
-// ── Summary log ─────────────────────────────────────────────────────────────
-
-/// Read all build summaries from the summary log. Invalid lines are skipped
-/// (schema evolution / partial writes must not poison reporting).
-pub fn read_summaries(summary_log_path: &Path) -> Result<Vec<BuildSummaryEvent>> {
-    if !summary_log_path.exists() {
-        return Ok(Vec::new());
-    }
-    let lock = open_log_lock(summary_log_path).context("opening summary log lock")?;
-    lock.lock_shared().context("locking summary log for read")?;
-
-    let file = File::open(summary_log_path).context("opening summary log")?;
-    let reader = BufReader::new(&file);
-    let mut events = Vec::new();
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        match deser_json::from_str::<BuildSummaryEvent>(&line) {
-            Ok(event) => events.push(event),
-            Err(e) => {
-                log::debug!("skipping invalid summary line: {}", e);
-            }
-        }
-    }
-
-    lock.unlock().context("unlocking summary log")?;
-    Ok(events)
-}
-
 // ── Transfer log ────────────────────────────────────────────────────────────
 
 use crate::daemon::TransferEvent;
@@ -1192,8 +1161,6 @@ pub fn clear_events(event_log_path: &Path) -> Result<()> {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EventStats {
     pub local_hits: usize,
-    pub prefetch_hits: usize,
-    pub remote_hits: usize,
     pub dups: usize,
     pub misses: usize,
     pub errors: usize,
@@ -1272,16 +1239,6 @@ pub fn compute_stats_onto(mut stats: EventStats, events: &[BuildEvent]) -> Event
         match event.result {
             EventResult::LocalHit => {
                 stats.local_hits += 1;
-                stats.hit_elapsed_ms += event.elapsed_ms;
-                stats.hit_compile_time_ms += event.compile_time_ms;
-            }
-            EventResult::PrefetchHit => {
-                stats.prefetch_hits += 1;
-                stats.hit_elapsed_ms += event.elapsed_ms;
-                stats.hit_compile_time_ms += event.compile_time_ms;
-            }
-            EventResult::RemoteHit => {
-                stats.remote_hits += 1;
                 stats.hit_elapsed_ms += event.elapsed_ms;
                 stats.hit_compile_time_ms += event.compile_time_ms;
             }
@@ -1532,22 +1489,8 @@ mod tests {
         assert_eq!(miss.attributed_ms(), 127);
         assert_eq!(miss.unattributed_ms(), 73);
 
-        for result in [
-            EventResult::LocalHit,
-            EventResult::PrefetchHit,
-            EventResult::RemoteHit,
-        ] {
-            let mut hit = miss.clone();
-            hit.result = result;
-            assert!(hit.is_hit(), "{result:?} is served from cache");
-            assert_eq!(
-                hit.overhead_ms(),
-                300,
-                "{result:?}: stored compile cost was not spent here"
-            );
-        }
         let mut hit = miss.clone();
-        hit.result = EventResult::PrefetchHit;
+        hit.result = EventResult::LocalHit;
         assert_eq!(
             hit.overhead_ms(),
             300,
@@ -1942,8 +1885,6 @@ mod tests {
     #[test]
     fn test_event_result_display() {
         assert_eq!(EventResult::LocalHit.to_string(), "local_hit");
-        assert_eq!(EventResult::PrefetchHit.to_string(), "prefetch_hit");
-        assert_eq!(EventResult::RemoteHit.to_string(), "remote_hit");
         assert_eq!(EventResult::Dup.to_string(), "dup");
         assert_eq!(EventResult::Miss.to_string(), "miss");
         assert_eq!(EventResult::Error.to_string(), "error");
@@ -2581,8 +2522,8 @@ mod tests {
     fn test_compute_stats() {
         let events = vec![
             test_event("a", EventResult::LocalHit, 10, 300, 100, "k1"),
-            test_event("b", EventResult::PrefetchHit, 5, 250, 150, "k1b"),
-            test_event("c", EventResult::RemoteHit, 50, 900, 200, "k2"),
+            test_event("b", EventResult::LocalHit, 5, 250, 150, "k1b"),
+            test_event("c", EventResult::LocalHit, 50, 900, 200, "k2"),
             test_event("dup", EventResult::Dup, 700, 650, 400, "kdup"),
             test_event("d", EventResult::Miss, 1000, 950, 500, "k3"),
             test_event("e", EventResult::Error, 5, 0, 0, "k4"),
@@ -2591,9 +2532,7 @@ mod tests {
         ];
 
         let stats = compute_stats(&events);
-        assert_eq!(stats.local_hits, 1);
-        assert_eq!(stats.prefetch_hits, 1);
-        assert_eq!(stats.remote_hits, 1);
+        assert_eq!(stats.local_hits, 3);
         assert_eq!(stats.dups, 1);
         assert_eq!(stats.misses, 1);
         assert_eq!(stats.errors, 1);

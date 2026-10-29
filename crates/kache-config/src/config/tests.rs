@@ -3001,10 +3001,6 @@ fn test_config_event_log_path() {
         config.transfer_log_path(),
         PathBuf::from("/tmp/kache-runtime/transfers.jsonl")
     );
-    assert_eq!(
-        config.summary_log_path(),
-        PathBuf::from("/tmp/kache-runtime/summaries.jsonl")
-    );
     assert_eq!(config.store_dir(), PathBuf::from("/tmp/kache/store"));
     assert_eq!(config.index_db_path(), PathBuf::from("/tmp/kache/index.db"));
     assert_eq!(
@@ -3251,7 +3247,7 @@ fn concurrent_runtime_dirs_isolate_job_state_while_sharing_store() {
     }
     assert_ne!(a.event_log_path(), b.event_log_path());
     assert_ne!(a.transfer_log_path(), b.transfer_log_path());
-    assert_ne!(a.summary_log_path(), b.summary_log_path());
+
 
     let writers = [(a, "job-a"), (b, "job-b")].map(|(config, contents)| {
         std::thread::spawn(move || {

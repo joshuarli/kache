@@ -128,11 +128,8 @@ fn completion_child() {
     if fails {
         std::fs::remove_file(fixture.store.blob_path(&fixture.meta.files[1].hash)).unwrap();
     }
-    let result = match mode.as_str() {
-        "remote" => EventResult::RemoteHit,
-        "prefetch" => EventResult::PrefetchHit,
-        _ => EventResult::LocalHit,
-    };
+    let _ = mode.as_str();
+    let result = EventResult::LocalHit;
     let restored = fixture.context().restore_and_finish(
         &fixture.store,
         &fixture.meta,
@@ -197,12 +194,7 @@ fn completion_child() {
 #[test]
 fn completion_replays_diagnostics_and_progress_only_after_success() {
     let _lock = crate::test_support::process_state_test_lock();
-    for (mode, label) in [
-        ("local", "local hit"),
-        ("remote", "remote hit"),
-        ("prefetch", "prefetch hit"),
-        ("failure", ""),
-    ] {
+    for (mode, label) in [("local", "local hit"), ("failure", "")] {
         let output = crate::test_support::without_terminal(&mut std::process::Command::new(
             std::env::current_exe().unwrap(),
         ))
@@ -355,11 +347,7 @@ fn readonly_hit_records_restored_output_hashes_in_the_primary_store() {
 fn incomplete_or_mismatched_executable_pairs_never_publish_a_hit() {
     let _lock = crate::test_support::process_state_test_lock();
     let invocation = crate::invocation::InvocationEnv::capture();
-    for result in [
-        EventResult::LocalHit,
-        EventResult::RemoteHit,
-        EventResult::PrefetchHit,
-    ] {
+    for result in [EventResult::LocalHit] {
         for (name, mismatch) in [("app.exe", false), ("app", false), ("app.custom", true)] {
             let mut fixture = Fixture::new();
             let out_dir = fixture.dir.path().join("target/debug/deps");
@@ -442,11 +430,7 @@ fn incomplete_or_mismatched_executable_pairs_never_publish_a_hit() {
 fn unidentifiable_executable_entries_evict_only_the_writable_source() {
     let _lock = crate::test_support::process_state_test_lock();
     let invocation = crate::invocation::InvocationEnv::capture();
-    for result in [
-        EventResult::LocalHit,
-        EventResult::RemoteHit,
-        EventResult::PrefetchHit,
-    ] {
+    for result in [EventResult::LocalHit] {
         for readonly in [false, true] {
             for (ambiguous, explicit) in [(false, false), (false, true), (true, false)] {
                 let mut fixture = Fixture::new();

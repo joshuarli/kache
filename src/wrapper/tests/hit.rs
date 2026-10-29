@@ -14,7 +14,7 @@ fn report_preserves_phase_metrics() {
     HitCompletion {
         event_root: "/consumer",
         crate_name: "consumer.c",
-        result: EventResult::PrefetchHit,
+        result: EventResult::LocalHit,
         cache_key: "requested-key",
         start: Instant::now() - Duration::from_millis(1500),
         key_ms: 41,
@@ -34,7 +34,7 @@ fn report_preserves_phase_metrics() {
     let event = &events[0];
     assert_eq!(event.root, "/consumer");
     assert_eq!(event.crate_name, "consumer.c");
-    assert_eq!(event.result, EventResult::PrefetchHit);
+    assert_eq!(event.result, EventResult::LocalHit);
     assert_eq!(event.cache_key, "requested-key");
     assert_eq!(event.size, 42);
     assert_eq!(event.compile_time_ms, 7);

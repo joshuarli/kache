@@ -306,8 +306,10 @@ pub struct GcSummary {
 ///
 /// Incremented when a breaking change is made to the report's JSON structure
 /// or code semantics. Additive fields (such as new optional/default fields or
-/// non-breaking telemetry metrics) do not increment this version.
-pub const REPORT_SCHEMA_VERSION: u32 = 1;
+/// non-breaking telemetry metrics) do not increment this version. Version 2
+/// drops the stale remote/prefetch accounting (`prefetch_hits`,
+/// `remote_hits`, `prefetch` block, `prefetch_hit`/`remote_hit` results).
+pub const REPORT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BuildReport {
@@ -321,7 +323,6 @@ pub struct BuildReport {
     pub timing: TimingBreakdown,
     pub storage: StorageBreakdown,
     pub network: Option<NetworkAnalysis>,
-    pub prefetch: PrefetchAnalysis,
     pub top_misses: Vec<CrateDetail>,
     pub top_hits: Vec<CrateDetail>,
     pub all_events: Vec<CrateDetail>,
@@ -418,8 +419,6 @@ pub struct ReportSummary {
     pub time_saved_ms: u64,
     pub total_crates: usize,
     pub local_hits: usize,
-    pub prefetch_hits: usize,
-    pub remote_hits: usize,
     #[deser(default)]
     pub dups: usize,
     pub misses: usize,
@@ -449,9 +448,8 @@ pub struct ReportSummary {
 }
 
 impl ReportSummary {
-    /// Hits of every kind: local, prefetched and remote.
     pub fn total_hits(&self) -> usize {
-        self.local_hits + self.prefetch_hits + self.remote_hits
+        self.local_hits
     }
 }
 
@@ -762,13 +760,6 @@ pub struct NetworkAnalysis {
     #[deser(default)]
     pub unknown_format_downloads: usize,
     pub slowest_downloads: Vec<TransferDetail>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PrefetchAnalysis {
-    pub prefetch_hits: usize,
-    pub total_hits: usize,
-    pub contribution_pct: f64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -1115,9 +1106,8 @@ pub fn generate_report_with_filter(
 
     let stats = events::compute_stats(&build_events);
     let total_compiled = stats.dups + stats.misses;
-    let total_cacheable =
-        stats.local_hits + stats.prefetch_hits + stats.remote_hits + total_compiled;
-    let total_hits = stats.local_hits + stats.prefetch_hits + stats.remote_hits;
+    let total_cacheable = stats.local_hits + total_compiled;
+    let total_hits = stats.local_hits;
     let bypass = build_bypass_analysis(&build_events, top);
     let timeline = build_report_timeline(&build_events);
     let trace_events = build_trace_events(&build_events);
@@ -1151,12 +1141,7 @@ pub fn generate_report_with_filter(
 
     let mut hits: Vec<CrateDetail> = build_events
         .iter()
-        .filter(|e| {
-            matches!(
-                e.result,
-                EventResult::LocalHit | EventResult::PrefetchHit | EventResult::RemoteHit
-            )
-        })
+        .filter(|e| matches!(e.result, EventResult::LocalHit))
         .map(to_crate_detail)
         .collect();
     hits.sort_by_key(|entry| std::cmp::Reverse(entry.compile_time_ms));
@@ -1197,21 +1182,9 @@ pub fn generate_report_with_filter(
         Some(analysis)
     };
 
-    // Prefetch
-    let prefetch = PrefetchAnalysis {
-        prefetch_hits: stats.prefetch_hits,
-        total_hits,
-        contribution_pct: if total_hits > 0 {
-            (stats.prefetch_hits as f64 / total_hits as f64) * 100.0
-        } else {
-            0.0
-        },
-    };
-
     // Suggestions
     let mut suggestions = generate_suggestions(
         &stats,
-        &prefetch,
         &network,
         &misses,
         total_cacheable,
@@ -1308,8 +1281,6 @@ pub fn generate_report_with_filter(
             time_saved_ms: stats.hit_compile_time_ms,
             total_crates: total_cacheable,
             local_hits: stats.local_hits,
-            prefetch_hits: stats.prefetch_hits,
-            remote_hits: stats.remote_hits,
             dups: stats.dups,
             misses: stats.misses,
             errors: stats.errors,
@@ -1379,7 +1350,6 @@ pub fn generate_report_with_filter(
         },
         storage,
         network,
-        prefetch,
         top_misses: misses.into_iter().take(top).collect(),
         top_hits: hits.into_iter().take(top).collect(),
         all_events,
@@ -1524,7 +1494,7 @@ fn build_report_timeline(events: &[BuildEvent]) -> ReportTimeline {
         start = start.min(event_start(event));
         end = end.max(event.ts);
         match event.result {
-            EventResult::LocalHit | EventResult::PrefetchHit | EventResult::RemoteHit => {
+            EventResult::LocalHit => {
                 cacheable_count += 1;
                 hit_count += 1;
             }
@@ -1616,7 +1586,7 @@ fn assign_trace_lanes(events: &[BuildEvent]) -> Vec<u32> {
 /// clicking into a slice (#456).
 fn trace_result_style(result: EventResult) -> (&'static str, &'static str) {
     match result {
-        EventResult::LocalHit | EventResult::PrefetchHit | EventResult::RemoteHit => {
+        EventResult::LocalHit => {
             ("hit", "good")
         }
         EventResult::Miss => ("miss", "bad"),
@@ -2111,11 +2081,6 @@ fn build_network_analysis(transfers: &[TransferEvent], top: usize) -> NetworkAna
     let mut unknown_format_downloads = 0usize;
 
     for t in transfers {
-        if t.accounting.as_ref().is_some_and(|accounting| {
-            accounting.operation == kache_core::timeline::PrefetchOperation::List
-        }) {
-            continue;
-        }
         match t.direction {
             TransferDirection::Upload => {
                 if t.ok {
@@ -2398,7 +2363,6 @@ fn rotation_cut_notice(max_size: u64, last_build: bool) -> String {
 
 fn generate_suggestions(
     stats: &events::EventStats,
-    prefetch: &PrefetchAnalysis,
     network: &Option<NetworkAnalysis>,
     top_misses: &[CrateDetail],
     total_cacheable: usize,
@@ -2484,13 +2448,6 @@ fn generate_suggestions(
                 avg_overhead
             ));
         }
-    }
-
-    // Low prefetch contribution
-    if prefetch.total_hits > 10 && prefetch.contribution_pct < 20.0 {
-        suggestions.push(
-            "Prefetch contributed <20% of hits — check namespace/shard configuration".to_string(),
-        );
     }
 
     // Remote-transfer issues
@@ -2608,8 +2565,7 @@ fn cache_roi(report: &BuildReport) -> Option<f64> {
 }
 
 fn cache_overhead_summary(report: &BuildReport) -> Option<String> {
-    let total_hits =
-        report.summary.local_hits + report.summary.prefetch_hits + report.summary.remote_hits;
+    let total_hits = report.summary.local_hits;
     if total_hits == 0 || report.timing.hit_time_ms == 0 {
         return None;
     }
@@ -3147,10 +3103,7 @@ pub fn format_markdown(report: &BuildReport) -> String {
         ));
     }
     lines.push(format!("| Total crates | {} |", s.total_crates));
-    lines.push(format!(
-        "| Hits | {} (local: {}, prefetch: {}, remote: {}) |",
-        total_hits, s.local_hits, s.prefetch_hits, s.remote_hits
-    ));
+    lines.push(format!("| Hits | {} |", total_hits));
     if s.dups > 0 {
         lines.push(format!("| Dups | {} |", s.dups));
     }
@@ -3351,18 +3304,6 @@ pub fn format_markdown(report: &BuildReport) -> String {
         push_storage_table(&mut lines, &report.storage);
         lines.push(String::new());
     }
-
-    // Prefetch
-    let p = &report.prefetch;
-    lines.push("#### Prefetch".to_string());
-    lines.push("| Metric | Value |".to_string());
-    lines.push("|---|---|".to_string());
-    lines.push(format!(
-        "| Prefetch hits | {} / {} total hits |",
-        p.prefetch_hits, p.total_hits
-    ));
-    lines.push(format!("| Contribution | {:.1}% |", p.contribution_pct));
-    lines.push(String::new());
 
     if bypass_total(&report.bypass) > 0 {
         lines.push("#### Passthroughs & Skips".to_string());
@@ -3851,13 +3792,12 @@ pub fn format_github(report: &BuildReport) -> String {
         lines.push("</details>".to_string());
     }
 
-    // ── Timing & Prefetch (collapsed) ──
+    // ── Timing (collapsed) ──
     let total_ms = t.hit_time_ms + t.miss_time_ms;
-    let p = &report.prefetch;
-    if total_ms > 0 || p.total_hits > 0 {
+    if total_ms > 0 {
         lines.push(String::new());
         lines.push("<details>".to_string());
-        lines.push("<summary><strong>Timing & Prefetch</strong></summary>".to_string());
+        lines.push("<summary><strong>Timing</strong></summary>".to_string());
         lines.push(String::new());
         if total_ms > 0 {
             let hit_pct = t.hit_time_ms as f64 / total_ms as f64 * 100.0;
@@ -3910,13 +3850,6 @@ pub fn format_github(report: &BuildReport) -> String {
             crate::term::duration_ms(t.total_unattributed_ms),
             t.avg_unattributed_ms
         ));
-        if p.total_hits > 0 {
-            lines.push(String::new());
-            lines.push(format!(
-                "**Prefetch:** {}/{} hits ({:.1}%)",
-                p.prefetch_hits, p.total_hits, p.contribution_pct
-            ));
-        }
         lines.push(String::new());
         lines.push("</details>".to_string());
     }
@@ -4169,17 +4102,6 @@ pub fn format_text(report: &BuildReport) -> String {
         term::count(report.storage.store_entries as u64),
         "unique keys".into(),
     ));
-    if report.prefetch.prefetch_hits > 0 {
-        storage.push((
-            "Prefetch",
-            format!(
-                "{} of {}",
-                term::count(report.prefetch.prefetch_hits as u64),
-                term::count(report.prefetch.total_hits as u64)
-            ),
-            format!("hits ({:.1}%)", report.prefetch.contribution_pct),
-        ));
-    }
     if let Some(gc) = &report.gc {
         storage.push((
             "Last GC",

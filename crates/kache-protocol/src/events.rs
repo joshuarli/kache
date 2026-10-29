@@ -401,10 +401,7 @@ impl BuildEvent {
     /// Served from cache. `compile_time_ms` on a hit is the stored compile
     /// cost, not time this process spent.
     pub fn is_hit(&self) -> bool {
-        matches!(
-            self.result,
-            EventResult::LocalHit | EventResult::PrefetchHit | EventResult::RemoteHit
-        )
+        matches!(self.result, EventResult::LocalHit)
     }
 
     /// Wrapper time minus the compile it ran, if it ran one.
@@ -448,9 +445,6 @@ fn is_false(value: &bool) -> bool {
 #[deser(rename_all = "snake_case")]
 pub enum EventResult {
     LocalHit,
-    /// Local hit on an artifact that was downloaded by the manifest prefetch.
-    PrefetchHit,
-    RemoteHit,
     /// Entry miss; compiler ran; all output blobs already existed.
     Dup,
     Miss,
@@ -463,8 +457,6 @@ impl std::fmt::Display for EventResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EventResult::LocalHit => write!(f, "local_hit"),
-            EventResult::PrefetchHit => write!(f, "prefetch_hit"),
-            EventResult::RemoteHit => write!(f, "remote_hit"),
             EventResult::Dup => write!(f, "dup"),
             EventResult::Miss => write!(f, "miss"),
             EventResult::Error => write!(f, "error"),
@@ -472,74 +464,6 @@ impl std::fmt::Display for EventResult {
             EventResult::Skipped => write!(f, "skipped"),
         }
     }
-}
-
-/// Per-session prefetch summary, appended to `summaries.jsonl` by the daemon
-/// when a build session is finalized (kunobi-ninja/kache#583 P0.5).
-///
-/// Finalization happens on session inactivity, supersession by a newer
-/// session, or daemon shutdown — cargo gives no positive end-of-build signal,
-/// so closure is always inferred (`closure_reason` says how). Counts are kept
-/// as raw numerators/denominators; consumers derive ratios (key precision =
-/// `used_keys / downloaded_keys`, byte precision = `used_bytes /
-/// downloaded_bytes`) so mixed-version or partial sessions stay auditable.
-///
-/// `used_keys`/`used_bytes` are a LOWER BOUND: a completed prefetch is
-/// imported into the local store and consumed as a `LocalHit` without
-/// contacting the daemon, so daemon-side demand misses it. Join per-crate
-/// events by `session_id` + `cache_key` for full attribution.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct BuildSummaryEvent {
-    pub ts: UtcTime,
-    pub schema: u32,
-    /// Shutdown could not observe every prefetch outcome. Completed counters
-    /// remain lower bounds; missing bytes and attempts must not be read as zero.
-    #[deser(default)]
-    pub incomplete: bool,
-    #[deser(default)]
-    pub session_id: String,
-    #[deser(default)]
-    pub root: String,
-    /// `advisory` | `fallback` | `none` — which planner produced the plan.
-    #[deser(default)]
-    pub plan_source: String,
-    #[deser(default)]
-    pub plan_id: String,
-    /// `inactivity` | `superseded` | `shutdown` | `shutdown_timeout`.
-    #[deser(default)]
-    pub closure_reason: String,
-    #[deser(default)]
-    pub started_at_ms: u64,
-    #[deser(default)]
-    pub last_activity_ms: u64,
-    /// Plan candidates offered for prefetch.
-    #[deser(default)]
-    pub candidate_keys: u64,
-    /// Prefetch downloads completed (distinct keys / compressed wire bytes).
-    #[deser(default)]
-    pub downloaded_keys: u64,
-    #[deser(default)]
-    pub downloaded_bytes: u64,
-    /// Daemon-visible consumption of downloaded keys (lower bound, see above).
-    #[deser(default)]
-    pub used_keys: u64,
-    #[deser(default)]
-    pub used_bytes: u64,
-    /// Distinct keys demanded via RemoteCheck while the plan was active.
-    #[deser(default)]
-    pub demanded_keys: u64,
-    /// Distinct demanded keys that were plan candidates.
-    #[deser(default)]
-    pub demanded_candidate_keys: u64,
-    /// Whether adaptive cancellation or shutdown stopped work for this plan.
-    #[deser(default)]
-    pub cancelled: bool,
-    /// Key-cache LIST refreshes attributed to this session (delta of the
-    /// daemon-lifetime counters between plan install and finalization).
-    #[deser(default)]
-    pub list_requests: u64,
-    #[deser(default)]
-    pub list_duration_ms: u64,
 }
 
 #[cfg(feature = "test-support")]

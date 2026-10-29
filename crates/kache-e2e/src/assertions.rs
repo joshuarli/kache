@@ -403,8 +403,6 @@ mod tests {
             hit_rate_pct: rate,
             total_crates: total,
             local_hits: hits,
-            prefetch_hits: 0,
-            remote_hits: 0,
             dups: 0,
             misses,
         }

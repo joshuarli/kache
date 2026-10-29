@@ -470,8 +470,6 @@ fn compile_started_wire_tags_and_stats_default() {
         entries: None,
         events: EventStatsResponse {
             local_hits: 0,
-            prefetch_hits: 0,
-            remote_hits: 0,
             dups: 0,
             misses: 0,
             errors: 0,
@@ -485,7 +483,6 @@ fn compile_started_wire_tags_and_stats_default() {
             store_new_blobs: 0,
         },
         blob_stats: None,
-        recent_summaries: Vec::new(),
         version: String::new(),
         build_epoch: 0,
         gc_policy_version: GC_POLICY_PROTOCOL_VERSION,
@@ -515,7 +512,6 @@ fn compile_started_wire_tags_and_stats_default() {
         let old_obj = old.as_map_mut().unwrap();
         old_obj.remove("in_flight");
         old_obj.remove("blob_stats");
-        old_obj.remove("recent_summaries");
         old_obj.remove("gc_policy_version");
     }
     let mut old_effective = old.get("effective_config").unwrap().clone();
@@ -530,7 +526,6 @@ fn compile_started_wire_tags_and_stats_default() {
     let parsed: StatsResponse = deser_value::from_value(&old).unwrap();
     assert!(parsed.in_flight.is_empty());
     assert!(parsed.blob_stats.is_none());
-    assert!(parsed.recent_summaries.is_empty());
     assert!(parsed.effective_config.is_none());
     assert_eq!(parsed.gc_policy_version, 0);
 }

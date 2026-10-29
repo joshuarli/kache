@@ -656,15 +656,7 @@ impl Daemon {
         let since = stats_window(req).cutoff(UtcTime::now());
         let es =
             events::event_stats_since(&self.config.event_log_path(), since).unwrap_or_default();
-        let recent_summaries = if req.include_summaries {
-            let mut summaries =
-                events::read_summaries(&self.config.summary_log_path()).unwrap_or_default();
-            let keep_from = summaries.len().saturating_sub(5);
-            summaries.drain(..keep_from);
-            summaries
-        } else {
-            Vec::new()
-        };
+        let _ = req.include_summaries;
 
         let in_flight = self.in_flight_snapshot();
 
@@ -676,8 +668,6 @@ impl Daemon {
             stores: inventory.stores,
             events: EventStatsResponse {
                 local_hits: es.local_hits,
-                prefetch_hits: es.prefetch_hits,
-                remote_hits: es.remote_hits,
                 dups: es.dups,
                 misses: es.misses,
                 errors: es.errors,
@@ -691,7 +681,6 @@ impl Daemon {
                 store_new_blobs: es.store_new_blobs,
             },
             blob_stats: Some(inventory.blob_stats),
-            recent_summaries,
             version: self.version.clone(),
             build_epoch: build_epoch(),
             gc_policy_version: GC_POLICY_PROTOCOL_VERSION,

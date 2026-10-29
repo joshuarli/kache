@@ -66,8 +66,6 @@ fn heartbeat_lines_enabled(level: u8) -> bool {
 fn progress_label(result: EventResult, level: u8) -> Option<&'static str> {
     match result {
         EventResult::LocalHit => Some("local hit"),
-        EventResult::PrefetchHit => Some("prefetch hit"),
-        EventResult::RemoteHit => Some("remote hit"),
         EventResult::Dup if level < 2 => None,
         EventResult::Dup => Some("dup"),
         EventResult::Miss if level < 2 => None,
@@ -8132,10 +8130,7 @@ impl<'a> EventInputs<'a> {
             success
                 && !matches!(
                     self.result,
-                    EventResult::LocalHit
-                        | EventResult::PrefetchHit
-                        | EventResult::RemoteHit
-                        | EventResult::Error
+                    EventResult::LocalHit | EventResult::Error
                 ),
             artifacts,
             package,
@@ -8552,7 +8547,7 @@ fn explain_miss_diff(
             && !e.key_fields.is_empty()
             && matches!(
                 e.result,
-                EventResult::LocalHit | EventResult::PrefetchHit | EventResult::RemoteHit
+                EventResult::LocalHit
             )
     }) else {
         return Vec::new();

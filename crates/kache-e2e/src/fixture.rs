@@ -302,7 +302,7 @@ pub struct MetricAssertions {
     /// Upper bound on `summary.total_crates`. Skeleton fixtures use
     /// this to assert "still nothing cached" until real caching lands.
     pub max_entries_after: Option<u64>,
-    /// Lower bound on `local_hits + prefetch_hits + remote_hits`.
+    /// Lower bound on `local_hits`.
     pub min_hits: Option<u64>,
     /// Lower bound on `summary.misses`. Used by fixtures whose
     /// contract is "must NOT cache-hit on relocate" — e.g.

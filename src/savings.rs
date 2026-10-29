@@ -30,7 +30,7 @@ pub const SAVINGS_SCHEMA: u32 = 1;
 pub struct Totals {
     /// The oldest event or GC run counted.
     pub since: UtcTime,
-    /// Local, prefetched and remote hits.
+    /// Local hits.
     #[deser(default)]
     pub hits: u64,
     /// Compile time those hits avoided, as `kache stats` counts it.
@@ -84,7 +84,7 @@ impl Totals {
         let since = events.iter().map(|event| event.ts).min()?;
         let stats = crate::events::compute_stats(events);
         Some(Self {
-            hits: (stats.local_hits + stats.prefetch_hits + stats.remote_hits) as u64,
+            hits: stats.local_hits as u64,
             hit_compile_time_ms: stats.hit_compile_time_ms,
             zero_copy_bytes: stats.reflinked_bytes + stats.hardlinked_bytes,
             copied_bytes: stats.copied_bytes,

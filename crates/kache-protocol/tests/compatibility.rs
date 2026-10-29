@@ -67,8 +67,6 @@ fn old_transfer_records_keep_their_schema_and_direction() {
     }))
     .unwrap();
     assert_eq!(transfer.schema, 5);
-    assert!(transfer.accounting.is_none());
-    assert!(transfer.prefetch.is_none());
 }
 
 #[test]

@@ -33,9 +33,6 @@ pub(crate) struct StatsSnapshot {
     pub daemon_version: String,
     pub daemon_build_epoch: u64,
     pub blob_stats: Option<crate::store::BlobStats>,
-    /// Recent daemon-owned session summaries, or direct-store summaries when
-    /// no daemon was reachable.
-    pub recent_summaries: Vec<crate::events::BuildSummaryEvent>,
     /// The daemon's effective config from the stats response
     /// (kunobi-ninja/kache#689); `None` when the daemon is unreachable or
     /// predates effective-config reporting.
@@ -51,8 +48,6 @@ impl Default for StatsSnapshot {
             entry_count: 0,
             event_stats: daemon::EventStatsResponse {
                 local_hits: 0,
-                prefetch_hits: 0,
-                remote_hits: 0,
                 dups: 0,
                 misses: 0,
                 errors: 0,
@@ -69,16 +64,15 @@ impl Default for StatsSnapshot {
             daemon_version: String::new(),
             daemon_build_epoch: 0,
             blob_stats: None,
-            recent_summaries: Vec::new(),
             daemon_effective_config: None,
         }
     }
 }
 
 pub fn count_hit_rate(es: &daemon::EventStatsResponse) -> f64 {
-    let total = es.local_hits + es.prefetch_hits + es.remote_hits + es.dups + es.misses;
+    let total = es.local_hits + es.dups + es.misses;
     if total > 0 {
-        ((es.local_hits + es.prefetch_hits + es.remote_hits) as f64 / total as f64) * 100.0
+        (es.local_hits as f64 / total as f64) * 100.0
     } else {
         0.0
     }
@@ -123,7 +117,6 @@ pub(crate) fn fetch_stats_snapshot(
             daemon_version: resp.version,
             daemon_build_epoch: resp.build_epoch,
             blob_stats: resp.blob_stats,
-            recent_summaries: resp.recent_summaries,
             daemon_effective_config: resp.effective_config,
         };
     }
@@ -155,7 +148,6 @@ pub(crate) fn fetch_stats_snapshot(
             daemon_version: resp.version,
             daemon_build_epoch: resp.build_epoch,
             blob_stats: resp.blob_stats,
-            recent_summaries: resp.recent_summaries,
             daemon_effective_config: resp.effective_config,
         };
     }
@@ -176,16 +168,7 @@ pub(crate) fn snapshot_from_direct_reads(
 
     let since = window.cutoff(UtcTime::now());
     let es = events::event_stats_since(&config.event_log_path(), since).unwrap_or_default();
-
-    let recent_summaries = if include_summaries {
-        let mut summaries =
-            crate::events::read_summaries(&config.summary_log_path()).unwrap_or_default();
-        let keep_from = summaries.len().saturating_sub(5);
-        summaries.drain(..keep_from);
-        summaries
-    } else {
-        Vec::new()
-    };
+    let _ = include_summaries;
 
     StatsSnapshot {
         total_size: inventory.total_size,
@@ -194,8 +177,6 @@ pub(crate) fn snapshot_from_direct_reads(
         stores: inventory.stores,
         event_stats: daemon::EventStatsResponse {
             local_hits: es.local_hits,
-            prefetch_hits: es.prefetch_hits,
-            remote_hits: es.remote_hits,
             dups: es.dups,
             misses: es.misses,
             errors: es.errors,
@@ -212,7 +193,6 @@ pub(crate) fn snapshot_from_direct_reads(
         daemon_version: String::new(),
         daemon_build_epoch: 0,
         blob_stats: Some(inventory.blob_stats),
-        recent_summaries,
         daemon_effective_config: None,
     }
 }
@@ -369,7 +349,6 @@ pub fn telemetry_write(
             daemon_version: resp.version,
             daemon_build_epoch: resp.build_epoch,
             blob_stats: resp.blob_stats,
-            recent_summaries: resp.recent_summaries,
             daemon_effective_config: resp.effective_config,
         },
         Err(_) => snapshot_from_direct_reads(config, SinceWindow::DEFAULT, false),
@@ -583,8 +562,6 @@ pub fn stats(
             miss_elapsed_ms: u64,
             total_elapsed_ms: u64,
             local_hits: usize,
-            prefetch_hits: usize,
-            remote_hits: usize,
             dups: usize,
             misses: usize,
             daemon_connected: bool,
@@ -621,8 +598,6 @@ pub fn stats(
                 miss_elapsed_ms: snap.event_stats.miss_elapsed_ms,
                 total_elapsed_ms: snap.event_stats.total_elapsed_ms,
                 local_hits: snap.event_stats.local_hits,
-                prefetch_hits: snap.event_stats.prefetch_hits,
-                remote_hits: snap.event_stats.remote_hits,
                 dups: snap.event_stats.dups,
                 misses: snap.event_stats.misses,
                 daemon_connected: snap.daemon_connected,
@@ -658,70 +633,9 @@ pub fn stats(
         println!("{line}");
     }
 
-    // Recent per-session prefetch summaries (#583 P0.5): the durable record
-    // (survives daemon restarts) behind the live snapshot above. Keys/bytes
-    // are daemon-visible lower bounds; join events.jsonl by session_id for
-    // full attribution.
-    for line in prefetch_session_lines(&snap.recent_summaries) {
-        println!("{line}");
-    }
     println!();
     println!("Details: `kache stats --full`");
     Ok(())
-}
-
-/// Lines for the recent prefetch sessions, including the heading.
-/// Empty when there are no summaries, so a quiet window stays quiet.
-fn prefetch_session_lines(summaries: &[crate::events::BuildSummaryEvent]) -> Vec<String> {
-    if summaries.is_empty() {
-        return Vec::new();
-    }
-    let mut lines = vec![String::new(), "Prefetch sessions".to_string()];
-    let body: Vec<Vec<String>> = summaries
-        .iter()
-        .rev()
-        .take(5)
-        .map(|s| {
-            vec![
-                kache_core::time::local_parts(s.ts).month_day_clock(),
-                if s.session_id.is_empty() {
-                    "legacy".to_string()
-                } else {
-                    s.session_id.clone()
-                },
-                format!(
-                    "{}/{}",
-                    term::count(s.downloaded_keys),
-                    term::count(s.candidate_keys)
-                ),
-                term::bytes(s.downloaded_bytes),
-                term::count(s.used_keys),
-                format!(
-                    "{}, {} demanded, {}{}",
-                    s.plan_source,
-                    s.demanded_keys,
-                    s.closure_reason,
-                    summary_status_suffix(s.cancelled, s.incomplete)
-                ),
-            ]
-        })
-        .collect();
-    use term::Align::{Left, Right};
-    lines.extend(term::table(
-        &["WHEN", "SESSION", "FETCHED", "BYTES", "USED", "PLAN"],
-        &[Left, Left, Right, Right, Right, Left],
-        &body,
-    ));
-    lines
-}
-
-fn summary_status_suffix(cancelled: bool, incomplete: bool) -> &'static str {
-    match (cancelled, incomplete) {
-        (false, false) => "",
-        (true, false) => ", CANCELLED",
-        (false, true) => ", INCOMPLETE (partial totals)",
-        (true, true) => ", CANCELLED, INCOMPLETE (partial totals)",
-    }
 }
 
 /// `kache stats` rows for the machine's shared index and GC record: what the
@@ -880,7 +794,7 @@ fn since_label(since: kache_core::time::CivilDate, today: kache_core::time::Civi
 /// Hit rate, source counts, weighted hit rate, time saved and miss time.
 fn build_rows(snap: &StatsSnapshot) -> Vec<StatsRow> {
     let es = &snap.event_stats;
-    let hits = es.local_hits + es.prefetch_hits + es.remote_hits;
+    let hits = es.local_hits;
     let total = hits + es.dups + es.misses;
     let from_cache = if total == 0 {
         "no builds in this window".to_string()
@@ -896,10 +810,8 @@ fn build_rows(snap: &StatsSnapshot) -> Vec<StatsRow> {
         (
             "Sources",
             format!(
-                "local {} · prefetch {} · remote {} · dup {} · miss {}",
+                "local {} · dup {} · miss {}",
                 term::count(es.local_hits as u64),
-                term::count(es.prefetch_hits as u64),
-                term::count(es.remote_hits as u64),
                 term::count(es.dups as u64),
                 term::count(es.misses as u64),
             ),
@@ -1512,12 +1424,7 @@ pub fn why_miss(config: &Config, crate_name: &str, json: bool) -> Result<()> {
                     diagnosis: if latest_uncached.is_some() {
                         "not_cached"
                     } else if crate_events.iter().any(|event| {
-                        matches!(
-                            event.result,
-                            events::EventResult::LocalHit
-                                | events::EventResult::RemoteHit
-                                | events::EventResult::PrefetchHit
-                        )
+                        matches!(event.result, events::EventResult::LocalHit)
                     }) {
                         "all_hits"
                     } else {
@@ -1601,12 +1508,7 @@ pub fn why_miss(config: &Config, crate_name: &str, json: bool) -> Result<()> {
     }
 
     let last_hit = crate_events.iter().rev().find(|e| {
-        matches!(
-            e.result,
-            events::EventResult::LocalHit
-                | events::EventResult::RemoteHit
-                | events::EventResult::PrefetchHit
-        )
+        matches!(e.result, events::EventResult::LocalHit)
     });
     // Metadata of the missed key, when the compile was stored after it.
     let miss_meta = missed_entry(&stored, &miss.cache_key).and_then(read_entry_meta);
@@ -2186,11 +2088,7 @@ fn latest_uncached_compile<'a>(
             crate::report::ran_compiler_uncached(event)
                 || matches!(
                     event.result,
-                    EventResult::LocalHit
-                        | EventResult::PrefetchHit
-                        | EventResult::RemoteHit
-                        | EventResult::Miss
-                        | EventResult::Dup
+                    EventResult::LocalHit | EventResult::Miss | EventResult::Dup
                 )
         })
         .filter(|event| crate::report::ran_compiler_uncached(event))
@@ -2201,10 +2099,7 @@ fn latest_uncached_compile<'a>(
 fn no_miss_headline(crate_name: &str, crate_events: &[&events::BuildEvent]) -> String {
     use events::EventResult;
     let hit = |event: &&events::BuildEvent| {
-        matches!(
-            event.result,
-            EventResult::LocalHit | EventResult::PrefetchHit | EventResult::RemoteHit
-        )
+        matches!(event.result, EventResult::LocalHit)
     };
     if crate_events.iter().all(hit) {
         format!("No misses for `{crate_name}`: all events are hits.")

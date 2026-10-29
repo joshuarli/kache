@@ -463,8 +463,6 @@ fn test_transfer(
     ok: bool,
 ) -> TransferEvent {
     TransferEvent {
-        accounting: None,
-        prefetch: None,
         outcome: String::new(),
         schema: 3,
         crate_name: crate_name.to_string(),
@@ -635,7 +633,7 @@ fn write_test_events(dir: &std::path::Path) -> Config {
         ),
         test_event(
             "tokio",
-            EventResult::PrefetchHit,
+            EventResult::LocalHit,
             8,
             500,
             2 * 1024 * 1024,
@@ -643,7 +641,7 @@ fn write_test_events(dir: &std::path::Path) -> Config {
         ),
         test_event(
             "regex",
-            EventResult::RemoteHit,
+            EventResult::LocalHit,
             120,
             400,
             512 * 1024,
@@ -797,9 +795,7 @@ fn test_generate_report_with_all_result_types() {
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
 
     assert_eq!(report.summary.total_crates, 5); // excludes errors from cacheable count
-    assert_eq!(report.summary.local_hits, 1);
-    assert_eq!(report.summary.prefetch_hits, 1);
-    assert_eq!(report.summary.remote_hits, 1);
+    assert_eq!(report.summary.local_hits, 3);
     assert_eq!(report.summary.dups, 1);
     assert_eq!(report.summary.misses, 1);
     assert_eq!(report.summary.errors, 1);
@@ -1103,7 +1099,7 @@ fn test_validator_rejects_invalid_schema_version() {
 
     let json = format_json(&report).unwrap();
     let mut val: deser_value::Value = deser_json::from_str(&json).unwrap();
-    val["schema_version"] = deser_value::value!(2);
+    val["schema_version"] = deser_value::value!(3);
     let schema: deser_value::Value = deser_json::from_str(REPORT_SCHEMA_JSON).unwrap();
 
     validate_json_value(&val, &schema, &schema, "report");
@@ -1132,7 +1128,7 @@ fn test_json_roundtrip() {
 
     let json = format_json(&report).unwrap();
     let raw: deser_value::Value = deser_json::from_str(&json).unwrap();
-    assert_eq!(raw["schema_version"], 1);
+    assert_eq!(raw["schema_version"], 2);
     assert!(raw.get("traceEvents").is_some());
     assert!(raw.get("trace_events").is_none());
     assert_eq!(raw["displayTimeUnit"], "ms");
@@ -1882,7 +1878,6 @@ fn pct_of_rounds_to_one_decimal_and_survives_an_empty_total() {
 #[test]
 fn trace_result_style_distinguishes_hit_and_miss() {
     assert_eq!(trace_result_style(EventResult::LocalHit), ("hit", "good"));
-    assert_eq!(trace_result_style(EventResult::RemoteHit), ("hit", "good"));
     assert_eq!(trace_result_style(EventResult::Miss), ("miss", "bad"));
     assert_eq!(
         trace_result_style(EventResult::Passthrough),
@@ -1906,7 +1901,6 @@ fn test_markdown_contains_sections() {
     assert!(md.contains("#### Summary"));
     assert!(md.contains("#### Timing"));
     assert!(md.contains("#### Remote transfer"));
-    assert!(md.contains("#### Prefetch"));
     assert!(md.contains("#### Passthroughs & Skips"));
     assert!(md.contains("#### Top Compiled Cache-Key Misses"));
     assert!(md.contains("#### Suggestions"));
@@ -2332,8 +2326,6 @@ fn test_suggestion_network_latency_thresholds() {
     };
 
     let slow = TransferEvent {
-        accounting: None,
-        prefetch: None,
         outcome: String::new(),
         schema: 3,
         crate_name: "slow".to_string(),
@@ -2408,7 +2400,7 @@ fn test_github_format_has_collapsible_sections() {
     assert!(gh.contains("via fallback"));
     assert!(gh.contains("refused: unsupported rustc invocation"));
     assert!(gh.contains("<summary><strong>Remote transfer</strong>"));
-    assert!(gh.contains("<summary><strong>Timing & Prefetch</strong>"));
+    assert!(gh.contains("<summary><strong>Timing</strong></summary>"));
     assert!(gh.contains("Download format"));
     assert!(gh.contains("Read fan-out"));
     assert!(gh.contains("v3 3"));
@@ -3035,26 +3027,12 @@ fn not_found_transfers_are_not_download_failures() {
 
 #[test]
 fn packed_list_and_cancellation_do_not_diagnose_download_failures() {
-    let mut list = test_transfer(
-        "catalog",
-        TransferDirection::Download,
-        "pack_catalog",
-        0,
-        5,
-        false,
-    );
-    list.accounting = Some(kache_core::timeline::PrefetchAccounting {
-        operation: kache_core::timeline::PrefetchOperation::List,
-        ..Default::default()
-    });
     let mut cancelled = test_transfer("pack", TransferDirection::Download, "pack", 100, 5, false);
     cancelled.outcome = "cancelled".to_owned();
     assert_eq!(
-        build_network_analysis(&[list.clone(), cancelled], 10).downloads_failed,
+        build_network_analysis(&[cancelled], 10).downloads_failed,
         0
     );
-    list.ok = true;
-    assert_eq!(build_network_analysis(&[list], 10).downloads_ok, 0);
 }
 
 #[test]
@@ -3983,8 +3961,7 @@ fn redaction_terms_skip_roots_that_would_erase_every_path() {
 fn cache_overhead_names_the_total_and_the_average_per_hit() {
     let mut report = blank_report();
     assert_eq!(cache_overhead_summary(&report), None);
-    report.summary.local_hits = 1;
-    report.summary.remote_hits = 1;
+    report.summary.local_hits = 2;
     assert_eq!(cache_overhead_summary(&report), None, "no time recorded");
     report.timing.hit_time_ms = 1_500;
     report.timing.avg_hit_ms = 750.0;
@@ -3995,11 +3972,9 @@ fn cache_overhead_names_the_total_and_the_average_per_hit() {
 }
 
 #[test]
-fn total_hits_counts_every_kind_of_hit() {
+fn total_hits_counts_local_hits() {
     let mut report = blank_report();
-    report.summary.local_hits = 1;
-    report.summary.prefetch_hits = 3;
-    report.summary.remote_hits = 7;
+    report.summary.local_hits = 11;
     assert_eq!(report.summary.total_hits(), 11);
 }
 
@@ -4149,13 +4124,7 @@ fn text_network_and_storage_rows_hide_a_zero() {
     let text = format_text(&report);
     assert!(text_row(&text, "Blobs").is_some(), "{text}");
 
-    report.prefetch.prefetch_hits = 2;
-    report.prefetch.total_hits = 4;
-    let text = format_text(&report);
-    assert!(text_row(&text, "Prefetch").is_some(), "{text}");
-    report.prefetch.prefetch_hits = 0;
-    let text = format_text(&report);
-    assert!(text_row(&text, "Prefetch").is_none(), "{text}");
+
 }
 
 #[test]
@@ -4239,11 +4208,6 @@ fn local_time_keeps_an_unparsed_input() {
 
 #[test]
 fn suggestions_name_three_distinct_misses_only_above_the_share() {
-    let prefetch = PrefetchAnalysis {
-        prefetch_hits: 0,
-        total_hits: 0,
-        contribution_pct: 0.0,
-    };
     let suggest = |miss_ms, hit_ms, dups, misses, names: &[&str]| {
         let mut stats = crate::events::compute_stats(&[]);
         stats.miss_compile_time_ms = miss_ms;
@@ -4251,7 +4215,7 @@ fn suggestions_name_three_distinct_misses_only_above_the_share() {
         stats.dups = dups;
         stats.misses = misses;
         let details: Vec<CrateDetail> = names.iter().copied().map(miss_detail).collect();
-        generate_suggestions(&stats, &prefetch, &None, &details, 1, 0).join("\n")
+        generate_suggestions(&stats, &None, &details, 1, 0).join("\n")
     };
     let phrase = "compile time spent on compiled cache-key misses";
     assert!(!suggest(80, 20, 4, 0, &["a"]).contains(phrase));

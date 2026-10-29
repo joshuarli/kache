@@ -11,7 +11,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// Expected report schema version supported by this E2E reader.
-pub const SUPPORTED_REPORT_SCHEMA_VERSION: u32 = 1;
+pub const SUPPORTED_REPORT_SCHEMA_VERSION: u32 = 2;
 
 /// Raw `kache report --format json` document, deserialized with the
 /// summary surface lifted out for assertions and the full body kept as
@@ -94,17 +94,14 @@ pub struct ReportSummary {
     pub hit_rate_pct: f64,
     pub total_crates: u64,
     pub local_hits: u64,
-    pub prefetch_hits: u64,
-    pub remote_hits: u64,
     #[deser(default)]
     pub dups: u64,
     pub misses: u64,
 }
 
 impl ReportSummary {
-    /// Aggregate hits across all sources (local + prefetch + remote).
     pub fn total_hits(&self) -> u64 {
-        self.local_hits + self.prefetch_hits + self.remote_hits
+        self.local_hits
     }
 
     /// Entries where the compiler ran because the cache key missed.
@@ -126,11 +123,9 @@ impl ReportSummary {
     /// did nothing is `0%`, not `NaN`.
     pub fn delta_since(&self, earlier: &ReportSummary) -> ReportSummary {
         let local_hits = self.local_hits.saturating_sub(earlier.local_hits);
-        let prefetch_hits = self.prefetch_hits.saturating_sub(earlier.prefetch_hits);
-        let remote_hits = self.remote_hits.saturating_sub(earlier.remote_hits);
         let dups = self.dups.saturating_sub(earlier.dups);
         let misses = self.misses.saturating_sub(earlier.misses);
-        let hits = local_hits + prefetch_hits + remote_hits;
+        let hits = local_hits;
         let total_crates = hits + dups + misses;
         let hit_rate_pct = if total_crates == 0 {
             0.0
@@ -141,8 +136,6 @@ impl ReportSummary {
             hit_rate_pct,
             total_crates,
             local_hits,
-            prefetch_hits,
-            remote_hits,
             dups,
             misses,
         }
@@ -157,8 +150,6 @@ pub fn empty_summary() -> ReportSummary {
         hit_rate_pct: 0.0,
         total_crates: 0,
         local_hits: 0,
-        prefetch_hits: 0,
-        remote_hits: 0,
         dups: 0,
         misses: 0,
     }
@@ -243,17 +234,13 @@ mod tests {
             hit_rate_pct: 0.0,
             total_crates: 3,
             local_hits: 1,
-            prefetch_hits: 0,
-            remote_hits: 0,
             dups: 1,
             misses: 1,
         };
         let later = ReportSummary {
             hit_rate_pct: 50.0,
             total_crates: 7,
-            local_hits: 3,
-            prefetch_hits: 1,
-            remote_hits: 0,
+            local_hits: 4,
             dups: 2,
             misses: 1,
         };
@@ -270,7 +257,7 @@ mod tests {
     #[test]
     fn kache_report_deserialization_accepts_supported_schema_version_and_additive_fields() {
         let json = deser_value::value!({
-            "schema_version": 1,
+            "schema_version": 2,
             "summary": {
                 "hit_rate_pct": 50.0,
                 "total_crates": 2,
@@ -295,7 +282,7 @@ mod tests {
         });
 
         let typed: KacheReport = deser_value::from_value(&json).expect("should deserialize");
-        assert_eq!(typed.schema_version, 1);
+        assert_eq!(typed.schema_version, 2);
         assert_eq!(typed.summary.total_crates, 2);
         assert_eq!(typed.all_events.len(), 1);
         assert_eq!(typed.all_events[0].crate_name, "foo");

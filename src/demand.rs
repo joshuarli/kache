@@ -3,14 +3,13 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use kache_core::timeline::KeyDemand;
 
 #[derive(Default)]
 struct Observation {
     first_demand_at_ms: u64,
-    remote_wait: Duration,
 }
 
 #[derive(Default)]
@@ -20,7 +19,6 @@ impl DemandLog {
     fn record(&mut self, key: &str, at_ms: u64) {
         self.0.entry(key.to_string()).or_insert(Observation {
             first_demand_at_ms: at_ms,
-            remote_wait: Duration::ZERO,
         });
     }
 
@@ -30,7 +28,6 @@ impl DemandLog {
             .map(|(cache_key, observation)| KeyDemand {
                 cache_key,
                 first_demand_at_ms: observation.first_demand_at_ms,
-                remote_wait_ms: observation.remote_wait.as_millis() as u64,
             })
             .collect()
     }
@@ -90,7 +87,6 @@ mod tests {
             vec![KeyDemand {
                 cache_key: "key".to_string(),
                 first_demand_at_ms: 100,
-                remote_wait_ms: 0,
             }]
         );
         assert!(log.take().is_empty());
@@ -106,13 +102,11 @@ mod tests {
             vec![
                 KeyDemand {
                     cache_key: "actual".to_string(),
-                    first_demand_at_ms: 200,
-                    remote_wait_ms: 0
+                    first_demand_at_ms: 200
                 },
                 KeyDemand {
                     cache_key: "predicted".to_string(),
-                    first_demand_at_ms: 100,
-                    remote_wait_ms: 0
+                    first_demand_at_ms: 100
                 },
             ]
         );
@@ -134,6 +128,5 @@ mod tests {
         assert_eq!(own.len(), 1);
         assert_eq!(own[0].cache_key, "main");
         assert!(own[0].first_demand_at_ms > 0);
-        assert_eq!(own[0].remote_wait_ms, 0);
     }
 }
