@@ -776,12 +776,12 @@ mod tests {
         assert!(index_len(&config) < 8 << 20);
     }
 
-    #[tokio::test]
+    #[test]
     #[cfg(unix)]
-    async fn shutdown_attempt_runs_off_the_async_workers_and_compacts() {
+    fn shutdown_attempt_runs_off_the_async_workers_and_compacts() {
         let dir = tempfile::tempdir().unwrap();
         let config = sparse_store(dir.path());
-        crate::maintenance::run_at_shutdown(config.clone()).await;
+        smol::block_on(crate::maintenance::run_at_shutdown(config.clone()));
         assert!(index_len(&config) < 8 << 20);
     }
 

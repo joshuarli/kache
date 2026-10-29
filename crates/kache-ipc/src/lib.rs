@@ -1,9 +1,8 @@
 //! Local IPC transport for the daemon.
 //!
-//! The daemon's local socket and the wrapper / CLI clients use the
-//! `interprocess` crate over Unix domain sockets. This module hides the
-//! `Name` resolution machinery and provides a `prelude` with the trait
-//! imports callers need.
+//! The daemon's local socket and the wrapper / CLI clients use Unix domain
+//! sockets. Sync clients use `interprocess` over a filesystem path; async
+//! daemon endpoints use `async-net` so the runtime stays smol-based.
 //!
 //! # Naming
 //!
@@ -18,19 +17,15 @@ pub use deadline_io::finish_by;
 
 pub use interprocess::local_socket::ListenerOptions;
 #[cfg(feature = "async")]
-pub use interprocess::local_socket::tokio::Stream as TokioStream;
+pub use async_net::unix::{UnixListener as AsyncListener, UnixStream as AsyncStream};
 pub use interprocess::local_socket::{Name, Stream as SyncStream};
-// TokioListener is the type produced by `ListenerOptions::new().create_tokio()`.
-// Re-exported so the daemon's `accept_loop` and its tests can name it explicitly.
-#[cfg(feature = "async")]
-pub use interprocess::local_socket::tokio::Listener as TokioListener;
 
 /// Trait imports needed to call methods on the listener / stream types.
 /// Most users want `use crate::prelude::*;`.
 pub mod prelude {
-    #[cfg(feature = "async")]
-    pub use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
     pub use interprocess::local_socket::traits::{Listener as _, Stream as _};
+    #[cfg(feature = "async")]
+    pub use futures_lite::io::{AsyncReadExt as _, AsyncWriteExt as _};
 }
 
 /// Why the daemon cannot bind a local socket at `path`, or `None` when it can.
@@ -48,24 +43,21 @@ pub fn socket_path_problem(path: &Path) -> Option<String> {
     None
 }
 
-/// Bind through shared ownership and disable the transport's unchecked unlink.
+/// Bind through shared ownership. The returned listener does not unlink the
+/// socket on drop; `kunobi_daemon::local::unix_socket::SocketGuard` owns
+/// cleanup so a successor never unlinks a live endpoint.
 #[cfg(feature = "async")]
-pub async fn bind_daemon_listener(path: &Path) -> Result<Option<TokioListener>> {
-    use interprocess::local_socket::traits::tokio::Listener as _;
+pub async fn bind_daemon_listener(path: &Path) -> Result<Option<AsyncListener>> {
     if let Some(problem) = socket_path_problem(path) {
         anyhow::bail!(problem);
     }
-    let mut listener: TokioListener = {
-        use kunobi_daemon::local::unix_socket::{self, Bound};
-        let bound = unix_socket::acquire(path)
-            .map_err(|error| anyhow::anyhow!("acquiring daemon socket: {error:?}"))?;
-        let Bound::Won(listener) = bound else {
-            return Ok(None);
-        };
-        let fd: std::os::fd::OwnedFd = listener.into();
-        interprocess::os::unix::uds_local_socket::tokio::Listener::try_from(fd)?.into()
+    use kunobi_daemon::local::unix_socket::{self, Bound};
+    let bound = unix_socket::acquire(path)
+        .map_err(|error| anyhow::anyhow!("acquiring daemon socket: {error:?}"))?;
+    let Bound::Won(listener) = bound else {
+        return Ok(None);
     };
-    listener.do_not_reclaim_name_on_drop();
+    let listener = AsyncListener::try_from(listener)?;
     Ok(Some(listener))
 }
 
@@ -123,20 +115,63 @@ pub fn require_self_peer(peer_euid: Option<u32>) -> std::io::Result<()> {
 /// Linux, `getpeereid` on macOS and the BSDs. `None` means we could not
 /// authenticate the peer, which [`require_self_peer`] treats as a refusal.
 #[cfg(feature = "async")]
-pub fn peer_euid(stream: &TokioStream) -> Option<u32> {
-    use interprocess::local_socket::traits::StreamCommon as _;
-    stream.peer_creds().ok().and_then(|creds| creds.euid())
+pub fn peer_euid(stream: &AsyncStream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    let fd = stream.as_raw_fd();
+    #[cfg(target_os = "linux")]
+    {
+        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        let ret = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut cred as *mut libc::ucred).cast(),
+                &mut len,
+            )
+        };
+        if ret != 0 {
+            return None;
+        }
+        Some(cred.uid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut uid: libc::uid_t = 0;
+        let mut gid: libc::gid_t = 0;
+        let ret = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
+        if ret != 0 { None } else { Some(uid) }
+    }
 }
 
 #[cfg(feature = "async")]
-pub fn peer_pid(stream: &TokioStream) -> Option<u32> {
-    use interprocess::local_socket::traits::StreamCommon as _;
-    stream
-        .peer_creds()
-        .ok()?
-        .pid()
-        .and_then(|pid| u32::try_from(pid).ok())
-        .filter(|pid| *pid != 0)
+pub fn peer_pid(stream: &AsyncStream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    let fd = stream.as_raw_fd();
+    #[cfg(target_os = "linux")]
+    {
+        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        let ret = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut cred as *mut libc::ucred).cast(),
+                &mut len,
+            )
+        };
+        if ret != 0 {
+            return None;
+        }
+        u32::try_from(cred.pid).ok().filter(|pid| *pid != 0)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = fd;
+        None
+    }
 }
 
 /// Kernel audit identity. Keep its representation opaque and use libbsm to
@@ -158,14 +193,14 @@ impl PeerAuditToken {
 }
 
 #[cfg(all(target_os = "macos", feature = "async"))]
-pub fn peer_audit_token(stream: &TokioStream) -> std::io::Result<PeerAuditToken> {
+pub fn peer_audit_token(stream: &AsyncStream) -> std::io::Result<PeerAuditToken> {
     use std::os::fd::AsRawFd;
-    let TokioStream::UdSocket(socket) = stream;
+    let fd = stream.as_raw_fd();
     let mut token = PeerAuditToken([0; 8]);
     let mut length = std::mem::size_of::<PeerAuditToken>() as libc::socklen_t;
     let result = unsafe {
         libc::getsockopt(
-            socket.inner().as_raw_fd(),
+            fd,
             libc::SOL_LOCAL,
             libc::LOCAL_PEERTOKEN,
             (&mut token as *mut PeerAuditToken).cast(),
@@ -202,15 +237,62 @@ pub fn connect_sync(socket: &Path, busy_wait: std::time::Duration) -> std::io::R
     SyncStream::connect(socket_name(socket).map_err(std::io::Error::other)?)
 }
 
-/// Connect a Tokio client to the daemon socket at `socket`.
+/// Connect an async client to the daemon socket at `socket`.
 #[cfg(feature = "async")]
-pub async fn connect_tokio(
+pub async fn connect_async(
     socket: &Path,
     busy_wait: std::time::Duration,
-) -> std::io::Result<TokioStream> {
-    use interprocess::local_socket::traits::tokio::Stream as _;
+) -> std::io::Result<AsyncStream> {
     let _ = busy_wait;
-    TokioStream::connect(socket_name(socket).map_err(std::io::Error::other)?).await
+    AsyncStream::connect(socket).await
+}
+
+/// Bind a blocking listener through shared ownership. Returns `None` when
+/// another daemon owns the endpoint.
+pub fn bind_sync_listener(
+    path: &Path,
+) -> Result<Option<std::os::unix::net::UnixListener>> {
+    if let Some(problem) = socket_path_problem(path) {
+        anyhow::bail!(problem);
+    }
+    use kunobi_daemon::local::unix_socket::{self, Bound};
+    let bound = unix_socket::acquire(path)
+        .map_err(|error| anyhow::anyhow!("acquiring daemon socket: {error:?}"))?;
+    let Bound::Won(listener) = bound else {
+        return Ok(None);
+    };
+    Ok(Some(listener))
+}
+
+/// The peer's effective UID for a blocking Unix stream.
+pub fn peer_euid_std(stream: &std::os::unix::net::UnixStream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    let fd = stream.as_raw_fd();
+    #[cfg(target_os = "linux")]
+    {
+        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        let ret = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut cred as *mut libc::ucred).cast(),
+                &mut len,
+            )
+        };
+        if ret != 0 {
+            return None;
+        }
+        Some(cred.uid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut uid: libc::uid_t = 0;
+        let mut gid: libc::gid_t = 0;
+        let ret = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
+        if ret != 0 { None } else { Some(uid) }
+    }
 }
 
 /// True if a daemon socket at `path` accepts a connection
@@ -245,11 +327,8 @@ mod tests {
             "/{}",
             "a".repeat(kunobi_daemon::local::unix_socket::MAX_PATH_BYTES)
         );
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let Err(error) = runtime.block_on(bind_daemon_listener(Path::new(&path))) else {
+        let result = smol::block_on(bind_daemon_listener(Path::new(&path)));
+        let Err(error) = result else {
             panic!("an overlong path cannot bind");
         };
         assert!(error.to_string().contains("KACHE_SOCKET_PATH"), "{error:#}");
@@ -333,35 +412,30 @@ mod tests {
     }
 
     #[cfg(feature = "async")]
-    #[tokio::test]
-    async fn same_user_peer_check_accepts_own_connections() {
-        use crate::prelude::*;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("creds.sock");
-        let name = socket_name(&path).unwrap();
-        let listener = ListenerOptions::new()
-            .name(name)
-            .create_tokio()
-            .expect("bind listener");
+    #[test]
+    fn same_user_peer_check_accepts_own_connections() {
+        smol::block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("creds.sock");
+            let listener = bind_daemon_listener(&path).await.expect("bind listener");
+            let listener = listener.expect("listener won the bind");
+            let connect_path = path.clone();
+            let client_task = smol::spawn(async move {
+                AsyncStream::connect(&connect_path).await.expect("connect")
+            });
+            let (stream, _addr) = listener.accept().await.expect("accept");
+            let client = client_task.await;
 
-        let client = tokio::spawn(async move {
-            TokioStream::connect(socket_name(&path).unwrap())
-                .await
-                .expect("connect")
+            // The test client runs under the same effective UID as the "daemon",
+            // so the credential gate must accept it. Rejection of foreign UIDs is
+            // not unit-testable without privilege switching.
+            require_self_peer(peer_euid(&stream)).expect("same-user peer accepted");
+            require_self_peer(peer_euid(&client)).expect("same-user server accepted");
+            #[cfg(target_os = "linux")]
+            for connection in [&stream, &client] {
+                assert_eq!(peer_pid(connection), Some(std::process::id()));
+            }
         });
-        let (stream, client) = tokio::join!(listener.accept(), client);
-
-        // The test client runs under the same effective UID as the "daemon",
-        // so the credential gate must accept it. Rejection of foreign UIDs is
-        // not unit-testable without privilege switching.
-        let stream = stream.expect("accept");
-        require_self_peer(peer_euid(&stream)).expect("same-user peer accepted");
-        let client = client.expect("client task");
-        require_self_peer(peer_euid(&client)).expect("same-user server accepted");
-        #[cfg(target_os = "linux")]
-        for connection in [&stream, &client] {
-            assert_eq!(peer_pid(connection), Some(std::process::id()));
-        }
     }
 }
 

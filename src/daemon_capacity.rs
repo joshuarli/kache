@@ -46,8 +46,8 @@ impl DaemonCapacity {
             // headroom for those RPCs at every configured pipeline capacity.
             connections: executions.saturating_mul(4).max(128),
             // A pipeline holds a blocking thread while its nested RPC may
-            // need blocking filesystem work. Preserve Tokio's usual 512
-            // threads for other work even when pipelines exceed that count.
+            // need blocking filesystem work. Preserve 512 threads for other
+            // work even when pipelines exceed that count.
             blocking_threads: executions.saturating_add(512),
         }
     }
@@ -187,7 +187,10 @@ mod tests {
     fn oversized_inputs_keep_all_semaphores_representable() {
         let capacity = DaemonCapacity::for_resources(None, usize::MAX, None);
         assert_eq!(capacity.executions, usize::MAX >> 5);
-        assert!(capacity.connections <= tokio::sync::Semaphore::MAX_PERMITS);
+        assert_eq!(
+            capacity.connections,
+            (usize::MAX >> 5).saturating_mul(4).max(128)
+        );
         assert!(capacity.connections > capacity.executions);
         assert!(capacity.blocking_threads > capacity.executions);
         assert_eq!(

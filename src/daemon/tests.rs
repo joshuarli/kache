@@ -16,26 +16,31 @@ fn compiler_request_capacity_handles_bursts_and_recovers_after_drop() {
         requests.push(
             workers
                 .clone()
-                .try_acquire_owned()
+                .try_acquire_arc()
                 .expect("pipeline request rejected before the burst limit"),
         );
     }
-    assert!(workers.clone().try_acquire_owned().is_err());
+    assert!(workers.clone().try_acquire_arc().is_none());
 
     drop(requests.pop());
     let replacement = workers
         .clone()
-        .try_acquire_owned()
+        .try_acquire_arc()
         .expect("a finished request must release its slot");
-    assert!(workers.clone().try_acquire_owned().is_err());
+    assert!(workers.clone().try_acquire_arc().is_none());
 
     drop(replacement);
     drop(requests);
-    let next_burst = workers
-        .clone()
-        .try_acquire_many_owned(32)
-        .expect("all slots must be reusable after the burst finishes");
-    assert!(workers.try_acquire_owned().is_err());
+    let mut next_burst = Vec::new();
+    for _ in 0..32 {
+        next_burst.push(
+            workers
+                .clone()
+                .try_acquire_arc()
+                .expect("all slots must be reusable after the burst finishes"),
+        );
+    }
+    assert!(workers.try_acquire_arc().is_none());
     drop(next_burst);
 }
 
@@ -206,8 +211,22 @@ fn reaped_child_is_not_alive() {
 
 // Tests use the same transport as production, which resolves to UDS.
 #[cfg(test)]
-use crate::transport::ListenerOptions;
-use crate::transport::{TokioListener, TokioStream, socket_name};
+use crate::transport::AsyncListener;
+use crate::transport::AsyncStream;
+
+#[cfg(test)]
+async fn smol_opt_timeout<T>(
+    duration: Duration,
+    future: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    use futures::FutureExt as _;
+    let mut future = Box::pin(future.fuse());
+    let mut timer = Box::pin(async_io::Timer::after(duration).fuse());
+    futures::select! {
+        value = future => Some(value),
+        _ = timer => None,
+    }
+}
 
 /// A sibling of `socket_path` that no earlier bind in this process has
 /// used.
@@ -227,43 +246,44 @@ fn fresh_endpoint(socket_path: &Path) -> std::path::PathBuf {
 /// time. A repeated name is `EADDRINUSE`, so `bind_listener` panics here
 /// instead of intermittently in whichever test happened to ask for a second
 /// roundtrip.
-#[tokio::test]
-async fn each_bind_gets_an_endpoint_name_of_its_own() {
-    let dir = tempfile::tempdir().unwrap();
-    let socket_path = dir.path().join("daemon.sock");
-    let first = fresh_endpoint(&socket_path);
-    let second = fresh_endpoint(&socket_path);
-    assert_ne!(first, second, "a reused name is the collision itself");
-    assert_eq!(
-        (first.parent(), second.parent()),
-        (socket_path.parent(), socket_path.parent()),
-        "endpoints stay beside the socket path the caller gave"
-    );
-    let _first = bind_listener(&first);
-    let _second = bind_listener(&second);
+#[test]
+fn each_bind_gets_an_endpoint_name_of_its_own() {
+    smol::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("daemon.sock");
+        let first = fresh_endpoint(&socket_path);
+        let second = fresh_endpoint(&socket_path);
+        assert_ne!(first, second, "a reused name is the collision itself");
+        assert_eq!(
+            (first.parent(), second.parent()),
+            (socket_path.parent(), socket_path.parent()),
+            "endpoints stay beside the socket path the caller gave"
+        );
+        let _first = bind_listener(&first).await;
+        let _second = bind_listener(&second).await;
+    });
 }
 
 /// Bind a daemon-style listener at `path`, taking the cross-platform
 /// transport. Used by every roundtrip test to remove boilerplate.
-fn bind_listener(path: &Path) -> TokioListener {
-    let name = socket_name(path).expect("socket name");
-    ListenerOptions::new()
-        .name(name)
-        .create_tokio()
-        .expect("create_tokio listener")
+async fn bind_listener(path: &Path) -> AsyncListener {
+    crate::transport::bind_daemon_listener(path)
+        .await
+        .expect("bind listener")
+        .expect("listener won the endpoint")
 }
 
 /// Client-side connect mirror of bind_listener.
-async fn connect_stream(path: &Path) -> TokioStream {
-    let name = socket_name(path).expect("socket name");
-    TokioStream::connect(name).await.expect("connect")
+async fn connect_stream(path: &Path) -> AsyncStream {
+    AsyncStream::connect(path).await.expect("connect")
 }
 
 /// Bind a *synchronous* listener at `path` so `transport::is_reachable`
-/// reports the endpoint as live. Unlike the tokio listener, it needs no
-/// async runtime — so it can be created inside a plain `std::thread`.
+/// reports the endpoint as live. It needs no async runtime — so it can be
+/// created inside a plain `std::thread`.
 fn bind_sync_listener(path: &Path) -> interprocess::local_socket::Listener {
-    let name = socket_name(path).expect("socket name");
+    use interprocess::local_socket::{GenericFilePath, ListenerOptions, ToFsName as _};
+    let name = path.to_fs_name::<GenericFilePath>().expect("socket name");
     ListenerOptions::new()
         .name(name)
         .create_sync()
@@ -272,7 +292,7 @@ fn bind_sync_listener(path: &Path) -> interprocess::local_socket::Listener {
 
 /// Send one request, read one response, and deliberately keep the socket
 /// open so shutdown tests can prove the server does not require client EOF.
-async fn client_request_keep_open(socket_path: &Path, req: &Request) -> (Response, TokioStream) {
+async fn client_request_keep_open(socket_path: &Path, req: &Request) -> (Response, AsyncStream) {
     let mut stream = connect_stream(socket_path).await;
 
     let mut line = serde_json::to_string(req).expect("serialize request");
@@ -284,7 +304,7 @@ async fn client_request_keep_open(socket_path: &Path, req: &Request) -> (Respons
 
     let mut resp_line = String::new();
     {
-        let mut reader = BufReader::new(&stream);
+        let mut reader = BufReader::new(stream.clone());
         reader
             .read_line(&mut resp_line)
             .await
@@ -305,10 +325,8 @@ async fn client_request_keep_open(socket_path: &Path, req: &Request) -> (Respons
 /// **drop the stream** so the server's read loop sees EOF and
 /// `handle_connection` returns.
 ///
-/// Tests must NOT instead half-close with `AsyncWriteExt::shutdown`: the
-/// `interprocess` tokio stream's `poll_shutdown` does not perform a
-/// `shutdown(SHUT_WR)` on macOS, so the server never sees EOF on its read
-/// half and the test hangs forever waiting on `server.await`. Dropping the
+/// Tests must NOT instead half-close: the server never sees EOF on its read
+/// half and the test hangs forever waiting on the server task. Dropping the
 /// whole stream closes both halves and behaves identically on every
 /// platform — which is also exactly what the real client does.
 async fn client_roundtrip(socket_path: &Path, req: &Request) -> Response {
@@ -330,18 +348,18 @@ async fn one_shot_request(daemon: &Arc<Daemon>, socket_path: &Path, req: &Reques
     // the client below use the derived path, so callers keep passing the
     // socket path their config reports.
     let socket_path = &fresh_endpoint(socket_path);
-    let listener = bind_listener(socket_path);
+    let listener = bind_listener(socket_path).await;
 
     let server_daemon = daemon.clone();
-    let server = tokio::spawn(async move {
-        let stream = listener.accept().await.expect("accept");
+    let server = smol::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept");
         handle_connection(stream, &server_daemon, &Arc::new(Lifecycle::default()))
             .await
             .expect("handle_connection");
     });
 
     let resp = client_roundtrip(socket_path, req).await;
-    server.await.expect("join server task");
+    server.await;
     resp
 }
 
@@ -506,72 +524,69 @@ fn compile_started_wire_tags_and_stats_default() {
     assert_eq!(parsed.gc_policy_version, 0);
 }
 
-#[tokio::test]
-async fn test_shutdown_request_sets_flag_and_stores_notify_permit() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let socket_path = config.socket_path();
-    std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
+#[test]
+fn test_shutdown_request_sets_flag_and_stores_notify_permit() {
+    smol::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path());
+        let socket_path = config.socket_path();
+        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
 
-    let listener = bind_listener(&socket_path);
-    let daemon = Arc::new(Daemon::new(config));
-    let lifecycle = Arc::new(Lifecycle::default());
+        let listener = bind_listener(&socket_path).await;
+        let daemon = Arc::new(Daemon::new(config));
+        let lifecycle = Arc::new(Lifecycle::default());
 
-    let server_daemon = daemon.clone();
-    let server_flag = lifecycle.clone();
+        let server_daemon = daemon.clone();
+        let server_flag = lifecycle.clone();
 
-    let server = tokio::spawn(async move {
-        let stream = listener.accept().await.expect("accept");
-        handle_connection(stream, &server_daemon, &server_flag)
+        let server = smol::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            handle_connection(stream, &server_daemon, &server_flag)
+                .await
+                .expect("handle_connection");
+        });
+
+        let resp = client_roundtrip(&socket_path, &Request::Shutdown).await;
+        server.await;
+
+        assert!(resp.ok, "stop request should return ok");
+        assert!(
+            !lifecycle.accepting_calls(),
+            "stop request must close admission"
+        );
+        // A later observer must also see the shared drain transition.
+        smol_opt_timeout(Duration::from_secs(1), lifecycle.draining())
             .await
-            .expect("handle_connection");
+            .expect("stop request must wake a later drain observer");
     });
-
-    let resp = client_roundtrip(&socket_path, &Request::Shutdown).await;
-    server.await.expect("join server task");
-
-    assert!(resp.ok, "stop request should return ok");
-    assert!(
-        !lifecycle.accepting_calls(),
-        "stop request must close admission"
-    );
-    // A later observer must also see the shared drain transition.
-    tokio::time::timeout(Duration::from_secs(1), lifecycle.draining())
-        .await
-        .expect("stop request must wake a later drain observer");
 }
 
-#[tokio::test]
-async fn connection_handler_drain_aborts_silent_handler_at_deadline() {
-    let mut handlers = tokio::task::JoinSet::new();
-    handlers.spawn(std::future::pending::<()>());
+#[test]
+fn connection_handler_drain_aborts_silent_handler_at_deadline() {
+    smol::block_on(async {
+        let mut handlers = Vec::new();
+        handlers.push(smol::spawn(std::future::pending::<()>()));
 
-    assert!(
-        drain_connection_handlers(&mut handlers, Duration::from_millis(20)).await,
-        "a silent handler must be aborted at the drain deadline"
-    );
-    assert!(handlers.is_empty(), "aborted handlers must still be joined");
+        assert!(
+            drain_connection_handlers(&mut handlers, Duration::from_millis(20)).await,
+            "a silent handler must be aborted at the drain deadline"
+        );
+        assert!(handlers.is_empty(), "aborted handlers must still be joined");
+    });
 }
 
-#[tokio::test]
-async fn connection_handler_observation_distinguishes_panics_from_cancellation() {
-    assert!(
-        !observe_connection_handler(tokio::spawn(async {}).await),
-        "a successful handler is not anomalous"
-    );
+#[test]
+fn connection_handler_drain_completes_finished_handlers_without_abort() {
+    smol::block_on(async {
+        let mut handlers = Vec::new();
+        handlers.push(smol::spawn(async {}));
 
-    let panicked = tokio::spawn(async { panic!("expected handler panic") }).await;
-    assert!(
-        observe_connection_handler(panicked),
-        "a handler panic must remain operationally visible"
-    );
-
-    let cancelled = tokio::spawn(std::future::pending::<()>());
-    cancelled.abort();
-    assert!(
-        !observe_connection_handler(cancelled.await),
-        "deadline cancellation is expected and must stay quiet"
-    );
+        assert!(
+            !drain_connection_handlers(&mut handlers, Duration::from_secs(1)).await,
+            "finished handlers drain without cancellation"
+        );
+        assert!(handlers.is_empty(), "drained handlers must still be joined");
+    });
 }
 
 /// Regression for #288 (loop side): a quiet `stop` must wake the accept loop
@@ -581,94 +596,96 @@ async fn connection_handler_observation_distinguishes_panics_from_cancellation()
 /// the loop within the assertion window is the stop-request wakeup. Before
 /// the fix the loop would stay parked for `ACCEPT_LOOP_IDLE_TICK` (~60s) and
 /// this 5s timeout would elapse.
-#[tokio::test]
-async fn test_accept_loop_breaks_promptly_on_stop_request() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let socket_path = config.socket_path();
-    std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
+#[test]
+fn test_accept_loop_breaks_promptly_on_stop_request() {
+    smol::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path());
+        let socket_path = config.socket_path();
+        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
 
-    let listener = bind_listener(&socket_path);
-    let daemon = Arc::new(Daemon::new(config));
-    let lifecycle = Arc::new(Lifecycle::default());
+        let listener = bind_listener(&socket_path).await;
+        let daemon = Arc::new(Daemon::new(config));
+        let lifecycle = Arc::new(Lifecycle::default());
 
-    // Client sends a one-shot `stop` once the loop is up.
-    let client_socket = socket_path.clone();
-    let client =
-        tokio::spawn(async move { client_roundtrip(&client_socket, &Request::Shutdown).await });
+        // Client sends a one-shot `stop` once the loop is up.
+        let client_socket = socket_path.clone();
+        let client =
+            smol::spawn(async move { client_roundtrip(&client_socket, &Request::Shutdown).await });
 
-    // `accept_loop` borrows the listener, so run it in this task (not a
-    // spawned 'static one) under a timeout. `future::pending` stands in for
-    // an OS shutdown signal that never arrives.
-    let outcome = tokio::time::timeout(
-        Duration::from_secs(5),
-        accept_loop(
-            &listener,
-            &daemon,
-            &lifecycle,
-            None,
-            Duration::from_secs(1),
-            std::future::pending::<()>(),
-        ),
-    )
-    .await;
+        // `accept_loop` borrows the listener, so run it in this task (not a
+        // spawned 'static one) under a timeout. `future::pending` stands in for
+        // an OS shutdown signal that never arrives.
+        let outcome = smol_opt_timeout(
+            Duration::from_secs(5),
+            accept_loop(
+                &listener,
+                &daemon,
+                &lifecycle,
+                None,
+                Duration::from_secs(1),
+                std::future::pending::<()>(),
+            ),
+        )
+        .await;
 
-    assert!(
-        outcome.is_ok(),
-        "accept_loop did not break within 5s of a stop request (issue #288 regression)"
-    );
-    assert!(
-        !lifecycle.accepting_calls(),
-        "shutdown flag should be set after the stop request"
-    );
-    let resp = tokio::time::timeout(Duration::from_secs(5), client)
-        .await
-        .expect("accept loop never acknowledged shutdown")
-        .expect("join client task");
-    assert!(resp.ok, "stop request should return ok");
+        assert!(
+            outcome.is_some(),
+            "accept_loop did not break within 5s of a stop request (issue #288 regression)"
+        );
+        assert!(
+            !lifecycle.accepting_calls(),
+            "shutdown flag should be set after the stop request"
+        );
+        let resp = smol_opt_timeout(Duration::from_secs(5), client)
+            .await
+            .expect("accept loop never acknowledged shutdown");
+        assert!(resp.ok, "stop request should return ok");
+    });
 }
 
-#[tokio::test]
-async fn test_send_request_with_timeout_bounds_unresponsive_daemon() {
-    let dir = tempfile::tempdir().unwrap();
-    let socket_path = dir.path().join("daemon.sock");
-    let listener = bind_listener(&socket_path);
+#[test]
+fn test_send_request_with_timeout_bounds_unresponsive_daemon() {
+    smol::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("daemon.sock");
+        let listener = bind_listener(&socket_path).await;
 
-    let server = tokio::spawn(async move {
-        let stream = listener.accept().await.expect("accept");
-        let mut request_line = String::new();
-        {
-            let mut reader = BufReader::new(&stream);
-            reader
-                .read_line(&mut request_line)
-                .await
-                .expect("read request");
-        }
-        assert!(request_line.contains("\"stats\""));
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        drop(stream);
+        let server = smol::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let mut request_line = String::new();
+            {
+                let mut reader = BufReader::new(stream.clone());
+                reader
+                    .read_line(&mut request_line)
+                    .await
+                    .expect("read request");
+            }
+            assert!(request_line.contains("\"stats\""));
+            async_io::Timer::after(Duration::from_secs(1)).await;
+            drop(stream);
+        });
+
+        let req = Request::Stats(StatsRequest {
+            include_entries: false,
+            include_summaries: false,
+            sort_by: None,
+            event_hours: None,
+            event_secs: None,
+            client_epoch: 0,
+            client_version: None,
+        });
+        let client_socket_path = socket_path.clone();
+        let started = Instant::now();
+        let result = smol::unblock(move || {
+            send_request_with_timeout(&client_socket_path, &req, Duration::from_millis(75))
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_millis(750));
+        let _ = server.cancel().await;
     });
-
-    let req = Request::Stats(StatsRequest {
-        include_entries: false,
-        include_summaries: false,
-        sort_by: None,
-        event_hours: None,
-        event_secs: None,
-        client_epoch: 0,
-        client_version: None,
-    });
-    let client_socket_path = socket_path.clone();
-    let started = Instant::now();
-    let result = tokio::task::spawn_blocking(move || {
-        send_request_with_timeout(&client_socket_path, &req, Duration::from_millis(75))
-    })
-    .await
-    .expect("join client task");
-
-    assert!(result.is_err());
-    assert!(started.elapsed() < Duration::from_millis(750));
-    server.abort();
 }
 
 pub(super) fn test_config(dir: &Path) -> Config {
@@ -747,48 +764,50 @@ pub(super) fn test_config(dir: &Path) -> Config {
 
 
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_release_controls_drain_and_legacy_timestamps_do_not() {
-    for (version, should_drain) in [
-        (None, false),
-        (Some(VERSION.to_owned()), false),
-        (Some(format!("{VERSION}+rebuilt")), false),
-        (Some("0.0.1".into()), false),
-        (Some("legacy".into()), false),
-        (Some("999.0.0".into()), true),
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let config = test_config(dir.path());
-        let daemon = Arc::new(Daemon::new(config.clone()));
-        let lifecycle = Arc::new(Lifecycle::default());
-        let listener = bind_listener(&config.socket_path());
-        let (serving, control) = (daemon.clone(), lifecycle.clone());
-        let server = tokio::spawn(async move {
-            let stream = listener.accept().await.unwrap();
-            handle_connection(stream, &serving, &control).await.unwrap();
-        });
-        let response = client_roundtrip(
-            &config.socket_path(),
-            &Request::CompileStarted(CompileStartedRequest {
-                crate_name: "release-test".into(),
-                root: String::new(),
-                pid: 1234,
-                started_at_ms: 1,
-                typical_ms: None,
-                client_epoch: u64::MAX,
-                client_version: version.clone(),
-            }),
-        )
-        .await;
-        server.await.unwrap();
-        assert!(response.ok, "{response:?}");
-        assert_eq!(!lifecycle.accepting_calls(), should_drain, "{version:?}");
-        assert_eq!(
-            daemon.in_flight_compiles.lock().unwrap().len(),
-            1,
-            "accepted work must survive"
-        );
-    }
+#[test]
+fn request_release_controls_drain_and_legacy_timestamps_do_not() {
+    smol::block_on(async {
+        for (version, should_drain) in [
+            (None, false),
+            (Some(VERSION.to_owned()), false),
+            (Some(format!("{VERSION}+rebuilt")), false),
+            (Some("0.0.1".into()), false),
+            (Some("legacy".into()), false),
+            (Some("999.0.0".into()), true),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = test_config(dir.path());
+            let daemon = Arc::new(Daemon::new(config.clone()));
+            let lifecycle = Arc::new(Lifecycle::default());
+            let listener = bind_listener(&config.socket_path()).await;
+            let (serving, control) = (daemon.clone(), lifecycle.clone());
+            let server = smol::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                handle_connection(stream, &serving, &control).await.unwrap();
+            });
+            let response = client_roundtrip(
+                &config.socket_path(),
+                &Request::CompileStarted(CompileStartedRequest {
+                    crate_name: "release-test".into(),
+                    root: String::new(),
+                    pid: 1234,
+                    started_at_ms: 1,
+                    typical_ms: None,
+                    client_epoch: u64::MAX,
+                    client_version: version.clone(),
+                }),
+            )
+            .await;
+            server.await;
+            assert!(response.ok, "{response:?}");
+            assert_eq!(!lifecycle.accepting_calls(), should_drain, "{version:?}");
+            assert_eq!(
+                daemon.in_flight_compiles.lock().unwrap().len(),
+                1,
+                "accepted work must survive"
+            );
+        }
+    });
 }
 
 fn stats_at_version(version: &str) -> StatsResponse {
@@ -801,32 +820,33 @@ fn stats_at_version(version: &str) -> StatsResponse {
     .unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn diagnostic_stats_send_no_upgrade_metadata_to_legacy_daemons() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let listener = bind_listener(&config.socket_path());
-    let server = tokio::spawn(async move {
-        let stream = listener.accept().await.unwrap();
-        let mut line = String::new();
-        BufReader::new(&stream).read_line(&mut line).await.unwrap();
-        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(value["stats"]["client_epoch"], 0);
-        assert!(value["stats"].get("client_version").is_none());
-        let response = Response {
-            stats: Some(stats_at_version("0.0.1")),
-            ..Response::ok()
-        };
-        let line = format!("{}\n", serde_json::to_string(&response).unwrap());
-        (&stream).write_all(line.as_bytes()).await.unwrap();
+#[test]
+fn diagnostic_stats_send_no_upgrade_metadata_to_legacy_daemons() {
+    smol::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path());
+        let listener = bind_listener(&config.socket_path()).await;
+        let server = smol::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.clone()).read_line(&mut line).await.unwrap();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["stats"]["client_epoch"], 0);
+            assert!(value["stats"].get("client_version").is_none());
+            let response = Response {
+                stats: Some(stats_at_version("0.0.1")),
+                ..Response::ok()
+            };
+            let line = format!("{}\n", serde_json::to_string(&response).unwrap());
+            stream.write_all(line.as_bytes()).await.unwrap();
+        });
+        let stats =
+            smol::unblock(move || send_stats_request_without_restart(&config, false))
+                .await
+                .unwrap();
+        server.await;
+        assert_eq!(stats.version, "0.0.1");
     });
-    let stats =
-        tokio::task::spawn_blocking(move || send_stats_request_without_restart(&config, false))
-            .await
-            .unwrap()
-            .unwrap();
-    server.await.unwrap();
-    assert_eq!(stats.version, "0.0.1");
 }
 
 /// 1.0.x orders daemons by this value, so it must be the running
@@ -882,61 +902,60 @@ fn foreground_startup_rejects_a_file_in_place_of_the_runtime_directory() {
     assert!(run_server(&config, &provenance, None).is_err());
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn server_main_binds_socket_and_handles_shutdown() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.daemon_idle_timeout_secs = 0;
-    let socket_path = config.socket_path();
-    let coord = DaemonCoordFile::for_socket(&socket_path);
-    let server_config = config.clone();
-    let provenance = crate::config::config_file_provenance_at(dir.path().join("config.toml"));
-    let server = tokio::spawn(async move {
-        server_main(
-            &server_config,
-            &provenance,
-            coord,
-            None,
-            DaemonCapacity::discover(server_config.daemon_execution_concurrency),
-        )
-        .await
-    });
+#[test]
+fn server_main_binds_socket_and_handles_shutdown() {
+    smol::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(dir.path());
+        config.daemon_idle_timeout_secs = 0;
+        let socket_path = config.socket_path();
+        let coord = DaemonCoordFile::for_socket(&socket_path);
+        let server_config = config.clone();
+        let provenance = crate::config::config_file_provenance_at(dir.path().join("config.toml"));
+        let server = smol::spawn(async move {
+            server_main(
+                &server_config,
+                &provenance,
+                coord,
+                None,
+                DaemonCapacity::discover(server_config.daemon_execution_concurrency),
+            )
+            .await
+        });
 
-    let ready_socket = socket_path.clone();
-    let ready = tokio::task::spawn_blocking(move || {
-        kunobi_daemon::readiness::wait_until(Instant::now() + Duration::from_secs(5), |deadline| {
-            lifecycle_client::current_socket(&ready_socket, deadline)
+        let ready_socket = socket_path.clone();
+        let ready = smol::unblock(move || {
+            kunobi_daemon::readiness::wait_until(Instant::now() + Duration::from_secs(5), |deadline| {
+                lifecycle_client::current_socket(&ready_socket, deadline)
+            })
+            .map(|proof| proof.is_some())
         })
-        .map(|proof| proof.is_some())
-    })
-    .await
-    .unwrap()
-    .unwrap();
-    assert!(ready, "server_main must bind its configured socket");
-
-    assert_eq!(
-        read_daemon_state(&socket_path).unwrap().control_version,
-        Some(kunobi_daemon::wire::VERSION),
-        "stop must use the advertised binary DRAIN endpoint"
-    );
-    let shutdown_config = config.clone();
-    tokio::task::spawn_blocking(move || send_shutdown_request(&shutdown_config))
         .await
-        .unwrap()
         .unwrap();
+        assert!(ready, "server_main must bind its configured socket");
 
-    let result = tokio::time::timeout(Duration::from_secs(10), server)
-        .await
-        .expect("server_main should stop after a shutdown request")
-        .expect("server_main task should not panic");
+        assert_eq!(
+            read_daemon_state(&socket_path).unwrap().control_version,
+            Some(kunobi_daemon::wire::VERSION),
+            "stop must use the advertised binary DRAIN endpoint"
+        );
+        let shutdown_config = config.clone();
+        smol::unblock(move || send_shutdown_request(&shutdown_config))
+            .await
+            .unwrap();
+
+        let result = smol_opt_timeout(Duration::from_secs(10), server)
+            .await
+            .expect("server_main should stop after a shutdown request");
     assert!(
         result.is_ok(),
         "server_main should exit cleanly: {result:?}"
     );
-    assert!(
-        !socket_path.exists(),
-        "server_main should remove its socket during shutdown"
-    );
+        assert!(
+            !socket_path.exists(),
+            "server_main should remove its socket during shutdown"
+        );
+    });
 }
 
 // ── Protocol serde round-trips ───────────────────────────────
@@ -956,8 +975,9 @@ fn readiness_rejects_an_accepting_socket_that_does_not_answer() {
     assert!(start.elapsed() < Duration::from_secs(2));
 }
 
-#[tokio::test]
-async fn readiness_requires_a_successful_compatible_health_response() {
+#[test]
+fn readiness_requires_a_successful_compatible_health_response() {
+    smol::block_on(async {
     for (response, accepted) in [
         (
             Response {
@@ -1002,31 +1022,30 @@ async fn readiness_requires_a_successful_compatible_health_response() {
     ] {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("daemon.sock");
-        let listener = bind_listener(&socket);
-        let server = tokio::spawn(async move {
-            let peer = listener.accept().await.unwrap();
+        let listener = bind_listener(&socket).await;
+        let server = smol::spawn(async move {
+            let (mut peer, _) = listener.accept().await.unwrap();
             let mut request = String::new();
-            BufReader::new(&peer).read_line(&mut request).await.unwrap();
+            BufReader::new(peer.clone()).read_line(&mut request).await.unwrap();
             assert!(matches!(
                 serde_json::from_str::<Request>(&request).unwrap(),
                 Request::Health
             ));
             let mut response = serde_json::to_vec(&response).unwrap();
             response.push(b'\n');
-            (&peer).write_all(&response).await.unwrap();
+            peer.write_all(&response).await.unwrap();
         });
-        let proof = tokio::task::spawn_blocking(move || {
+        let proof = smol::unblock(move || {
             lifecycle_client::current_socket(&socket, Instant::now() + Duration::from_secs(5))
         })
         .await
-        .unwrap()
         .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), server)
+        smol_opt_timeout(Duration::from_secs(5), server)
             .await
-            .expect("readiness probe never completed the health exchange")
-            .unwrap();
+            .expect("readiness probe never completed the health exchange");
         assert_eq!(proof.is_some(), accepted);
     }
+    });
 }
 
 #[test]
@@ -2510,42 +2529,41 @@ fn send_gc_hint_reports_no_daemon_without_starting_one() {
 
 /// The daemon acknowledges the hint before it sweeps, then sweeps off the
 /// connection.
-#[tokio::test]
-async fn send_gc_hint_is_acknowledged_and_the_daemon_sweeps() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.max_size = 1000;
-    let socket_path = config.socket_path();
-    std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
-    let store = Store::open(&config).unwrap();
-    put_upload_evict_entry(&store, dir.path(), "evictable", 1200, false);
+#[test]
+fn send_gc_hint_is_acknowledged_and_the_daemon_sweeps() {
+    smol::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(dir.path());
+        config.max_size = 1000;
+        let socket_path = config.socket_path();
+        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
+        let store = Store::open(&config).unwrap();
+        put_upload_evict_entry(&store, dir.path(), "evictable", 1200, false);
 
-    let listener = bind_listener(&socket_path);
-    let daemon = Arc::new(Daemon::new(config.clone()));
-    let server = tokio::spawn(async move {
-        let stream = listener.accept().await.expect("accept");
-        handle_connection(stream, &daemon, &Arc::new(Lifecycle::default()))
+        let listener = bind_listener(&socket_path).await;
+        let daemon = Arc::new(Daemon::new(config.clone()));
+        let server = smol::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            handle_connection(stream, &daemon, &Arc::new(Lifecycle::default()))
+                .await
+                .expect("handle_connection");
+        });
+
+        let cfg = config.clone();
+        let accepted = smol::unblock(move || send_gc_hint(&cfg)).await;
+        assert!(accepted);
+        // Bounded: if no hint ever reached the socket, `accept` would wait
+        // forever and the test would hang instead of failing.
+        smol_opt_timeout(Duration::from_secs(10), server)
             .await
-            .expect("handle_connection");
+            .expect("the daemon never received the hint");
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while store.contains("evictable") {
+            assert!(Instant::now() < deadline, "the hinted sweep never ran");
+            async_io::Timer::after(Duration::from_millis(20)).await;
+        }
     });
-
-    let cfg = config.clone();
-    let accepted = tokio::task::spawn_blocking(move || send_gc_hint(&cfg))
-        .await
-        .unwrap();
-    assert!(accepted);
-    // Bounded: if no hint ever reached the socket, `accept` would wait
-    // forever and the test would hang instead of failing.
-    tokio::time::timeout(Duration::from_secs(10), server)
-        .await
-        .expect("the daemon never received the hint")
-        .unwrap();
-
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while store.contains("evictable") {
-        assert!(Instant::now() < deadline, "the hinted sweep never ran");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
 }
 
 /// Entries for the periodic-sweep tests: a store over budget on retained
@@ -2665,26 +2683,30 @@ fn test_handle_request_sync_dispatches_gc() {
 
 /// #281: the blocking handlers are dispatched through `offload`, which must
 /// return the handler's own response unchanged.
-#[tokio::test]
-async fn offload_returns_the_handler_response() {
-    let resp = offload(Response::ok).await;
-    assert!(resp.ok);
+#[test]
+fn offload_returns_the_handler_response() {
+    smol::block_on(async {
+        let resp = offload(Response::ok).await;
+        assert!(resp.ok);
+    });
 }
 
 /// #281: a panic inside an offloaded handler must surface as an error
 /// response, not unwind and tear down the connection task.
-#[tokio::test]
-async fn offload_maps_a_handler_panic_to_an_error_response() {
-    let resp = offload(|| panic!("handler boom")).await;
-    assert!(!resp.ok, "a panicking handler must yield an error response");
-    assert!(
-        resp.error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("task failed"),
-        "error should explain the handler task failed, got {:?}",
-        resp.error
-    );
+#[test]
+fn offload_maps_a_handler_panic_to_an_error_response() {
+    smol::block_on(async {
+        let resp = offload(|| panic!("handler boom")).await;
+        assert!(!resp.ok, "a panicking handler must yield an error response");
+        assert!(
+            resp.error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("task failed"),
+            "error should explain the handler task failed, got {:?}",
+            resp.error
+        );
+    });
 }
 
 
@@ -2806,23 +2828,25 @@ fn clean_tool_version_caches_removes_only_old_tool_version_txt() {
 
 // ── Socket integration tests ─────────────────────────────────
 
-#[tokio::test]
-async fn test_socket_gc_roundtrip() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let socket_path = config.socket_path();
-    std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
+#[test]
+fn test_socket_gc_roundtrip() {
+    smol::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path());
+        let socket_path = config.socket_path();
+        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
 
-    let daemon = Arc::new(Daemon::new(config));
-    let resp = one_shot_request(
-        &daemon,
-        &socket_path,
-        &Request::Gc(GcRequest::automatic(daemon.config.gc_max_age_hours)),
-    )
-    .await;
+        let daemon = Arc::new(Daemon::new(config));
+        let resp = one_shot_request(
+            &daemon,
+            &socket_path,
+            &Request::Gc(GcRequest::automatic(daemon.config.gc_max_age_hours)),
+        )
+        .await;
 
-    assert!(resp.ok);
-    assert_eq!(resp.evicted, Some(0));
+        assert!(resp.ok);
+        assert_eq!(resp.evicted, Some(0));
+    });
 }
 
 

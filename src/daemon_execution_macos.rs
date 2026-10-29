@@ -1,9 +1,9 @@
 //! macOS compiler admission uses the peer's kernel audit identity.
 
-use super::TokioStream;
+use super::AsyncStream;
 
 pub(super) fn peer_may_delegate(
-    stream: &TokioStream,
+    stream: &AsyncStream,
     reported_pid: u32,
     trusted_pipeline: bool,
 ) -> bool {

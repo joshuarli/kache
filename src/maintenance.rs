@@ -124,7 +124,7 @@ pub(crate) fn unix_now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// One maintenance pass. Blocking: call from `spawn_blocking`. The steps log
+/// One maintenance pass. Blocking: call from `smol::unblock`. The steps log
 /// their own failures; one failing does not stop the other. The dedup slice
 /// runs only when the earlier steps left the gap free.
 pub(crate) fn run(config: &Config, trigger: Trigger<'_>) {
@@ -172,31 +172,36 @@ fn compact_left_the_gap(outcome: &crate::index_compact::Outcome) -> bool {
 /// finds nothing to do costs two index opens, one aggregate query over the
 /// blob tables and three PRAGMAs. With `auto_share_target_files` on, a quiet
 /// check also runs one short clone slice over the tracked targets.
-pub(crate) fn spawn_periodic(
-    config: Config,
-    clock: Arc<RequestClock>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        tokio::time::sleep(FIRST_CHECK_AFTER).await;
-        let mut interval = tokio::time::interval(CHECK_INTERVAL);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+pub(crate) fn spawn_periodic(config: Config, clock: Arc<RequestClock>) -> smol::Task<()> {
+    smol::spawn(async move {
+        async_io::Timer::after(FIRST_CHECK_AFTER).await;
         loop {
-            interval.tick().await;
             let config = config.clone();
             let clock = clock.clone();
-            let task = tokio::task::spawn_blocking(move || run(&config, Trigger::Periodic(&clock)));
-            if let Err(error) = task.await {
-                tracing::warn!("store maintenance task panicked: {error}");
+            let outcome = smol::unblock(move || {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run(&config, Trigger::Periodic(&clock))
+                }))
+            })
+            .await;
+            if outcome.is_err() {
+                tracing::warn!("store maintenance task panicked");
             }
+            async_io::Timer::after(CHECK_INTERVAL).await;
         }
     })
 }
 
 /// The shutdown pass: quiet rules only, so a contended index yields at once.
 pub(crate) async fn run_at_shutdown(config: Config) {
-    let task = tokio::task::spawn_blocking(move || run(&config, Trigger::Shutdown));
-    if let Err(error) = task.await {
-        tracing::warn!("store maintenance task panicked: {error}");
+    let outcome = smol::unblock(move || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run(&config, Trigger::Shutdown)
+        }))
+    })
+    .await;
+    if outcome.is_err() {
+        tracing::warn!("store maintenance task panicked");
     }
 }
 

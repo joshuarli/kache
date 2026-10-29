@@ -32,6 +32,7 @@ mod init_completions;
 mod init_shell;
 mod invocation;
 mod key_env;
+mod lifecycle;
 use kache_store::link;
 mod link_probe;
 mod machine;

@@ -14,7 +14,7 @@ use std::fs::File;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixDatagram;
-use tokio::io::AsyncReadExt;
+use futures_lite::io::AsyncReadExt;
 
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -26,7 +26,7 @@ mod linux;
 #[path = "daemon_execution_macos.rs"]
 mod macos;
 
-fn peer_may_delegate(stream: &TokioStream, reported_pid: u32, trusted_pipeline: bool) -> bool {
+fn peer_may_delegate(stream: &AsyncStream, reported_pid: u32, trusted_pipeline: bool) -> bool {
     #[cfg(target_os = "macos")]
     {
         macos::peer_may_delegate(stream, reported_pid, trusted_pipeline)
@@ -53,7 +53,7 @@ fn trusts_pipeline(client: bool, daemon: bool) -> bool {
 
 #[cfg(unix)]
 pub(super) fn probe(
-    stream: &TokioStream,
+    stream: &AsyncStream,
     client_pid: u32,
     version: &str,
     client_trust: bool,
@@ -268,7 +268,7 @@ impl Prepared {
 }
 
 struct DescriptorChannel {
-    socket: tokio::net::UnixDatagram,
+    socket: async_io::Async<UnixDatagram>,
     ticket: DescriptorTicket,
     _directory: tempfile::TempDir,
 }
@@ -286,7 +286,7 @@ impl DescriptorChannel {
         let mut key = [0; 16];
         getrandom::fill(&mut key).context("creating descriptor ticket")?;
         Ok(Self {
-            socket: tokio::net::UnixDatagram::from_std(socket)?,
+            socket: async_io::Async::new(socket)?,
             ticket: DescriptorTicket {
                 endpoint: NativeString::capture(path.as_os_str()),
                 key,
@@ -296,12 +296,57 @@ impl DescriptorChannel {
     }
 
     async fn receive(&self, expected: usize) -> Result<Vec<OwnedFd>> {
-        Ok(self
-            .socket
-            .async_io(tokio::io::Interest::READABLE, || {
-                kache_ipc::descriptors::receive(self.socket.as_fd(), &self.ticket.key, expected)
-            })
-            .await?)
+        use futures::FutureExt as _;
+        let deadline = Instant::now() + PREPARE_TIMEOUT;
+        loop {
+            match kache_ipc::descriptors::receive(
+                self.socket.get_ref().as_fd(),
+                &self.ticket.key,
+                expected,
+            ) {
+                Ok(fds) => return Ok(fds),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => return Err(error.into()),
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!("descriptor receive timed out");
+            }
+            let mut readable = Box::pin(self.socket.readable().fuse());
+            let mut timer = Box::pin(async_io::Timer::at(deadline).fuse());
+            futures::select! {
+                _ = readable => {},
+                _ = timer => anyhow::bail!("descriptor receive timed out"),
+            }
+        }
+    }
+}
+
+async fn smol_timeout<T>(
+    duration: Duration,
+    future: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    use futures::FutureExt as _;
+    let mut future = Box::pin(future.fuse());
+    let mut timer = Box::pin(async_io::Timer::after(duration).fuse());
+    futures::select! {
+        result = future => result,
+        _ = timer => Err(anyhow::anyhow!("timed out after {duration:?}")),
+    }
+}
+
+async fn io_timeout<T>(
+    duration: Duration,
+    future: impl std::future::Future<Output = std::io::Result<T>>,
+) -> std::io::Result<T> {
+    use futures::FutureExt as _;
+    let mut future = Box::pin(future.fuse());
+    let mut timer = Box::pin(async_io::Timer::after(duration).fuse());
+    futures::select! {
+        result = future => result,
+        _ = timer => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "timed out",
+        )),
     }
 }
 
@@ -315,17 +360,21 @@ impl Drop for CancelOnDrop {
     }
 }
 
-async fn write_reply(stream: &TokioStream, reply: &ExecutionReply) -> Result<()> {
+async fn write_reply(stream: &AsyncStream, reply: &ExecutionReply) -> Result<()> {
+    use futures_lite::io::AsyncWriteExt as _;
     let mut frame = serde_json::to_vec(reply)?;
     frame.push(b'\n');
-    let mut writer = stream;
-    tokio::time::timeout(PREPARE_TIMEOUT, writer.write_all(&frame)).await??;
+    let mut writer = stream.clone();
+    smol_timeout(PREPARE_TIMEOUT, async move {
+        writer.write_all(&frame).await.map_err(anyhow::Error::from)
+    })
+    .await?;
     Ok(())
 }
 
 pub(super) async fn handle(
-    stream: &TokioStream,
-    reader: &mut BufReader<&TokioStream>,
+    stream: &AsyncStream,
+    reader: &mut BufReader<AsyncStream>,
     request: ExecutionRequest,
     daemon: &Arc<Daemon>,
     lifecycle: &Arc<Lifecycle>,
@@ -360,9 +409,9 @@ pub(super) async fn handle(
             .await;
         }
     };
-    let permit = match daemon.execution_workers.clone().try_acquire_owned() {
-        Ok(permit) => permit,
-        Err(_) => {
+    let permit = match daemon.execution_workers.clone().try_acquire_arc() {
+        Some(permit) => permit,
+        None => {
             return write_reply(
                 stream,
                 &ExecutionReply::Declined {
@@ -392,13 +441,28 @@ pub(super) async fn handle(
         },
     )
     .await?;
-    let descriptors = tokio::select! {
-        _ = lifecycle.draining() => return Ok(()),
-        incoming = reader.fill_buf() => {
-            let _ = incoming?;
-            anyhow::bail!("compiler client disconnected or wrote before preparation");
+    let descriptors = {
+        use futures::FutureExt as _;
+        use futures_lite::io::AsyncBufReadExt as _;
+        let mut draining = Box::pin(lifecycle.draining().fuse());
+        let mut disconnected = Box::pin(reader.fill_buf().fuse());
+        let mut receive = Box::pin(
+            smol_timeout(
+                PREPARE_TIMEOUT,
+                channel.receive(
+                    3 + usize::from(prepared.terminal) + 2 + prepared.originals.len(),
+                ),
+            )
+            .fuse(),
+        );
+        futures::select! {
+            _ = draining => return Ok(()),
+            incoming = disconnected => {
+                let _ = incoming?;
+                anyhow::bail!("compiler client disconnected or wrote before preparation");
+            }
+            result = receive => result?,
         }
-        result = tokio::time::timeout(PREPARE_TIMEOUT, channel.receive(3 + usize::from(prepared.terminal) + 2 + prepared.originals.len())) => result??,
     };
     drop(channel);
     let cancellation = Cancellation::default();
@@ -407,10 +471,22 @@ pub(super) async fn handle(
         prepared.receive(descriptors, cancellation.clone(), Arc::clone(daemon))?;
     write_reply(stream, &ExecutionReply::Prepared).await?;
     let mut frame = Vec::new();
-    let commit = tokio::select! {
-        _ = lifecycle.draining() => return Ok(()),
-        result = tokio::time::timeout(PREPARE_TIMEOUT, read_bounded_line(reader, &mut frame)) => result??,
-    }.context("compiler client disconnected before Commit")?;
+    let commit = {
+        use futures::FutureExt as _;
+        let mut draining = Box::pin(lifecycle.draining().fuse());
+        let mut commit = Box::pin(
+            io_timeout(
+                PREPARE_TIMEOUT,
+                read_bounded_line(reader, &mut frame),
+            )
+            .fuse(),
+        );
+        futures::select! {
+            _ = draining => return Ok(()),
+            result = commit => result?,
+        }
+    }
+    .context("compiler client disconnected before Commit")?;
     let _: ExecutionCommand = serde_json::from_str(&commit)?;
     anyhow::ensure!(
         peer_may_delegate(stream, client_pid, trusted_pipeline),
@@ -419,24 +495,29 @@ pub(super) async fn handle(
     write_reply(stream, &ExecutionReply::Accepted).await?;
     let activity = daemon.request_clock.begin_activity();
 
-    let mut worker = tokio::task::spawn_blocking(move || {
+    let worker_task = smol::unblock(move || {
         let _activity = activity;
         let _permit = permit;
-        match entry {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match entry {
             ExecutionEntry::Compiler => crate::run_compiler_invocation(&args, context),
             ExecutionEntry::Original => {
                 crate::run_original_compiler_invocation(&args, context, &executable)
             }
-        }
+        }))
     });
     let mut unexpected = [0; 1];
-    let result = tokio::select! {
-        result = &mut worker => result,
-        disconnected = reader.read(&mut unexpected) => {
-            let _ = disconnected;
-            cancellation.cancel();
-            let _ = worker.await;
-            return Ok(());
+    let result = {
+        use futures::FutureExt as _;
+        let mut worker = Box::pin(worker_task.fuse());
+        let mut disconnected = Box::pin(reader.read(&mut unexpected).fuse());
+        futures::select! {
+            result = worker => result,
+            disconnected = disconnected => {
+                let _ = disconnected;
+                cancellation.cancel();
+                let _ = worker.await;
+                return Ok(());
+            }
         }
     };
     let reply = match result {
@@ -444,8 +525,8 @@ pub(super) async fn handle(
         Ok(Err(error)) => ExecutionReply::Failed {
             message: format!("{error:#}"),
         },
-        Err(error) => ExecutionReply::Failed {
-            message: format!("compiler worker failed: {error}"),
+        Err(_) => ExecutionReply::Failed {
+            message: "compiler worker failed".to_string(),
         },
     };
     write_reply(stream, &reply).await
@@ -461,9 +542,10 @@ mod tests {
         isolated_test("descriptor_channel_waits_for_readiness_and_validates_the_ticket");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_descriptor_channel_waits_for_readiness_and_validates_the_ticket() {
+    fn fixture_descriptor_channel_waits_for_readiness_and_validates_the_ticket() {
+        smol::block_on(async {
         for valid_ticket in [true, false] {
             let channel = DescriptorChannel::new().unwrap();
             let mut receiving = std::pin::pin!(channel.receive(1));
@@ -482,9 +564,7 @@ mod tests {
             }
             kache_ipc::descriptors::send(sender.as_fd(), &ticket, &[file.as_fd()]).unwrap();
 
-            let result = tokio::time::timeout(PREPARE_TIMEOUT, receiving)
-                .await
-                .unwrap();
+            let result = smol_timeout(PREPARE_TIMEOUT, receiving).await;
             if valid_ticket {
                 let mut descriptors = result.unwrap();
                 assert_eq!(descriptors.len(), 1);
@@ -503,6 +583,7 @@ mod tests {
                 );
             }
         }
+        });
     }
 
     fn isolated_test(name: &str) {
@@ -636,7 +717,20 @@ mod tests {
                 "compiler did not become ready: {}",
                 path.display()
             );
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            async_io::Timer::after(Duration::from_millis(5)).await;
+        }
+    }
+
+    async fn smol_opt_timeout<T>(
+        duration: Duration,
+        future: impl std::future::Future<Output = T>,
+    ) -> Option<T> {
+        use futures::FutureExt as _;
+        let mut future = Box::pin(future.fuse());
+        let mut timer = Box::pin(async_io::Timer::after(duration).fuse());
+        futures::select! {
+            value = future => Some(value),
+            _ = timer => None,
         }
     }
 
@@ -648,7 +742,7 @@ mod tests {
         PathBuf,
         Arc<Daemon>,
         Arc<Lifecycle>,
-        tokio::task::JoinHandle<Vec<Result<()>>>,
+        smol::Task<Vec<Result<()>>>,
     ) {
         server_with_trust(root, connections, workers, false).await
     }
@@ -662,7 +756,7 @@ mod tests {
         PathBuf,
         Arc<Daemon>,
         Arc<Lifecycle>,
-        tokio::task::JoinHandle<Vec<Result<()>>>,
+        smol::Task<Vec<Result<()>>>,
     ) {
         let mut config = super::super::tests::test_config(root);
         config.trust_daemon_execution = trust;
@@ -672,33 +766,31 @@ mod tests {
             .unwrap()
             .unwrap();
         let mut daemon = Daemon::new(config);
-        daemon.execution_workers = Arc::new(tokio::sync::Semaphore::new(workers));
+        daemon.execution_workers = Arc::new(async_lock::Semaphore::new(workers));
         daemon.request_clock = Arc::new(crate::maintenance::RequestClock::idle());
         let daemon = Arc::new(daemon);
         let lifecycle = Arc::new(Lifecycle::default());
         let d = daemon.clone();
         let l = lifecycle.clone();
-        let task = tokio::spawn(async move {
-            let mut handlers = tokio::task::JoinSet::new();
+        let task = smol::spawn(async move {
+            let mut handlers = Vec::new();
             for _ in 0..connections {
-                let stream = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                let (stream, _) = io_timeout(Duration::from_secs(5), listener.accept())
                     .await
-                    .expect("execution client did not connect")
-                    .unwrap();
+                    .expect("execution client did not connect");
                 let d = d.clone();
                 let l = l.clone();
-                handlers.spawn(async move {
-                    tokio::time::timeout(
+                handlers.push(smol::spawn(async move {
+                    smol_timeout(
                         Duration::from_secs(30),
                         super::super::handle_connection(stream, &d, &l),
                     )
                     .await
-                    .expect("execution request did not finish")
-                });
+                }));
             }
             let mut results = Vec::new();
-            while let Some(result) = handlers.join_next().await {
-                results.push(result.unwrap());
+            for handler in handlers {
+                results.push(handler.await);
             }
             results
         });
@@ -712,9 +804,10 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_trusted_linux_clients_stream_concurrently_and_release_worker_permits() {
+    fn fixture_trusted_linux_clients_stream_concurrently_and_release_worker_permits() {
+        smol::block_on(async {
         let root = tempfile::tempdir().unwrap();
         let (socket, daemon, _, server) = server_with_trust(root.path(), 3, 2, true).await;
         let available = trusted_execution_available();
@@ -724,7 +817,7 @@ mod tests {
             let (args, context) = fixture(root.path(), name);
             paths.push(context.env.cwd().unwrap().to_owned());
             let socket = socket.clone();
-            clients.push(tokio::task::spawn_blocking(move || {
+            clients.push(smol::unblock(move || {
                 crate::invocation::execution::try_execute_with_trust(&socket, &args, &context, true)
             }));
         }
@@ -741,16 +834,15 @@ mod tests {
                 );
             }
             assert!(clients.iter().all(|client| !client.is_finished()));
-            assert_eq!(daemon.execution_workers.available_permits(), 0);
+            assert!(daemon.execution_workers.clone().try_acquire_arc().is_none());
         }
         let (args, context) = fixture(root.path(), "untrusted-client");
         let third = socket.clone();
         assert_eq!(
-            tokio::task::spawn_blocking(move || {
+            smol::unblock(move || {
                 crate::invocation::execution::try_execute_with_trust(&third, &args, &context, true)
             })
             .await
-            .unwrap()
             .unwrap(),
             None
         );
@@ -758,22 +850,26 @@ mod tests {
             std::fs::write(path.join("release"), b"go").unwrap();
         }
         for client in clients {
-            assert_eq!(client.await.unwrap().unwrap(), available.then_some(7));
+            assert_eq!(client.await.unwrap(), available.then_some(7));
         }
         assert!(
             server
                 .await
-                .unwrap()
                 .into_iter()
                 .all(|result| result.is_ok())
         );
-        assert_eq!(daemon.execution_workers.available_permits(), 2);
+        assert!({
+            let a = daemon.execution_workers.clone().try_acquire_arc();
+            let b = daemon.execution_workers.clone().try_acquire_arc();
+            a.is_some() && b.is_some()
+        });
         if !available {
             for path in paths {
                 assert!(!path.join("record").exists());
                 assert!(!path.join("ready").exists());
             }
         }
+        });
     }
 
     #[cfg(target_os = "linux")]
@@ -783,9 +879,10 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_filtered_execution_requires_both_peers_to_trust_the_pipeline() {
+    fn fixture_filtered_execution_requires_both_peers_to_trust_the_pipeline() {
+        smol::block_on(async {
         let filtered =
             !linux::permits_delegation(Path::new("/proc"), std::process::id()).unwrap_or(false);
         let trusted_available = trusted_execution_available();
@@ -797,7 +894,7 @@ mod tests {
             let (args, context) = fixture(root.path(), "policy-client");
             let path = context.env.cwd().unwrap().to_owned();
             std::fs::write(path.join("release"), b"go").unwrap();
-            let outcome = tokio::task::spawn_blocking(move || {
+            let outcome = smol::unblock(move || {
                 crate::invocation::execution::try_execute_with_trust(
                     &socket,
                     &args,
@@ -806,7 +903,6 @@ mod tests {
                 )
             })
             .await
-            .unwrap()
             .unwrap();
             let accepted = !filtered || (client_trust && daemon_trust && trusted_available);
             assert_eq!(outcome, accepted.then_some(7));
@@ -814,11 +910,11 @@ mod tests {
             assert!(
                 server
                     .await
-                    .unwrap()
                     .into_iter()
                     .all(|result| result.is_ok())
             );
         }
+        });
     }
 
     #[cfg(target_os = "linux")]
@@ -828,9 +924,10 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_execution_probe_authenticates_the_peer_and_reserves_no_worker() {
+    fn fixture_execution_probe_authenticates_the_peer_and_reserves_no_worker() {
+        smol::block_on(async {
         let root = tempfile::tempdir().unwrap();
         let (socket, daemon, _, server) = server_with_trust(root.path(), 3, 2, true).await;
         for (pid, version, accepted) in [
@@ -843,7 +940,7 @@ mod tests {
             (std::process::id(), "different-release", false),
         ] {
             let socket = socket.clone();
-            let response = tokio::task::spawn_blocking(move || {
+            let response = smol::unblock(move || {
                 let request = Request::ExecutionStatus {
                     client_pid: pid,
                     client_version: version.into(),
@@ -857,21 +954,24 @@ mod tests {
                 .unwrap();
                 serde_json::from_str::<Response>(&response).unwrap()
             })
-            .await
-            .unwrap();
+            .await;
             let status = response.execution_status.unwrap();
             assert_eq!(status.eligible, accepted);
             assert!(status.client_trust_enabled);
             assert!(status.daemon_trust_enabled);
-            assert_eq!(daemon.execution_workers.available_permits(), 2);
+            assert!({
+                let a = daemon.execution_workers.clone().try_acquire_arc();
+                let b = daemon.execution_workers.clone().try_acquire_arc();
+                a.is_some() && b.is_some()
+            });
         }
         assert!(
             server
                 .await
-                .unwrap()
                 .into_iter()
                 .all(|result| result.is_ok())
         );
+        });
     }
 
     #[test]
@@ -881,10 +981,11 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_execution_handoff_streams_two_compilers_without_serializing_or_mixing_clients()
+    fn fixture_execution_handoff_streams_two_compilers_without_serializing_or_mixing_clients()
     {
+        smol::block_on(async {
         if !native_execution_available() {
             return;
         }
@@ -896,7 +997,7 @@ mod tests {
             let (args, context) = fixture(root.path(), name);
             paths.push(context.env.cwd().unwrap().to_owned());
             let socket = socket.clone();
-            clients.push(tokio::task::spawn_blocking(move || {
+            clients.push(smol::unblock(move || {
                 if name == "left" {
                     let (files, terminal) = context.io.transfer_files()?;
                     let args = std::iter::once(std::ffi::OsString::from("kache"))
@@ -937,7 +1038,7 @@ mod tests {
             std::fs::write(path.join("release"), b"go").unwrap();
         }
         for client in clients {
-            assert_eq!(client.await.unwrap().unwrap(), Some(7));
+            assert_eq!(client.await.unwrap(), Some(7));
         }
         for (name, path) in ["left", "right"].into_iter().zip(&paths) {
             assert_eq!(
@@ -945,8 +1046,13 @@ mod tests {
                 format!("{name}|{}\n", path.display())
             );
         }
-        assert!(server.await.unwrap().iter().all(Result::is_ok));
-        assert_eq!(daemon.execution_workers.available_permits(), 2);
+        assert!(server.await.iter().all(Result::is_ok));
+        assert!({
+            let a = daemon.execution_workers.clone().try_acquire_arc();
+            let b = daemon.execution_workers.clone().try_acquire_arc();
+            a.is_some() && b.is_some()
+        });
+        });
     }
 
     #[test]
@@ -954,9 +1060,10 @@ mod tests {
         isolated_test("execution_keeps_a_silent_compiler_alive_past_the_daemon_idle_timeout");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_execution_keeps_a_silent_compiler_alive_past_the_daemon_idle_timeout() {
+    fn fixture_execution_keeps_a_silent_compiler_alive_past_the_daemon_idle_timeout() {
+        smol::block_on(async {
         if !native_execution_available() {
             return;
         }
@@ -967,11 +1074,12 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let daemon = Arc::new(Daemon::new(config));
-        let initial_permits = daemon.execution_workers.available_permits();
+        let mut daemon_inner = Daemon::new(config);
+        daemon_inner.execution_workers = Arc::new(async_lock::Semaphore::new(1));
+        let daemon = Arc::new(daemon_inner);
         let lifecycle = Arc::new(Lifecycle::default());
         let server_daemon = daemon.clone();
-        let server = tokio::spawn(async move {
+        let server = smol::spawn(async move {
             super::super::accept_loop(
                 &listener,
                 &server_daemon,
@@ -984,11 +1092,11 @@ mod tests {
         });
         let (args, context) = fixture(root.path(), "silent");
         let path = context.env.cwd().unwrap().to_owned();
-        let client = tokio::task::spawn_blocking(move || {
+        let client = smol::unblock(move || {
             crate::invocation::execution::try_execute(&socket, &args, &context)
         });
         ready(&path.join("ready")).await;
-        tokio::time::sleep(Duration::from_millis(900)).await;
+        async_io::Timer::after(Duration::from_millis(900)).await;
         assert!(
             !client.is_finished(),
             "idle expiry interrupted an active compiler"
@@ -998,15 +1106,15 @@ mod tests {
             "daemon exited while compiler was active"
         );
         std::fs::write(path.join("release"), b"go").unwrap();
-        assert_eq!(client.await.unwrap().unwrap(), Some(7));
-        tokio::time::timeout(Duration::from_secs(2), server)
+        assert_eq!(client.await.unwrap(), Some(7));
+        smol_opt_timeout(Duration::from_secs(2), server)
             .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            daemon.execution_workers.available_permits(),
-            initial_permits
+            .expect("server finished");
+        assert!(
+            daemon.execution_workers.clone().try_acquire_arc().is_some(),
+            "the worker permit must be released"
         );
+        });
     }
 
     fn request(args: &[String], context: &InvocationContext) -> ExecutionRequest {
@@ -1042,9 +1150,9 @@ mod tests {
         isolated_test("preparation_keeps_terminal_jobserver_and_environment_in_their_own_slots");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_preparation_keeps_terminal_jobserver_and_environment_in_their_own_slots() {
+    fn fixture_preparation_keeps_terminal_jobserver_and_environment_in_their_own_slots() {
         use std::io::Write;
         use std::os::fd::AsRawFd;
         use std::os::unix::fs::MetadataExt;
@@ -1190,25 +1298,25 @@ mod tests {
         isolated_test("aborting_the_connection_task_cancels_only_its_compiler_request");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_aborting_the_connection_task_cancels_only_its_compiler_request() {
+    fn fixture_aborting_the_connection_task_cancels_only_its_compiler_request() {
+        smol::block_on(async {
         use crate::invocation::process::{CancellationScope, CommandExt};
 
         let cancellation = Cancellation::default();
         let worker_token = cancellation.clone();
-        let (ready, waiting) = tokio::sync::oneshot::channel();
-        let task = tokio::spawn(async move {
+        let (ready, waiting) = futures::channel::oneshot::channel();
+        let task = smol::spawn(async move {
             let _guard = CancelOnDrop(worker_token);
             ready.send(()).unwrap();
             std::future::pending::<()>().await;
         });
-        tokio::time::timeout(Duration::from_secs(3), waiting)
+        smol_opt_timeout(Duration::from_secs(3), waiting)
             .await
-            .unwrap()
+            .expect("worker signals readiness")
             .unwrap();
-        task.abort();
-        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(task.cancel().await.is_none());
         {
             let _scope = CancellationScope::borrow(Some(cancellation));
             assert_eq!(
@@ -1222,6 +1330,7 @@ mod tests {
         }
         let _other = CancellationScope::borrow(Some(Cancellation::default()));
         crate::invocation::process::check().unwrap();
+        });
     }
 
     #[test]
@@ -1229,9 +1338,10 @@ mod tests {
         isolated_test("only_accepted_execution_marks_build_activity");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_only_accepted_execution_marks_build_activity() {
+    fn fixture_only_accepted_execution_marks_build_activity() {
+        smol::block_on(async {
         if !native_execution_available() {
             return;
         }
@@ -1239,7 +1349,7 @@ mod tests {
         let (socket, daemon, _, server) = server(root.path(), 2, 1).await;
         let (_, context) = fixture(root.path(), "activity");
         let rejected_socket = socket.clone();
-        let idle = tokio::task::spawn_blocking(move || {
+        let idle = smol::unblock(move || {
             let (files, terminal) = context.io.transfer_files()?;
             kache_client::Execution {
                 entry: ExecutionEntry::Original,
@@ -1254,23 +1364,22 @@ mod tests {
             .try_execute(&rejected_socket)
         })
         .await
-        .unwrap()
         .unwrap();
         assert_eq!(idle, None);
         assert!(daemon.request_clock.idle_for() >= crate::maintenance::QUIET_AFTER);
         let (args2, context2) = fixture(root.path(), "accepted-activity");
         std::fs::write(context2.env.cwd().unwrap().join("release"), "go").unwrap();
-        let exit = tokio::task::spawn_blocking(move || {
+        let exit = smol::unblock(move || {
             crate::invocation::execution::try_execute(&socket, &args2, &context2)
         })
         .await
-        .unwrap()
         .unwrap();
         assert_eq!(exit, Some(7));
         assert!(daemon.request_clock.idle_for() < crate::maintenance::QUIET_AFTER);
-        for result in server.await.unwrap() {
+        for result in server.await {
             result.unwrap();
         }
+        });
     }
 
     #[test]
@@ -1321,9 +1430,10 @@ mod tests {
         isolated_test("original_compiler_shim_uses_the_clients_relative_path");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_original_compiler_shim_uses_the_clients_relative_path() {
+    fn fixture_original_compiler_shim_uses_the_clients_relative_path() {
+        smol::block_on(async {
         if !native_execution_available() {
             return;
         }
@@ -1339,7 +1449,7 @@ mod tests {
         std::fs::copy(&args[0], cwd.join("tools/cc")).unwrap();
         context.env.set("PATH", "shims:tools:/usr/bin:/bin");
         std::fs::write(cwd.join("release"), "go").unwrap();
-        let exit = tokio::task::spawn_blocking(move || {
+        let exit = smol::unblock(move || {
             let (files, terminal) = context.io.transfer_files()?;
             kache_client::Execution {
                 entry: ExecutionEntry::Original,
@@ -1354,10 +1464,9 @@ mod tests {
             .try_execute(&socket)
         })
         .await
-        .unwrap()
         .unwrap();
         assert_eq!(exit, Some(7));
-        for result in server.await.unwrap() {
+        for result in server.await {
             result.unwrap();
         }
         assert_eq!(
@@ -1372,6 +1481,7 @@ mod tests {
             std::fs::read_to_string(cwd.join("stderr")).unwrap(),
             "diagnostic-shim\n"
         );
+        });
     }
 
     #[test]
@@ -1453,14 +1563,13 @@ mod tests {
         socket: &Path,
         request: ExecutionRequest,
         context: &InvocationContext,
-    ) -> (TokioStream, DescriptorTicket) {
-        let stream = TokioStream::connect(crate::transport::socket_name(socket).unwrap())
-            .await
-            .unwrap();
+    ) -> (AsyncStream, DescriptorTicket) {
+        use futures_lite::io::AsyncWriteExt as _;
+        let mut stream = AsyncStream::connect(socket).await.unwrap();
         let mut frame = serde_json::to_vec(&Request::ExecuteV1(Box::new(request))).unwrap();
         frame.push(b'\n');
-        (&stream).write_all(&frame).await.unwrap();
-        let mut reader = BufReader::new(&stream);
+        stream.write_all(&frame).await.unwrap();
+        let mut reader = BufReader::new(stream.clone());
         let line = read_bounded_line(&mut reader, &mut Vec::new())
             .await
             .unwrap()
@@ -1506,9 +1615,10 @@ mod tests {
         isolated_test("prepared_compiler_never_runs_without_commit_and_releases_its_resources");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_prepared_compiler_never_runs_without_commit_and_releases_its_resources() {
+    fn fixture_prepared_compiler_never_runs_without_commit_and_releases_its_resources() {
+        smol::block_on(async {
         if !native_execution_available() {
             return;
         }
@@ -1518,15 +1628,16 @@ mod tests {
         let path = context.env.cwd().unwrap().to_owned();
         let (stream, ticket) = prepare_client(&socket, request(&args, &context), &context).await;
         assert!(!path.join("record").exists());
-        assert_eq!(daemon.execution_workers.available_permits(), 0);
+        assert!(daemon.execution_workers.clone().try_acquire_arc().is_none());
         assert!(
             !PathBuf::from(ticket.endpoint.decode().unwrap()).exists(),
             "one-use endpoint must already be removed"
         );
         drop(stream);
-        assert!(server.await.unwrap()[0].is_err());
+        assert!(server.await[0].is_err());
         assert!(!path.join("record").exists());
-        assert_eq!(daemon.execution_workers.available_permits(), 1);
+        assert!(daemon.execution_workers.clone().try_acquire_arc().is_some());
+        });
     }
 
     #[test]
@@ -1534,9 +1645,10 @@ mod tests {
         isolated_test("draining_before_commit_releases_worker_without_starting_a_compiler");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_draining_before_commit_releases_worker_without_starting_a_compiler() {
+    fn fixture_draining_before_commit_releases_worker_without_starting_a_compiler() {
+        smol::block_on(async {
         if !native_execution_available() {
             return;
         }
@@ -1546,10 +1658,11 @@ mod tests {
         let path = context.env.cwd().unwrap().to_owned();
         let (stream, _) = prepare_client(&socket, request(&args, &context), &context).await;
         lifecycle.start_drain();
-        assert!(server.await.unwrap()[0].is_ok());
+        assert!(server.await[0].is_ok());
         drop(stream);
         assert!(!path.join("record").exists());
-        assert_eq!(daemon.execution_workers.available_permits(), 1);
+        assert!(daemon.execution_workers.clone().try_acquire_arc().is_some());
+        });
     }
 
     #[test]
@@ -1557,9 +1670,10 @@ mod tests {
         isolated_test("disconnected_accepted_compiler_is_cancelled_and_reaped");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_disconnected_accepted_compiler_is_cancelled_and_reaped() {
+    fn fixture_disconnected_accepted_compiler_is_cancelled_and_reaped() {
+        smol::block_on(async {
         if !native_execution_available() {
             return;
         }
@@ -1581,10 +1695,9 @@ mod tests {
         let start = Instant::now();
         client.kill().unwrap();
         client.wait().unwrap();
-        let results = tokio::time::timeout(Duration::from_secs(2), server)
+        let results = smol_opt_timeout(Duration::from_secs(2), server)
             .await
-            .unwrap()
-            .unwrap();
+            .expect("server finishes");
         // The final reply can race the disconnect reader after the client dies.
         // Either path must reap the compiler and release its worker below.
         if let Err(error) = &results[0] {
@@ -1606,7 +1719,7 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(daemon.execution_workers.available_permits(), 1);
+        assert!(daemon.execution_workers.clone().try_acquire_arc().is_some());
         let pid: libc::pid_t = std::fs::read_to_string(path.join("pid"))
             .unwrap()
             .parse()
@@ -1619,6 +1732,7 @@ mod tests {
             std::io::Error::last_os_error().raw_os_error(),
             Some(libc::ECHILD)
         );
+        });
     }
 
     #[test]
@@ -1660,9 +1774,10 @@ mod tests {
         isolated_test("execution_jobserver_descriptors_reach_only_the_compiler");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_execution_jobserver_descriptors_reach_only_the_compiler() {
+    fn fixture_execution_jobserver_descriptors_reach_only_the_compiler() {
+        smol::block_on(async {
         if !native_execution_available() {
             return;
         }
@@ -1694,14 +1809,13 @@ mod tests {
             ),
         );
         write.write_all(b"t").unwrap();
-        let result = tokio::task::spawn_blocking(move || {
+        let result = smol::unblock(move || {
             crate::invocation::execution::try_execute(&socket, &args, &context)
         })
         .await
-        .unwrap()
         .unwrap();
         assert_eq!(result, Some(0));
-        assert!(server.await.unwrap()[0].is_ok());
+        assert!(server.await[0].is_ok());
         read.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
         let mut byte = [0; 1];
         read.read_exact(&mut byte).unwrap();
@@ -1714,6 +1828,7 @@ mod tests {
             unsafe { libc::fcntl(write.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
             0
         );
+        });
     }
 
     #[test]
@@ -1721,22 +1836,22 @@ mod tests {
         isolated_test("execution_declines_a_forged_peer_pid_before_preparing_a_worker");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_execution_declines_a_forged_peer_pid_before_preparing_a_worker() {
+    fn fixture_execution_declines_a_forged_peer_pid_before_preparing_a_worker() {
+        smol::block_on(async {
+        use futures_lite::io::AsyncWriteExt as _;
         let root = tempfile::tempdir().unwrap();
         let (socket, daemon, _, server) = server(root.path(), 1, 1).await;
         let (args, context) = fixture(root.path(), "forged");
         let path = context.env.cwd().unwrap().to_owned();
         let mut request = request(&args, &context);
         request.client_pid = 0;
-        let stream = TokioStream::connect(crate::transport::socket_name(&socket).unwrap())
-            .await
-            .unwrap();
+        let mut stream = AsyncStream::connect(&socket).await.unwrap();
         let mut frame = serde_json::to_vec(&Request::ExecuteV1(Box::new(request))).unwrap();
         frame.push(b'\n');
-        (&stream).write_all(&frame).await.unwrap();
-        let line = read_bounded_line(&mut BufReader::new(&stream), &mut Vec::new())
+        stream.write_all(&frame).await.unwrap();
+        let line = read_bounded_line(&mut BufReader::new(stream.clone()), &mut Vec::new())
             .await
             .unwrap()
             .unwrap();
@@ -1744,9 +1859,10 @@ mod tests {
             serde_json::from_str(&line).unwrap(),
             ExecutionReply::Declined { .. }
         ));
-        assert!(server.await.unwrap()[0].is_ok());
+        assert!(server.await[0].is_ok());
         assert!(!path.join("record").exists());
-        assert_eq!(daemon.execution_workers.available_permits(), 1);
+        assert!(daemon.execution_workers.clone().try_acquire_arc().is_some());
+        });
     }
 
     #[cfg(target_os = "macos")]
@@ -1787,9 +1903,10 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
-    #[tokio::test]
+    #[test]
     #[ignore = "bounded subprocess fixture"]
-    async fn fixture_execution_rejects_sandboxed_client_using_kernel_identity() {
+    fn fixture_execution_rejects_sandboxed_client_using_kernel_identity() {
+        smol::block_on(async {
         for (client_trust, daemon_trust) in
             [(false, false), (false, true), (true, false), (true, true)]
         {
@@ -1804,7 +1921,7 @@ mod tests {
                 denied.display()
             );
             let output = crate::platform::host_output_async(
-                tokio::process::Command::new("/usr/bin/sandbox-exec")
+                async_process::Command::new("/usr/bin/sandbox-exec")
                     .arg("-p")
                     .arg(profile)
                     .arg(std::env::current_exe().unwrap())
@@ -1832,12 +1949,13 @@ mod tests {
             .await
             .unwrap();
             assert!(output.status.success(), "{output:?}");
-            assert!(server.await.unwrap()[0].is_ok());
+            assert!(server.await[0].is_ok());
             assert_eq!(
                 root_path.join("restricted/record").exists(),
                 client_trust && daemon_trust
             );
-            assert_eq!(daemon.execution_workers.available_permits(), 1);
+            assert!(daemon.execution_workers.clone().try_acquire_arc().is_some());
         }
+        });
     }
 }

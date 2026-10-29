@@ -110,16 +110,24 @@ fn memo_input_from_wire(
 }
 
 /// A job the handler accepted: the request plus the key lock it holds.
+///
+/// `_slot` is the queue reservation. It stays alive until the worker receives
+/// the job, so a later hand-off cannot take a slot this one already claimed.
 pub(crate) struct PublishJob {
     request: PublishCcRequest,
     owns_event: bool,
     _lock: KeyLock,
+    _slot: async_lock::SemaphoreGuardArc,
 }
 
 /// The daemon's publish queue: a bounded channel drained by one blocking
 /// worker with its own store connection.
+///
+/// `slots` is the reservation async-channel does not provide. Its permit
+/// count matches the channel capacity set in [`PublishQueue::set_sender`].
 pub(crate) struct PublishQueue {
-    tx: std::sync::Mutex<Option<tokio::sync::mpsc::Sender<PublishJob>>>,
+    tx: std::sync::Mutex<Option<async_channel::Sender<PublishJob>>>,
+    slots: std::sync::Mutex<Arc<async_lock::Semaphore>>,
     progress: Arc<PublishProgress>,
 }
 
@@ -150,12 +158,18 @@ impl PublishProgress {
             .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
         self.done.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
+
+    fn unaccept(&self) {
+        self.pending
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 
 impl PublishQueue {
     pub(crate) fn new() -> Self {
         Self {
             tx: std::sync::Mutex::new(None),
+            slots: std::sync::Mutex::new(Arc::new(async_lock::Semaphore::new(0))),
             progress: Arc::new(PublishProgress::default()),
         }
     }
@@ -164,13 +178,26 @@ impl PublishQueue {
         Arc::clone(&self.progress)
     }
 
-    pub(crate) fn set_sender(&self, tx: tokio::sync::mpsc::Sender<PublishJob>) {
+    pub(crate) fn set_sender(&self, tx: async_channel::Sender<PublishJob>) {
+        let capacity = tx.capacity().unwrap_or(PUBLISH_QUEUE_CAPACITY);
+        // Install the reservation before the sender. A hand-off that observes
+        // the sender must observe the capacity that belongs to it.
+        if let Ok(mut slots) = self.slots.lock() {
+            *slots = Arc::new(async_lock::Semaphore::new(capacity));
+        }
         if let Ok(mut slot) = self.tx.lock() {
             *slot = Some(tx);
         }
     }
 
-    fn sender(&self) -> Option<tokio::sync::mpsc::Sender<PublishJob>> {
+    fn reserve_slot(&self) -> Option<async_lock::SemaphoreGuardArc> {
+        self.slots
+            .lock()
+            .ok()
+            .and_then(|slots| slots.try_acquire_arc())
+    }
+
+    fn sender(&self) -> Option<async_channel::Sender<PublishJob>> {
         self.tx.lock().ok().and_then(|slot| slot.clone())
     }
 
@@ -246,59 +273,64 @@ impl Daemon {
         let Some(tx) = self.publish_queue().sender() else {
             return refused("queue closed");
         };
+        if tx.is_closed() {
+            return refused("queue closed");
+        }
         // Reserve before claiming ownership: once the receipt is accepted,
         // queue insertion must not fail because another handler took its slot.
-        let permit = match tx.try_reserve_owned() {
-            Ok(permit) => permit,
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => return refused("queue full"),
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                return refused("queue closed");
-            }
+        let Some(slot) = self.publish_queue().reserve_slot() else {
+            return refused("queue full");
         };
         let key = request.cache_key.clone();
         let daemon = Arc::clone(self);
-        let claim =
-            tokio::task::spawn_blocking(move || daemon.with_store(|store| store.claim_build(&key)))
-                .await;
+        let claim = smol::unblock(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                daemon.with_store(|store| store.claim_build(&key))
+            }))
+        })
+        .await;
         let lock = match claim {
             Ok(Ok(BuildClaim::Acquired(lock))) => lock,
             Ok(Ok(BuildClaim::Committed(_))) => return refused("already committed"),
             Ok(Ok(BuildClaim::Contended)) => return refused("key contended"),
             Ok(Err(error)) => return refused(&format!("claim failed: {error:#}")),
-            Err(error) => return refused(&format!("claim task failed: {error}")),
+            Err(_) => return refused("claim task failed"),
         };
         // Own separate links before acknowledging. A client may time out
         // after acceptance and remove every path it sent us.
-        let claimed = tokio::task::spawn_blocking(move || {
-            let files = request
-                .files
-                .iter()
-                .map(|file| (PathBuf::from(&file.path), file.store_name.clone()))
-                .collect::<Vec<_>>();
-            let owned = match snapshot_for_handoff(&config, &files) {
-                Ok(owned) => owned,
-                Err(error) if handoff_withdrawn(&request, &error) => return Ok(None),
-                Err(error) => return Err(error),
-            };
-            // Rename and client cancellation race on the same pending file.
-            // Exactly one wins, even if the socket reply is lost. A missing
-            // receipt means the wrapper already gave up. It publishes only if
-            // it can take the key back, so keep these snapshots and the claim.
-            let owns_event = match accept_receipt(&request) {
-                Ok(()) => true,
-                Err(error) if receipt_cancelled(&error) => false,
-                Err(error) => {
-                    remove_handoff_files(&owned);
-                    return Err(error);
-                }
-            };
-            remove_handoff_files(&request.files);
-            let mut request = request;
-            request.files = owned;
-            Ok::<_, anyhow::Error>(Some(PublishJob {
-                request,
-                owns_event,
-                _lock: lock,
+        let claimed = smol::unblock(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let files = request
+                    .files
+                    .iter()
+                    .map(|file| (PathBuf::from(&file.path), file.store_name.clone()))
+                    .collect::<Vec<_>>();
+                let owned = match snapshot_for_handoff(&config, &files) {
+                    Ok(owned) => owned,
+                    Err(error) if handoff_withdrawn(&request, &error) => return Ok(None),
+                    Err(error) => return Err(error),
+                };
+                // Rename and client cancellation race on the same pending file.
+                // Exactly one wins, even if the socket reply is lost. A missing
+                // receipt means the wrapper already gave up. It publishes only if
+                // it can take the key back, so keep these snapshots and the claim.
+                let owns_event = match accept_receipt(&request) {
+                    Ok(()) => true,
+                    Err(error) if receipt_cancelled(&error) => false,
+                    Err(error) => {
+                        remove_handoff_files(&owned);
+                        return Err(error);
+                    }
+                };
+                remove_handoff_files(&request.files);
+                let mut request = request;
+                request.files = owned;
+                Ok::<_, anyhow::Error>(Some(PublishJob {
+                    request,
+                    owns_event,
+                    _lock: lock,
+                    _slot: slot,
+                }))
             }))
         })
         .await;
@@ -306,10 +338,17 @@ impl Daemon {
             Ok(Ok(Some(job))) => job,
             Ok(Ok(None)) => return refused(WITHDRAWN),
             Ok(Err(error)) => return refused(&format!("snapshot failed: {error:#}")),
-            Err(error) => return refused(&format!("snapshot task failed: {error}")),
+            Err(_) => return refused("snapshot task failed"),
         };
         self.publish_queue().progress.accepted();
-        permit.send(job);
+        if let Err(error) = tx.try_send(job) {
+            self.publish_queue().progress.unaccept();
+            return refused(if error.is_full() {
+                "queue full"
+            } else {
+                "queue closed"
+            });
+        }
         Response::ok()
     }
 }
@@ -322,13 +361,14 @@ impl Daemon {
 /// or when it has finished nothing for `stall`, which means it is wedged.
 /// Returns how many accepted jobs were left unpublished.
 pub(crate) async fn drain_publications(
-    mut done: tokio::sync::oneshot::Receiver<()>,
+    mut done: futures::channel::oneshot::Receiver<()>,
     progress: &PublishProgress,
     stall: Duration,
 ) -> usize {
+    use futures::FutureExt as _;
     let tick = stall.min(Duration::from_secs(1));
     let mut last_done = progress.done();
-    let mut last_change = tokio::time::Instant::now();
+    let mut last_change = std::time::Instant::now();
     loop {
         // Each pass ends within a tick of the last check, and a check past
         // `stall` returns, so the wait never runs far past the window. A
@@ -337,39 +377,40 @@ pub(crate) async fn drain_publications(
             last_change.elapsed() < stall * 10 + tick,
             "drain kept waiting past its stall window"
         );
-        match tokio::time::timeout(tick, &mut done).await {
-            Ok(_) => return progress.pending(),
-            Err(_) => {
-                let now_done = progress.done();
-                if now_done != last_done {
-                    // The count only grows; a change that is not growth
-                    // would keep the stall clock from ever running out.
-                    debug_assert!(now_done > last_done, "publish progress went backwards");
-                    last_done = now_done;
-                    last_change = tokio::time::Instant::now();
-                } else if last_change.elapsed() >= stall {
-                    return progress.pending();
-                }
-            }
+        let mut done_fused = Box::pin((&mut done).fuse());
+        let mut timer = Box::pin(async_io::Timer::after(tick).fuse());
+        let finished = futures::select! {
+            _ = done_fused => true,
+            _ = timer => false,
+        };
+        if finished {
+            return progress.pending();
+        }
+        let now_done = progress.done();
+        if now_done != last_done {
+            // The count only grows; a change that is not growth
+            // would keep the stall clock from ever running out.
+            debug_assert!(now_done > last_done, "publish progress went backwards");
+            last_done = now_done;
+            last_change = std::time::Instant::now();
+        } else if last_change.elapsed() >= stall {
+            return progress.pending();
         }
     }
 }
 
 /// Run [`run_publish_worker`] on a thread of its own. The receiver resolves
 /// once the worker has drained the queue and exited, and the caller bounds
-/// that wait. A plain thread rather than `spawn_blocking`: a worker wedged in
-/// a put must not hold up the runtime's teardown.
+/// that wait. A plain thread rather than a blocking pool task: a worker wedged
+/// in a put must not hold up the runtime's teardown.
 pub(crate) fn spawn_publish_worker(
     daemon: Arc<Daemon>,
-    rx: tokio::sync::mpsc::Receiver<PublishJob>,
-) -> std::io::Result<tokio::sync::oneshot::Receiver<()>> {
-    let runtime = tokio::runtime::Handle::current();
-    let (done_tx, done) = tokio::sync::oneshot::channel();
+    rx: async_channel::Receiver<PublishJob>,
+) -> std::io::Result<futures::channel::oneshot::Receiver<()>> {
+    let (done_tx, done) = futures::channel::oneshot::channel();
     std::thread::Builder::new()
         .name("kache-publish".to_string())
         .spawn(move || {
-            // Uploads are queued through the runtime (see `enqueue_upload`).
-            let _runtime = runtime.enter();
             run_publish_worker(daemon, rx);
             let _ = done_tx.send(());
         })?;
@@ -379,10 +420,7 @@ pub(crate) fn spawn_publish_worker(
 /// Run the publish worker until the queue closes and drains. Blocking, with
 /// its own store connection so the daemon's shared store mutex never waits
 /// on a put.
-pub(crate) fn run_publish_worker(
-    daemon: Arc<Daemon>,
-    mut rx: tokio::sync::mpsc::Receiver<PublishJob>,
-) {
+pub(crate) fn run_publish_worker(daemon: Arc<Daemon>, rx: async_channel::Receiver<PublishJob>) {
     let config = daemon.config().clone();
     let store = match Store::open(&config) {
         Ok(store) => store,
@@ -390,14 +428,14 @@ pub(crate) fn run_publish_worker(
             tracing::warn!("publish worker could not open the store: {error:#}; hand-offs refused");
             daemon.publish_queue().close();
             // Drain so accepted jobs release their locks and files.
-            while let Some(job) = rx.blocking_recv() {
+            while let Ok(job) = rx.recv_blocking() {
                 discard_handoff_files(&job.request);
                 daemon.publish_queue().progress.finished();
             }
             return;
         }
     };
-    while let Some(job) = rx.blocking_recv() {
+    while let Ok(job) = rx.recv_blocking() {
         publish_one(&daemon, &config, &store, job);
     }
 }
@@ -410,7 +448,11 @@ fn publish_one(daemon: &Arc<Daemon>, config: &Config, store: &Store, job: Publis
         request,
         owns_event,
         _lock,
+        _slot,
     } = job;
+    // The message has left the channel. Free the reservation before the put
+    // so a slow publish does not shrink the queue.
+    drop(_slot);
     let store_started = std::time::Instant::now();
     let files: Vec<(PathBuf, String)> = request
         .files
@@ -830,6 +872,19 @@ pub(crate) fn remove_handoff_files(files: &[HandoffFile]) {
 mod tests {
     use super::*;
 
+    async fn smol_timeout<T>(
+        duration: Duration,
+        future: impl std::future::Future<Output = T>,
+    ) -> Option<T> {
+        use futures::FutureExt as _;
+        let mut future = Box::pin(future.fuse());
+        let mut timer = Box::pin(async_io::Timer::after(duration).fuse());
+        futures::select! {
+            value = future => Some(value),
+            _ = timer => None,
+        }
+    }
+
     #[test]
     fn a_request_is_abandoned_exactly_one_grace_after_its_last_change() {
         let now = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
@@ -1008,12 +1063,13 @@ mod tests {
     /// The worker stores what the handler accepted: the entry is committed
     /// under the key, the event carries the daemon's store fields, and the
     /// snapshots are gone.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn an_accepted_handoff_is_stored_logged_and_cleaned_up() {
+    #[test]
+    fn an_accepted_handoff_is_stored_logged_and_cleaned_up() {
+        smol::block_on(async {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::test_config(dir.path().join("cache"));
         let daemon = Arc::new(Daemon::new(config.clone()));
-        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let (tx, rx) = async_channel::bounded(4);
         daemon.publish_queue().set_sender(tx);
         let worker = spawn_publish_worker(Arc::clone(&daemon), rx).unwrap();
         let mut request = handoff_request(&config, &key("accepted"), dir.path());
@@ -1054,7 +1110,7 @@ mod tests {
         let response = daemon.handle_publish_cc(request.clone()).await;
         assert!(response.ok, "{:?}", response.error);
         daemon.publish_queue().close();
-        tokio::time::timeout(Duration::from_secs(10), worker)
+        smol_timeout(Duration::from_secs(10), worker)
             .await
             .expect("closing the queue lets the worker drain and exit")
             .unwrap();
@@ -1107,6 +1163,7 @@ mod tests {
                 > 0,
             "{event:?}"
         );
+        });
     }
 
     /// Run blocking publication fixtures in a child that can be killed and
@@ -1177,25 +1234,25 @@ mod tests {
 
     /// Only an entry the wrapper marked for the remote is queued for upload,
     /// even when a remote is configured.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_handoff_over_the_socket_reaches_the_publish_queue() {
-        use interprocess::local_socket::traits::tokio::Listener as _;
+    #[test]
+    fn a_handoff_over_the_socket_reaches_the_publish_queue() {
+        smol::block_on(async {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::test_config(dir.path().join("cache"));
         let daemon = Arc::new(Daemon::new(config.clone()));
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let (tx, rx) = async_channel::bounded(1);
         daemon.publish_queue().set_sender(tx);
         let socket = config.socket_path();
         std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
-        let listener = crate::transport::ListenerOptions::new()
-            .name(crate::transport::socket_name(&socket).unwrap())
-            .create_tokio()
+        let listener = crate::transport::bind_daemon_listener(&socket)
+            .await
+            .unwrap()
             .unwrap();
-        let lifecycle = Arc::new(kunobi_daemon::Lifecycle::default());
+        let lifecycle = Arc::new(crate::lifecycle::Lifecycle::default());
         let server = {
             let (daemon, lifecycle) = (Arc::clone(&daemon), Arc::clone(&lifecycle));
-            tokio::spawn(async move {
-                let stream = listener.accept().await.unwrap();
+            smol::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
                 crate::daemon::handle_connection(stream, &daemon, &lifecycle).await
             })
         };
@@ -1204,34 +1261,34 @@ mod tests {
         request.client_version = Some("999.0.0".into());
         let outcome = {
             let (config, request) = (config.clone(), request.clone());
-            tokio::task::spawn_blocking(move || {
+            smol::unblock(move || {
                 hand_off_cc_publish_within(&config, &request, Duration::from_secs(10))
             })
             .await
-            .unwrap()
         };
         assert_eq!(outcome, Handoff::Accepted);
-        let job = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+        let job = smol_timeout(Duration::from_secs(10), rx.recv())
             .await
             .expect("the accepted job is queued")
             .unwrap();
         assert_eq!(job.request.cache_key, request.cache_key);
         drop(job);
-        tokio::time::timeout(Duration::from_secs(10), server)
+        smol_timeout(Duration::from_secs(10), server)
             .await
             .expect("the handler ends with the connection")
-            .unwrap()
             .unwrap();
         assert!(
             !lifecycle.accepting_calls(),
             "a newer wrapper drains the daemon"
         );
+        });
     }
 
     /// Refusals never take the key: a full queue, a foreign path, a key a
     /// peer holds, and an invalid key all leave the wrapper to publish.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn refusals_leave_the_key_free_and_the_snapshots_alone() {
+    #[test]
+    fn refusals_leave_the_key_free_and_the_snapshots_alone() {
+        smol::block_on(async {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::test_config(dir.path().join("cache"));
         let daemon = Arc::new(Daemon::new(config.clone()));
@@ -1250,7 +1307,7 @@ mod tests {
         ));
 
         // A queue of one: the second hand-off finds it full.
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let (tx, rx) = async_channel::bounded(1);
         daemon.publish_queue().set_sender(tx);
         let first = handoff_request(&config, &key("first"), dir.path());
         let _first_receipt = HandoffReceipt::new(&first).unwrap();
@@ -1299,6 +1356,7 @@ mod tests {
         let _invalid_receipt = HandoffReceipt::new(&invalid).unwrap();
         invalid.cache_key = "nope".to_string();
         assert!(!daemon.handle_publish_cc(invalid).await.ok);
+        });
     }
 
     /// The progress a queue hands out is the one its jobs update, so the
@@ -1315,48 +1373,54 @@ mod tests {
 
     /// A queue that takes longer than any fixed budget to drain is still
     /// drained, as long as the worker keeps finishing jobs.
-    #[tokio::test]
-    async fn shutdown_waits_for_a_slow_but_moving_worker() {
+    #[test]
+    fn shutdown_waits_for_a_slow_but_moving_worker() {
+        smol::block_on(async {
         let progress = Arc::new(PublishProgress::default());
         for _ in 0..10 {
             progress.accepted();
         }
-        let (done_tx, done) = tokio::sync::oneshot::channel();
+        let (done_tx, done) = futures::channel::oneshot::channel();
         let worker = Arc::clone(&progress);
-        tokio::spawn(async move {
+        smol::spawn(async move {
             // Ten jobs, each slower than half the stall window: the whole
             // queue takes several stall windows, but no single gap does.
             for _ in 0..10 {
-                tokio::time::sleep(Duration::from_millis(60)).await;
+                async_io::Timer::after(Duration::from_millis(60)).await;
                 worker.finished();
             }
             let _ = done_tx.send(());
-        });
+        })
+        .detach();
         let left = drain_publications(done, &progress, Duration::from_millis(150)).await;
         assert_eq!(left, 0);
         assert_eq!(progress.done(), 10);
+        });
     }
 
     /// A worker that finishes nothing for the stall window is given up on,
     /// and the jobs it never reached are counted.
-    #[tokio::test]
-    async fn shutdown_gives_up_on_a_wedged_worker_and_counts_what_is_left() {
+    #[test]
+    fn shutdown_gives_up_on_a_wedged_worker_and_counts_what_is_left() {
+        smol::block_on(async {
         let progress = Arc::new(PublishProgress::default());
         for _ in 0..3 {
             progress.accepted();
         }
         progress.finished();
-        let (_done_tx, done) = tokio::sync::oneshot::channel::<()>();
+        let (_done_tx, done) = futures::channel::oneshot::channel::<()>();
         let started = std::time::Instant::now();
         let left = drain_publications(done, &progress, Duration::from_millis(100)).await;
         assert_eq!(left, 2);
         assert!(started.elapsed() < Duration::from_secs(5));
+        });
     }
 
     /// A hand-off the shutdown drain stores is committed locally even
     /// though the publish worker starts only during the drain.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn the_shutdown_drain_stores_what_it_accepts() {
+    #[test]
+    fn the_shutdown_drain_stores_what_it_accepts() {
+        smol::block_on(async {
         let Some(dir) = publish_fixture_child_root(
             "daemon_publish::tests::the_shutdown_drain_stores_what_it_accepts",
             "KACHE_TEST_SHUTDOWN_PUBLISH_ROOT",
@@ -1366,24 +1430,22 @@ mod tests {
         let mut config = crate::test_support::test_config(dir.join("cache"));
         config.auto_gc = false;
         let daemon = Arc::new(Daemon::new(config.clone()));
-        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let (tx, rx) = async_channel::bounded(4);
         daemon.publish_queue().set_sender(tx);
         let request = handoff_request(&config, &key("drained"), &dir);
         let _receipt = HandoffReceipt::new(&request).unwrap();
         assert!(daemon.handle_publish_cc(request.clone()).await.ok);
 
-        let runtime = tokio::runtime::Handle::current();
-        let (done_tx, done) = tokio::sync::oneshot::channel();
+        let (done_tx, done) = futures::channel::oneshot::channel();
         let (start_tx, start_rx) = std::sync::mpsc::channel();
         let worker_daemon = Arc::clone(&daemon);
         let worker = std::thread::spawn(move || {
-            let _runtime = runtime.enter();
             start_rx.recv().expect("shutdown releases the worker");
             run_publish_worker(worker_daemon, rx);
             let _ = done_tx.send(());
         });
         let drain = crate::daemon::drain_publish_queue(&daemon, done);
-        tokio::pin!(drain);
+        futures::pin_mut!(drain);
         // Let shutdown close publication admission before the worker can
         // publish. Poll once so the fixture needs no scheduling delay.
         std::future::poll_fn(|cx| {
@@ -1399,7 +1461,7 @@ mod tests {
             "shutdown closes the publish queue"
         );
         start_tx.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(30), drain)
+        smol_timeout(Duration::from_secs(30), drain)
             .await
             .expect("the drain ends once the worker exits");
         worker.join().expect("publish worker panicked");
@@ -1407,14 +1469,16 @@ mod tests {
         let store = Store::open(&config).unwrap();
         assert!(store.get(&request.cache_key).unwrap().is_some(), "stored");
         std::fs::write(dir.join("publisher-complete"), b"ok").unwrap();
+        });
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn client_cleanup_after_a_lost_reply_cannot_remove_queued_outputs() {
+    #[test]
+    fn client_cleanup_after_a_lost_reply_cannot_remove_queued_outputs() {
+        smol::block_on(async {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::test_config(dir.path().join("cache"));
         let daemon = Arc::new(Daemon::new(config.clone()));
-        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+        let (tx, rx) = async_channel::bounded(2);
         daemon.publish_queue().set_sender(tx);
         let request = handoff_request(&config, &key("lost-reply"), dir.path());
         let receipt = HandoffReceipt::new(&request).unwrap();
@@ -1446,18 +1510,20 @@ mod tests {
         assert_eq!(std::fs::read(&later[0].path).unwrap(), b"different object");
         remove_handoff_files(&later);
         assert_eq!(std::fs::read_dir(handoff_dir(&config)).unwrap().count(), 0);
+        });
     }
 
     /// The wrapper's 25 ms budget ran out and it removed the receipt. The
     /// daemon already holds the key, so it stores the snapshot itself. While
     /// that job is queued the wrapper's reclaim sees the key held; after the
     /// put it sees a commit and does not store a second copy.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn cancelled_handoff_publishes_without_taking_the_wrappers_event() {
+    #[test]
+    fn cancelled_handoff_publishes_without_taking_the_wrappers_event() {
+        smol::block_on(async {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::test_config(dir.path().join("cache"));
         let daemon = Arc::new(Daemon::new(config.clone()));
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let (tx, rx) = async_channel::bounded(1);
         daemon.publish_queue().set_sender(tx);
         let request = handoff_request(&config, &key("cancelled"), dir.path());
         let receipt = HandoffReceipt::new(&request).unwrap();
@@ -1501,15 +1567,17 @@ mod tests {
         );
         drop(receipt);
         assert_eq!(std::fs::read_dir(handoff_dir(&config)).unwrap().count(), 0);
+        });
     }
 
     #[cfg(unix)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_receipt_rename_that_is_not_cancellation_still_frees_the_key() {
+    #[test]
+    fn a_receipt_rename_that_is_not_cancellation_still_frees_the_key() {
+        smol::block_on(async {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::test_config(dir.path().join("cache"));
         let daemon = Arc::new(Daemon::new(config.clone()));
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let (tx, rx) = async_channel::bounded(1);
         daemon.publish_queue().set_sender(tx);
         let request = handoff_request(&config, &key("rename-denied"), dir.path());
         let receipt = HandoffReceipt::new(&request).unwrap();
@@ -1524,7 +1592,7 @@ mod tests {
         assert!(response.error.unwrap().contains("snapshot failed"));
         assert!(matches!(
             rx.try_recv(),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            Err(async_channel::TryRecvError::Empty)
         ));
         let store = Store::open(&config).unwrap();
         assert!(matches!(
@@ -1533,16 +1601,18 @@ mod tests {
         ));
         drop(receipt);
         remove_handoff_files(&request.files);
+        });
     }
 
     /// A wrapper that withdrew removed its receipt, then its files. Only
     /// that pair is routine; files missing under a live receipt still warn.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn files_gone_after_the_receipt_is_a_routine_withdrawal() {
+    #[test]
+    fn files_gone_after_the_receipt_is_a_routine_withdrawal() {
+        smol::block_on(async {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::test_config(dir.path().join("cache"));
         let daemon = Arc::new(Daemon::new(config.clone()));
-        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+        let (tx, rx) = async_channel::bounded(2);
         daemon.publish_queue().set_sender(tx);
         for withdrawn in [true, false] {
             let request = handoff_request(&config, &key(&format!("gone-{withdrawn}")), dir.path());
@@ -1567,6 +1637,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
         assert!(!refusal_is_routine(WITHDRAWN));
         assert!(!refusal_is_routine("publish refused: queue full"));
+        });
     }
 
     #[test]

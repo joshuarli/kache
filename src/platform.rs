@@ -79,7 +79,7 @@ pub(crate) fn host_output(
 
 #[cfg(test)]
 pub(crate) async fn host_output_async(
-    command: &mut tokio::process::Command,
+    command: &mut async_process::Command,
 ) -> std::io::Result<std::process::Output> {
     use std::process::Stdio;
     command
@@ -90,7 +90,7 @@ pub(crate) async fn host_output_async(
         let _admission = kache_ipc::descriptors::spawn_guard();
         command.spawn()?
     };
-    child.wait_with_output().await
+    child.output().await
 }
 
 /// Is `pid` safe to hand to `kill(2)` as a single-process target?
@@ -283,13 +283,11 @@ fn macos_max_files_per_proc() -> libc::rlim_t {
 
 /// Resolve when the OS asks the daemon to stop: SIGTERM/SIGINT.
 pub async fn wait_for_shutdown() {
-    use tokio::signal::unix::{SignalKind, signal};
-    let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
-    let mut sigint = signal(SignalKind::interrupt()).expect("SIGINT handler");
-    tokio::select! {
-        _ = sigterm.recv() => {}
-        _ = sigint.recv() => {}
-    }
+    use async_signal::{Signal, Signals};
+    use futures::StreamExt as _;
+    let mut signals =
+        Signals::new([Signal::Term, Signal::Int]).expect("SIGTERM/SIGINT handler");
+    signals.next().await;
 }
 
 /// Configure a process to be fully detached (in its own process group) so that
@@ -336,8 +334,9 @@ pub fn is_self_spawn(argv: &[String], self_spawn: Option<&std::ffi::OsStr>) -> b
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test]
-    async fn host_utilities_capture_bytes_without_request_cancellation() {
+    #[test]
+    fn host_utilities_capture_bytes_without_request_cancellation() {
+        smol::block_on(async {
         let script = "read ignored; printf '\\377host-out'; printf '\\376host-err' >&2; exit 7";
         let check = |output: std::process::Output| {
             assert_eq!(output.status.code(), Some(7));
@@ -354,10 +353,11 @@ mod tests {
             );
         }
         check(
-            super::host_output_async(tokio::process::Command::new("/bin/sh").args(["-c", script]))
+            super::host_output_async(async_process::Command::new("/bin/sh").args(["-c", script]))
                 .await
                 .unwrap(),
         );
+        });
     }
 
     #[test]

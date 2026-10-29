@@ -8,7 +8,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
-use tokio::sync::oneshot;
+use futures::channel::oneshot;
 
 const BODY_LIMIT: usize = 16 * 1024 * 1024;
 
@@ -276,8 +276,8 @@ async fn round_trip(
     headers: &[(&str, &str)],
     body: &[u8],
 ) -> WireResponse {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+    use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = async_net::TcpStream::connect(format!("127.0.0.1:{port}"))
         .await
         .expect("mock server accepts connections");
     let mut head = format!(
@@ -306,11 +306,7 @@ async fn round_trip(
 
 async fn start_server(
     store: MockS3,
-) -> (
-    u16,
-    oneshot::Sender<()>,
-    tokio::task::JoinHandle<std::io::Result<()>>,
-) {
+) -> (u16, oneshot::Sender<()>, smol::Task<std::io::Result<()>>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("mock server binds loopback");
@@ -319,13 +315,13 @@ async fn start_server(
         .expect("bound listener has an address")
         .port();
     let executor = BoxExecutor::new(FnExecutor::new(|future: BoxSendFuture| {
-        tokio::spawn(future);
+        smol::spawn(future).detach();
     }));
     let app = Router::<MockS3>::new()
         .fallback(s3_handler)
         .with_state(store);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let server = tokio::spawn(async move {
+    let server = smol::spawn(async move {
         serve(listener, app, executor)
             .shutdown_on(async move {
                 let _ = shutdown_rx.await;
@@ -346,19 +342,14 @@ fn signed_headers() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-async fn shutdown_cleanly(
-    shutdown: oneshot::Sender<()>,
-    server: tokio::task::JoinHandle<std::io::Result<()>>,
-) {
+async fn shutdown_cleanly(shutdown: oneshot::Sender<()>, server: smol::Task<std::io::Result<()>>) {
     let _ = shutdown.send(());
-    server
-        .await
-        .expect("server task joins")
-        .expect("server shuts down cleanly");
+    server.await.expect("server shuts down cleanly");
 }
 
-#[tokio::test]
-async fn put_get_head_round_trip_with_conditional_create() {
+#[test]
+fn put_get_head_round_trip_with_conditional_create() {
+    smol::block_on(async {
     let store = MockS3::default();
     let (port, shutdown, server) = start_server(store.clone()).await;
     let object = "/kache-test/artifacts/v3/packs/abc.tar.zst";
@@ -424,10 +415,12 @@ async fn put_get_head_round_trip_with_conditional_create() {
     );
     shutdown_cleanly(shutdown, server).await;
     assert_eq!(store.signed_count(), store.requests().len());
+    });
 }
 
-#[tokio::test]
-async fn list_objects_filters_by_prefix() {
+#[test]
+fn list_objects_filters_by_prefix() {
+    smol::block_on(async {
     let store = MockS3::default();
     let (port, shutdown, server) = start_server(store.clone()).await;
     let signed = signed_headers();
@@ -484,10 +477,12 @@ async fn list_objects_filters_by_prefix() {
 
     shutdown_cleanly(shutdown, server).await;
     assert_eq!(store.signed_count(), store.requests().len());
+    });
 }
 
-#[tokio::test]
-async fn rejects_requests_without_sigv4_headers() {
+#[test]
+fn rejects_requests_without_sigv4_headers() {
+    smol::block_on(async {
     let store = MockS3::default();
     let (port, shutdown, server) = start_server(store.clone()).await;
 
@@ -521,10 +516,12 @@ async fn rejects_requests_without_sigv4_headers() {
     assert_eq!(store.requests().len(), 2);
     assert_eq!(store.signed_count(), 0);
     shutdown_cleanly(shutdown, server).await;
+    });
 }
 
-#[tokio::test]
-async fn rejects_objects_outside_the_bucket() {
+#[test]
+fn rejects_objects_outside_the_bucket() {
+    smol::block_on(async {
     let store = MockS3::default();
     let (port, shutdown, server) = start_server(store.clone()).await;
     let signed = signed_headers();
@@ -539,10 +536,12 @@ async fn rejects_objects_outside_the_bucket() {
 
     shutdown_cleanly(shutdown, server).await;
     assert_eq!(store.signed_count(), store.requests().len());
+    });
 }
 
-#[tokio::test]
-async fn rejects_body_over_limit() {
+#[test]
+fn rejects_body_over_limit() {
+    smol::block_on(async {
     let store = MockS3::default();
     let (port, shutdown, server) = start_server(store.clone()).await;
     let signed = signed_headers();
@@ -564,4 +563,5 @@ async fn rejects_body_over_limit() {
     );
 
     shutdown_cleanly(shutdown, server).await;
+    });
 }

@@ -1,10 +1,10 @@
 //! Kache identity and endpoint adapter for shared lifecycle control.
 use super::*;
+use crate::lifecycle::Lifecycle;
 use kunobi_daemon::local::Duplex;
 use kunobi_daemon::{
     ServiceIdentity,
     admission::{Admission, Limits, Pool},
-    control::ControlService,
     local::peer::PeerCredentials,
     peer::{Policy, SameUser},
     wire::{self, operation},
@@ -53,29 +53,117 @@ fn offer(config: &Config) -> Result<wire::Hello> {
     ))
 }
 
+pub(super) struct ControlService {
+    lifecycle: Arc<Lifecycle>,
+    ready: std::sync::atomic::AtomicBool,
+    process_id: u32,
+    generation: u64,
+    build: String,
+    revision: u64,
+}
+
+impl ControlService {
+    pub(super) fn new(
+        lifecycle: Arc<Lifecycle>,
+        generation: u64,
+        build: String,
+        revision: u64,
+    ) -> Self {
+        Self {
+            lifecycle,
+            ready: std::sync::atomic::AtomicBool::new(false),
+            process_id: std::process::id(),
+            generation,
+            build,
+            revision,
+        }
+    }
+
+    pub(super) fn mark_ready(&self) {
+        self.ready
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(super) fn snapshot(&self) -> wire::Health {
+        let state = self.lifecycle.snapshot();
+        wire::Health {
+            process_id: self.process_id,
+            generation: self.generation,
+            build: self.build.clone(),
+            revision: self.revision,
+            ready: self.ready.load(std::sync::atomic::Ordering::Acquire) && !state.draining,
+            draining: state.draining,
+            active: state.active as u64,
+            ..Default::default()
+        }
+    }
+
+    pub(super) fn handle(&self, request: &wire::Control) -> std::io::Result<wire::Control> {
+        use wire::{MessageKind, operation};
+        if request.kind != MessageKind::Lifecycle
+            || !request.payload.is_empty()
+            || !request.token.is_empty()
+            || request.offset.is_some()
+            || (request.generation != 0 && request.generation != self.generation)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid lifecycle request",
+            ));
+        }
+        match request.operation {
+            operation::HEALTH => {}
+            operation::DRAIN => {
+                self.lifecycle.start_drain();
+            }
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "unsupported lifecycle request",
+                ));
+            }
+        }
+        self.snapshot()
+            .response(request)
+            .map_err(std::io::Error::other)
+    }
+}
+
 pub(super) struct Server {
     pub(super) service: Arc<ControlService>,
-    task: tokio::task::JoinHandle<()>,
-    stop: Arc<Notify>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    socket_path: PathBuf,
     _socket: SocketCleanupGuard,
 }
 impl Server {
     pub(super) async fn finish(&mut self) {
-        self.stop.notify_one();
-        let _ = (&mut self.task).await;
+        self.stop
+            .store(true, std::sync::atomic::Ordering::Release);
+        // Wake the blocking accept by connecting once; the loop exits on the
+        // stop flag before handling it.
+        if let Ok(stream) = std::os::unix::net::UnixStream::connect(&self.socket_path) {
+            let _ = stream;
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = smol::unblock(move || thread.join()).await;
+        }
     }
 }
 impl Drop for Server {
     fn drop(&mut self) {
-        self.task.abort();
+        self.stop
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 }
 
 pub(super) async fn serve(config: &Config, lifecycle: Arc<Lifecycle>) -> Result<Server> {
     let path = endpoint(config);
-    let listener = crate::transport::bind_daemon_listener(&path)
-        .await?
+    let listener = crate::transport::bind_sync_listener(&path)?
         .context("control endpoint already owned")?;
+    listener
+        .set_nonblocking(true)
+        .context("control listener nonblocking")?;
     let socket = SocketCleanupGuard::new(&path)?;
     // 1.0.x clients replace a daemon whose revision is older than their own
     // executable mtime; later clients compare the release in `build`.
@@ -87,38 +175,81 @@ pub(super) async fn serve(config: &Config, lifecycle: Arc<Lifecycle>) -> Result<
     ));
     let offer = offer(config)?;
     let handler = Arc::clone(&service);
-    let stop = Arc::new(Notify::new());
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stopping = Arc::clone(&stop);
-    let task = tokio::spawn(async move {
-        let admission = Arc::new(Admission::new(Limits::default()));
-        let mut connections = tokio::task::JoinSet::new();
-        loop {
-            tokio::select! {
-                biased;
-                _ = stopping.notified() => break,
-                Some(_) = connections.join_next(), if !connections.is_empty() => {},
-                accepted = listener.accept() => {
-                    let Ok(stream) = accepted else { break };
-                    let Some(permit) = admission.try_acquire(Pool::Control) else { continue };
-                    let handler = Arc::clone(&handler);
-                    let offer = offer.clone();
-                    connections.spawn(async move {
-                        let _permit = permit;
-                        if crate::transport::require_self_peer(crate::transport::peer_euid(&stream)).is_err() { return; }
-                        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-                        let _ = handler.serve(&stream, &offer, deadline).await;
-                    });
+    let socket_path = path.clone();
+    let thread = std::thread::Builder::new()
+        .name("kache-control".to_string())
+        .spawn(move || {
+            let admission = Arc::new(Admission::new(Limits::default()));
+            // The control endpoint is low-traffic; handle each connection to
+            // completion on this thread with bounded deadlines.
+            loop {
+                if stopping.load(std::sync::atomic::Ordering::Acquire) {
+                    break;
+                }
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        // The listener is nonblocking so the loop can poll
+                        // the stop flag; accepted sockets inherit that mode
+                        // on some platforms, but the session handshake below
+                        // blocks. Restore blocking mode first.
+                        if stream.set_nonblocking(false).is_err() {
+                            continue;
+                        }
+                        let Some(_permit) =
+                            admission.try_acquire(Pool::Control)
+                        else {
+                            continue;
+                        };
+                        if crate::transport::require_self_peer(
+                            crate::transport::peer_euid_std(&stream),
+                        )
+                        .is_err()
+                        {
+                            continue;
+                        }
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .ok();
+                        stream
+                            .set_write_timeout(Some(Duration::from_secs(2)))
+                            .ok();
+                        let mut session = match wire::Session::accept(stream, &offer) {
+                            Ok(session) => session,
+                            Err(_) => continue,
+                        };
+                        let request = match session.receive() {
+                            Ok(request) => request,
+                            Err(_) => continue,
+                        };
+                        let reply = match handler.handle(&request) {
+                            Ok(reply) => reply,
+                            Err(_) => continue,
+                        };
+                        let _ = session.send(&reply);
+                    }
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock =>
+                    {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => {
+                        if stopping.load(std::sync::atomic::Ordering::Acquire) {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
                 }
             }
-        }
-        // Preserve pending drain acknowledgements before the owner exits.
-        // Each control exchange already has its own absolute deadline.
-        while connections.join_next().await.is_some() {}
-    });
+            let _ = socket_path;
+        })
+        .context("spawning control server thread")?;
     Ok(Server {
         service,
-        task,
         stop,
+        thread: Some(thread),
+        socket_path: path,
         _socket: socket,
     })
 }
@@ -222,42 +353,59 @@ fn legacy_exchange(path: &Path, request: &Request, deadline: Instant) -> Result<
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn lifecycle_messages_preserve_health_and_drain_through_the_binary_codec() {
+    async fn smol_timeout<T>(
+        duration: Duration,
+        future: impl std::future::Future<Output = T>,
+    ) -> Option<T> {
+        use futures::FutureExt as _;
+        let mut future = Box::pin(future.fuse());
+        let mut timer = Box::pin(async_io::Timer::after(duration).fuse());
+        futures::select! {
+            value = future => Some(value),
+            _ = timer => None,
+        }
+    }
+
+    #[test]
+    fn lifecycle_messages_preserve_health_and_drain_through_the_binary_codec() {
         let root = tempfile::tempdir().unwrap();
         let config = super::super::tests::test_config(root.path());
         let local = offer(&config).unwrap();
         for operation in [operation::HEALTH, operation::DRAIN] {
-            let (client, server) = tokio::io::duplex(4096);
-            tokio::time::timeout(Duration::from_secs(5), async {
-                let client = async {
-                    let mut session = wire::AsyncSession::connect(client, &local).await.unwrap();
-                    let message = lifecycle_message(operation);
-                    session.send(&message).await.unwrap();
-                    let reply = session.receive().await.unwrap();
-                    let health = wire::Health::from_response(&reply, &message).unwrap();
-                    assert_eq!(health.ready, operation == operation::HEALTH);
-                    assert_eq!(health.draining, operation == operation::DRAIN);
-                };
-                let server = async {
-                    let mut session = wire::AsyncSession::accept(server, &local).await.unwrap();
-                    let message = session.receive().await.unwrap();
-                    assert_eq!(message.operation, operation);
-                    let health = wire::Health {
-                        process_id: std::process::id(),
-                        ready: message.operation == operation::HEALTH,
-                        draining: message.operation == operation::DRAIN,
-                        ..Default::default()
-                    };
-                    session
-                        .send(&health.response(&message).unwrap())
-                        .await
-                        .unwrap();
-                };
-                tokio::join!(client, server);
-            })
-            .await
-            .expect("binary lifecycle roundtrip stalled");
+            let (client_end, server_end) = std::os::unix::net::UnixStream::pair().unwrap();
+            client_end
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            client_end
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            server_end
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            server_end
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let local_client = local.clone();
+            let client_thread = std::thread::spawn(move || {
+                let mut session = wire::Session::connect(client_end, &local_client).unwrap();
+                let message = lifecycle_message(operation);
+                session.send(&message).unwrap();
+                let reply: wire::Control = session.receive().unwrap();
+                let health = wire::Health::from_response(&reply, &message).unwrap();
+                assert_eq!(health.ready, operation == operation::HEALTH);
+                assert_eq!(health.draining, operation == operation::DRAIN);
+            });
+            let mut session = wire::Session::accept(server_end, &local).unwrap();
+            let message: wire::Control = session.receive().unwrap();
+            assert_eq!(message.operation, operation);
+            let health = wire::Health {
+                process_id: std::process::id(),
+                ready: message.operation == operation::HEALTH,
+                draining: message.operation == operation::DRAIN,
+                ..Default::default()
+            };
+            session.send(&health.response(&message).unwrap()).unwrap();
+            client_thread.join().unwrap();
         }
     }
 
@@ -300,138 +448,145 @@ mod tests {
         assert!(wire::negotiate(&local, &peer).is_err());
     }
 
-    async fn query(config: &Config, operation: u32) -> Result<Option<wire::Health>> {
-        let config = config.clone();
-        tokio::task::spawn_blocking(move || {
-            request(&config, operation, Instant::now() + Duration::from_secs(2))
-        })
-        .await
-        .unwrap()
+    fn query(config: &Config, operation: u32) -> Result<Option<wire::Health>> {
+        request(config, operation, Instant::now() + Duration::from_secs(2))
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn live_control_proves_startup_readiness_and_drain_without_waiting_for_admitted_work() {
-        let root = tempfile::tempdir().unwrap();
-        let config = super::super::tests::test_config(root.path());
-        let lifecycle = Arc::new(Lifecycle::default());
-        let server = serve(&config, Arc::clone(&lifecycle)).await.unwrap();
-        let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
-        coord.control_version = Some(wire::VERSION);
-        coord.write_phase(DaemonPhase::Starting).unwrap();
-        let initial = query(&config, operation::HEALTH).await.unwrap().unwrap();
-        assert!(!initial.ready);
-        assert!(!initial.draining);
-        assert_eq!(initial.process_id, std::process::id());
-        let starter_config = config.clone();
-        let starter =
-            tokio::task::spawn_blocking(move || lifecycle_client::ensure(&starter_config, false));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(!starter.is_finished(), "an initializing owner is not ready");
-        assert!(
-            lifecycle.accepting_calls(),
-            "a compatible initializer must not be drained"
-        );
-        server.service.mark_ready();
-        assert!(starter.await.unwrap().unwrap());
-        let health_config = config.clone();
-        let health = tokio::task::spawn_blocking(move || send_health_request(&health_config))
+    #[test]
+    fn live_control_proves_startup_readiness_and_drain_without_waiting_for_admitted_work() {
+        smol::block_on(async {
+            let root = tempfile::tempdir().unwrap();
+            let config = super::super::tests::test_config(root.path());
+            let lifecycle = Arc::new(Lifecycle::default());
+            let server = serve(&config, Arc::clone(&lifecycle)).await.unwrap();
+            let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
+            coord.control_version = Some(wire::VERSION);
+            coord.write_phase(DaemonPhase::Starting).unwrap();
+            let initial = smol::unblock({
+                let config = config.clone();
+                move || query(&config, operation::HEALTH)
+            })
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(health.version, VERSION);
-        assert_ne!(build_epoch(), 0, "the test binary has a readable mtime");
-        assert_eq!(health.build_epoch, build_epoch());
-        let pending = lifecycle.begin().unwrap();
-        assert!(
-            query(&config, operation::HEALTH)
+            assert!(!initial.ready);
+            assert!(!initial.draining);
+            assert_eq!(initial.process_id, std::process::id());
+            let starter_config = config.clone();
+            let starter = std::thread::spawn(move || {
+                lifecycle_client::ensure(&starter_config, false)
+            });
+            smol::Timer::after(Duration::from_millis(100)).await;
+            assert!(!starter.is_finished(), "an initializing owner is not ready");
+            assert!(
+                lifecycle.accepting_calls(),
+                "a compatible initializer must not be drained"
+            );
+            server.service.mark_ready();
+            assert!(smol::unblock(move || starter.join().unwrap()).await.unwrap());
+            let health_config = config.clone();
+            let health =
+                smol::unblock(move || send_health_request(&health_config))
+                    .await
+                    .unwrap();
+            assert_eq!(health.version, VERSION);
+            assert_ne!(build_epoch(), 0, "the test binary has a readable mtime");
+            assert_eq!(health.build_epoch, build_epoch());
+            let pending = lifecycle.begin().unwrap();
+            assert!(
+                query(&config, operation::HEALTH)
+                    .unwrap()
+                    .unwrap()
+                    .ready
+            );
+            let drain = query(&config, operation::DRAIN).unwrap().unwrap();
+            assert!(drain.draining);
+            assert!(!drain.ready);
+            assert_eq!(drain.active, 1);
+            assert!(lifecycle.begin().is_none());
+            drop(pending);
+            assert_eq!(
+                query(&config, operation::HEALTH)
+                    .unwrap()
+                    .unwrap()
+                    .active,
+                0
+            );
+        });
+    }
+
+    #[test]
+    fn dropping_control_server_releases_the_listener_and_handler() {
+        smol::block_on(async {
+            let root = tempfile::tempdir().unwrap();
+            let config = super::super::tests::test_config(root.path());
+            let server = serve(&config, Arc::new(Lifecycle::default()))
                 .await
-                .unwrap()
-                .unwrap()
-                .ready
-        );
-        let drain = query(&config, operation::DRAIN).await.unwrap().unwrap();
-        assert!(drain.draining);
-        assert!(!drain.ready);
-        assert_eq!(drain.active, 1);
-        assert!(lifecycle.begin().is_none());
-        drop(pending);
-        assert_eq!(
-            query(&config, operation::HEALTH)
+                .unwrap();
+            let handler = Arc::downgrade(&server.service);
+            smol::Timer::after(Duration::from_millis(5)).await;
+            drop(server);
+            smol_timeout(Duration::from_secs(2), async {
+                while handler.upgrade().is_some() {
+                    smol::Timer::after(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("dropped control server leaked its listener thread");
+            let mut replacement = serve(&config, Arc::new(Lifecycle::default()))
                 .await
-                .unwrap()
-                .unwrap()
-                .active,
-            0
-        );
+                .unwrap();
+            replacement.finish().await;
+        });
     }
 
-    #[tokio::test]
-    async fn dropping_control_server_releases_the_listener_and_handler() {
-        let root = tempfile::tempdir().unwrap();
-        let config = super::super::tests::test_config(root.path());
-        let server = serve(&config, Arc::new(Lifecycle::default()))
-            .await
-            .unwrap();
-        let handler = Arc::downgrade(&server.service);
-        tokio::task::yield_now().await;
-        drop(server);
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while handler.upgrade().is_some() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("dropped control server leaked its listener task");
-        let mut replacement = serve(&config, Arc::new(Lifecycle::default()))
-            .await
-            .unwrap();
-        replacement.finish().await;
+    #[test]
+    fn server_exit_preserves_the_drain_acknowledgement() {
+        smol::block_on(async {
+            let root = tempfile::tempdir().unwrap();
+            let config = super::super::tests::test_config(root.path());
+            let lifecycle = Arc::new(Lifecycle::default());
+            let mut server = serve(&config, Arc::clone(&lifecycle)).await.unwrap();
+            let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
+            coord.control_version = Some(wire::VERSION);
+            coord.write_phase(DaemonPhase::Ready).unwrap();
+            server.service.mark_ready();
+            let probe_config = config.clone();
+            let drain_config = config.clone();
+            let client = std::thread::spawn(move || query(&drain_config, operation::DRAIN));
+            smol_timeout(Duration::from_secs(3), lifecycle.draining())
+                .await
+                .expect("drain was never requested");
+            server.finish().await;
+            assert!(
+                query(&probe_config, operation::HEALTH).is_err(),
+                "finished server still accepts control requests"
+            );
+            drop(server);
+            let acknowledged = client.join().unwrap().unwrap().unwrap();
+            assert!(acknowledged.draining);
+            assert!(!acknowledged.ready);
+        });
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn server_exit_preserves_the_drain_acknowledgement() {
-        let root = tempfile::tempdir().unwrap();
-        let config = super::super::tests::test_config(root.path());
-        let lifecycle = Arc::new(Lifecycle::default());
-        let mut server = serve(&config, Arc::clone(&lifecycle)).await.unwrap();
-        let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
-        coord.control_version = Some(wire::VERSION);
-        coord.write_phase(DaemonPhase::Ready).unwrap();
-        server.service.mark_ready();
-        let probe_config = config.clone();
-        let client = tokio::spawn(async move { query(&config, operation::DRAIN).await });
-        tokio::time::timeout(Duration::from_secs(3), lifecycle.draining())
+    #[test]
+    fn a_record_cannot_substitute_another_pid_or_cache_instance() {
+        smol::block_on(async {
+            let root = tempfile::tempdir().unwrap();
+            let config = super::super::tests::test_config(root.path());
+            let lifecycle = Arc::new(Lifecycle::default());
+            let _server = serve(&config, Arc::clone(&lifecycle)).await.unwrap();
+            let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
+            coord.control_version = Some(wire::VERSION);
+            coord.pid = std::process::id().saturating_add(1);
+            coord.write_phase(DaemonPhase::Starting).unwrap();
+            assert!(query(&config, operation::DRAIN).is_err());
+            let probe_config = config.clone();
+            let failure = smol::unblock(move || {
+                lifecycle_client::current(&probe_config, Instant::now() + Duration::from_secs(2))
+            })
             .await
-            .unwrap();
-        server.finish().await;
-        assert!(
-            query(&probe_config, operation::HEALTH).await.is_err(),
-            "finished server still accepts control requests"
-        );
-        drop(server);
-        let acknowledged = client.await.unwrap().unwrap().unwrap();
-        assert!(acknowledged.draining);
-        assert!(!acknowledged.ready);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_record_cannot_substitute_another_pid_or_cache_instance() {
-        let root = tempfile::tempdir().unwrap();
-        let config = super::super::tests::test_config(root.path());
-        let lifecycle = Arc::new(Lifecycle::default());
-        let _server = serve(&config, Arc::clone(&lifecycle)).await.unwrap();
-        let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
-        coord.control_version = Some(wire::VERSION);
-        coord.pid = std::process::id().saturating_add(1);
-        coord.write_phase(DaemonPhase::Starting).unwrap();
-        assert!(query(&config, operation::DRAIN).await.is_err());
-        let probe_config = config.clone();
-        let failure = tokio::task::spawn_blocking(move || {
-            lifecycle_client::current(&probe_config, Instant::now() + Duration::from_secs(2))
-        })
-        .await
-        .unwrap()
-        .expect_err("identity mismatch must not become a retryable startup observation");
+            .expect_err("identity mismatch must not become a retryable startup observation");
         assert!(matches!(
             failure.downcast_ref::<kunobi_daemon::client::RequestError>(),
             Some(kunobi_daemon::client::RequestError::Peer(
@@ -444,6 +599,7 @@ mod tests {
         let mut foreign = offer(&config).unwrap();
         foreign.service_id[0] ^= 1;
         assert!(wire::negotiate(&offer(&config).unwrap(), &foreign).is_err());
+        });
     }
 
     #[test]

@@ -1,5 +1,4 @@
-use crate::transport::prelude::*;
-use crate::transport::{TokioListener, TokioStream};
+use crate::transport::{AsyncListener, AsyncStream};
 use anyhow::{Context, Result};
 pub use kache_protocol::{
     CompileFinishedRequest, CompileStartedRequest,
@@ -12,7 +11,7 @@ pub use kache_protocol::{
     GcBreakdown, GcRequest, GcRequestMode, Request, Response,
     StatsResponse,
 };
-use kunobi_daemon::Lifecycle;
+use crate::lifecycle::Lifecycle;
 #[path = "daemon_lifecycle.rs"]
 mod lifecycle_client;
 pub(crate) use lifecycle_client::Ensured;
@@ -26,8 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::Notify;
+use futures_lite::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::config::Config;
 use crate::events;
@@ -453,7 +451,7 @@ pub(crate) struct Daemon {
     /// Set while a hinted sweep is queued or running; further hints coalesce.
     gc_hint_pending: AtomicBool,
     /// Bound pipeline requests. Compiler scheduling has its own permits.
-    execution_workers: Arc<tokio::sync::Semaphore>,
+    execution_workers: Arc<async_lock::Semaphore>,
     capacity: DaemonCapacity,
 }
 
@@ -487,7 +485,7 @@ impl Daemon {
             file_hash_cache: Arc::new(Mutex::new(HashMap::new())),
             request_clock: Arc::new(crate::maintenance::RequestClock::new()),
             gc_hint_pending: AtomicBool::new(false),
-            execution_workers: Arc::new(tokio::sync::Semaphore::new(capacity.executions)),
+            execution_workers: Arc::new(async_lock::Semaphore::new(capacity.executions)),
             capacity,
             config,
         }
@@ -872,11 +870,12 @@ impl Daemon {
         let cache_dir = self.config.cache_dir.clone();
         let store_dir = self.config.store_dir();
         let target_dir = PathBuf::from(&req.target_dir);
-        tokio::task::spawn_blocking(move || {
+        smol::unblock(move || {
             crate::prestage::stage(&cache_dir, &target_dir, |hash| {
                 crate::store::blob_path_in_store_dir(&store_dir, hash)
             });
-        });
+        })
+        .detach();
         Response::ok()
     }
 
@@ -888,7 +887,7 @@ impl Daemon {
     fn handle_gc_hint(self: &Arc<Self>) -> Response {
         if self.claim_gc_hint() {
             let daemon = Arc::clone(self);
-            tokio::task::spawn_blocking(move || daemon.run_hinted_sweep());
+            smol::unblock(move || daemon.run_hinted_sweep()).detach();
         }
         Response::ok()
     }
@@ -898,11 +897,12 @@ impl Daemon {
     /// throttle limits requests; each sweep also takes the store's gc.lock.
     pub(crate) fn request_gc_for_invocation(self: &Arc<Self>, config: Config) {
         let daemon = Arc::clone(self);
-        tokio::task::spawn_blocking(move || {
+        smol::unblock(move || {
             if let Err(error) = daemon.sweep_invocation_under_size_pressure(&config) {
                 tracing::warn!("invocation GC sweep failed: {error:#}");
             }
-        });
+        })
+        .detach();
     }
 
     fn sweep_invocation_under_size_pressure(&self, config: &Config) -> Result<()> {
@@ -1417,34 +1417,14 @@ pub fn run_server(
         blocking_threads = capacity.blocking_threads,
         "daemon request capacity"
     );
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .max_blocking_threads(capacity.blocking_threads)
-        .enable_all()
-        .build()?;
-
-    run_daemon_runtime(
-        rt,
-        server_main(
-            config,
-            provenance,
-            coord,
-            readiness,
-            capacity,
-        ),
-    )
-}
-
-fn run_daemon_runtime(
-    runtime: tokio::runtime::Runtime,
-    server: impl std::future::Future<Output = Result<()>>,
-) -> Result<()> {
-    let result = runtime.block_on(server);
-    // The server has already drained handlers and durable uploads. Aborting
-    // GC or migration does not cancel its spawn_blocking work: dropping the
-    // runtime would wait forever and keep the daemon run lock held. This is
-    // the foreground daemon's exit path; the process ends after we return.
-    runtime.shutdown_timeout(Duration::from_secs(1));
-    result
+    let _ = capacity.blocking_threads;
+    smol::block_on(server_main(
+        config,
+        provenance,
+        coord,
+        readiness,
+        capacity,
+    ))
 }
 
 /// One upload worker job, start to finish: retried while its outcome is
@@ -1472,7 +1452,7 @@ fn publish_drain_warning(unpublished: usize) -> Option<String> {
 /// compiles again.
 pub(crate) async fn drain_publish_queue(
     daemon: &Daemon,
-    publish_done: tokio::sync::oneshot::Receiver<()>,
+    publish_done: futures::channel::oneshot::Receiver<()>,
 ) {
     daemon.publish_queue.close();
     let publish_progress = daemon.publish_queue.progress();
@@ -1546,9 +1526,10 @@ async fn server_main(
     // Publication of compiles handed off by cc wrappers: one worker thread
     // with its own store connection, fed by a bounded queue the handler
     // fills only after it holds the key lock (see `daemon_publish`).
-    let (publish_tx, publish_rx) = tokio::sync::mpsc::channel::<crate::daemon_publish::PublishJob>(
-        crate::daemon_publish::PUBLISH_QUEUE_CAPACITY,
-    );
+    let (publish_tx, publish_rx) =
+        async_channel::bounded::<crate::daemon_publish::PublishJob>(
+            crate::daemon_publish::PUBLISH_QUEUE_CAPACITY,
+        );
     daemon.publish_queue.set_sender(publish_tx);
     let publish_done = crate::daemon_publish::spawn_publish_worker(daemon.clone(), publish_rx)
         .context("starting the publish worker")?;
@@ -1561,40 +1542,44 @@ async fn server_main(
     // blobs to verify them, and the wrapper hands the work here precisely so
     // the build does not wait for the disk.
     let durability_daemon = daemon.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let durability_handle = smol::spawn(async move {
         loop {
-            interval.tick().await;
             let daemon = durability_daemon.clone();
             // Blocking: fsync per blob, off the async workers (#281).
-            let _ = tokio::task::spawn_blocking(move || daemon.flush_pending_durability()).await;
+            // A panic in one flush must not stop the later ones.
+            let _ = smol::unblock(move || {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    daemon.flush_pending_durability()
+                }))
+            })
+            .await;
+            async_io::Timer::after(std::time::Duration::from_secs(2)).await;
         }
     });
 
-    let gc_handle = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let gc_handle = smol::spawn(async move {
         loop {
-            interval.tick().await;
             tracing::info!("periodic GC sweep starting");
             // Offload the blocking sweep so it never stalls an async worker —
             // the accept loop and in-flight RemoteCheck stay responsive (#281).
             let gc = gc_daemon.clone();
-            match tokio::task::spawn_blocking(move || {
-                gc.run_gc(
-                    GcPolicy::Automatic {
-                        max_age_hours: gc.config.gc_max_age_hours,
-                    },
-                    GcDriver::Periodic,
-                )
+            let result = smol::unblock(move || {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    gc.run_gc(
+                        GcPolicy::Automatic {
+                            max_age_hours: gc.config.gc_max_age_hours,
+                        },
+                        GcDriver::Periodic,
+                    )
+                }))
             })
-            .await
-            {
+            .await;
+            match result {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => tracing::warn!("periodic GC failed: {e}"),
-                Err(e) => tracing::warn!("periodic GC task panicked: {e}"),
+                Err(_) => tracing::warn!("periodic GC task panicked"),
             }
+            async_io::Timer::after(std::time::Duration::from_secs(6 * 3600)).await;
         }
     });
 
@@ -1604,8 +1589,8 @@ async fn server_main(
 
     // Background blob migration: lazily migrate legacy entries on startup
     let migration_config = config.clone();
-    tokio::spawn(async move {
-        let result = tokio::task::spawn_blocking(move || {
+    smol::spawn(async move {
+        let result = smol::unblock(move || {
             if let Ok(store) = Store::open(&migration_config) {
                 store.migrate_to_blobs(|_, _| {})
             } else {
@@ -1614,7 +1599,7 @@ async fn server_main(
         })
         .await;
 
-        if let Ok(Ok(stats)) = result
+        if let Ok(stats) = result
             && stats.entries_migrated > 0
         {
             tracing::info!(
@@ -1622,7 +1607,8 @@ async fn server_main(
                 stats.entries_migrated,
             );
         }
-    });
+    })
+    .detach();
 
     // Readiness is published only after application setup can enter the accept loop.
     control.service.mark_ready();
@@ -1631,12 +1617,12 @@ async fn server_main(
         let _ = notifier.ready();
     }
     let heartbeat_coord = coord.clone();
-    let heartbeat_handle = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(DAEMON_COORD_HEARTBEAT_INTERVAL);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        interval.tick().await;
+    let heartbeat_handle = smol::spawn(async move {
+        if let Err(e) = heartbeat_coord.write_phase(DaemonPhase::Ready) {
+            tracing::debug!("daemon coordinator heartbeat failed: {e}");
+        }
         loop {
-            interval.tick().await;
+            async_io::Timer::after(DAEMON_COORD_HEARTBEAT_INTERVAL).await;
             if let Err(e) = heartbeat_coord.write_phase(DaemonPhase::Ready) {
                 tracing::debug!("daemon coordinator heartbeat failed: {e}");
             }
@@ -1653,15 +1639,17 @@ async fn server_main(
     let config_provenance = provenance.clone();
     let config_watch_lifecycle = Arc::clone(&lifecycle);
 
-    let config_watch_handle = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(DAEMON_CONFIG_WATCH_INTERVAL);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        interval.tick().await;
+    let config_watch_handle = smol::spawn(async move {
+        use futures::FutureExt as _;
         loop {
-            tokio::select! {
-                biased;
-                _ = config_watch_lifecycle.draining() => break,
-                _ = interval.tick() => {}
+            let mut draining = Box::pin(config_watch_lifecycle.draining().fuse());
+            let mut timer = Box::pin(async_io::Timer::after(DAEMON_CONFIG_WATCH_INTERVAL).fuse());
+            let drained = futures::select_biased! {
+                _ = draining => true,
+                _ = timer => false,
+            };
+            if drained {
+                break;
             }
             if crate::config::config_file_has_changed(&config_provenance) {
                 tracing::info!("config file changed on disk, scheduling restart to reload it");
@@ -1688,13 +1676,14 @@ async fn server_main(
     )
     .await;
 
-    gc_handle.abort();
+    let _ = gc_handle.cancel().await;
+    let _ = durability_handle.cancel().await;
     if let Some(h) = maintenance_handle {
-        h.abort();
+        let _ = h.cancel().await;
     }
     // Stop producers before draining the tasks and taking the final counters.
-    heartbeat_handle.abort();
-    config_watch_handle.abort();
+    let _ = heartbeat_handle.cancel().await;
+    let _ = config_watch_handle.cancel().await;
 
     drain_publish_queue(&daemon, publish_done).await;
     drop(daemon);
@@ -1737,21 +1726,29 @@ fn accept_backoff(error: &std::io::Error) -> Option<Duration> {
 const CONNECTION_HANDLER_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn accept_loop(
-    listener: &TokioListener,
+    listener: &AsyncListener,
     daemon: &Arc<Daemon>,
     lifecycle: &Arc<Lifecycle>,
     idle_timeout: Option<Duration>,
     handler_drain_timeout: Duration,
-    shutdown_signal: impl std::future::Future<Output = ()>,
+    shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) {
-    tokio::pin!(shutdown_signal);
+    // A signal stops admission; the loop then drains via the lifecycle gate.
+    // This keeps the select set to accept / drain / idle only.
+    let shutdown_lifecycle = Arc::clone(lifecycle);
+    smol::spawn(async move {
+        shutdown_signal.await;
+        tracing::info!("shutdown signal received, draining...");
+        shutdown_lifecycle.start_drain();
+    })
+    .detach();
     let mut last_activity = Instant::now();
-    let mut handlers = tokio::task::JoinSet::new();
+    let mut handlers: Vec<smol::Task<()>> = Vec::new();
 
     // Bound the number of connection handlers doing work at once. Excess
-    // connections park on `acquire_owned` (cheap) instead of all running
+    // connections park on the semaphore (cheap) instead of all running
     // concurrently, so a burst of local clients can't pile up active handlers.
-    let conn_limiter = Arc::new(tokio::sync::Semaphore::new(daemon.capacity.connections));
+    let conn_limiter = Arc::new(async_lock::Semaphore::new(daemon.capacity.connections));
 
     loop {
         if !lifecycle.accepting_calls() {
@@ -1771,118 +1768,115 @@ async fn accept_loop(
             break;
         }
 
-        tokio::select! {
-            accept = listener.accept() => {
-                // interprocess returns `Stream` directly (no peer address tuple)
-                match accept {
-                    Ok(stream) => {
-                        // Capture the request's monotonic age before it can park
-                        // behind the handler limiter. A later dispatch must not
-                        // restart a client whose end-to-end budget already ran
-                        // out in this queue.
-                        let request_started_at = Instant::now();
-                        last_activity = request_started_at;
-                        let d = daemon.clone();
-                        let flag = lifecycle.clone();
-
-                        let limiter = conn_limiter.clone();
-                        handlers.spawn(async move {
-                            if let Err(e) = handle_connection_after_queue(
-                                stream,
-                                &d,
-                                &flag,
-                                limiter,
-                                request_started_at,
-                            )
-                            .await
-                            {
-                                // Downcast to check for client-disconnect I/O errors
-                                // (broken pipe / connection reset) which are expected
-                                // from fire-and-forget clients.
-                                if e.downcast_ref::<std::io::Error>()
-                                    .is_some_and(is_client_disconnect)
-                                {
-                                    tracing::debug!("connection handler: client disconnected: {e}");
-                                } else {
-                                    tracing::warn!("connection handler error: {e}");
+        let idle_tick = idle_timeout
+            .unwrap_or(ACCEPT_LOOP_IDLE_TICK)
+            .min(ACCEPT_LOOP_IDLE_TICK);
+        {
+            use futures::FutureExt as _;
+            let mut accept_fut = Box::pin(listener.accept().fuse());
+            let mut drain_fut = Box::pin(lifecycle.draining().fuse());
+            let mut sleep_fut = Box::pin(async_io::Timer::after(idle_tick).fuse());
+            futures::select! {
+                result = accept_fut => {
+                    match result {
+                        Ok((stream, _)) => {
+                            let request_started_at = Instant::now();
+                            last_activity = request_started_at;
+                            let d = daemon.clone();
+                            let flag = lifecycle.clone();
+                            let limiter = conn_limiter.clone();
+                            handlers.push(smol::spawn(async move {
+                                let result = futures::FutureExt::catch_unwind(
+                                    std::panic::AssertUnwindSafe(handle_connection_after_queue(
+                                        stream,
+                                        &d,
+                                        &flag,
+                                        limiter,
+                                        request_started_at,
+                                    )),
+                                )
+                                .await;
+                                match result {
+                                    Ok(Ok(())) => {}
+                                    Ok(Err(e)) => {
+                                        if e.downcast_ref::<std::io::Error>()
+                                            .is_some_and(is_client_disconnect)
+                                        {
+                                            tracing::debug!(
+                                                "connection handler: client disconnected: {e}"
+                                            );
+                                        } else {
+                                            tracing::warn!("connection handler error: {e}");
+                                        }
+                                    }
+                                    Err(_) => {
+                                        tracing::warn!("connection handler task failed");
+                                    }
                                 }
+                            }));
+                        }
+                        Err(e) => {
+                            tracing::warn!("accept error: {e}");
+                            if let Some(pause) = accept_backoff(&e) {
+                                async_io::Timer::after(pause).await;
                             }
-                        });
-                    }
-                    Err(e) => {
-                        tracing::warn!("accept error: {e}");
-                        if let Some(pause) = accept_backoff(&e) {
-                            tokio::time::sleep(pause).await;
                         }
                     }
                 }
-            }
-            // Shared drain notification also wakes an otherwise idle listener.
-            _ = lifecycle.draining() => {}
-            // Wake periodically to check idle timeout (select won't fire otherwise)
-            _ = tokio::time::sleep(idle_timeout.unwrap_or(ACCEPT_LOOP_IDLE_TICK).min(ACCEPT_LOOP_IDLE_TICK)) => {}
-            _ = &mut shutdown_signal => {
-                tracing::info!("shutdown signal received, draining...");
-                break;
-            }
-            Some(result) = handlers.join_next(), if !handlers.is_empty() => {
-                observe_connection_handler(result);
-                last_activity = Instant::now();
+                // Shared drain notification also wakes an otherwise idle listener.
+                _ = drain_fut => {}
+                // Wake periodically to check idle timeout.
+                _ = sleep_fut => {}
             }
         }
+        // Reap finished handlers so the vector does not grow without bound.
+        handlers.retain(|task| !task.is_finished());
     }
 
     // Every accepted connection is owned by this loop. Tell persistent
     // handlers to stop after their current response, then wait for those
-    // responses under a deadline. This must happen before `server_main` drops
-    // the runtime and starts draining publications.
+    // responses under a deadline. This must happen before `server_main`
+    // drains publications.
     lifecycle.start_drain();
-    let drain_deadline = tokio::time::Instant::now() + handler_drain_timeout;
+    let drain_deadline = Instant::now() + handler_drain_timeout;
     let _ = lifecycle.drain_until(drain_deadline).await;
     if drain_connection_handlers(
         &mut handlers,
-        drain_deadline.saturating_duration_since(tokio::time::Instant::now()),
+        drain_deadline.saturating_duration_since(Instant::now()),
     )
     .await
     {
         tracing::warn!(
             timeout_ms = handler_drain_timeout.as_millis() as u64,
-            "connection handler drain timed out; aborted remaining handlers"
+            "connection handler drain timed out; cancelled remaining handlers"
         );
     }
 }
 
-fn observe_connection_handler(result: std::result::Result<(), tokio::task::JoinError>) -> bool {
-    if let Err(error) = result
-        && !error.is_cancelled()
-    {
-        tracing::warn!("connection handler task failed: {error}");
-        return true;
-    }
-    false
-}
-
 /// Drain all accepted connection handlers under one deadline. Returns true if
-/// unfinished handlers had to be aborted.
-async fn drain_connection_handlers(
-    handlers: &mut tokio::task::JoinSet<()>,
-    timeout: Duration,
-) -> bool {
-    let drained = tokio::time::timeout(timeout, async {
-        while let Some(result) = handlers.join_next().await {
-            observe_connection_handler(result);
+/// unfinished handlers had to be cancelled.
+async fn drain_connection_handlers(handlers: &mut Vec<smol::Task<()>>, timeout: Duration) -> bool {
+    use futures::FutureExt as _;
+    let drained = {
+        let mut wait = Box::pin(
+            async {
+                for task in handlers.drain(..) {
+                    task.await;
+                }
+            }
+            .fuse(),
+        );
+        let mut timer = Box::pin(async_io::Timer::after(timeout).fuse());
+        futures::select! {
+            _ = wait => true,
+            _ = timer => false,
         }
-    })
-    .await
-    .is_ok();
-
+    };
     if drained {
         return false;
     }
-
-    handlers.abort_all();
-    while let Some(result) = handlers.join_next().await {
-        observe_connection_handler(result);
+    for task in handlers.drain(..) {
+        let _ = task.cancel().await;
     }
     true
 }
@@ -1936,10 +1930,14 @@ async fn read_request_before_shutdown(
         return Ok(None);
     }
 
-    let line = tokio::select! {
-        biased;
-        _ = lifecycle.draining() => return Ok(None),
-        line = read => line?,
+    let line = {
+        use futures::FutureExt as _;
+        let mut draining = Box::pin(lifecycle.draining().fuse());
+        let mut read = Box::pin(read.fuse());
+        futures::select_biased! {
+            _ = draining => return Ok(None),
+            line = read => line?,
+        }
     };
     if !lifecycle.accepting_calls() {
         return Ok(None);
@@ -1955,7 +1953,7 @@ fn decode_request_frame(buf: &[u8]) -> String {
     s
 }
 
-/// Run a blocking daemon handler on tokio's blocking thread pool so its
+/// Run a blocking daemon handler on the smol blocking pool so its
 /// `std::fs` work and `Mutex<Store>` hold never stall an async worker thread —
 /// which would otherwise back up the accept loop and every other connection's
 /// `RemoteCheck` (#281). A handler panic is mapped to an error response rather
@@ -1964,17 +1962,19 @@ async fn offload<F>(f: F) -> Response
 where
     F: FnOnce() -> Response + Send + 'static,
 {
-    match tokio::task::spawn_blocking(f).await {
+    let result =
+        smol::unblock(move || std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))).await;
+    match result {
         Ok(resp) => resp,
-        Err(e) => Response::err(format!("daemon handler task failed: {e}")),
+        Err(_) => Response::err("daemon handler task failed"),
     }
 }
 
 async fn handle_connection_after_queue(
-    stream: TokioStream,
+    stream: AsyncStream,
     daemon: &Arc<Daemon>,
     lifecycle: &Arc<Lifecycle>,
-    limiter: Arc<tokio::sync::Semaphore>,
+    limiter: Arc<async_lock::Semaphore>,
     request_started_at: Instant,
 ) -> Result<()> {
     // Peer-credential gate before anything else: the check is a cheap
@@ -1984,13 +1984,13 @@ async fn handle_connection_after_queue(
         tracing::warn!(%error, "rejected IPC connection from another local user");
         return Ok(());
     }
-    let _permit = limiter.acquire_owned().await.ok();
+    let _permit = limiter.acquire_arc().await;
     handle_connection_started_at(stream, daemon, lifecycle, request_started_at).await
 }
 
 #[cfg(test)]
 pub(crate) async fn handle_connection(
-    stream: TokioStream,
+    stream: AsyncStream,
     daemon: &Arc<Daemon>,
     lifecycle: &Arc<Lifecycle>,
 ) -> Result<()> {
@@ -1998,16 +1998,16 @@ pub(crate) async fn handle_connection(
 }
 
 async fn handle_connection_started_at(
-    stream: TokioStream,
+    stream: AsyncStream,
     daemon: &Arc<Daemon>,
     lifecycle: &Arc<Lifecycle>,
     _request_started_at: Instant,
 ) -> Result<()> {
-    // Use borrow pattern: &TokioStream implements both AsyncRead and AsyncWrite.
-    // Do NOT use stream.split() — interprocess docs warn that "dropping a half
-    // does not shut it down", which causes the reader to never see EOF and
-    // hangs the server loop (and tarpaulin coverage runs).
-    let mut reader = BufReader::new(&stream);
+    // Clone for the reader; the owned stream stays for writes. Both share the
+    // same socket. Do NOT use split() — dropping a half must not hide EOF and
+    // hang the server loop.
+    let mut reader = BufReader::new(stream.clone());
+    let mut stream = stream;
     let mut frame = Vec::new();
 
     loop {
@@ -2115,7 +2115,7 @@ async fn handle_connection_started_at(
 
         let mut resp_line = serde_json::to_string(&resp)?;
         resp_line.push('\n');
-        if let Err(e) = (&stream).write_all(resp_line.as_bytes()).await {
+        if let Err(e) = stream.write_all(resp_line.as_bytes()).await {
             // Client closed without reading (fire-and-forget mode) — not an error.
             tracing::debug!("response write failed (client likely closed): {e}");
             break;
