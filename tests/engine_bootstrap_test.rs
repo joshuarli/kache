@@ -219,7 +219,7 @@ fn trusted_linux_frontend_keeps_native_children_and_reports_execution_separately
     let report: deser_value::Value =
         deser_json::from_slice(&std::fs::read(fixture.root.path().join("stdout")).unwrap())
             .unwrap();
-    assert!(status.success(), "{report}");
+    assert!(status.success(), "{report:?}");
     let check = report["checks"]
         .as_seq()
         .unwrap()
@@ -244,7 +244,7 @@ fn trusted_linux_frontend_keeps_native_children_and_reports_execution_separately
     let report: deser_value::Value =
         deser_json::from_slice(&std::fs::read(fixture.root.path().join("stdout")).unwrap())
             .unwrap();
-    assert!(status.success(), "{report}");
+    assert!(status.success(), "{report:?}");
     assert_eq!(report["compiler_execution"]["eligible"], true);
     assert_eq!(report["compiler_execution"]["client_trust_enabled"], true);
     assert_eq!(report["compiler_execution"]["daemon_trust_enabled"], true);

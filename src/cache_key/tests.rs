@@ -18173,3 +18173,167 @@ fn out_dir_include_spellings_share_one_collapsed_fingerprint() {
         "a crate-relative dotted spelling stays as rustc recorded it"
     );
 }
+
+const SYSTEM_VERSION_PLIST: &str = "\
+<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
+<plist version=\"1.0\">
+<dict>
+	<key>ProductBuildVersion</key>
+	<string>23E208</string>
+	<key>ProductVersion</key>
+	<string>14.4</string>
+</dict>
+</plist>
+";
+
+fn write_system_version_plist(root: &Path, body: &str) {
+    let plist_dir = root.join("System/Library/CoreServices");
+    std::fs::create_dir_all(&plist_dir).unwrap();
+    std::fs::write(plist_dir.join("SystemVersion.plist"), body).unwrap();
+}
+
+fn sdk_invocation(root: &Path) -> InvocationEnv {
+    InvocationEnv::from_parts(
+        std::iter::empty::<(std::ffi::OsString, std::ffi::OsString)>(),
+        Some(root.to_path_buf()),
+        None,
+        root.to_path_buf(),
+    )
+}
+
+#[test]
+fn sdk_metadata_success_needs_no_filesystem_fallback() {
+    let directory = tempfile::tempdir().unwrap();
+    let env = sdk_invocation(directory.path());
+    let identity = sdk_identity_with_queries(None, &env, |arguments| {
+        assert_eq!(&arguments[..2], &["--sdk", "macosx"]);
+        match arguments[2] {
+            "--show-sdk-version" => Ok("14.4".into()),
+            "--show-sdk-build-version" => Ok("23E208".into()),
+            _ => panic!("successful metadata probe must not locate a fallback"),
+        }
+    })
+    .unwrap();
+    assert_eq!(identity, "14.4 (23E208)");
+}
+
+#[test]
+fn sdk_fallback_locates_the_selected_default_or_named_sdk() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let selected = root.join("selected.sdk");
+    write_system_version_plist(&selected, SYSTEM_VERSION_PLIST);
+    write_system_version_plist(
+        &root.join("macosx"),
+        &SYSTEM_VERSION_PLIST.replace("14.4", "99.0"),
+    );
+    let env = sdk_invocation(root);
+    for (given, expected, fail_version) in [
+        (None, "macosx", true),
+        (Some("macosx14.4"), "macosx14.4", false),
+    ] {
+        let identity = sdk_identity_with_queries(given, &env, |arguments| {
+            assert_eq!(&arguments[..2], &["--sdk", expected]);
+            match arguments[2] {
+                "--show-sdk-version" if !fail_version => Ok("14.4".into()),
+                "--show-sdk-path" => Ok("selected.sdk".into()),
+                _ => bail!("metadata unavailable"),
+            }
+        })
+        .unwrap();
+        assert_eq!(identity, "14.4 (23E208)");
+    }
+}
+
+#[test]
+fn sdk_fallback_keeps_explicit_filesystem_roots() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let selected = root.join("selected.sdk");
+    write_system_version_plist(&selected, SYSTEM_VERSION_PLIST);
+    std::fs::create_dir(root.join("invalid.sdk")).unwrap();
+    let env = sdk_invocation(root);
+    for given in ["selected.sdk", "invalid.sdk"] {
+        let result = sdk_identity_with_queries(Some(given), &env, |arguments| {
+            assert_eq!(arguments, &["--sdk", given, "--show-sdk-version"]);
+            bail!("metadata unavailable")
+        });
+        if given == "selected.sdk" {
+            assert_eq!(result.unwrap(), "14.4 (23E208)");
+        } else {
+            assert!(
+                result.is_err(),
+                "an invalid explicit root must not use the default SDK"
+            );
+        }
+    }
+}
+
+#[test]
+fn sdk_location_failures_preserve_metadata_errors_and_reject_non_sdks() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let env = sdk_invocation(root);
+    let error = sdk_identity_with_queries(None, &env, |arguments| {
+        if arguments[2] == "--show-sdk-path" {
+            bail!("SDK path unavailable");
+        }
+        bail!("metadata unavailable")
+    })
+    .unwrap_err();
+    let message = format!("{error:#}");
+    assert!(message.contains("metadata unavailable"));
+    assert!(message.contains("SDK path unavailable"));
+    std::fs::create_dir(root.join("invalid.sdk")).unwrap();
+    for given in ["invalid.sdk", "missing.sdk"] {
+        assert!(
+            sdk_identity_with_queries(None, &env, |arguments| {
+                if arguments[2] == "--show-sdk-path" {
+                    return Ok(given.into());
+                }
+                bail!("metadata unavailable")
+            })
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn plist_string_reads_xml_string_values_and_rejects_empty() {
+    assert_eq!(
+        plist_string(SYSTEM_VERSION_PLIST, "ProductVersion").as_deref(),
+        Some("14.4")
+    );
+    assert_eq!(
+        plist_string(SYSTEM_VERSION_PLIST, "ProductBuildVersion").as_deref(),
+        Some("23E208")
+    );
+    assert_eq!(plist_string(SYSTEM_VERSION_PLIST, "ProductName"), None);
+    assert_eq!(
+        plist_string(
+            "<key>ProductVersion</key>\n<string>   </string>",
+            "ProductVersion"
+        ),
+        None
+    );
+}
+
+#[test]
+fn identity_from_sdk_root_reads_system_version_plist() {
+    let dir = tempfile::tempdir().unwrap();
+    write_system_version_plist(dir.path(), SYSTEM_VERSION_PLIST);
+    assert_eq!(
+        identity_from_sdk_root(dir.path()).unwrap(),
+        "14.4 (23E208)"
+    );
+    let empty = tempfile::tempdir().unwrap();
+    assert!(identity_from_sdk_root(empty.path()).is_err());
+    let missing_version = tempfile::tempdir().unwrap();
+    write_system_version_plist(
+        missing_version.path(),
+        "<key>ProductBuildVersion</key><string>23E208</string>",
+    );
+    assert!(identity_from_sdk_root(missing_version.path()).is_err());
+}

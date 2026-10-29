@@ -1567,4 +1567,60 @@ WantedBy=default.target
         );
         assert_eq!(StartupLog::Journal.human(), StartupLog::Journal.to_string());
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_launchd_job_that_is_not_loaded_is_bootstrapped_instead() {
+        use std::os::unix::process::ExitStatusExt;
+        let output = |code: i32, stderr: &str| std::process::Output {
+            status: std::process::ExitStatus::from_raw(code << 8),
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
+        };
+        assert_eq!(LAUNCHCTL_NO_SUCH_SERVICE, 113);
+        let target = "gui/501/ninja.kunobi.kache";
+        assert!(
+            start_launchd_job(
+                target,
+                || Ok(output(0, "")),
+                || panic!("a loaded job is not bootstrapped")
+            )
+            .unwrap()
+        );
+        let bootstrapped = std::cell::Cell::new(false);
+        assert!(
+            start_launchd_job(
+                target,
+                || Ok(output(LAUNCHCTL_NO_SUCH_SERVICE, "Could not find service")),
+                || {
+                    bootstrapped.set(true);
+                    Ok(output(0, ""))
+                }
+            )
+            .unwrap()
+        );
+        assert!(bootstrapped.get());
+        let error = start_launchd_job(
+            target,
+            || Ok(output(LAUNCHCTL_NO_SUCH_SERVICE - 1, "refused")),
+            || panic!("only a missing job is bootstrapped"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("kickstart") && error.contains("refused"),
+            "{error}"
+        );
+        let error = start_launchd_job(
+            target,
+            || Ok(output(LAUNCHCTL_NO_SUCH_SERVICE, "")),
+            || Ok(output(5, "Input/output error")),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("not loaded") && error.contains("Input/output error"),
+            "{error}"
+        );
+    }
 }
