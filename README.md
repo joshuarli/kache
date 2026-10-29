@@ -38,13 +38,6 @@ Build the same revision in two worktrees with separate target directories.
 The second can restore compatible outputs from the first.
 [Try the walkthrough][first-reuse].
 
-<picture>
-  <source media="(prefers-reduced-motion: reduce)" srcset="assets/demo-36381adc.png">
-  <img src="assets/demo-36381adc.gif" alt="A recorded demo of a second worktree restoring cached crates, followed by its build report.">
-</picture>
-
-[View the still image](assets/demo-36381adc.png).
-
 A new cache needs a build to fill it. Reuse requires matching inputs, toolchain,
 and build settings. Unsupported compiler invocations run normally.
 [What can be cached →](https://kunobi.ninja/docs/kache#current-support)
@@ -60,15 +53,11 @@ and build settings. Unsupported compiler invocations run normally.
 - Work fully offline. The cache lives on the local machine; nothing is uploaded.
 - See what happened. Inspect hits and misses, then ask `kache explain` what changed.
 
-[![Four Firefox worktrees sharing cached outputs through copy-on-write clones.](https://raw.githubusercontent.com/kunobi-ninja/kache/main/assets/store-worktrees.svg)][hero-image]
-
 Rust executables and build-script runs are cached by default.
 See [platform support and caching limits](https://kunobi.ninja/docs/kache#current-support)
 for workload details.
 
 ## Less disk per worktree
-
-[![A measured second Firefox worktree adds about 3 GB with Kache on APFS, compared with 16.7 GB with sccache.](https://raw.githubusercontent.com/kunobi-ninja/kache/main/assets/worktree-cost.svg)][storage-chart]
 
 In a Firefox 151 benchmark with Kache 0.7.0 on macOS/APFS, the second worktree
 added about 3 GB of new data. [Read the measurements and methodology →][storage-report]
@@ -91,13 +80,6 @@ Reports describe recorded builds. `Details missing` means those builds did
 not record enough information to explain a miss. Enable detailed recording
 before the next build with `kache config set cache.explain_miss true`;
 this cannot reconstruct details from earlier builds.
-
-<picture>
-  <source media="(prefers-reduced-motion: reduce)" srcset="assets/monitor-9dd7cee8.png">
-  <img src="assets/monitor-9dd7cee8.gif" alt="Kache's monitor showing builds, miss explanations, projects, and stored outputs.">
-</picture>
-
-[View the still image](assets/monitor-9dd7cee8.png).
 
 [See the current dashboard and controls →](https://kunobi.ninja/docs/kache/monitor)
 

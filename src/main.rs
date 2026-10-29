@@ -96,8 +96,8 @@ mod wrapper_config;
 #[cfg(target_os = "macos")]
 #[used]
 #[unsafe(link_section = "__TEXT,__info_plist")]
-static MACOS_INFO_PLIST: [u8; include_bytes!("../assets/macos/Info.plist").len()] =
-    *include_bytes!("../assets/macos/Info.plist");
+static MACOS_INFO_PLIST: [u8; include_bytes!("Info.plist").len()] =
+    *include_bytes!("Info.plist");
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};

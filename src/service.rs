@@ -1478,7 +1478,7 @@ WantedBy=default.target
 
     #[test]
     fn test_embedded_macos_info_plist_matches_launchd_identity() {
-        let info = include_str!("../assets/macos/Info.plist");
+        let info = include_str!("Info.plist");
         assert!(info.contains(&format!("<string>{MACOS_BUNDLE_IDENTIFIER}</string>")));
         assert!(info.contains("NSLocalNetworkUsageDescription"));
         assert!(info.contains("build-cache servers configured on your local network"));

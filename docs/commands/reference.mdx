@@ -342,8 +342,6 @@ kache explain serde
 kache --json explain serde
 ```
 
-<video src="https://raw.githubusercontent.com/kunobi-ninja/kache/main/assets/why-miss.webm" aria-label="one source edit, one recompile, and kache why-miss naming the key that changed" autoPlay loop muted playsInline controls />
-
 Explains the latest recorded miss using the event log and stored entries. Store failures and rejected entries take precedence over key comparisons. Repeated misses under the same key in older logs retain an unknown cause when those logs cannot explain what happened.
 
 The terminal report has the same sections as the report for the latest build: the last miss, the diagnosis, the comparison with another build tree and the dependency cascade when there is one, then the stored entries and recent events.
