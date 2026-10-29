@@ -193,7 +193,7 @@ impl UtcTime {
 
     /// RFC 3339 in chrono's serde shape: `Z` suffix. What the event
     /// log and other persisted records carry.
-    fn to_rfc3339_z(&self) -> String {
+    fn to_rfc3339_z(self) -> String {
         format!("{}Z", self.date_time_part())
     }
 
