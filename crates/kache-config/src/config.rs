@@ -2652,7 +2652,7 @@ pub fn probe_memo_dir_for(invocation: &InvocationEnv) -> Result<PathBuf> {
 }
 
 pub fn default_cache_dir() -> PathBuf {
-    dirs::cache_dir()
+    kache_fs::cache_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join("kache")
 }
@@ -3299,7 +3299,7 @@ pub fn config_file_path() -> PathBuf {
     let config_base = std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            dirs::home_dir()
+            kache_fs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("/tmp"))
                 .join(".config")
         });
@@ -3345,7 +3345,7 @@ fn existing_socket_target_is_usable(path: &Path) -> bool {
 }
 
 pub fn shellexpand(s: &str) -> PathBuf {
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = kache_fs::home_dir() {
         if s == "~" {
             return home;
         }
@@ -3449,7 +3449,7 @@ fn expand_env_vars_collecting_with_default(
 fn default_env_var_value(key: &str) -> Option<String> {
     match key {
         "CARGO_HOME" => {
-            dirs::home_dir().map(|home| home.join(".cargo").to_string_lossy().into_owned())
+            kache_fs::home_dir().map(|home| home.join(".cargo").to_string_lossy().into_owned())
         }
         _ => None,
     }

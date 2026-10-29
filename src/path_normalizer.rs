@@ -1821,7 +1821,7 @@ mod tests {
     #[test]
     fn home_rule_normalizes_paths_inside_home() {
         let n = PathNormalizer::from_env(None);
-        if let Some(home) = dirs::home_dir().and_then(|p| p.canonicalize().ok()) {
+        if let Some(home) = kache_fs::home_dir().and_then(|p| p.canonicalize().ok()) {
             // Windows `canonicalize()` yields a `\\?\C:\…` verbatim path; real
             // cargo/rustc paths don't carry that prefix, so strip it before
             // building the test input (no-op on Unix).
@@ -1873,7 +1873,7 @@ mod tests {
         // common case for kache contributors). Skip the assertion if
         // the dir really doesn't exist — better to skip than spam CI
         // with environment-dependent flakes.
-        let rustup_dir = dirs::home_dir().map(|h| h.join(".rustup"));
+        let rustup_dir = kache_fs::home_dir().map(|h| h.join(".rustup"));
         let Some(dir) = rustup_dir else {
             return;
         };

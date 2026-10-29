@@ -30,7 +30,7 @@ pub(crate) fn resolve_wrapper_setting() -> Option<WrapperSetting> {
         std::env::var_os("RUSTC_WRAPPER"),
         std::env::current_dir().ok().as_deref(),
         std::env::var_os("CARGO_HOME").map(PathBuf::from),
-        dirs::home_dir(),
+        kache_fs::home_dir(),
     )
 }
 
@@ -38,12 +38,12 @@ pub(crate) fn cargo_rustdoc_setting() -> Option<(String, PathBuf)> {
     cargo_rustdoc_setting_from(
         std::env::current_dir().ok().as_deref(),
         std::env::var_os("CARGO_HOME").map(PathBuf::from),
-        dirs::home_dir(),
+        kache_fs::home_dir(),
     )
 }
 
 pub(crate) fn display_path(path: &Path) -> String {
-    if let Some(home) = dirs::home_dir()
+    if let Some(home) = kache_fs::home_dir()
         && let Ok(stripped) = path.strip_prefix(&home)
     {
         return format!("~/{}", stripped.display());

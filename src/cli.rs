@@ -1293,7 +1293,7 @@ pub fn report(
         Ok(())
     };
     let terms = if redact {
-        let home = dirs::home_dir().unwrap_or_default();
+        let home = kache_fs::home_dir().unwrap_or_default();
         let terms = crate::report::redaction_terms(&report, &[&config.cache_dir, &home]);
         crate::report::redact_report(&mut report);
         terms
@@ -6710,7 +6710,7 @@ fn cargo_output_dir() -> Option<std::path::PathBuf> {
             build_target_dir: std::env::var_os("CARGO_BUILD_TARGET_DIR"),
             build_dir: std::env::var_os("CARGO_BUILD_BUILD_DIR"),
             cargo_home: std::env::var_os("CARGO_HOME"),
-            home: dirs::home_dir().unwrap_or_default(),
+            home: kache_fs::home_dir().unwrap_or_default(),
         },
     )
 }
@@ -6896,7 +6896,7 @@ pub fn doctor(
     probe: bool,
     json: bool,
 ) -> Result<()> {
-    let home = dirs::home_dir().unwrap_or_default();
+    let home = kache_fs::home_dir().unwrap_or_default();
     let (config, provenance) = crate::config::Config::load_with_provenance()
         .map_or((None, None), |(config, provenance)| {
             (Some(config), Some(provenance))
@@ -7549,7 +7549,7 @@ fn migrate_cargo_wrapper(path: &std::path::Path) -> Result<Option<String>> {
 
 /// Migrate from sccache to kache (called by `doctor --fix`).
 fn migrate(purge_sccache: bool) -> Result<()> {
-    let home = dirs::home_dir().unwrap_or_default();
+    let home = kache_fs::home_dir().unwrap_or_default();
     let mut actions: Vec<String> = Vec::new();
 
     // 1. Stop sccache daemon if running
@@ -8370,7 +8370,7 @@ pub(crate) fn cargo_home_dir() -> std::path::PathBuf {
             std::env::current_dir().unwrap_or_default().join(cargo_home)
         }
     } else {
-        dirs::home_dir().unwrap_or_default().join(".cargo")
+        kache_fs::home_dir().unwrap_or_default().join(".cargo")
     }
 }
 
@@ -9703,7 +9703,7 @@ fn apply_shell_edits(
 /// for a shell it cannot set up.
 #[cfg(unix)]
 fn shell_startup_files() -> Result<Option<(crate::init_shell::Shell, Vec<std::path::PathBuf>)>> {
-    let home = dirs::home_dir().context("could not find your home directory")?;
+    let home = kache_fs::home_dir().context("could not find your home directory")?;
     let shell = std::env::var_os("SHELL")
         .as_deref()
         .and_then(|shell| crate::init_shell::Shell::detect(std::path::Path::new(shell)));

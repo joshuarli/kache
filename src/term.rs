@@ -381,13 +381,13 @@ pub(crate) fn percent(value: f64) -> String {
 
 /// `path` with the home directory written as `~`.
 pub(crate) fn home_path(path: &Path) -> String {
-    home_path_in(path, dirs::home_dir().as_deref())
+    home_path_in(path, kache_fs::home_dir().as_deref())
 }
 
 /// `path` with the home directory written as `$HOME`, for a command people
 /// paste into a shell: unlike `~`, it also expands inside double quotes.
 pub(crate) fn shell_home_path(path: &Path) -> String {
-    shell_home_path_in(path, dirs::home_dir().as_deref())
+    shell_home_path_in(path, kache_fs::home_dir().as_deref())
 }
 
 fn shell_home_path_in(path: &Path, home: Option<&Path>) -> String {
@@ -766,7 +766,7 @@ mod tests {
     fn the_shell_path_uses_this_users_home() {
         let outside = Path::new("/kache-test-outside-home/x");
         assert_eq!(shell_home_path(outside), "/kache-test-outside-home/x");
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = kache_fs::home_dir() {
             assert_eq!(shell_home_path(&home.join("shims")), "$HOME/shims");
         }
     }

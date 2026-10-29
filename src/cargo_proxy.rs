@@ -894,7 +894,7 @@ fn cargo_home(cwd: &Path) -> std::result::Result<PathBuf, String> {
             cwd.join(path)
         });
     }
-    dirs::home_dir()
+    kache_fs::home_dir()
         .map(|home| home.join(".cargo"))
         .ok_or_else(|| "cannot resolve Cargo's home directory: home directory not found".to_string())
 }

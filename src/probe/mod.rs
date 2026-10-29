@@ -1164,7 +1164,7 @@ esac
         // Read HOME under the lock: other tests point it at a tempdir while
         // holding it, and a read taken before it can see their value.
         let lock = crate::config::config_path_lock();
-        let Some(home) = dirs::home_dir() else {
+        let Some(home) = kache_fs::home_dir() else {
             eprintln!("skipping: no home dir");
             return;
         };

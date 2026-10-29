@@ -32,10 +32,10 @@ impl InvocationEnv {
         Self::from_parts(
             std::env::vars_os(),
             std::env::current_dir().ok(),
-            dirs::home_dir(),
+            kache_fs::home_dir(),
             std::env::temp_dir(),
         )
-        .with_cache_dir(dirs::cache_dir())
+        .with_cache_dir(kache_fs::cache_dir())
     }
 
     pub fn with_cache_dir(mut self, cache: Option<PathBuf>) -> Self {

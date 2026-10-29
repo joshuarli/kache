@@ -2165,7 +2165,7 @@ pub(crate) mod shim {
     /// User-level farm created by `kache install-shims` with no directory argument.
     /// `None` without a home directory.
     pub(crate) fn default_shim_dir() -> Option<PathBuf> {
-        dirs::home_dir().map(|home| farm::default_dir(&home))
+        kache_fs::home_dir().map(|home| farm::default_dir(&home))
     }
 
     /// Names already on PATH that `wanted` accepts and [`farm::SHIM_NAMES`]

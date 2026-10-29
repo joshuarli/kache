@@ -12,21 +12,21 @@ const UNIT_NAME: &str = "kache.service";
 // ── Path helpers ─────────────────────────────────────────────────
 
 fn plist_path() -> PathBuf {
-    dirs::home_dir()
+    kache_fs::home_dir()
         .unwrap_or_default()
         .join("Library/LaunchAgents")
         .join(PLIST_NAME)
 }
 
 fn legacy_plist_path() -> PathBuf {
-    dirs::home_dir()
+    kache_fs::home_dir()
         .unwrap_or_default()
         .join("Library/LaunchAgents")
         .join(LEGACY_PLIST_NAME)
 }
 
 fn unit_path() -> PathBuf {
-    dirs::home_dir()
+    kache_fs::home_dir()
         .unwrap_or_default()
         .join(".config/systemd/user")
         .join(UNIT_NAME)
@@ -44,7 +44,7 @@ pub fn service_file_path() -> Option<PathBuf> {
 }
 
 fn log_dir() -> PathBuf {
-    dirs::home_dir()
+    kache_fs::home_dir()
         .unwrap_or_default()
         .join("Library/Logs/kache")
 }

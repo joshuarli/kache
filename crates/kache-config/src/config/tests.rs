@@ -3515,7 +3515,7 @@ fn test_source_excluded_matches_source_as_passed() {
 
 #[test]
 fn test_exclude_expands_cargo_home_default_when_unset() {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+    let home = kache_fs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
     let cargo_home = home.join(".cargo").to_string_lossy().into_owned();
 
     let (expanded, _) = expand_env_vars_collecting("$CARGO_HOME/registry/src/**", |_| None);
@@ -3637,7 +3637,7 @@ fn test_shellexpand_relative() {
 #[test]
 fn test_shellexpand_bare_tilde() {
     let path = shellexpand("~");
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = kache_fs::home_dir() {
         assert_eq!(path, home);
     } else {
         assert_eq!(path, PathBuf::from("~"));
@@ -3671,7 +3671,7 @@ fn set_env_var_for_test(key: &'static str, value: &str) -> GenericEnvGuard {
 #[test]
 fn test_kache_cache_dir_env_expands_bare_tilde() {
     let _guard = config_path_lock();
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = kache_fs::home_dir() {
         let _env_guard = set_env_var_for_test("KACHE_CACHE_DIR", "~");
         let config = Config::load().unwrap();
         assert_eq!(config.cache_dir, home);
@@ -3681,7 +3681,7 @@ fn test_kache_cache_dir_env_expands_bare_tilde() {
 #[test]
 fn test_kache_config_env_expands_bare_tilde() {
     let _guard = config_path_lock();
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = kache_fs::home_dir() {
         let _env_guard = set_env_var_for_test("KACHE_CONFIG", "~");
         let resolved = resolve_config_path();
         assert_eq!(resolved, home);
