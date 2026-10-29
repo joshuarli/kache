@@ -214,9 +214,101 @@ fn daemon_state_is_recent(state: &DaemonCoordState) -> bool {
 /// Compare release precedence, ignoring build metadata. Missing or malformed
 /// versions are unknown and cannot authorize an automatic replacement.
 pub(crate) fn compare_daemon_version(client: &str, daemon: &str) -> Option<std::cmp::Ordering> {
-    let client = semver::Version::parse(client).ok()?;
-    let daemon = semver::Version::parse(daemon).ok()?;
+    let client = Release::parse(client)?;
+    let daemon = Release::parse(daemon)?;
     Some(client.cmp_precedence(&daemon))
+}
+
+/// A `major.minor.patch` release with an optional prerelease, parsed
+/// strictly enough that malformed versions stay unknown: three bare numeric
+/// parts, then optional `-prerelease` and `+build` identifier runs.
+#[derive(Debug, PartialEq, Eq)]
+struct Release {
+    core: [u64; 3],
+    prerelease: Vec<String>,
+}
+
+impl Release {
+    fn parse(version: &str) -> Option<Self> {
+        let without_build = match version.split_once('+') {
+            Some((core, build)) if valid_identifiers(build) => core,
+            Some(_) => return None,
+            None => version,
+        };
+        let (core, prerelease) = match without_build.split_once('-') {
+            Some((core, pre)) if !pre.is_empty() => (core, pre),
+            Some(_) => return None,
+            None => (without_build, ""),
+        };
+        let mut parts = core.split('.');
+        let mut numbered = [0u64; 3];
+        for slot in &mut numbered {
+            let part = parts.next()?;
+            if part.is_empty() || (part.len() > 1 && part.starts_with('0')) {
+                return None;
+            }
+            if !part.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            *slot = part.parse().ok()?;
+        }
+        if parts.next().is_some() {
+            return None;
+        }
+        let prerelease = if prerelease.is_empty() {
+            Vec::new()
+        } else {
+            if !valid_identifiers(prerelease) {
+                return None;
+            }
+            prerelease.split('.').map(str::to_string).collect()
+        };
+        Some(Release { core: numbered, prerelease })
+    }
+
+    fn cmp_precedence(&self, other: &Release) -> std::cmp::Ordering {
+        self.core
+            .cmp(&other.core)
+            .then_with(|| cmp_prerelease(&self.prerelease, &other.prerelease))
+    }
+}
+
+fn valid_identifiers(run: &str) -> bool {
+    !run.is_empty()
+        && run.split('.').all(|id| {
+            !id.is_empty()
+                && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                && (!id.bytes().all(|b| b.is_ascii_digit()) || id.len() == 1 || !id.starts_with('0'))
+        })
+}
+
+fn cmp_prerelease(left: &[String], right: &[String]) -> std::cmp::Ordering {
+    match (left.is_empty(), right.is_empty()) {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        (false, false) => {
+            for pair in left.iter().zip(right.iter()) {
+                let ordering = cmp_prerelease_id(pair.0, pair.1);
+                if ordering != std::cmp::Ordering::Equal {
+                    return ordering;
+                }
+            }
+            left.len().cmp(&right.len())
+        }
+    }
+}
+
+fn cmp_prerelease_id(left: &str, right: &str) -> std::cmp::Ordering {
+    match (
+        left.bytes().all(|b| b.is_ascii_digit()),
+        right.bytes().all(|b| b.is_ascii_digit()),
+    ) {
+        (true, true) => left.len().cmp(&right.len()).then_with(|| left.cmp(right)),
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        (false, false) => left.cmp(right),
+    }
 }
 
 pub(crate) fn client_version_is_newer(client: &str, daemon: &str) -> bool {
