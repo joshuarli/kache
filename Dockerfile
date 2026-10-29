@@ -57,6 +57,20 @@ RUN for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do \
         done; \
     done
 
+# Cargo-driven links get `-B/usr/lib/e-crt/<target>` from musl-cargo, but a
+# bare `cc` or `rustc` invocation does not. The compiler CRT stubs for the
+# image's native arch must also sit on clang's default search path, beside
+# musl-dev's crt1.o/crti.o/crtn.o; otherwise raw links fail with
+# "cannot open crtbeginS.o".
+RUN case "$TARGETARCH" in \
+        amd64) stub_target=x86_64-unknown-linux-musl ;; \
+        arm64) stub_target=aarch64-unknown-linux-musl ;; \
+        *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && for obj in crtbegin.o crtbeginS.o crtbeginT.o crtend.o crtendS.o; do \
+        ln -s "/usr/lib/e-crt/$stub_target/$obj" "/usr/lib/$obj"; \
+    done
+
 RUN case "$TARGETARCH" in \
         amd64) arch=x86_64; sum=$RUSTUP_X86_64_SHA256 ;; \
         arm64) arch=aarch64; sum=$RUSTUP_AARCH64_SHA256 ;; \
