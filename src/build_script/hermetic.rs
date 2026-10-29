@@ -1302,6 +1302,11 @@ mod tests {
 
     #[test]
     fn a_sealed_run_is_read_only_and_found_again() {
+        #[cfg(unix)]
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipping: running as root, read-only dirs stay writable");
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let sandbox = sandbox_in(dir.path());
         std::fs::write(sandbox.out_dir.join("gen.rs"), b"pub const N: u8 = 1;").unwrap();

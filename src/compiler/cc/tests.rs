@@ -8190,6 +8190,10 @@ fn include_dir_digest_skips_isystem_roots() {
 #[test]
 fn include_dir_resolution_separates_absent_from_unreadable() {
     use std::os::unix::fs::PermissionsExt;
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipped: root ignores directory modes");
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let first = temp.path().join("first");
     let second = temp.path().join("second");
@@ -8246,6 +8250,10 @@ fn include_dir_resolution_skips_when_an_intermediate_component_is_a_file() {
 #[test]
 fn include_dir_digest_unreadable_dir_is_fail_closed() {
     use std::os::unix::fs::PermissionsExt;
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipped: root ignores directory modes");
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let include = temp.path().join("inc");
     fs::create_dir(&include).unwrap();

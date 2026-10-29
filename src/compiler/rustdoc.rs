@@ -3218,6 +3218,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn an_unreadable_module_is_not_cached() {
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipping: running as root, mode 000 does not deny reads");
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let lib = dir.path().join("lib.rs");
         let hidden = dir.path().join("hidden.rs");

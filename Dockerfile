@@ -14,6 +14,7 @@ RUN apk add --no-cache \
     bash \
     file \
     make \
+    procps \
     strace \
     musl-dev \
     libgcc \
@@ -39,6 +40,14 @@ RUN case "$TARGETARCH" in \
     && tar xf "$archive" -C /opt/llvm-musl --strip-components=1 \
     && test -f /opt/llvm-musl/lib/libclang.so \
     && rm "$archive"
+
+# rustc's default linker driver is `cc`, and several tests probe or run it;
+# the prebuilt LLVM tree only ships `clang` under its own name. Without the
+# conventional names, native links and the tests that exercise them fail with
+# "linker `cc` not found".
+RUN ln -s /opt/llvm-musl/bin/clang /usr/local/bin/cc \
+    && ln -s /opt/llvm-musl/bin/clang++ /usr/local/bin/c++ \
+    && cc --version
 
 RUN for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do \
         stub_dir="/usr/lib/e-crt/$target"; \

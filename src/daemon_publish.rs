@@ -1535,6 +1535,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_receipt_rename_that_is_not_cancellation_still_frees_the_key() {
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipping: running as root, read-only dirs stay writable");
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let config = crate::test_support::test_config(dir.path().join("cache"));
     let daemon = Arc::new(Daemon::new(config.clone()));

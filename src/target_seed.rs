@@ -2590,6 +2590,11 @@ source = "git+https://example.com/gitdep#abc"
 
     #[test]
     fn each_donor_path_is_enough_and_an_unread_file_keeps_the_unit_out() {
+        #[cfg(unix)]
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipping: running as root, mode 000 does not deny reads");
+            return;
+        }
         for layout in [Layout::PerUnit, Layout::Shared] {
             let dir = tempfile::tempdir().unwrap();
             let donor = donor(dir.path(), "a", layout);
