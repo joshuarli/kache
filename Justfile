@@ -172,35 +172,6 @@ e2e-s3 *ARGS:
 # the slow full benchmarks.
 #
 # Runs against a copy of the tree on a CONTAINER-NATIVE named volume, not a
-# bind mount: kache restores hits via hardlink and the harness relocates
-# source trees, both of which break on Docker Desktop's macOS bind-mount fs
-# (cross-device hardlinks; virtiofs copy perms). The volume also keeps the
-# multi-GB cargo target OFF the host — only results.json is copied back to
-# tmp/e2e/. The work volume persists, so rebuilds are incremental; reset it
-# with `docker volume rm kache-e2e-work`. Extra ARGS pass through to
-# kache-scenario (e.g. `just e2e-docker --select name:e2e-cc-cl-xclang-deps`).
-[group('dev')]
-e2e-docker *ARGS:
-  docker build -f packaging/docker/e2e.Dockerfile -t kache-e2e:local .
-  mkdir -p {{justfile_directory()}}/tmp/e2e
-  docker run --rm \
-    -v {{justfile_directory()}}:/src:ro \
-    -v kache-e2e-work:/work \
-    -v {{justfile_directory()}}/tmp/e2e:/out \
-    -v kache-e2e-cargo-registry:/usr/local/cargo/registry \
-    kache-e2e:local \
-    bash -euo pipefail -c '\
-      rsync -a --delete --exclude=.git --exclude=/target --exclude=/tmp /src/ /work/ && \
-      cd /work && \
-      cargo build --release -p kache && \
-      cargo build --release -p kache-e2e && \
-      ./target/release/kache-scenario \
-        --kache ./target/release/kache \
-        --scenarios ./scenarios \
-        --select suite:e2e \
-        --select tier:gate \
-        --out /out/results.json {{ARGS}}'
-
 # Verify the `KACHE_FALLBACK` wrapper delegates to — and is cached by —
 # a real sccache. Builds an excluded rlib through kache twice and
 # asserts the rebuild is an sccache cache hit. Skips if sccache is not
@@ -425,21 +396,6 @@ bump VERSION:
   # Fail here rather than at the release floor if anything did not line up.
   ./scripts/check-version-consistency.sh
   echo "Bumped to {{VERSION}}. Commit + open a PR; after merge, cut the tag with 'just release'."
-
-# Deliberately read-only: the value is only correct once HEAD is the tagged
-# release commit, so package-publish computes it at publish time rather than
-# committing it here. Run from a full clone — it refuses a shallow one.
-# Show the pkgver the -git AUR package will be published with
-[group('release')]
-aur-pkgver:
-  @./scripts/aur/vcs-pkgver.sh .
-
-# Runs in CI on every change: the value it guards is only ever seen as AUR
-# metadata, so a wrong one publishes cleanly and no build fails.
-# Test the -git pkgver computation
-[group('release')]
-test-aur-pkgver:
-  @./scripts/aur/test-vcs-pkgver.sh
 
 # Refuses unless the tree is releasable (clean, on `main`, in sync with
 # origin/main, so a tag is never cut from a dirty / off-main / un-pulled

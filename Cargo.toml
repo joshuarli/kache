@@ -121,38 +121,6 @@ proptest = { version = "1.12.0", default-features = false, features = ["std", "h
 serde_json = "1"
 bytes = "1"
 
-[package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
-pkg-fmt = "tgz"
-
-# Debian packaging (cargo-deb). Read by the _workflows build_deb step to
-# produce kache_<version>_{amd64,arm64}.deb, which package-publish.yml then
-# pushes into the apt repo on R2. cargo-deb reads this regardless of the
-# --target passed, so the same config drives both amd64 and arm64 builds.
-[package.metadata.deb]
-maintainer = "Kunobi Ninja <feedback@kunobi.ninja>"
-copyright = "2026, Zondax AG"
-license-file = ["LICENSE", "0"]
-extended-description = """\
-kache is a zero-copy, content-addressed build cache for Rust, C/C++ and more. \
-It avoids file \
-copies and wasted disk by hardlinking artifacts locally and sharing them \
-via S3-compatible object storage or a shared filesystem."""
-section = "utils"
-priority = "optional"
-# CRITICAL: empty depends. kache is built as a static musl binary, so it has
-# no shared-library runtime dependencies. An auto-resolved or non-empty
-# `depends` would pin glibc and break install on musl/minimal systems.
-depends = ""
-assets = [
-    ["target/release/kache", "usr/bin/kache", "755"],
-    ["target/release/kache-engine", "usr/bin/kache-engine", "755"],
-    ["README.md", "usr/share/doc/kache/README", "644"],
-]
-# postinst runs `kache init --shims /usr/lib/kache --force --canonical-only`
-# so the farm matches SHIM_NAMES in this binary. prerm removes those links.
-maintainer-scripts = "packaging/debian/"
-
 [profile.dev]
 debug = 0
 strip = "symbols"
