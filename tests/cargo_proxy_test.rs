@@ -668,10 +668,7 @@ fn proxied_shared_target_build(project: &Path, home: &Path, cache: &Path, target
 }
 
 fn run_shared_target_binary(target: &Path) -> String {
-    let mut binary = target.join("debug/proxy_shared_target");
-    if cfg!(windows) {
-        binary.set_extension("exe");
-    }
+    let binary = target.join("debug/proxy_shared_target");
     let output = Command::new(&binary).output().unwrap();
     assert!(output.status.success(), "{} failed", binary.display());
     String::from_utf8(output.stdout).unwrap()

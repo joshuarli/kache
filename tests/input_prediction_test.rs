@@ -860,9 +860,7 @@ fn build_proc_macro(root: &Path) -> PathBuf {
         .status()
         .expect("run rustc to build the test proc macro");
     assert!(status.success(), "building the test proc macro failed");
-    let extension = if cfg!(windows) {
-        "dll"
-    } else if cfg!(target_os = "macos") {
+    let extension = if cfg!(target_os = "macos") {
         "dylib"
     } else {
         "so"

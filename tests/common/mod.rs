@@ -263,10 +263,7 @@ fn bootstrap_kache() -> Result<PathBuf, String> {
         ));
     }
 
-    let mut bin = target_dir.join("debug").join("kache");
-    if cfg!(windows) {
-        bin.set_extension("exe");
-    }
+    let bin = target_dir.join("debug").join("kache");
     if !bin.is_file() {
         return Err(format!(
             "kache build reported success but {} is missing",

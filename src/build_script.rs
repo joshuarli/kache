@@ -3253,12 +3253,8 @@ mod tests {
 
     #[test]
     fn base_dir_root_accepts_only_an_absolute_checkout() {
-        let root = if cfg!(windows) { r"C:\\" } else { "/" };
-        let checkout = if cfg!(windows) {
-            r"C:\\work\\app"
-        } else {
-            "/work/app"
-        };
+        let root = "/";
+        let checkout = "/work/app";
         assert_eq!(
             base_dir_root(Some(checkout.into())),
             Some(PathBuf::from(checkout))

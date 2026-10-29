@@ -1389,11 +1389,7 @@ esac
         let both_script = create_mock_probe_script(
             temp.path(),
             "mock_both",
-            if cfg!(windows) {
-                "echo KACHE_PROBE_CLANG\r\necho KACHE_PROBE_GNU"
-            } else {
-                "echo KACHE_PROBE_CLANG\necho KACHE_PROBE_GNU"
-            },
+            "echo KACHE_PROBE_CLANG\necho KACHE_PROBE_GNU",
         );
         let both_str = both_script.to_str().unwrap();
         assert_eq!(probe_compiler_family(both_str), None);
@@ -1407,7 +1403,7 @@ esac
         let fail_script = create_mock_probe_script(
             temp.path(),
             "mock_fail",
-            if cfg!(windows) { "exit /b 1" } else { "exit 1" },
+            "exit 1",
         );
         let fail_str = fail_script.to_str().unwrap();
         assert_eq!(probe_compiler_family(fail_str), None);
@@ -1420,11 +1416,7 @@ esac
         // the regression is deterministic: `run_family_probe` must drain the
         // pipe and scan the whole bounded output. Its own timeout already
         // bounds hangs without relying on CI wall-clock scheduling.
-        let large_body = if cfg!(windows) {
-            "for /L %%i in (1,1,200) do echo 01234567890123456789012345678901234567890123456789\r\necho KACHE_PROBE_GNU"
-        } else {
-            "yes '0123456789012345678901234567890123456789' | head -n 300\necho KACHE_PROBE_GNU"
-        };
+        let large_body = "yes '0123456789012345678901234567890123456789' | head -n 300\necho KACHE_PROBE_GNU";
         let script = create_mock_probe_script(temp.path(), "mock_large", large_body);
         // Brief retry on the transient spawn-failure Err (ETXTBSY, #673);
         // a wrong Ok value fails immediately.

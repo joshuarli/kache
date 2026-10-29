@@ -123,10 +123,7 @@ fn assert_build_succeeded(output: &Output) {
 }
 
 fn run_app(target: &Path) -> String {
-    let mut binary = target.join("debug/app");
-    if cfg!(windows) {
-        binary.set_extension("exe");
-    }
+    let binary = target.join("debug/app");
     let output = Command::new(&binary).output().unwrap();
     assert!(output.status.success(), "{} failed", binary.display());
     String::from_utf8(output.stdout).unwrap()

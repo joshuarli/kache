@@ -209,11 +209,7 @@ const ORACLE_BASE: OracleState = OracleState {
 };
 
 fn oracle_binary(out_dir: &Path) -> PathBuf {
-    let mut binary = out_dir.join("kache-semantic-oracle");
-    if cfg!(windows) {
-        binary.set_extension("exe");
-    }
-    binary
+    out_dir.join("kache-semantic-oracle")
 }
 
 /// Materialize one generated compiler-input state and return its effective
@@ -1066,11 +1062,7 @@ fn option_env_presence_changes_cached_behavior() {
                 "{}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            let binary = out.join(if cfg!(windows) {
-                "consumer.exe"
-            } else {
-                "consumer"
-            });
+            let binary = out.join("consumer");
             let output = hermetic_command(rustc_path(), cache.path(), Some(&config))
                 .arg(&consumer)
                 .args(["--edition=2021", "--extern"])

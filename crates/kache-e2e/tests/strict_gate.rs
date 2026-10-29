@@ -95,7 +95,7 @@ fn missing_tools_remain_lenient_by_default() {
 fn deny_missing_tools_allows_declared_os_skips() {
     let temp = tempfile::tempdir().unwrap();
     let other_os = if std::env::consts::OS == "linux" {
-        "windows"
+        "macos"
     } else {
         "linux"
     };

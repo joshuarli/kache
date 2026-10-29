@@ -197,19 +197,14 @@ fn assert_build_succeeded(output: &Output) {
 }
 
 fn run_binary(target: &Path, name: &str) -> String {
-    let mut binary = target.join("debug").join(name);
-    if cfg!(windows) {
-        binary.set_extension("exe");
-    }
+    let binary = target.join("debug").join(name);
     let output = Command::new(&binary).output().unwrap();
     assert!(output.status.success(), "{} failed", binary.display());
     String::from_utf8(output.stdout).unwrap()
 }
 
 fn provider_artifact(target: &Path) -> PathBuf {
-    let extension = if cfg!(windows) {
-        "dll"
-    } else if cfg!(target_os = "macos") {
+    let extension = if cfg!(target_os = "macos") {
         "dylib"
     } else {
         "so"
@@ -363,17 +358,11 @@ fn workspace_provider_input_rekeys_direct_and_two_hop_consumers() {
     let changed_events = events(cache.path());
     let changed_by_crate = latest_by_crate(&changed_events[relocated_events.len()..]);
     let changed_provider_artifact = provider_artifact(target.path());
-    // MSVC proc-macro DLL relinks are not guaranteed to be byte-reproducible,
-    // so byte identity is a Unix proof oracle rather than a Windows invariant.
-    // Windows still exercises the output and explicit key/result assertions
-    // below, which are the behavior this regression protects.
-    if !cfg!(windows) {
-        assert_eq!(
-            artifact_hash(&changed_provider_artifact),
-            cold_provider_hash,
-            "the proc-macro provider artifact should be byte-identical"
-        );
-    }
+    assert_eq!(
+        artifact_hash(&changed_provider_artifact),
+        cold_provider_hash,
+        "the proc-macro provider artifact should be byte-identical"
+    );
     for name in [
         "macro_provider",
         "direct_app",

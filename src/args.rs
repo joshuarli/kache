@@ -362,7 +362,7 @@ pub fn codegen_backend_name(unstable_flags: &[String]) -> Option<&str> {
 /// loader, which searches library paths rather than the working directory,
 /// so hashing `./x.so` could key a different file than rustc loads.
 pub fn codegen_backend_is_keyable(backend: &str) -> bool {
-    backend.contains('/') || (cfg!(windows) && backend.contains('\\'))
+    backend.contains('/')
 }
 
 impl RustcArgs {
@@ -1340,10 +1340,9 @@ mod tests {
             !codegen_backend_is_keyable("x.so"),
             "the loader searches library paths for a bare file name"
         );
-        assert_eq!(
-            codegen_backend_is_keyable("dir\\x.so"),
-            cfg!(windows),
-            "a backslash separates paths only on Windows"
+        assert!(
+            !codegen_backend_is_keyable("dir\\x.so"),
+            "a backslash does not separate paths on unix"
         );
         let parsed =
             RustcArgs::parse(&flags(&["rustc", "lib.rs", "-Z", "codegen-backend=./x.so"])).unwrap();
@@ -2573,8 +2572,7 @@ mod tests {
     }
 
     fn layout_path(path: &str) -> PathBuf {
-        let root = if cfg!(windows) { "C:/" } else { "/" };
-        Path::new(root).join(path.trim_start_matches('/'))
+        Path::new("/").join(path.trim_start_matches('/'))
     }
 
     #[test]

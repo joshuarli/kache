@@ -26,14 +26,6 @@ CC = "$KACHE cc"
 CC_ALT = "$KACHE /usr/bin/cc"
 KACHE_DEFERRED_DISCOVERY = "1"
 
-# Windows has no /usr/bin/cc, and `cc` and `cc.exe` are different file names
-# to the key. Name `cc.exe` both ways: bare, and by its absolute path.
-[windows]
-build = 'make CC_ALT="\"${CC%% *}\" \"$(cygpath -m "$(command -v cc.exe)")\""'
-
-[windows.env]
-CC = "$KACHE cc.exe"
-
 [commands]
 build = "make"
 clean = "make clean"

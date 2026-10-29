@@ -138,11 +138,6 @@ pub struct Fixture {
     #[serde(default)]
     pub os: Vec<String>,
 
-    /// Overrides applied only when the harness runs on Windows (see
-    /// [`OsOverride`]). Parsed on every platform but consulted only there.
-    #[serde(default)]
-    pub windows: Option<OsOverride>,
-
     /// Absolute path to the fixture directory (set at load time, not
     /// in the toml).
     #[serde(skip)]
@@ -199,36 +194,6 @@ pub struct ModifySpec {
 pub struct Commands {
     pub build: String,
     pub clean: String,
-}
-
-/// Platform-specific overrides, applied when the harness runs on that
-/// platform. Each present field replaces its base counterpart; absent fields
-/// leave the base untouched. Currently only `[windows]` is consumed — e.g.
-/// `rust-c-ffi` must build with the `x86_64-pc-windows-gnu` target there
-/// (MinGW C objects can't link into an MSVC Rust binary), which changes the
-/// build command and the artifact output paths.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OsOverride {
-    /// Replaces `commands.build`.
-    #[serde(default)]
-    pub build: Option<String>,
-    /// Replaces `verify.run` (only when the fixture has a `[verify]`).
-    #[serde(default)]
-    pub run: Option<String>,
-    /// Replaces `diff.artifacts` (only when the fixture has a `[diff]`).
-    #[serde(default)]
-    pub artifacts: Option<Vec<String>>,
-    /// Merged into `[env]` (override-wins per key). Values ARE token-expanded
-    /// (`$KACHE` / `$KACHE_CC` / `$KACHE_CXX` / `$FALLBACK`), because the merge
-    /// happens before the expansion pass in [`Fixture::load`]. Used to retarget
-    /// a compiler on Windows, e.g. `rust-c-ffi` routes its build.rs C half
-    /// through the `$KACHE_CC` / `$KACHE_CXX` shims instead of `$KACHE cc`,
-    /// because cc-rs's `check_exe` mangles a multi-token `"<path>.exe cc"` CC
-    /// into bare `<path>.exe` on Windows (the `.exe` suffix makes
-    /// `set_extension` swallow the ` cc` arg), dropping the subcommand.
-    #[serde(default)]
-    pub env: HashMap<String, String>,
 }
 
 /// How to verify the compiled artifact actually works.
@@ -462,7 +427,7 @@ impl Fixture {
             ));
         }
         for os in &fixture.os {
-            if !matches!(os.as_str(), "linux" | "macos" | "windows") {
+            if !matches!(os.as_str(), "linux" | "macos") {
                 return Err(anyhow!(
                     "fixture `{}` declares unsupported operating system `{os}`",
                     fixture.name

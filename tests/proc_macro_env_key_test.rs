@@ -95,9 +95,7 @@ pub fn emit(_input: TokenStream) -> TokenStream {
     // Match the dynamic-library extension exactly. A substring match on the
     // crate name is not enough on Windows, where the same directory also holds
     // `pmenv.dll.lib` and `pmenv.pdb` alongside `pmenv.dll`.
-    let dylib_ext = if cfg!(windows) {
-        "dll"
-    } else if cfg!(target_os = "macos") {
+    let dylib_ext = if cfg!(target_os = "macos") {
         "dylib"
     } else {
         "so"

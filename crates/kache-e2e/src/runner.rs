@@ -1564,7 +1564,6 @@ mod tests {
             compiler_shims,
             daemon: false,
             os: Vec::new(),
-            windows: None,
             dir: PathBuf::new(),
         }
     }

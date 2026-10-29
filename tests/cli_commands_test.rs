@@ -4636,15 +4636,9 @@ fn gc_max_age_runs_eviction_sweep_on_populated_cache() {
 }
 
 fn create_wrapper_script(dir: &Path, name: &str) -> std::path::PathBuf {
-    if cfg!(windows) {
-        let script_path = dir.join(format!("{}.bat", name));
-        std::fs::write(&script_path, "@%*\n").unwrap();
-        script_path
-    } else {
-        let script_path = dir.join(name);
-        kache_fs::testutil::write_executable(&script_path, "#!/bin/sh\nexec \"$@\"\n");
-        script_path
-    }
+    let script_path = dir.join(name);
+    kache_fs::testutil::write_executable(&script_path, "#!/bin/sh\nexec \"$@\"\n");
+    script_path
 }
 
 #[test]
@@ -4661,7 +4655,7 @@ fn workspace_wrapper_via_cargo_build_env_and_path() {
     let mut new_path = std::ffi::OsString::new();
     new_path.push(path_dir.path());
     if let Some(ref p) = prev_path {
-        new_path.push(if cfg!(windows) { ";" } else { ":" });
+        new_path.push(":");
         new_path.push(p);
     }
 
@@ -4711,7 +4705,7 @@ fn workspace_wrapper_via_cargo_config_and_path() {
     let mut new_path = std::ffi::OsString::new();
     new_path.push(path_dir.path());
     if let Some(ref p) = prev_path {
-        new_path.push(if cfg!(windows) { ";" } else { ":" });
+        new_path.push(":");
         new_path.push(p);
     }
 
@@ -5347,11 +5341,7 @@ fn diff_is_quiet_when_the_sessions_match() {
 /// Copy both binaries. A child writes executable files on Unix so another
 /// test thread cannot fork with a writable descriptor and cause ETXTBSY.
 fn copy_kache_binary(path: &Path) {
-    let engine = path.with_file_name(if cfg!(windows) {
-        "kache-engine.exe"
-    } else {
-        "kache-engine"
-    });
+    let engine = path.with_file_name("kache-engine");
     for (source, destination) in [
         (KACHE_BIN, path),
         (env!("CARGO_BIN_EXE_kache-engine"), engine.as_path()),
@@ -5391,11 +5381,7 @@ fn same_release_copy_keeps_the_running_daemon() {
         state["pid"].as_u64().unwrap()
     };
     let before = status();
-    let copied = e.home.join(if cfg!(windows) {
-        "kache-copy.exe"
-    } else {
-        "kache-copy"
-    });
+    let copied = e.home.join("kache-copy");
     copy_kache_binary(&copied);
     filetime::set_file_mtime(
         &copied,

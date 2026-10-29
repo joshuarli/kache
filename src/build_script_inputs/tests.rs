@@ -7,11 +7,7 @@ const UNIT: &str = "app-0123456789abcdef";
 /// directory can be reached through a symlink. Windows would give a
 /// verbatim path, which does not take `/` as a separator.
 fn scratch(dir: &tempfile::TempDir) -> PathBuf {
-    if cfg!(windows) {
-        dir.path().to_path_buf()
-    } else {
-        dir.path().canonicalize().unwrap()
-    }
+    dir.path().canonicalize().unwrap()
 }
 
 /// A package whose build script ran, laid out as Cargo lays it out, with a
@@ -123,11 +119,7 @@ fn vars(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + use<> {
 
 /// `path`, absolute on this platform.
 fn abs(path: &str) -> String {
-    if cfg!(windows) {
-        format!("C:{path}")
-    } else {
-        path.to_string()
-    }
+    path.to_string()
 }
 
 fn legacy_out_dir() -> String {
@@ -393,11 +385,7 @@ fn variables_cargo_sets_on_rustc_count_by_name_only() {
     ] {
         assert!(!set_by_cargo(name), "{name}");
     }
-    assert_eq!(
-        set_by_cargo("out_dir"),
-        cfg!(windows),
-        "variable names compare as the platform compares them"
-    );
+    assert!(!set_by_cargo("out_dir"));
 }
 
 /// Cargo sets `<script>_OUT_DIR` only for a package with several build

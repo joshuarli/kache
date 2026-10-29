@@ -515,7 +515,7 @@ fn copy_tree(source: &Path, dest: &Path, budget: &mut CopyBudget, depth: usize) 
 mod tests {
     use super::*;
 
-    const VIRTUAL_PREFIX: &str = if cfg!(windows) { r"C:\src" } else { "/src" };
+    const VIRTUAL_PREFIX: &str = "/src";
 
     #[test]
     fn imports_newest_session_by_numeric_name_and_retains_ties() {

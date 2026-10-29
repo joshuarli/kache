@@ -93,11 +93,7 @@ fn create_workspace(project: &Path) {
 /// records would get no workspace guard. Windows keeps the spelling it was
 /// given.
 fn checkout_path(dir: &Path) -> PathBuf {
-    if cfg!(windows) {
-        dir.to_path_buf()
-    } else {
-        dir.canonicalize().unwrap()
-    }
+    dir.canonicalize().unwrap()
 }
 
 /// Keep a remote configured in the developer's shell out of the fixture.

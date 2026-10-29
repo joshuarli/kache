@@ -64,9 +64,7 @@ pub fn declared_value(_input: TokenStream) -> TokenStream {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let dylib_ext = if cfg!(windows) {
-        "dll"
-    } else if cfg!(target_os = "macos") {
+    let dylib_ext = if cfg!(target_os = "macos") {
         "dylib"
     } else {
         "so"
@@ -115,10 +113,7 @@ fn main() {
 "#,
     )
     .unwrap();
-    let mut output = root.join("activate-config-wrapper");
-    if cfg!(windows) {
-        output.set_extension("exe");
-    }
+    let output = root.join("activate-config-wrapper");
     let compile = Command::new(rustc_path())
         .args(["--edition", "2021", "-o"])
         .arg(&output)
@@ -223,10 +218,7 @@ fn last_fixture_passthrough_reason(cache_dir: &Path) -> Option<String> {
 }
 
 fn run_fixture(target_dir: &Path) -> String {
-    let mut binary = target_dir.join("debug").join("extra-input-warm-target");
-    if cfg!(windows) {
-        binary.set_extension("exe");
-    }
+    let binary = target_dir.join("debug").join("extra-input-warm-target");
     let output = Command::new(&binary)
         .output()
         .unwrap_or_else(|error| panic!("run {}: {error}", binary.display()));

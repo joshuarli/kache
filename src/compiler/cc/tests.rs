@@ -672,11 +672,7 @@ fn unresolved_bare_compilers_follow_each_clients_search_path() {
     fs::create_dir(&bin).unwrap();
     fs::create_dir(&empty).unwrap();
     let program = "custom-client-compiler";
-    let file = bin.join(if cfg!(windows) {
-        "custom-client-compiler.exe"
-    } else {
-        program
-    });
+    let file = bin.join(program);
     kache_fs::testutil::write_executable(&file, "#!/bin/sh\nexit 0\n");
     let client = |path: &Path| {
         InvocationEnv::from_parts(
@@ -904,11 +900,7 @@ fn recognizes_checks_path_separators_and_path_resolution() {
     ])));
 
     // Path with separators that does not exist -> returns false
-    let nonexistent_path = if cfg!(windows) {
-        r"C:\nonexistent\path\to\mycc"
-    } else {
-        "/nonexistent/path/to/mycc"
-    };
+    let nonexistent_path = "/nonexistent/path/to/mycc";
     assert!(!CcCompiler::recognizes(&s(&[nonexistent_path])));
 }
 
@@ -4675,13 +4667,8 @@ fn cc_memo_paths_map_out_and_back_across_checkouts() {
     );
 
     // An unmapped absolute path is its own answer; a relative name that
-    // matches no sentinel has none. Absoluteness is what the host says it
-    // is, so the path has to be spelled for the host.
-    let system_header = if cfg!(windows) {
-        r"C:\Program Files\sdk\stdio.h"
-    } else {
-        "/usr/include/stdio.h"
-    };
+    // matches no sentinel has none.
+    let system_header = "/usr/include/stdio.h";
     assert!(Path::new(system_header).is_absolute());
     assert_eq!(
         cc_unmapped_path_candidates(system_header, &other),

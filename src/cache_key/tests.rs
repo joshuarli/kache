@@ -1411,14 +1411,7 @@ fn env_name_key_bytes_case_policy_follows_the_platform() {
     use std::ffi::OsStr;
     let upper = env_name_key_bytes(OsStr::new("KACHE_TEST_CASE"));
     let mixed = env_name_key_bytes(OsStr::new("Kache_Test_Case"));
-    if cfg!(windows) {
-        // One variable on Windows: folding the OS's reported casing would
-        // split the cache between machines describing the same environment.
-        assert_eq!(upper, mixed);
-    } else {
-        // Two genuinely different variables on Unix.
-        assert_ne!(upper, mixed);
-    }
+    assert_ne!(upper, mixed);
 }
 
 #[test]
@@ -3211,11 +3204,7 @@ fn os_vars(pairs: &[(&str, &str)]) -> Vec<(std::ffi::OsString, std::ffi::OsStrin
 
 /// An absolute target directory for checkout `name` on any platform.
 fn checkout_target(name: &str) -> String {
-    if cfg!(windows) {
-        format!("C:/{name}/target")
-    } else {
-        format!("/{name}/target")
-    }
+    format!("/{name}/target")
 }
 
 fn registry_unit_args(checkout: &str, externs: &[&str]) -> RustcArgs {

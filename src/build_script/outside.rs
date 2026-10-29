@@ -828,12 +828,7 @@ mod tests {
             paths("cargo:rustc-link-arg=-Lnative=/t/g\n"),
             vec!["/t/g".to_string()]
         );
-        // Absolute on the platform running the test: `/t` has no drive on Windows.
-        let archive = if cfg!(windows) {
-            r"C:\t\g\lib.a"
-        } else {
-            "/t/g/lib.a"
-        };
+        let archive = "/t/g/lib.a";
         assert_eq!(
             paths(&format!("cargo:rustc-link-arg={archive}\n")),
             vec![archive.to_string()]
