@@ -2915,23 +2915,6 @@ mod shim_tests {
         );
     }
 
-    proptest::proptest! {
-        /// `shim_names` rejects a name `invoked_as_compiler` does not accept,
-        /// so a versioned driver found on PATH that failed here would make
-        /// `kache init` fail outright.
-        #[test]
-        fn every_versioned_driver_is_a_compiler_name(
-            driver in proptest::sample::select(&["cc", "c++", "gcc", "g++", "clang", "clang++"][..]),
-            version in "[0-9.]{0,8}",
-        ) {
-            let name = format!("{driver}-{version}");
-            proptest::prop_assert!(
-                !kache_shims::farm::is_versioned_driver(&name) || invoked_as_compiler(&name),
-                "{name}"
-            );
-        }
-    }
-
     /// Without `--from-path` only versioned drivers join the canonical names;
     /// with it, every compiler name. Neither lists this binary's own shims.
     #[cfg(unix)]

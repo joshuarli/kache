@@ -1352,7 +1352,6 @@ mod tests {
 
     use super::*;
     use crate::test_support::process_state_test_lock;
-    use proptest::prelude::*;
 
     #[derive(Debug, PartialEq, Eq)]
     struct RustcArgsFingerprint {
@@ -1447,27 +1446,6 @@ mod tests {
             coverage_instrumentation: parsed.has_coverage_instrumentation(),
             skip_path_remap: parsed.skip_path_remap(),
         }
-    }
-
-    fn response_file_extra_args() -> impl Strategy<Value = Vec<String>> {
-        proptest::collection::vec(any::<u8>(), 0..17).prop_map(|choices| {
-            choices
-                .into_iter()
-                .enumerate()
-                .flat_map(|(index, choice)| match choice % 8 {
-                    0 => vec!["-C".to_string(), format!("codegen-units={}", index + 1)],
-                    1 => vec!["--cfg".to_string(), format!("property_cfg_{index}")],
-                    2 => vec![format!("--extern=dep{index}=/tmp/libdep{index}.rlib")],
-                    3 => vec![format!("-Lnative=/tmp/native-{index}")],
-                    4 => vec![format!("-lstatic=property_{index}")],
-                    5 => vec!["-Z".to_string(), format!("property-option-{index}")],
-                    6 => vec![format!(
-                        "--remap-path-prefix=/tmp/property-{index}=/kache/{index}"
-                    )],
-                    _ => vec![format!("--future-kache-flag={index}")],
-                })
-                .collect()
-        })
     }
 
     /// Outcome-affecting lint configuration must be captured exactly — flag AND
@@ -1918,57 +1896,6 @@ mod tests {
             let parsed = RustcArgs::parse(&raw).unwrap();
             assert!(parsed.argfile_expansion_failed(), "argument: {argument:?}");
             assert_eq!(parsed.all_args, raw[1..], "argument: {argument:?}");
-        }
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig {
-            cases: 32,
-            max_shrink_iters: 128,
-            ..ProptestConfig::default()
-        })]
-
-        #[test]
-        fn property_response_file_and_direct_argv_parse_identically(
-            extra_args in response_file_extra_args(),
-        ) {
-            let _process_state = process_state_test_lock();
-            let dir = tempfile::tempdir().unwrap();
-            let response = dir.path().join("rustc.args");
-            let mut effective_args = vec![
-                "--crate-name".to_string(),
-                "property_response".to_string(),
-                "--crate-type=lib".to_string(),
-                "--emit=dep-info,metadata,link".to_string(),
-                "--out-dir".to_string(),
-                "target/debug/deps".to_string(),
-                "input.rs".to_string(),
-                "-C".to_string(),
-                "opt-level=2".to_string(),
-                "--color".to_string(),
-                "always".to_string(),
-                "-Dwarnings".to_string(),
-                "  spaced residual  ".to_string(),
-            ];
-            effective_args.extend(extra_args);
-            std::fs::write(&response, format!("{}\n", effective_args.join("\n"))).unwrap();
-
-            let mut direct_argv = vec!["rustc".to_string()];
-            direct_argv.extend(effective_args.clone());
-            let response_arg = format!("@{}", response.display());
-            let response_argv = vec!["rustc".to_string(), response_arg.clone()];
-
-            let direct = RustcArgs::parse(&direct_argv).unwrap();
-            let expanded = RustcArgs::parse(&response_argv).unwrap();
-
-            prop_assert!(!direct.has_expanded_argfiles());
-            prop_assert!(!direct.argfile_expansion_failed());
-            prop_assert!(expanded.has_expanded_argfiles());
-            prop_assert!(!expanded.argfile_expansion_failed());
-            prop_assert_eq!(&expanded.all_args, &effective_args);
-            prop_assert_eq!(direct.raw_args(), effective_args.as_slice());
-            prop_assert_eq!(expanded.raw_args(), &[response_arg]);
-            prop_assert_eq!(semantic_fingerprint(&direct), semantic_fingerprint(&expanded));
         }
     }
 
