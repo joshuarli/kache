@@ -47,7 +47,7 @@ mod resolve;
 use crate::invocation::InvocationEnv;
 use crate::invocation::process::CommandExt as _;
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
 

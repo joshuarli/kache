@@ -15,7 +15,7 @@ use crate::events::BuildEvent;
 use crate::store::SweepOrigin;
 use anyhow::{Context, Result};
 use kache_core::time::UtcTime;
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
@@ -31,22 +31,22 @@ pub struct Totals {
     /// The oldest event or GC run counted.
     pub since: UtcTime,
     /// Local, prefetched and remote hits.
-    #[serde(default)]
+    #[deser(default)]
     pub hits: u64,
     /// Compile time those hits avoided, as `kache stats` counts it.
-    #[serde(default)]
+    #[deser(default)]
     pub hit_compile_time_ms: u64,
     /// Bytes restored by reflink or hardlink.
-    #[serde(default)]
+    #[deser(default)]
     pub zero_copy_bytes: u64,
     /// Bytes restored by a full copy.
-    #[serde(default)]
+    #[deser(default)]
     pub copied_bytes: u64,
     /// Store bytes removed by the daemon's sweeps and the auto-GC worker.
-    #[serde(default)]
+    #[deser(default)]
     pub pruned_automatic_bytes: u64,
     /// Store bytes removed by a `kache gc` the user ran.
-    #[serde(default)]
+    #[deser(default)]
     pub pruned_requested_bytes: u64,
 }
 
@@ -107,7 +107,7 @@ fn merge(a: Option<Totals>, b: Option<Totals>) -> Option<Totals> {
 #[derive(Serialize, Deserialize)]
 struct LedgerFile {
     schema: u32,
-    #[serde(flatten)]
+    #[deser(flatten)]
     totals: Totals,
 }
 
@@ -138,14 +138,14 @@ fn load(path: &Path) -> Ledger {
             Ledger::Missing
         };
     };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+    let Ok(value) = deser_json::from_str::<deser_value::Value>(&content) else {
         return Ledger::Corrupt;
     };
-    let schema = value.get("schema").and_then(serde_json::Value::as_u64);
+    let schema = value.get("schema").and_then(|value| value.as_u64());
     if schema.is_some_and(|schema| schema > u64::from(SAVINGS_SCHEMA)) {
         return Ledger::Newer;
     }
-    match serde_json::from_value::<LedgerFile>(value) {
+    match deser_value::from_value::<LedgerFile>(&value) {
         Ok(file) => Ledger::Current(file),
         Err(_) => Ledger::Corrupt,
     }
@@ -198,7 +198,7 @@ fn add_locked(cache_dir: &Path, delta: &Totals, lock: std::fs::File) -> Result<(
             }
             Ledger::Current(current) => totals.absorb(&current.totals),
         }
-        let json = serde_json::to_string_pretty(&LedgerFile {
+        let json = deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&LedgerFile {
             schema: SAVINGS_SCHEMA,
             totals,
         })?;
@@ -222,7 +222,7 @@ pub(crate) fn prepare_rotation_fold(
     Ok(move |lines: &[&str]| {
         let events: Vec<BuildEvent> = lines
             .iter()
-            .filter_map(|line| serde_json::from_str(line).ok())
+            .filter_map(|line| deser_json::from_str(line).ok())
             .collect();
         match Totals::from_events(&events) {
             Some(delta) => add_locked(cache_dir, &delta, lock),

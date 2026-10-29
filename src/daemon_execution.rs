@@ -322,7 +322,7 @@ impl Drop for CancelOnDrop {
 
 fn write_reply(stream: &UnixStream, reply: &ExecutionReply) -> Result<()> {
     use std::io::Write;
-    let mut frame = serde_json::to_vec(reply)?;
+    let mut frame = deser_json::to_string(reply).map(String::into_bytes)?;
     frame.push(b'\n');
     let mut writer = stream.try_clone()?;
     writer.set_write_timeout(Some(PREPARE_TIMEOUT))?;
@@ -449,7 +449,7 @@ pub(super) fn handle(
             Err(error) => return Err(error.into()),
         }
     };
-    let _: ExecutionCommand = serde_json::from_str(&commit)?;
+    let _: ExecutionCommand = deser_json::from_str(&commit)?;
     anyhow::ensure!(
         peer_may_delegate(stream, client_pid, trusted_pipeline),
         "compiler process isolation changed before execution"
@@ -956,7 +956,7 @@ mod tests {
                 Duration::from_secs(3),
             )
             .unwrap();
-            serde_json::from_str::<Response>(&response).unwrap()
+            deser_json::from_str::<Response>(&response).unwrap()
         }).join().unwrap();
         let status = response.execution_status.unwrap();
         assert_eq!(status.eligible, accepted);
@@ -1572,7 +1572,7 @@ mod tests {
         let mut stream = UnixStream::connect(socket).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
         stream.set_write_timeout(Some(Duration::from_secs(10))).unwrap();
-        let mut frame = serde_json::to_vec(&Request::ExecuteV1(Box::new(request))).unwrap();
+        let mut frame = deser_json::to_string(&Request::ExecuteV1(Box::new(request))).map(String::into_bytes).unwrap();
         frame.push(b'\n');
         stream.write_all(&frame).unwrap();
         let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
@@ -1582,7 +1582,7 @@ mod tests {
         let ExecutionReply::Ready {
             descriptors: Some(ticket),
             ..
-        } = serde_json::from_str(&line).unwrap()
+        } = deser_json::from_str(&line).unwrap()
         else {
             panic!("server not ready: {line}");
         };
@@ -1607,7 +1607,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(matches!(
-            serde_json::from_str(&line).unwrap(),
+            deser_json::from_str(&line).unwrap(),
             ExecutionReply::Prepared
         ));
         drop(reader);
@@ -1842,7 +1842,7 @@ mod tests {
     let mut request = request(&args, &context);
     request.client_pid = 0;
     let mut stream = UnixStream::connect(&socket).unwrap();
-    let mut frame = serde_json::to_vec(&Request::ExecuteV1(Box::new(request))).unwrap();
+    let mut frame = deser_json::to_string(&Request::ExecuteV1(Box::new(request))).map(String::into_bytes).unwrap();
     frame.push(b'\n');
     std::io::Write::write_all(&mut stream, &frame).unwrap();
     let line = read_bounded_line(
@@ -1852,7 +1852,7 @@ mod tests {
     .unwrap()
     .unwrap();
     assert!(matches!(
-        serde_json::from_str(&line).unwrap(),
+        deser_json::from_str(&line).unwrap(),
         ExecutionReply::Declined { .. }
     ));
     assert!(server.join()[0].is_ok());

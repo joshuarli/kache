@@ -161,7 +161,7 @@ pub fn run(config: &Config, root: Option<&Path>, json: bool) -> Result<bool> {
     match compare(&events, root.as_deref()) {
         DiffOutcome::NeedTwo => {
             if json {
-                #[derive(serde::Serialize)]
+                #[derive(deser::Serialize)]
                 struct Body {
                     message: &'static str,
                 }
@@ -174,7 +174,7 @@ pub fn run(config: &Config, root: Option<&Path>, json: bool) -> Result<bool> {
         DiffOutcome::Compared(body) => {
             let alarmed = body.alarmed();
             if json {
-                #[derive(serde::Serialize)]
+                #[derive(deser::Serialize)]
                 struct Body {
                     root: String,
                     earlier_misses: usize,

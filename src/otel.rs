@@ -17,7 +17,7 @@
 //! Kartero delivered gauges only; it takes sums from 0.4.0.
 
 use anyhow::{Context, Result};
-use serde_json::{Value, json};
+use deser_value::{Value, value};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use kache_core::time::UtcTime;
@@ -61,7 +61,7 @@ pub(crate) fn write_otlp(
     let metrics_path = dir.join(METRICS_FILE);
     std::fs::write(
         &metrics_path,
-        serde_json::to_string(&body).context("serializing OTLP metrics")? + "\n",
+        deser_json::to_string(&body).context("serializing OTLP metrics")? + "\n",
     )
     .with_context(|| format!("writing {}", metrics_path.display()))?;
     std::fs::write(dir.join(SCHEMA_VERSION_FILE), format!("{SCHEMA_VERSION}\n"))
@@ -123,7 +123,7 @@ pub(crate) fn serialize_metrics_with(
     }
     // No host attribute: the file's shipper adds host identity, and a new
     // resource attribute would split the existing daemon counter series.
-    json!({
+    value!({
         "resourceMetrics": [{
             "resource": {
                 "attributes": resource
@@ -173,11 +173,11 @@ fn unix_nano_now() -> String {
 }
 
 fn str_attr(key: &str, value: &str) -> Value {
-    json!({"key": key, "value": {"stringValue": value}})
+    value!({"key": key, "value": {"stringValue": value}})
 }
 
 fn as_int(value: u64, time_unix_nano: &str, attributes: &[Value]) -> Value {
-    json!({
+    value!({
         "asInt": value.to_string(),
         "timeUnixNano": time_unix_nano,
         "attributes": attributes,
@@ -185,7 +185,7 @@ fn as_int(value: u64, time_unix_nano: &str, attributes: &[Value]) -> Value {
 }
 
 fn gauge(name: &str, unit: &str, data_points: Vec<Value>) -> Value {
-    json!({
+    value!({
         "name": name,
         "unit": unit,
         "gauge": { "dataPoints": data_points }
@@ -409,7 +409,7 @@ mod tests {
 
     fn metric<'a>(body: &'a Value, name: &str) -> &'a Value {
         body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .find(|m| m["name"] == name)
@@ -419,21 +419,26 @@ mod tests {
     fn all_attr_keys(body: &Value) -> BTreeSet<String> {
         let mut keys = BTreeSet::new();
         for attr in body["resourceMetrics"][0]["resource"]["attributes"]
-            .as_array()
+            .as_seq()
             .unwrap()
         {
             keys.insert(attr["key"].as_str().unwrap().to_string());
         }
         for m in body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
-            .as_array()
+            .as_seq()
             .unwrap()
         {
             let points = m["gauge"]["dataPoints"]
-                .as_array()
-                .or_else(|| m["sum"]["dataPoints"].as_array())
-                .unwrap_or_else(|| panic!("metric {} carries no data points", m["name"]));
+                .as_seq()
+                .or_else(|| m["sum"]["dataPoints"].as_seq())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "metric {} carries no data points",
+                        m["name"].as_str().unwrap_or("?")
+                    )
+                });
             for point in points {
-                for attr in point["attributes"].as_array().unwrap() {
+                for attr in point["attributes"].as_seq().unwrap() {
                     keys.insert(attr["key"].as_str().unwrap().to_string());
                 }
             }
@@ -460,7 +465,7 @@ mod tests {
         .map(str::to_string)
         .collect();
         assert_eq!(all_attr_keys(&body), expected);
-        let dumped = body.to_string();
+        let dumped = deser_json::to_string(&body).unwrap();
         assert!(!dumped.contains("kache.bench."));
         assert!(!dumped.contains("run_id"));
         assert!(!dumped.contains("cicd."));
@@ -524,7 +529,7 @@ mod tests {
 
     fn metric_names(body: &Value) -> BTreeSet<String> {
         body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .map(|m| m["name"].as_str().unwrap().to_string())
@@ -556,7 +561,7 @@ mod tests {
             "{names:?}"
         );
         let resource = body["resourceMetrics"][0]["resource"]["attributes"]
-            .as_array()
+            .as_seq()
             .unwrap();
         assert!(
             !resource
@@ -567,7 +572,7 @@ mod tests {
 
         let rows = metric(&body, "kache.cache.index.rowid_high_water");
         assert_eq!(rows["unit"], "1", "a write counter, not rows");
-        let points = rows["gauge"]["dataPoints"].as_array().unwrap();
+        let points = rows["gauge"]["dataPoints"].as_seq().unwrap();
         assert_eq!(points.len(), 2);
         assert_eq!(
             points[1]["attributes"][0]["value"]["stringValue"],
@@ -616,12 +621,12 @@ mod tests {
     fn gc_figures_are_last_run_gauges() {
         let body = with_machine(&machine_snap());
         let got: Vec<(String, String)> = body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .filter(|m| m["name"].as_str().unwrap().starts_with("kache.cache.gc."))
             .map(|m| {
-                assert!(m.get("sum").is_none(), "no cumulative sums: {m}");
+                assert!(m.get("sum").is_none(), "no cumulative sums: {m:?}");
                 (
                     m["name"].as_str().unwrap().to_string(),
                     m["gauge"]["dataPoints"][0]["asInt"]
@@ -669,7 +674,7 @@ mod tests {
         let body = with_machine(&machine);
         let got: Vec<(String, String, String)> =
             body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
-                .as_array()
+                .as_seq()
                 .unwrap()
                 .iter()
                 .filter(|m| {
@@ -783,7 +788,7 @@ mod tests {
         let version = dir.path().join(SCHEMA_VERSION_FILE);
         assert!(metrics.is_file());
         assert_eq!(std::fs::read_to_string(version).unwrap().trim(), "2");
-        let body: Value = serde_json::from_str(&std::fs::read_to_string(metrics).unwrap()).unwrap();
+        let body: Value = deser_json::from_str(&std::fs::read_to_string(metrics).unwrap()).unwrap();
         assert_eq!(
             body["resourceMetrics"][0]["scopeMetrics"][0]["scope"]["name"],
             "kache.cache"
@@ -811,7 +816,7 @@ mod tests {
         assert!(all_attr_keys(&body).contains("kache.cache.scenario"));
         assert!(all_attr_keys(&body).contains("kache.cache.phase"));
         let attrs = body["resourceMetrics"][0]["resource"]["attributes"]
-            .as_array()
+            .as_seq()
             .unwrap();
         let scenario = attrs
             .iter()
@@ -824,7 +829,7 @@ mod tests {
             .unwrap();
         assert_eq!(phase["value"]["stringValue"], "warm");
         assert!(
-            !body.to_string().contains("kache.bench."),
+            !deser_json::to_string(&body).unwrap().contains("kache.bench."),
             "join key must not pull bench metric names onto the cache dump"
         );
     }

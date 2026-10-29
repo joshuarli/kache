@@ -1,6 +1,6 @@
 //! Real rustdoc output must follow edits below non-mod.rs modules.
 
-use serde_json::Value;
+use deser_value::Value;
 use std::fs;
 
 mod common;
@@ -105,7 +105,7 @@ fn assert_doc_edit_refreshes(root_source: &str, module_file: &str, child_file: &
     let events: Vec<Value> = fs::read_to_string(cache.join("events.jsonl"))
         .unwrap()
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| deser_json::from_str(line).unwrap())
         .collect();
     assert_eq!(events.len(), 4);
     assert_eq!(events[0]["result"], "miss");

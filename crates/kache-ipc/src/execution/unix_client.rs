@@ -153,7 +153,7 @@ impl Client {
             frame.last() == Some(&b'\n'),
             "incomplete native process request"
         );
-        let command = serde_json::from_slice(&frame)?;
+        let command = deser_json::from_slice(&frame)?;
         let (reply, files) = match self.execute(command) {
             Ok(result) => result,
             Err(error) => (

@@ -9,7 +9,7 @@ fn write_config(cache: &Path, readonly: Option<&Path>) -> PathBuf {
     // must be committed here rather than queued for background publication.
     std::fs::create_dir_all(cache).unwrap();
     let path = isolated_config_path(cache);
-    let quote = |path: &Path| toml::Value::String(path.to_string_lossy().into_owned());
+    let quote = |path: &Path| common::toml_basic(&path.to_string_lossy());
     let fallback = readonly
         .map(|dir| format!("readonly_store = {}\n", quote(dir)))
         .unwrap_or_default();
@@ -50,15 +50,15 @@ fn compile(cache: &Path, config: &Path, source: &Path, out: &Path) {
     );
 }
 
-fn last_event(cache: &Path) -> serde_json::Value {
+fn last_event(cache: &Path) -> deser_value::Value {
     last_event_for(cache, "readonly_probe")
 }
 
-fn last_event_for(cache: &Path, crate_name: &str) -> serde_json::Value {
+fn last_event_for(cache: &Path, crate_name: &str) -> deser_value::Value {
     std::fs::read_to_string(cache.join("events.jsonl"))
         .unwrap()
         .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|line| deser_json::from_str::<deser_value::Value>(line).ok())
         .rfind(|event| event["crate_name"] == crate_name)
         .expect("a compiler event")
 }
@@ -100,11 +100,11 @@ fn rejected_readonly_hits_are_recompiled_and_cached_locally() {
         let host_config = write_config(&host, None);
         compile(&host, &host_config, &source, &root.path().join("host-out"));
         let host_event = last_event(&host);
-        assert_eq!(host_event["result"], "miss", "{host_event}");
+        assert_eq!(host_event["result"], "miss", "{host_event:?}");
         let key = host_event["cache_key"].as_str().unwrap();
         let metadata = host.join("store").join(key).join("meta.json");
         let mut meta: kache_format::EntryMeta =
-            serde_json::from_slice(&std::fs::read(&metadata).unwrap()).unwrap();
+            deser_json::from_slice(&std::fs::read(&metadata).unwrap()).unwrap();
         match rejection {
             "coverage" => meta.emit_kinds = vec!["metadata".into()],
             "missing-dependency" => {
@@ -128,7 +128,7 @@ fn rejected_readonly_hits_are_recompiled_and_cached_locally() {
         if rejection == "malformed-metadata" {
             std::fs::write(&metadata, "{broken JSON").unwrap();
         } else {
-            std::fs::write(&metadata, serde_json::to_vec(&meta).unwrap()).unwrap();
+            std::fs::write(&metadata, deser_json::to_string(&meta).map(String::into_bytes).unwrap()).unwrap();
         }
         let original_metadata = std::fs::read(&metadata).unwrap();
         // Keep the WAL side files alive while the job opens its reader.
@@ -147,12 +147,12 @@ fn rejected_readonly_hits_are_recompiled_and_cached_locally() {
             cold["cache_key"], key,
             "the host entry must have been considered"
         );
-        assert_eq!(cold["result"], "miss", "{rejection}: {cold}");
+        assert_eq!(cold["result"], "miss", "{rejection}: {cold:?}");
         assert!(job.join("store").join(key).join("meta.json").is_file());
         std::fs::remove_dir_all(&out).unwrap();
         compile(&job, &job_config, &source, &out);
         let warm = last_event(&job);
-        assert_eq!(warm["result"], "local_hit", "{rejection}: {warm}");
+        assert_eq!(warm["result"], "local_hit", "{rejection}: {warm:?}");
         assert_eq!(std::fs::read(&metadata).unwrap(), original_metadata);
         drop(owner);
     }
@@ -177,12 +177,12 @@ fn empty_job_store_uses_the_readonly_cc_hit_before_compiling() {
     let host_config = write_config(&host, None);
     compile_cc(&work, &host, &host_config);
     let cold = last_event_for(&host, "readonly_probe.c");
-    assert_eq!(cold["result"], "miss", "{cold}");
+    assert_eq!(cold["result"], "miss", "{cold:?}");
     assert_eq!(
         cold["preprocessor_runs"], 0,
-        "the host must exercise compile-before-key; otherwise this test cannot catch the gate regression: {cold}"
+        "the host must exercise compile-before-key; otherwise this test cannot catch the gate regression: {cold:?}"
     );
-    assert_eq!(cold["compiler_runs"], 1, "{cold}");
+    assert_eq!(cold["compiler_runs"], 1, "{cold:?}");
     let expected_object = std::fs::read(work.join("readonly_probe.o")).unwrap();
     std::fs::remove_file(work.join("readonly_probe.o")).unwrap();
     let owner = rusqlite::Connection::open(host.join("index.db")).unwrap();
@@ -196,8 +196,8 @@ fn empty_job_store_uses_the_readonly_cc_hit_before_compiling() {
     compile_cc(&work, &job, &job_config);
     let hit = last_event_for(&job, "readonly_probe.c");
     assert_eq!(hit["cache_key"], cold["cache_key"]);
-    assert_eq!(hit["result"], "local_hit", "{hit}");
-    assert_eq!(hit["compiler_runs"], 0, "{hit}");
+    assert_eq!(hit["result"], "local_hit", "{hit:?}");
+    assert_eq!(hit["compiler_runs"], 0, "{hit:?}");
     assert_eq!(
         std::fs::read(work.join("readonly_probe.o")).unwrap(),
         expected_object
@@ -223,11 +223,11 @@ fn failed_readonly_cc_restore_is_cached_locally_and_writable_failure_uses_passth
         let host_config = write_config(&host, None);
         compile_cc(&work, &host, &host_config);
         let seed = last_event_for(&host, "readonly_probe.c");
-        assert_eq!(seed["result"], "miss", "{seed}");
+        assert_eq!(seed["result"], "miss", "{seed:?}");
         let key = seed["cache_key"].as_str().unwrap();
         let metadata = host.join("store").join(key).join("meta.json");
         let mut meta: kache_format::EntryMeta =
-            serde_json::from_slice(&std::fs::read(&metadata).unwrap()).unwrap();
+            deser_json::from_slice(&std::fs::read(&metadata).unwrap()).unwrap();
         let mut duplicate = meta
             .files
             .iter()
@@ -239,7 +239,7 @@ fn failed_readonly_cc_restore_is_cached_locally_and_writable_failure_uses_passth
         // Both metadata records describe a valid blob, so lookup accepts the
         // entry. Restore maps both objects to the same output and rejects it
         // before publication. This needs no race or injected I/O failure.
-        let broken_metadata = serde_json::to_vec(&meta).unwrap();
+        let broken_metadata = deser_json::to_string(&meta).map(String::into_bytes).unwrap();
         std::fs::write(&metadata, &broken_metadata).unwrap();
         let object = work.join("readonly_probe.o");
         std::fs::remove_file(&object).unwrap();
@@ -272,17 +272,17 @@ fn failed_readonly_cc_restore_is_cached_locally_and_writable_failure_uses_passth
         assert_eq!(std::fs::read(&metadata).unwrap(), broken_metadata);
         assert!(object.is_file(), "restore rejection must still compile");
         if read_only {
-            assert_eq!(first["cache_key"], key, "{first}");
-            assert_eq!(first["result"], "miss", "{first}");
-            assert_eq!(first["compiler_runs"], 1, "{first}");
+            assert_eq!(first["cache_key"], key, "{first:?}");
+            assert_eq!(first["result"], "miss", "{first:?}");
+            assert_eq!(first["compiler_runs"], 1, "{first:?}");
             assert!(
                 first["lookup_rejection"]
                     .as_str()
                     .unwrap()
                     .contains("maps multiple artifacts"),
-                "the host lookup must reach the restore rejection: {first}"
+                "the host lookup must reach the restore rejection: {first:?}"
             );
-            let repaired: kache_format::EntryMeta = serde_json::from_slice(
+            let repaired: kache_format::EntryMeta = deser_json::from_slice(
                 &std::fs::read(cache.join("store").join(key).join("meta.json")).unwrap(),
             )
             .unwrap();
@@ -296,23 +296,23 @@ fn failed_readonly_cc_restore_is_cached_locally_and_writable_failure_uses_passth
                 "the job must store its own usable entry"
             );
         } else {
-            assert_eq!(first["result"], "passthrough", "{first}");
+            assert_eq!(first["result"], "passthrough", "{first:?}");
             assert!(
                 first["passthrough_reason"]
                     .as_str()
                     .unwrap()
                     .contains("maps multiple artifacts"),
-                "the writable entry must reach the same restore rejection: {first}"
+                "the writable entry must reach the same restore rejection: {first:?}"
             );
         }
         std::fs::remove_file(&object).unwrap();
         compile_cc(&work, &cache, &config);
         let second = last_event_for(&cache, "readonly_probe.c");
         if read_only {
-            assert_eq!(second["result"], "local_hit", "{second}");
-            assert_eq!(second["compiler_runs"], 0, "{second}");
+            assert_eq!(second["result"], "local_hit", "{second:?}");
+            assert_eq!(second["compiler_runs"], 0, "{second:?}");
         } else {
-            assert_eq!(second["result"], "passthrough", "{second}");
+            assert_eq!(second["result"], "passthrough", "{second:?}");
         }
         assert!(object.is_file());
         assert_eq!(std::fs::read(&metadata).unwrap(), broken_metadata);

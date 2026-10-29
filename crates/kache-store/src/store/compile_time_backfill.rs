@@ -102,7 +102,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
     pub(super) fn compile_time_outcome(&self, candidate: Candidate) -> Outcome {
         let read = || -> Result<i64> {
             let bytes = fs::read(self.entry_dir(&candidate.key).join("meta.json"))?;
-            let meta: EntryMeta = serde_json::from_slice(&bytes)?;
+            let meta: EntryMeta = deser_json::from_slice(&bytes)?;
             anyhow::ensure!(meta.cache_key == candidate.key, "metadata key mismatch");
             Ok(i64::try_from(meta.compile_time_ms)?)
         };

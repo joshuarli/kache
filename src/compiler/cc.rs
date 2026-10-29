@@ -5693,12 +5693,12 @@ fn cc_shadowing_names(
         let probes = cc_header_probe_scan(&cc_splice_lines(&bytes));
         Ok((
             blake3::hash(&bytes).to_hex().to_string(),
-            serde_json::to_string(&probes)?,
+            deser_json::to_string(&probes)?,
         ))
     })?;
     let scans = scans
         .iter()
-        .map(|scan| serde_json::from_str::<Option<CcHeaderProbeScan>>(scan))
+        .map(|scan| deser_json::from_str::<Option<CcHeaderProbeScan>>(scan))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let definitions = parsed
         .defines
@@ -5761,7 +5761,7 @@ fn cc_shadowing_names(
 }
 
 /// A header name an availability probe tests for.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 struct CcHeaderProbe {
     name: PathBuf,
     /// `"name"`, searched from the probing file's directory first; else
@@ -5773,7 +5773,7 @@ struct CcHeaderProbe {
 /// every read header has been scanned: an alias can be defined in one header
 /// and used in another. Conditional definitions are an overapproximation;
 /// every possible literal probe participates in the availability guard.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Default, deser::Serialize, deser::Deserialize)]
 struct CcHeaderProbeScan {
     aliases: Vec<(String, String)>,
     uses: Vec<(String, Option<CcHeaderProbe>)>,
@@ -5783,13 +5783,13 @@ struct CcHeaderProbeScan {
     paste_forwarders: Vec<CcHeaderPasteForwarder>,
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, deser::Serialize, deser::Deserialize)]
 struct CcHeaderMacroUse {
     name: String,
     arguments: Option<Vec<Vec<String>>>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(deser::Serialize, deser::Deserialize)]
 struct CcHeaderPasteForwarder {
     name: String,
     parameters: Option<Vec<String>>,

@@ -1,6 +1,6 @@
 //! Environment-derived documentation must reflect the compiler's current input.
 
-use serde_json::Value;
+use deser_value::Value;
 use std::{fs, path::PathBuf};
 
 mod common;
@@ -95,7 +95,7 @@ impl DocFixture {
         fs::read_to_string(self.cache.join("events.jsonl"))
             .unwrap()
             .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
+            .map(|line| deser_json::from_str(line).unwrap())
             .collect()
     }
 

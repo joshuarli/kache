@@ -15,7 +15,7 @@
 //! tests feed it a fixture tree on any host. The macOS wrappers only call
 //! `sysctl` and `mount`; their parsers are platform-neutral and tested here.
 
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// The machine a bench ran on.
@@ -36,7 +36,7 @@ pub struct HostInfo {
     pub work_dir_fs: Option<String>,
     /// The cgroup v2 `cpu.max` of this process, when the host has one.
     pub cgroup_cpu_max: Option<CpuMax>,
-    #[serde(flatten)]
+    #[deser(flatten)]
     pub runner: RunnerEnv,
 }
 
@@ -751,7 +751,7 @@ mod tests {
 
     #[test]
     fn unknown_host_values_serialize_as_null() {
-        let json = serde_json::to_value(HostInfo::default()).unwrap();
+        let json = deser_value::to_value(&HostInfo::default()).unwrap();
         for key in [
             "logical_cpus",
             "cpu_model",
@@ -764,7 +764,7 @@ mod tests {
             "github_run_id",
             "github_run_attempt",
         ] {
-            assert!(json[key].is_null(), "{key} must be null, got {}", json[key]);
+            assert!(json[key].is_null(), "{key} must be null, got {:?}", json[key]);
         }
     }
 

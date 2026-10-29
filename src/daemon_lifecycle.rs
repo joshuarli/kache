@@ -158,7 +158,7 @@ pub(super) fn current_socket(socket: &Path, deadline: Instant) -> Result<Option<
             Err(error) if !transient(&error) => return Err(error),
             Err(_) => return Ok(None),
         };
-    let response: Response = serde_json::from_str(&response)?;
+    let response: Response = deser_json::from_str(&response)?;
     let Some(health) = response.health.filter(|_| response.ok) else {
         return Ok(None);
     };

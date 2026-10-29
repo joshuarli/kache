@@ -41,10 +41,10 @@ pub(crate) fn desired_assignments() -> &'static [CargoEnvAssignment] {
 /// Assignments not already present in `content`. A key with any value, including
 /// a different one, is left alone.
 pub(crate) fn missing_assignments(content: &str) -> Result<Vec<CargoEnvAssignment>> {
-    let parsed: toml::Value = if content.trim().is_empty() {
-        toml::Value::Table(toml::map::Map::new())
+    let parsed: deser_value::Value = if content.trim().is_empty() {
+        deser_value::Value::from(deser_value::Map::new())
     } else {
-        toml::from_str(content).context("parsing cargo config")?
+        deser_toml::from_str(content).context("parsing cargo config")?
     };
     let env_table = parsed.get("env");
     Ok(desired_assignments()

@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 pub use kache_store::filesystem::*;
-use serde::Serialize;
+use deser::Serialize;
 use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,7 +32,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 
 /// How complete the clone probe is on this platform.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 pub enum ClonedCoverage {
     /// macOS getattrlist private/shared sizes are trustworthy.
     Full,
@@ -66,11 +66,11 @@ struct JsonDoc<'a, T: Serialize> {
     schema_version: u32,
     command: &'a str,
     success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     error: Option<Failure<'a>>,
-    #[serde(flatten)]
+    #[deser(flatten)]
     body: T,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[deser(skip_serializing_if = Vec::is_empty)]
     next: Vec<NextAction>,
 }
 
@@ -153,11 +153,27 @@ pub(crate) fn emit_error(command: &str, code: &str, error: &anyhow::Error) -> Re
 
 /// Pretty JSON and a newline, as one stdout document.
 fn write_document(out: &mut impl std::io::Write, doc: &impl Serialize) -> Result<()> {
-    serde_json::to_writer_pretty(&mut *out, doc)
-        .map_err(std::io::Error::from)
+    deser_json::SerializerConfig::builder()
+        .pretty(deser_json::Indent::Spaces(2))
+        .build()
+        .to_writer(&mut *out, doc)
+        .map_err(|error| io_error_from_deser(&error))
         .and_then(|()| writeln!(out))
         .and_then(|()| out.flush())
         .map_err(stdout_error)
+}
+
+fn io_error_from_deser(error: &impl std::error::Error) -> std::io::Error {
+    let broken_pipe = std::error::Error::source(error).is_some_and(|source| {
+        source
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::BrokenPipe)
+    });
+    if broken_pipe {
+        std::io::Error::new(std::io::ErrorKind::BrokenPipe, error.to_string())
+    } else {
+        std::io::Error::other(error.to_string())
+    }
 }
 
 /// The reader of stdout went away, as with `kache --json --help | head`.
@@ -441,7 +457,7 @@ mod tests {
     #[test]
     fn a_document_is_pretty_json_and_one_newline() {
         let mut out = Vec::new();
-        write_document(&mut out, &serde_json::json!({ "a": 1 })).unwrap();
+        write_document(&mut out, &deser_value::value!({ "a": 1 })).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "{\n  \"a\": 1\n}\n");
     }
 
@@ -465,7 +481,7 @@ mod tests {
             &mut pipe(),
             "clean",
             Some("could not remove"),
-            serde_json::json!({}),
+            deser_value::value!({}),
             Vec::new(),
         )
         .unwrap_err();
@@ -474,7 +490,7 @@ mod tests {
             &mut pipe(),
             "clean",
             None,
-            serde_json::json!({}),
+            deser_value::value!({}),
             Vec::new(),
         )
         .unwrap_err();
@@ -484,11 +500,11 @@ mod tests {
             &mut out,
             "clean",
             Some("could not remove"),
-            serde_json::json!({}),
+            deser_value::value!({}),
             Vec::new(),
         )
         .unwrap();
-        let doc: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        let doc: deser_value::Value = deser_json::from_slice(&out).unwrap();
         assert_eq!(doc["success"], false);
         assert_eq!(doc["error"]["code"], "command_failed");
         assert!(still_failed(Ok(()), Some("failed")).is_ok());
@@ -501,7 +517,7 @@ mod tests {
     fn a_closed_stdout_ends_quietly_and_other_write_errors_fail() {
         let closed = write_document(
             &mut Failing(std::io::ErrorKind::BrokenPipe),
-            &serde_json::json!({}),
+            &deser_value::value!({}),
         )
         .unwrap_err();
         assert_eq!(failure_exit(&closed), None);
@@ -509,7 +525,7 @@ mod tests {
 
         let full = write_document(
             &mut Failing(std::io::ErrorKind::StorageFull),
-            &serde_json::json!({}),
+            &deser_value::value!({}),
         )
         .unwrap_err();
         assert_eq!(failure_exit(&full), Some(("command_failed", 1)));
@@ -537,7 +553,7 @@ mod tests {
 
     #[test]
     fn help_document_lists_visible_commands_in_help_order() {
-        let doc = serde_json::to_value(help_document()).unwrap();
+        let doc = deser_value::to_value(&help_document()).unwrap();
         assert_eq!(doc["name"], "kache");
         assert!(
             doc["usage"]
@@ -546,7 +562,7 @@ mod tests {
                 .starts_with("Usage: kache")
         );
         let names: Vec<&str> = doc["subcommands"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .map(|command| command["name"].as_str().unwrap())
@@ -558,7 +574,7 @@ mod tests {
         let init = &doc["subcommands"][0];
         assert!(
             init["arguments"]
-                .as_array()
+                .as_seq()
                 .unwrap()
                 .iter()
                 .any(|arg| arg["long"] == "yes")

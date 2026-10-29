@@ -293,17 +293,33 @@ impl std::fmt::Display for UtcTime {
     }
 }
 
-impl serde::Serialize for UtcTime {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.to_rfc3339_z())
+impl deser::Serialize for UtcTime {
+    fn serialize<'a>(
+        value: &'a Self,
+        _state: &mut deser::State,
+    ) -> Result<deser::ser::Emit<'a>, deser::Error> {
+        Ok(deser::ser::Emit::Atom(deser::Atom::Str(
+            value.to_rfc3339_z().into(),
+        )))
     }
 }
 
-impl<'de> serde::Deserialize<'de> for UtcTime {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = String::deserialize(deserializer)?;
-        UtcTime::parse_rfc3339(&raw)
-            .ok_or_else(|| serde::de::Error::custom("invalid RFC 3339 timestamp"))
+impl<'de> deser::Deserialize<'de> for UtcTime {
+    fn deserialize_atom(
+        slot: &mut deser::de::Slot<Self>,
+        atom: deser::Atom,
+        state: &mut deser::State,
+    ) -> Result<(), deser::Error> {
+        match atom {
+            deser::Atom::Str(text) => {
+                let time = UtcTime::parse_rfc3339(text.as_str()).ok_or_else(|| {
+                    deser::Error::new(deser::ErrorKind::InvalidValue, "invalid RFC 3339 timestamp")
+                })?;
+                slot.set(time);
+                Ok(())
+            }
+            other => deser::de::default_atom(slot, other, state),
+        }
     }
 }
 

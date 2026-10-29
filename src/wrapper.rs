@@ -371,7 +371,7 @@ fn auto_gc_threshold(max_size: u64) -> u64 {
 /// remaining bytes are blobs that target directories still hardlink or
 /// clone, which no eviction can free, so another sweep five minutes later
 /// frees nothing and only competes with builds for the index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 struct AutoGcBackoff {
     /// Unix seconds when the sweep finished.
     since: u64,
@@ -381,7 +381,7 @@ struct AutoGcBackoff {
     size_after: u64,
     /// Bytes of it the sweep found held by target directories, which no
     /// sweep can free (kunobi-ninja/kache#1206).
-    #[serde(default)]
+    #[deser(default)]
     held: u64,
 }
 
@@ -400,7 +400,7 @@ fn recent_held_bytes(backoff: Option<AutoGcBackoff>, now: u64) -> u64 {
 
 fn read_auto_gc_backoff(cache_dir: &Path) -> Option<AutoGcBackoff> {
     let json = std::fs::read(auto_gc_backoff_path(cache_dir)).ok()?;
-    serde_json::from_slice(&json).ok()
+    deser_json::from_slice(&json).ok()
 }
 
 /// The record after a sweep that left the store at `size_after`, `held` of
@@ -488,7 +488,7 @@ pub(crate) fn record_auto_gc_outcome(config: &Config, size_after: u64, held: u64
         return;
     };
     log::info!("{}", auto_gc_outcome_line(&next, config.max_size));
-    if let Ok(json) = serde_json::to_vec(&next)
+    if let Ok(json) = deser_json::to_string(&next).map(String::into_bytes)
         && let Err(e) = crate::atomic::atomic_replace(&path, &json)
     {
         log::debug!("auto-gc: could not write {}: {e:#}", path.display());
@@ -517,7 +517,7 @@ fn auto_gc_outcome_line(outcome: &AutoGcBackoff, max_size: u64) -> String {
 pub(crate) fn age_auto_gc_record_for_test(cache_dir: &Path, secs: u64) {
     let mut record = read_auto_gc_backoff(cache_dir).expect("a recorded sweep");
     record.since -= secs;
-    let json = serde_json::to_vec(&record).unwrap();
+    let json = deser_json::to_string(&record).map(String::into_bytes).unwrap();
     std::fs::write(auto_gc_backoff_path(cache_dir), json).unwrap();
 }
 
@@ -532,7 +532,7 @@ pub(crate) fn auto_gc_backoff_interval_for_test(cache_dir: &Path) -> Option<u64>
 pub(crate) fn expire_auto_gc_backoff_for_test(cache_dir: &Path) {
     let mut backoff = read_auto_gc_backoff(cache_dir).expect("a recorded backoff");
     backoff.since -= backoff.interval_secs;
-    let json = serde_json::to_vec(&backoff).unwrap();
+    let json = deser_json::to_string(&backoff).map(String::into_bytes).unwrap();
     std::fs::write(auto_gc_backoff_path(cache_dir), json).unwrap();
 }
 

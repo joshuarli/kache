@@ -161,7 +161,7 @@ impl Trigger<'_> {
 /// When the index was first seen over the threshold. Kept on disk because a
 /// CI daemon restarts per job and an in-memory timer would never reach
 /// [`FORCE_AFTER`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 struct OverThreshold {
     /// Unix seconds.
     since: u64,
@@ -173,7 +173,7 @@ fn state_path(cache_dir: &Path) -> PathBuf {
 
 fn read_since(cache_dir: &Path) -> Option<u64> {
     let json = std::fs::read(state_path(cache_dir)).ok()?;
-    serde_json::from_slice::<OverThreshold>(&json)
+    deser_json::from_slice::<OverThreshold>(&json)
         .ok()
         .map(|state| state.since)
 }
@@ -190,7 +190,7 @@ fn observe_over_threshold(cache_dir: &Path, now: u64) -> Duration {
     let stored = read_since(cache_dir);
     let since = resolve_since(stored, now);
     if stored != Some(since)
-        && let Ok(json) = serde_json::to_vec(&OverThreshold { since })
+        && let Ok(json) = deser_json::to_string(&OverThreshold { since }).map(String::into_bytes)
         && let Err(error) = crate::atomic::atomic_replace(&state_path(cache_dir), &json)
     {
         log::debug!("index compaction: could not record the threshold time: {error:#}");

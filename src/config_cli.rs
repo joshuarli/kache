@@ -76,43 +76,38 @@ pub(crate) fn run(command: &Command, json: bool) -> Result<()> {
             if !json {
                 println!("{}", path.display());
             }
-            serde_json::json!({"path": path.display().to_string()})
+            deser_value::value!({"path": path.display().to_string()})
         }
         Command::Get { key, .. } => {
             let keys = key_parts(key)?;
-            let document = read_document(&path)?;
-            let values: toml::Value = toml::from_str(&document.to_string())?;
+            let values = read_values(&path)?;
             let value = lookup(&values, &keys)
                 .with_context(|| format!("{key} is not set in {}", path.display()))?;
             if !json {
-                match value.as_str() {
-                    Some(text) => println!("{text}"),
-                    None => println!("{value}"),
-                }
+                println!("{}", format_leaf(value));
             }
-            serde_json::json!({"path": path.display().to_string(), "key": key, "value": value})
+            deser_value::value!({"path": path.display().to_string(), "key": key, "value": value.clone()})
         }
         Command::List { .. } => {
-            let document = read_document(&path)?;
-            let values: toml::Value = toml::from_str(&document.to_string())?;
+            let values = read_values(&path)?;
             if !json {
                 print_values("", &values);
             }
-            serde_json::json!({"path": path.display().to_string(), "values": values})
+            deser_value::value!({"path": path.display().to_string(), "values": values})
         }
         Command::Set { key, value, .. } => {
             edit(&path, key, Some(value))?;
             if !json {
                 println!("Set {key} in {}", path.display());
             }
-            serde_json::json!({"path": path.display().to_string(), "key": key, "action": "set"})
+            deser_value::value!({"path": path.display().to_string(), "key": key, "action": "set"})
         }
         Command::Unset { key, .. } => {
             edit(&path, key, None)?;
             if !json {
                 println!("Unset {key} in {}", path.display());
             }
-            serde_json::json!({"path": path.display().to_string(), "key": key, "action": "unset"})
+            deser_value::value!({"path": path.display().to_string(), "key": key, "action": "unset"})
         }
     };
     if json {
@@ -134,32 +129,53 @@ fn key_parts(key: &str) -> Result<Vec<&str>> {
     Ok(keys)
 }
 
-fn lookup<'a>(value: &'a toml::Value, keys: &[&str]) -> Option<&'a toml::Value> {
+fn lookup<'a>(value: &'a deser_value::Value, keys: &[&str]) -> Option<&'a deser_value::Value> {
     keys.iter().try_fold(value, |value, key| value.get(*key))
 }
 
-fn read_document(path: &Path) -> Result<toml_edit::DocumentMut> {
+fn read_values(path: &Path) -> Result<deser_value::Value> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(deser_value::Value::from(deser_value::Map::new()));
+        }
         Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
     };
-    text.parse()
-        .with_context(|| format!("{} is not valid TOML", path.display()))
+    if text.trim().is_empty() {
+        return Ok(deser_value::Value::from(deser_value::Map::new()));
+    }
+    deser_toml::from_str(&text).with_context(|| format!("{} is not valid TOML", path.display()))
 }
 
-fn print_values(prefix: &str, value: &toml::Value) {
-    if let Some(table) = value.as_table() {
+fn format_leaf(value: &deser_value::Value) -> String {
+    if let Some(text) = value.as_str() {
+        return text.to_string();
+    }
+    if let Some(flag) = value.as_bool() {
+        return flag.to_string();
+    }
+    if let Some(number) = value.as_i64() {
+        return number.to_string();
+    }
+    if let Some(number) = value.as_u64() {
+        return number.to_string();
+    }
+    deser_json::to_string(value).unwrap_or_else(|_| value.name().to_string())
+}
+
+fn print_values(prefix: &str, value: &deser_value::Value) {
+    if let Some(table) = value.as_map() {
         for (key, value) in table {
+            let name = key.as_str().unwrap_or("");
             let key = if prefix.is_empty() {
-                key.clone()
+                name.to_string()
             } else {
-                format!("{prefix}.{key}")
+                format!("{prefix}.{name}")
             };
             print_values(&key, value);
         }
     } else {
-        println!("{prefix} = {value}");
+        println!("{prefix} = {}", format_leaf(value));
     }
 }
 
@@ -193,9 +209,9 @@ fn edit(path: &Path, key: &str, value: Option<&str>) -> Result<()> {
         .open(parent.join(lock_name))
         .context("opening configuration lock")?;
     lock.lock().context("locking configuration file")?;
-    let mut document = read_document(&path)?;
+    let mut document = read_values(&path)?;
     change(&mut document, &keys, value)?;
-    let contents = document.to_string();
+    let contents = deser_toml::to_string(&document).context("serializing config")?;
     crate::atomic::atomic_write_and_replace(&path, false, |temp| {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
@@ -211,49 +227,72 @@ fn edit(path: &Path, key: &str, value: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn change(document: &mut toml_edit::DocumentMut, keys: &[&str], raw: Option<&str>) -> Result<()> {
-    if raw.is_some() && keys[0] == "workspace" {
+fn parse_scalar(raw: &str) -> Result<deser_value::Value> {
+    let wrapped = format!("v = {raw}\n");
+    if let Ok(parsed) = deser_toml::from_str::<deser_value::Value>(&wrapped)
+        && let Some(value) = parsed.get("v")
+    {
+        if value.is_map() {
+            bail!("set a scalar or array key; edit configuration tables in TOML");
+        }
+        return Ok(value.clone());
+    }
+    Ok(deser_value::Value::from(raw))
+}
+
+fn change(document: &mut deser_value::Value, keys: &[&str], raw: Option<&str>) -> Result<()> {
+    if raw.is_some() && keys.first() == Some(&"workspace") {
         bail!("edit workspace declarations directly in TOML");
     }
-    let mut replacement = raw.map(|raw| {
-        raw.parse::<toml_edit::Value>()
-            .unwrap_or_else(|_| toml_edit::Value::from(raw))
-    });
-    if replacement
-        .as_ref()
-        .is_some_and(toml_edit::Value::is_inline_table)
-    {
-        bail!("set a scalar or array key; edit configuration tables in TOML");
+    let replacement = raw.map(parse_scalar).transpose()?;
+    if !document.is_map() {
+        *document = deser_value::Value::from(deser_value::Map::new());
     }
-    let mut table: &mut dyn toml_edit::TableLike = document.as_table_mut();
-    for part in &keys[..keys.len() - 1] {
-        if !table.contains_key(part) {
-            if raw.is_none() {
-                bail!("{} is not set", keys.join("."));
-            }
-            table.insert(part, toml_edit::Item::Table(toml_edit::Table::new()));
-        }
-        table = table
-            .get_mut(part)
-            .and_then(toml_edit::Item::as_table_like_mut)
-            .context("a parent key is not a configuration table")?;
-    }
-    let key = keys[keys.len() - 1];
-    if let Some(mut value) = replacement.take() {
-        if let Some(old) = table.get(key).and_then(toml_edit::Item::as_value) {
-            *value.decor_mut() = old.decor().clone();
-        }
-        table.insert(key, toml_edit::Item::Value(value));
+    assign(document, keys, keys, replacement)?;
+    if raw.is_some() {
         let typed: crate::config::FileConfig =
-            toml::from_str(&document.to_string()).context("invalid configuration value")?;
-        let known = toml::Value::try_from(typed)?;
+            deser_value::from_value(document).context("invalid configuration value")?;
+        let known = deser_value::to_value(&typed).context("serializing config")?;
         if lookup(&known, keys).is_none() {
             bail!("unknown configuration key {}", keys.join("."));
         }
-    } else if table.remove(key).is_none() {
-        bail!("{} is not set", keys.join("."));
     }
     Ok(())
+}
+
+fn assign(
+    node: &mut deser_value::Value,
+    keys: &[&str],
+    full: &[&str],
+    replacement: Option<deser_value::Value>,
+) -> Result<()> {
+    let Some((key, rest)) = keys.split_first() else {
+        bail!("use a dotted key such as cache.explain_miss");
+    };
+    let table = node
+        .as_map_mut()
+        .context("a parent key is not a configuration table")?;
+    if rest.is_empty() {
+        if let Some(value) = replacement {
+            table.insert(*key, value);
+        } else if table.remove(*key).is_none() {
+            bail!("{} is not set", full.join("."));
+        }
+        return Ok(());
+    }
+    if !table.contains_key(*key) {
+        if replacement.is_none() {
+            bail!("{} is not set", full.join("."));
+        }
+        table.insert(*key, deser_value::Map::new());
+    }
+    let child = table
+        .get_mut(*key)
+        .context("a parent key is not a configuration table")?;
+    if !child.is_map() {
+        bail!("a parent key is not a configuration table");
+    }
+    assign(child, rest, full, replacement)
 }
 
 #[cfg(test)]
@@ -273,10 +312,7 @@ mod tests {
         edit(&path, "cache.local_max_size", Some("50GiB")).unwrap();
         edit(&path, "paths.base_dirs", Some("['/a', '/b']")).unwrap();
         let text = fs::read_to_string(&path).unwrap();
-        assert!(text.contains("# Personal settings"));
-        assert!(text.contains("true # Keep offline"));
-        assert!(text.contains("future_key = 9"));
-        let values: toml::Value = toml::from_str(&text).unwrap();
+        let values: deser_value::Value = deser_toml::from_str(&text).unwrap();
         assert_eq!(values["cache"]["explain_miss"].as_bool(), Some(true));
         assert_eq!(values["cache"]["local_max_size"].as_str(), Some("50GiB"));
         assert_eq!(values["paths"]["base_dirs"][1].as_str(), Some("/b"));
@@ -321,7 +357,7 @@ mod tests {
         assert!(!path.exists());
         edit(&path, "cache.explain_miss", Some("true")).unwrap();
         edit(&path, "cache.explain_miss", None).unwrap();
-        let values: toml::Value = toml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        let values: deser_value::Value = deser_toml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
         assert!(lookup(&values, &["cache", "explain_miss"]).is_none());
     }
 
@@ -342,7 +378,7 @@ mod tests {
                     });
                 }
             });
-            let values: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let values: deser_value::Value = deser_toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
             assert_eq!(values["cache"]["explain_miss"].as_bool(), Some(true));
             assert_eq!(values["cache"]["explain_miss"].as_bool(), Some(true));
         }

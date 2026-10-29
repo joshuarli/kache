@@ -77,8 +77,8 @@ fn last_unrecorded(cache_dir: &Path) -> u64 {
 }
 
 /// Why a target directory was removed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, deser::Serialize)]
+#[deser(rename_all = "snake_case")]
 pub(crate) enum Reason {
     /// Its workspace has been deleted.
     Orphaned,
@@ -352,7 +352,7 @@ fn intact(tracked: &TrackedTargetRoot) -> bool {
 }
 
 /// What the daemon's next quiet pass would do to one tracked target.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, deser::Serialize)]
 pub(crate) struct Plan {
     /// Why the whole target would go. Under pressure it goes only if its
     /// volume is still below the floor once unused units are pruned.

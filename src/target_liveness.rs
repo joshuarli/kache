@@ -3,7 +3,7 @@
 //! Receipts are local evidence, never a replacement for Cargo's freshness
 //! rules. Changed inputs, unknown layouts and busy roots retain all outputs.
 use anyhow::{Context, Result, bail, ensure};
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -29,7 +29,7 @@ pub(crate) struct Plan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 struct Stamp {
     len: u64,
     modified: SystemTime,
@@ -40,7 +40,7 @@ type Snapshot = BTreeMap<PathBuf, Stamp>;
 type StagedParts = Vec<(PathBuf, PathBuf)>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 struct ObservedUnit {
     fingerprint: PathBuf,
     parts: Vec<PathBuf>,
@@ -50,7 +50,7 @@ struct ObservedUnit {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 struct Receipt {
     schema: u32,
     target: PathBuf,
@@ -77,8 +77,8 @@ pub(crate) struct Capture {
     complete: bool,
     observed_bytes: usize,
     invalid: bool,
-    artifacts: Vec<serde_json::Value>,
-    scripts: Vec<serde_json::Value>,
+    artifacts: Vec<deser_value::Value>,
+    scripts: Vec<deser_value::Value>,
 }
 
 impl Capture {
@@ -185,7 +185,7 @@ impl Capture {
             self.invalid = true;
             return false;
         }
-        let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) else {
+        let Ok(value) = deser_json::from_slice::<deser_value::Value>(line) else {
             self.invalid = true;
             return false;
         };
@@ -279,7 +279,7 @@ impl Capture {
         // we cannot prove. Never publish a partial live graph.
         for artifact in &self.artifacts {
             for file in artifact["filenames"]
-                .as_array()
+                .as_seq()
                 .context("missing filenames")?
             {
                 ensure!(
@@ -306,7 +306,7 @@ impl Capture {
             insert_file(&mut inputs, &manifest, true)?;
             let package = package_name(&manifest)?;
             let files = artifact["filenames"]
-                .as_array()
+                .as_seq()
                 .context("missing filenames")?;
             let mut mapped = false;
             for file in files {
@@ -439,7 +439,7 @@ impl Capture {
         }
         let record = receipt_path(&self.config, &receipt.target);
         std::fs::create_dir_all(record.parent().context("receipt parent")?)?;
-        let bytes = serde_json::to_vec(&receipt)?;
+        let bytes = deser_json::to_string(&receipt).map(String::into_bytes)?;
         ensure!(bytes.len() as u64 <= MAX_RECEIPT, "receipt too large");
         crate::atomic::atomic_replace(&record, &bytes)?;
         crate::store::Store::open(&self.config)?
@@ -447,10 +447,10 @@ impl Capture {
     }
 }
 
-fn needs_package_protection(mapped: bool, kinds: &serde_json::Value) -> bool {
+fn needs_package_protection(mapped: bool, kinds: &deser_value::Value) -> bool {
     !mapped
         || kinds
-            .as_array()
+            .as_seq()
             .is_some_and(|k| k.iter().any(|v| v == "custom-build" || v == "bin"))
 }
 
@@ -532,7 +532,7 @@ fn workspace_root(start: &Path) -> Result<PathBuf> {
         if !manifest.is_file() {
             continue;
         }
-        let value: toml::Value = toml::from_str(&std::fs::read_to_string(&manifest)?)?;
+        let value: deser_value::Value = deser_toml::from_str(&std::fs::read_to_string(&manifest)?)?;
         if value.get("workspace").is_some() {
             return Ok(dir.to_path_buf());
         }
@@ -544,11 +544,11 @@ fn workspace_root(start: &Path) -> Result<PathBuf> {
 }
 
 fn package_name(manifest: &Path) -> Result<String> {
-    let value: toml::Value = toml::from_str(&std::fs::read_to_string(manifest)?)?;
+    let value: deser_value::Value = deser_toml::from_str(&std::fs::read_to_string(manifest)?)?;
     value
         .get("package")
         .and_then(|p| p.get("name"))
-        .and_then(toml::Value::as_str)
+        .and_then(|value| value.as_str())
         .map(str::to_string)
         .context("missing package name")
 }
@@ -797,7 +797,7 @@ fn read_receipt(config: &Config, target: &Path) -> Result<Receipt> {
         std::fs::metadata(&path)?.len() <= MAX_RECEIPT,
         "receipt too large"
     );
-    let receipt: Receipt = serde_json::from_slice(&std::fs::read(path)?)?;
+    let receipt: Receipt = deser_json::from_slice(&std::fs::read(path)?)?;
     ensure!(receipt.schema == SCHEMA, "unsupported receipt schema");
     Ok(receipt)
 }
@@ -1002,7 +1002,7 @@ pub(crate) fn prune(
     // Cargo may have finished between validation and acquiring its locks.
     let receipt_again = validated(config, target, workspace)?;
     ensure!(
-        serde_json::to_vec(&receipt)? == serde_json::to_vec(&receipt_again)?,
+        deser_json::to_string(&receipt).map(String::into_bytes)? == deser_json::to_string(&receipt_again).map(String::into_bytes)?,
         "receipt changed"
     );
     let mut pruned = protected_counts(&receipt);
@@ -1383,14 +1383,14 @@ mod tests {
 
     #[test]
     fn unmapped_artifacts_and_executable_targets_protect_the_whole_package() {
-        assert!(!needs_package_protection(true, &serde_json::json!(["lib"])));
-        assert!(needs_package_protection(false, &serde_json::json!(["lib"])));
-        assert!(needs_package_protection(true, &serde_json::json!(["bin"])));
+        assert!(!needs_package_protection(true, &deser_value::value!(["lib"])));
+        assert!(needs_package_protection(false, &deser_value::value!(["lib"])));
+        assert!(needs_package_protection(true, &deser_value::value!(["bin"])));
         assert!(needs_package_protection(
             true,
-            &serde_json::json!(["custom-build"])
+            &deser_value::value!(["custom-build"])
         ));
-        assert!(!needs_package_protection(true, &serde_json::Value::Null));
+        assert!(!needs_package_protection(true, &deser_value::Value::null()));
     }
 
     #[test]
@@ -1896,7 +1896,7 @@ mod tests {
             } else {
                 &mut capture.artifacts
             };
-            *records = vec![serde_json::Value::Null; 32_767];
+            *records = vec![deser_value::Value::null(); 32_767];
             assert!(capture.observe(line));
             assert!(!capture.invalid);
             let count = if script {
@@ -1968,7 +1968,7 @@ mod tests {
             if artifact_present {
                 capture
                     .artifacts
-                    .push(serde_json::json!({"reason":"compiler-artifact"}));
+                    .push(deser_value::value!({"reason":"compiler-artifact"}));
             }
             // Neither workspace nor target exists: reaching any inventory/writing
             // path would fail instead of passing this early-return assertion.

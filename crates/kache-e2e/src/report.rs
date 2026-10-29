@@ -6,7 +6,7 @@
 //! grow new metrics, the harness keeps passing them through.
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
 
@@ -15,7 +15,7 @@ pub const SUPPORTED_REPORT_SCHEMA_VERSION: u32 = 1;
 
 /// Raw `kache report --format json` document, deserialized with the
 /// summary surface lifted out for assertions and the full body kept as
-/// `serde_json::Value` for verbatim forwarding.
+/// `deser_value::Value` for verbatim forwarding.
 #[derive(Debug, Clone, Deserialize)]
 pub struct KacheReport {
     pub schema_version: u32,
@@ -26,7 +26,7 @@ pub struct KacheReport {
     /// (e.g. "this specific crate must miss on relocate"). Order is
     /// append-only, so a phase's events are the suffix beyond the
     /// previous phase's snapshot.
-    #[serde(default)]
+    #[deser(default)]
     pub all_events: Vec<Event>,
 }
 
@@ -40,34 +40,34 @@ pub struct Event {
     /// string to stay compatible with kache adding new event kinds.
     pub result: String,
     /// Times kache spawned the underlying compiler for this event
-    /// (0 on a hit, 1 on a miss). `#[serde(default)]` so reports from
+    /// (0 on a hit, 1 on a miss). `#[deser(default)]` so reports from
     /// an older kache without the field still deserialize.
-    #[serde(default)]
+    #[deser(default)]
     pub compiler_runs: u32,
     /// Times kache spawned the preprocessor (`cc -E`) for this event.
-    #[serde(default)]
+    #[deser(default)]
     pub preprocessor_runs: u32,
     /// Times kache spawned the rustc dep-info pre-pass for this event.
-    /// `0` on a warm predicted hit. `#[serde(default)]` so reports from
+    /// `0` on a warm predicted hit. `#[deser(default)]` so reports from
     /// an older kache without the field still deserialize.
-    #[serde(default)]
+    #[deser(default)]
     pub dep_info_runs: u32,
-    #[serde(default)]
+    #[deser(default)]
     pub prediction_mismatches: u32,
     /// Times kache spawned a compiler probe (`cc --version` / `cc -###`)
-    /// for this event. `#[serde(default)]` so reports from an older
+    /// for this event. `#[deser(default)]` so reports from an older
     /// kache without the field still deserialize.
-    #[serde(default)]
+    #[deser(default)]
     pub probe_runs: u32,
-    #[serde(default)]
+    #[deser(default)]
     pub store_handed_off: bool,
-    #[serde(default)]
+    #[deser(default)]
     pub store_error: String,
     /// `category|detail` string on passthrough events (empty otherwise).
     /// The `not-a-compile` category marks probe/query invocations
     /// (`rustc -vV`, `--print`), which run even on a fresh no-op build;
     /// every other category is a real compile the wrapper declined.
-    #[serde(default)]
+    #[deser(default)]
     pub passthrough_reason: String,
 }
 
@@ -96,7 +96,7 @@ pub struct ReportSummary {
     pub local_hits: u64,
     pub prefetch_hits: u64,
     pub remote_hits: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub dups: u64,
     pub misses: u64,
 }
@@ -168,7 +168,7 @@ pub fn empty_summary() -> ReportSummary {
 ///
 /// Thin wrapper over [`fetch_since`] with the 1-hour window the e2e
 /// harness uses for its short-lived fixtures.
-pub fn fetch(kache_path: &Path, cache_dir: &Path) -> Result<(KacheReport, serde_json::Value)> {
+pub fn fetch(kache_path: &Path, cache_dir: &Path) -> Result<(KacheReport, deser_value::Value)> {
     fetch_since(kache_path, cache_dir, "1h")
 }
 
@@ -186,16 +186,16 @@ pub fn fetch_since(
     kache_path: &Path,
     cache_dir: &Path,
     since: &str,
-) -> Result<(KacheReport, serde_json::Value)> {
+) -> Result<(KacheReport, deser_value::Value)> {
     fetch_since_with_root(kache_path, cache_dir, since, None)
 }
 
 /// Parse and validate report JSON bytes against the supported schema version.
-pub fn parse_report_json(bytes: &[u8]) -> Result<(KacheReport, serde_json::Value)> {
-    let raw: serde_json::Value =
-        serde_json::from_slice(bytes).context("parsing kache report JSON")?;
+pub fn parse_report_json(bytes: &[u8]) -> Result<(KacheReport, deser_value::Value)> {
+    let raw: deser_value::Value =
+        deser_json::from_slice(bytes).context("parsing kache report JSON")?;
     let typed: KacheReport =
-        serde_json::from_value(raw.clone()).context("extracting summary from kache report")?;
+        deser_value::from_value(&raw.clone()).context("extracting summary from kache report")?;
     if typed.schema_version != SUPPORTED_REPORT_SCHEMA_VERSION {
         anyhow::bail!(
             "unsupported report schema_version {} (expected {})",
@@ -211,7 +211,7 @@ pub fn fetch_since_with_root(
     cache_dir: &Path,
     since: &str,
     root: Option<&Path>,
-) -> Result<(KacheReport, serde_json::Value)> {
+) -> Result<(KacheReport, deser_value::Value)> {
     let mut cmd = Command::new(kache_path);
     cmd.args(["report", "--format", "json", "--since", since])
         .env("KACHE_CACHE_DIR", cache_dir);
@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn kache_report_deserialization_accepts_supported_schema_version_and_additive_fields() {
-        let json = serde_json::json!({
+        let json = deser_value::value!({
             "schema_version": 1,
             "summary": {
                 "hit_rate_pct": 50.0,
@@ -294,7 +294,7 @@ mod tests {
             "future_nested_object": { "new_field": "value" }
         });
 
-        let typed: KacheReport = serde_json::from_value(json).expect("should deserialize");
+        let typed: KacheReport = deser_value::from_value(&json).expect("should deserialize");
         assert_eq!(typed.schema_version, 1);
         assert_eq!(typed.summary.total_crates, 2);
         assert_eq!(typed.all_events.len(), 1);
@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn kache_report_rejects_missing_or_incompatible_schema_version() {
         // Missing schema_version fails typed deserialization
-        let no_version = serde_json::json!({
+        let no_version = deser_value::value!({
             "summary": {
                 "hit_rate_pct": 0.0,
                 "total_crates": 0,
@@ -315,12 +315,12 @@ mod tests {
                 "misses": 0
             }
         });
-        assert!(serde_json::from_value::<KacheReport>(no_version).is_err());
+        assert!(deser_value::from_value::<KacheReport>(&no_version).is_err());
     }
 
     #[test]
     fn parse_report_json_accepts_supported_version() {
-        let json = serde_json::json!({
+        let json = deser_value::value!({
             "schema_version": SUPPORTED_REPORT_SCHEMA_VERSION,
             "summary": {
                 "hit_rate_pct": 100.0,
@@ -332,7 +332,7 @@ mod tests {
                 "misses": 0
             }
         });
-        let bytes = serde_json::to_vec(&json).unwrap();
+        let bytes = deser_json::to_string(&json).map(String::into_bytes).unwrap();
         let (typed, raw) = parse_report_json(&bytes).expect("valid supported report");
         assert_eq!(typed.schema_version, SUPPORTED_REPORT_SCHEMA_VERSION);
         assert_eq!(raw["schema_version"], SUPPORTED_REPORT_SCHEMA_VERSION);
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn parse_report_json_rejects_unsupported_version() {
-        let json = serde_json::json!({
+        let json = deser_value::value!({
             "schema_version": SUPPORTED_REPORT_SCHEMA_VERSION + 1,
             "summary": {
                 "hit_rate_pct": 100.0,
@@ -352,7 +352,7 @@ mod tests {
                 "misses": 0
             }
         });
-        let bytes = serde_json::to_vec(&json).unwrap();
+        let bytes = deser_json::to_string(&json).map(String::into_bytes).unwrap();
         let err = parse_report_json(&bytes).expect_err("should reject unsupported version");
         assert!(
             err.to_string()

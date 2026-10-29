@@ -11,8 +11,8 @@ homepage = "https://kunobi.ninja/docs/kache"
 [dependencies]
 kache-protocol = { version = "2.0.0-rc.2", path = "../kache-protocol" }
 kache-fs = { version = "2.0.0-rc.2", path = "../kache-fs", features = ["staging"] }
-serde = "1"
-serde_json = "1"
+deser = { version = "0.10.2", features = ["derive"] }
+deser-json = "0.10.2"
 log = "0.4"
 anyhow = "1"
 kunobi-daemon = { version = "0.10.3", default-features = false, features = ["local"] }

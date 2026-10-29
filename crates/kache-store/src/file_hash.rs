@@ -139,7 +139,7 @@ pub enum FileHashCache<'db> {
     Owned(Connection),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, deser::Serialize, deser::Deserialize)]
 pub struct FileFingerprint {
     pub path: String,
     pub size: i64,

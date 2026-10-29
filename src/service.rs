@@ -531,7 +531,7 @@ fn configured_instance_matches(
             Err(error) => return Err(error).context("reading login service configuration"),
         };
         let file: crate::config::FileConfig =
-            toml::from_str(&text).context("parsing login service configuration")?;
+            deser_toml::from_str(&text).context("parsing login service configuration")?;
         if let Some(cache) = file.cache {
             if let Some(path) = cache.local_store {
                 store = crate::config::shellexpand(&path);
@@ -774,7 +774,7 @@ pub fn status(json: bool) -> Result<()> {
         .and_then(service_exe_problem);
 
     if json {
-        #[derive(serde::Serialize)]
+        #[derive(deser::Serialize)]
         struct Body {
             version: &'static str,
             epoch: u64,

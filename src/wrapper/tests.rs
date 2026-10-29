@@ -1311,7 +1311,7 @@ fn auto_gc_check_hints_a_reachable_daemon_and_spawns_no_worker() {
     let store = Store::open(&cfg).unwrap();
     put_test_entry(&store, dir.path(), "over-budget");
     let daemon =
-        FakeDaemon::with_reply(cfg.socket_path(), serde_json::json!({ "ok": true }));
+        FakeDaemon::with_reply(cfg.socket_path(), deser_value::value!({ "ok": true }));
     wait_until_reachable(&cfg.socket_path());
 
     let spawned = AtomicUsize::new(0);
@@ -1357,7 +1357,7 @@ fn auto_gc_check_spawns_the_worker_when_the_daemon_rejects_the_hint() {
     put_test_entry(&store, dir.path(), "over-budget");
     let daemon = FakeDaemon::with_reply(
         cfg.socket_path(),
-        serde_json::json!({ "ok": false, "error": "invalid request: unknown variant" }),
+        deser_value::value!({ "ok": false, "error": "invalid request: unknown variant" }),
     );
     wait_until_reachable(&cfg.socket_path());
 
@@ -1730,7 +1730,7 @@ fn explain_miss_diff_names_changed_groups() {
         .is_empty()
     );
 
-    let hit: crate::events::BuildEvent = serde_json::from_str(
+    let hit: crate::events::BuildEvent = deser_json::from_str(
         r#"{"ts":"2026-07-23T00:00:00Z","crate_name":"gkrust","root":"/w",
                 "result":"local_hit","elapsed_ms":1,"size":1,
                 "key_fields":{"args":"aaaa","sources":"ssss","link":"llll"}}"#,
@@ -3165,7 +3165,7 @@ fn restore_evicts_entries_built_with_a_failed_strip() {
     std::fs::create_dir_all(&entry_dir).unwrap();
     std::fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_string(&meta).unwrap(),
+        deser_json::to_string(&meta).unwrap(),
     )
     .unwrap();
     store.insert_entry_row_for_test("degraded-key");
@@ -6237,22 +6237,22 @@ struct FakeDaemon {
     stop: Arc<AtomicBool>,
     requests: Arc<AtomicUsize>,
     #[cfg(unix)]
-    recorded: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    recorded: Arc<std::sync::Mutex<Vec<deser_value::Value>>>,
     handle: Option<std::thread::JoinHandle<()>>,
     socket_path: PathBuf,
 }
 
 impl FakeDaemon {
-    fn with_reply(socket_path: PathBuf, reply: serde_json::Value) -> Self {
+    fn with_reply(socket_path: PathBuf, reply: deser_value::Value) -> Self {
         Self::with_delayed_reply(socket_path, reply, std::time::Duration::ZERO)
     }
 
     fn with_delayed_reply(
         socket_path: PathBuf,
-        reply: serde_json::Value,
+        reply: deser_value::Value,
         delay: std::time::Duration,
     ) -> Self {
-        let body = format!("{reply}\n");
+        let body = format!("{}\n", deser_json::to_string(&reply).unwrap());
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
@@ -6294,7 +6294,7 @@ impl FakeDaemon {
                 }
                 requests_thread.fetch_add(1, Ordering::SeqCst);
                 #[cfg(unix)]
-                if let Ok(request) = serde_json::from_slice(&buf) {
+                if let Ok(request) = deser_json::from_slice(&buf) {
                     recorded_thread.lock().unwrap().push(request);
                 }
                 std::thread::sleep(delay);
@@ -6487,7 +6487,7 @@ fn cc_hand_off_carries_the_executable_mtime_and_release() {
     let store = Store::open(&config).unwrap();
     let daemon = FakeDaemon::with_reply(
         config.socket_path(),
-        serde_json::json!({"ok": false, "error": "test daemon declines publication"}),
+        deser_value::value!({"ok": false, "error": "test daemon declines publication"}),
     );
     let key = blake3::hash(b"cc-handoff-epoch").to_hex().to_string();
     let object = dir.path().join("foo.o");
@@ -7626,7 +7626,7 @@ fn restore_evicts_entry_whose_depinfo_references_missing_paths() {
     std::fs::create_dir_all(&entry_dir).unwrap();
     std::fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_string(&meta).unwrap(),
+        deser_json::to_string(&meta).unwrap(),
     )
     .unwrap();
     store.insert_entry_row_for_test("poisoned-key");
@@ -7770,7 +7770,7 @@ fn restore_evicts_incomplete_extra_inputs_depinfo_entries() {
     std::fs::create_dir_all(&entry_dir).unwrap();
     std::fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_string(&meta).unwrap(),
+        deser_json::to_string(&meta).unwrap(),
     )
     .unwrap();
     store.insert_entry_row_for_test(&meta.cache_key);
@@ -7807,7 +7807,7 @@ fn restore_evicts_incomplete_extra_inputs_depinfo_entries() {
     std::fs::create_dir_all(&legacy_entry_dir).unwrap();
     std::fs::write(
         legacy_entry_dir.join("meta.json"),
-        serde_json::to_string(&legacy_meta).unwrap(),
+        deser_json::to_string(&legacy_meta).unwrap(),
     )
     .unwrap();
     store.insert_entry_row_for_test(&legacy_meta.cache_key);
@@ -7842,7 +7842,7 @@ fn restore_evicts_incomplete_extra_inputs_depinfo_entries() {
     std::fs::create_dir_all(&wrong_entry_dir).unwrap();
     std::fs::write(
         wrong_entry_dir.join("meta.json"),
-        serde_json::to_string(&wrong_meta).unwrap(),
+        deser_json::to_string(&wrong_meta).unwrap(),
     )
     .unwrap();
     store.insert_entry_row_for_test(&wrong_meta.cache_key);
@@ -7879,7 +7879,7 @@ fn restore_evicts_incomplete_extra_inputs_depinfo_entries() {
     std::fs::create_dir_all(&env_entry_dir).unwrap();
     std::fs::write(
         env_entry_dir.join("meta.json"),
-        serde_json::to_string(&env_meta).unwrap(),
+        deser_json::to_string(&env_meta).unwrap(),
     )
     .unwrap();
     store.insert_entry_row_for_test(&env_meta.cache_key);
@@ -8127,7 +8127,7 @@ fn restore_from_cache_rejects_entry_missing_requested_emit_kind() {
     let entry_dir = store.entry_dir(&meta.cache_key);
     std::fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_string(&meta).unwrap(),
+        deser_json::to_string(&meta).unwrap(),
     )
     .unwrap();
 
@@ -9831,7 +9831,7 @@ fn a_passthrough_reason_is_classified_on_the_event() {
     );
     assert_eq!(hit.miss_reason, crate::events::MissReason::None);
     assert!(
-        serde_json::to_value(&hit)
+        deser_value::to_value(&hit)
             .unwrap()
             .get("miss_reason")
             .is_none()
@@ -10166,7 +10166,7 @@ fn rebuilt_event_uses_actual_outputs_for_success_even_without_store() {
             ]
         );
         assert_eq!(event.store_error, "cannot store");
-        let serialized = serde_json::to_value(&event).unwrap();
+        let serialized = deser_value::to_value(&event).unwrap();
         assert_eq!(serialized["rebuilt_path"], "/actual/deps/libexample.rlib");
         assert_eq!(serialized["rebuilt_fingerprint"], "observed-input-key");
     }
@@ -10195,14 +10195,14 @@ fn rebuilt_event_omits_claims_for_hits_failures_and_unobserved_outputs() {
         assert!(event.rebuilt_fingerprint.is_none());
         assert!(event.rebuilt_path.is_none());
         assert!(event.rebuilt_paths.is_empty());
-        let json = serde_json::to_value(event).unwrap();
+        let json = deser_value::to_value(&event).unwrap();
         for field in [
             "rebuilt_package",
             "rebuilt_fingerprint",
             "rebuilt_path",
             "rebuilt_paths",
         ] {
-            assert!(json.get(field).is_none(), "{field}: {json}");
+            assert!(json.get(field).is_none(), "{field}: {json:?}");
         }
     }
     // Build-script execution only supplies package attribution, never outputs.
@@ -10380,7 +10380,7 @@ fn cc_successful_compile_and_handoff_preserve_actual_rebuilt_outputs() {
     run_lock.lock().unwrap();
     let daemon = FakeDaemon::with_reply(
         config.socket_path(),
-        serde_json::json!({"ok":false,"error":"test daemon declines publication"}),
+        deser_value::value!({"ok":false,"error":"test daemon declines publication"}),
     );
     let argv = vec![
         cc.display().to_string(),
@@ -10405,7 +10405,7 @@ fn cc_successful_compile_and_handoff_preserve_actual_rebuilt_outputs() {
         .find_map(|value| value.get("publish_cc_v2"))
         .expect("a successful eligible C compile must offer its outputs to the daemon");
     assert_eq!(request["event"]["rebuilt_path"], path);
-    assert_eq!(request["event"]["rebuilt_paths"], serde_json::json!([path]));
+    assert_eq!(request["event"]["rebuilt_paths"], deser_value::value!([path]));
     assert_eq!(
         request["event"]["rebuilt_fingerprint"],
         request["cache_key"]

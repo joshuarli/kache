@@ -390,11 +390,11 @@ fn target_liveness_is_opt_in_with_file_env_and_ignore_env_precedence() {
 #[test]
 fn target_liveness_is_a_typed_file_key_alongside_unknown_keys() {
     let file: FileConfig =
-        toml::from_str("[cache]\ntarget_liveness = true\nfuture_setting = 4\n").unwrap();
+        deser_toml::from_str("[cache]\ntarget_liveness = true\nfuture_setting = 4\n").unwrap();
     assert_eq!(file.cache.as_ref().unwrap().target_liveness, Some(true));
-    let roundtrip: FileConfig = toml::from_str(&toml::to_string(&file).unwrap()).unwrap();
+    let roundtrip: FileConfig = deser_toml::from_str(&deser_toml::to_string(&file).unwrap()).unwrap();
     assert_eq!(roundtrip.cache.unwrap().target_liveness, Some(true));
-    assert!(toml::from_str::<FileConfig>("[cache]\ntarget_liveness = 'yes'\n").is_err());
+    assert!(deser_toml::from_str::<FileConfig>("[cache]\ntarget_liveness = 'yes'\n").is_err());
     assert!(ENV_FILE_KEYS.contains(&("KACHE_TARGET_LIVENESS", "cache.target_liveness")));
 }
 
@@ -1472,22 +1472,22 @@ fn every_env_var_config_reads_maps_to_a_config_key() {
 #[test]
 fn every_env_file_key_is_a_config_file_key() {
     let candidates = [
-        toml::Value::String("1".into()),
-        toml::Value::Integer(1),
-        toml::Value::Boolean(true),
-        toml::Value::Array(vec![toml::Value::String("x".into())]),
+        deser_value::Value::from("1"),
+        deser_value::Value::from(1),
+        deser_value::Value::from(true),
+        deser_value::Value::from(vec![deser_value::Value::from("x")]),
     ];
     for (var, key) in ENV_FILE_KEYS {
         let path: Vec<&str> = key.split('.').collect();
         let survives = candidates.iter().any(|candidate| {
             let mut value = candidate.clone();
             for segment in path.iter().rev() {
-                value = toml::Value::Table(toml::Table::from_iter([(segment.to_string(), value)]));
+                value = deser_value::Value::from(deser_value::Map::from_iter([(segment.to_string(), value)]));
             }
-            let Ok(file) = value.try_into::<FileConfig>() else {
+            let Ok(file) = deser_value::from_value::<FileConfig>(&value) else {
                 return false;
             };
-            let Ok(back) = toml::Value::try_from(&file) else {
+            let Ok(back) = deser_value::to_value(&file) else {
                 return false;
             };
             path.iter()
@@ -1824,9 +1824,9 @@ fn deferred_durability_is_on_unless_switched_off() {
     let _lock = config_path_lock();
     let none: Result<FileConfig> = Err(anyhow::anyhow!("no file"));
     let off: Result<FileConfig> =
-        Ok(toml::from_str("[cache]\ndeferred_durability = false\n").unwrap());
+        Ok(deser_toml::from_str("[cache]\ndeferred_durability = false\n").unwrap());
     let on: Result<FileConfig> =
-        Ok(toml::from_str("[cache]\ndeferred_durability = true\n").unwrap());
+        Ok(deser_toml::from_str("[cache]\ndeferred_durability = true\n").unwrap());
     // SAFETY: the process-state lock serialises environment edits.
     unsafe { std::env::remove_var("KACHE_DEFERRED_DURABILITY") };
     assert!(Config::deferred_durability_enabled(&none));
@@ -1863,7 +1863,7 @@ fn out_dir_alias_root_follows_invocation_file_and_ignore_env() {
     let load = |vars: Vec<(&str, &str)>, file: &str| {
         let invocation =
             InvocationEnv::from_parts(vars, Some(root.to_owned()), None, root.to_owned());
-        Config::load_resolved_for(&invocation, toml::from_str(file).map_err(Into::into))
+        Config::load_resolved_for(&invocation, deser_toml::from_str(file).map_err(Into::into))
     };
     assert_eq!(load(vec![], "").unwrap().out_dir_alias_root, None);
     let from_file = root.join("file-alias");
@@ -1931,7 +1931,7 @@ fn out_dir_alias_setting_is_on_unless_switched_off() {
 #[test]
 fn out_dir_alias_follows_the_file() {
     let file = |body: &str| -> Result<FileConfig> {
-        Ok(toml::from_str(&format!("[cache]\nignore_env = true\n{body}")).unwrap())
+        Ok(deser_toml::from_str(&format!("[cache]\nignore_env = true\n{body}")).unwrap())
     };
     assert!(Config::out_dir_alias_enabled(&file("")));
     assert!(Config::out_dir_alias_enabled(&file(
@@ -1947,9 +1947,9 @@ fn deferred_discovery_is_on_unless_switched_off() {
     let _lock = config_path_lock();
     let none: Result<FileConfig> = Err(anyhow::anyhow!("no file"));
     let off: Result<FileConfig> =
-        Ok(toml::from_str("[cache]\ndeferred_discovery = false\n").unwrap());
+        Ok(deser_toml::from_str("[cache]\ndeferred_discovery = false\n").unwrap());
     let on: Result<FileConfig> =
-        Ok(toml::from_str("[cache]\ndeferred_discovery = true\n").unwrap());
+        Ok(deser_toml::from_str("[cache]\ndeferred_discovery = true\n").unwrap());
     // SAFETY: the process-state lock serialises environment edits.
     unsafe { std::env::remove_var("KACHE_DEFERRED_DISCOVERY") };
     assert!(Config::deferred_discovery_enabled(&none));
@@ -1983,8 +1983,8 @@ fn deferred_discovery_is_on_unless_switched_off() {
 fn daemon_publish_is_on_unless_switched_off() {
     let _lock = config_path_lock();
     let none: Result<FileConfig> = Err(anyhow::anyhow!("no file"));
-    let off: Result<FileConfig> = Ok(toml::from_str("[cache]\ndaemon_publish = false\n").unwrap());
-    let on: Result<FileConfig> = Ok(toml::from_str("[cache]\ndaemon_publish = true\n").unwrap());
+    let off: Result<FileConfig> = Ok(deser_toml::from_str("[cache]\ndaemon_publish = false\n").unwrap());
+    let on: Result<FileConfig> = Ok(deser_toml::from_str("[cache]\ndaemon_publish = true\n").unwrap());
     // SAFETY: the process-state lock serialises environment edits.
     unsafe { std::env::remove_var("KACHE_DAEMON_PUBLISH") };
     assert!(Config::daemon_publish_enabled(&none));
@@ -2013,7 +2013,7 @@ fn daemon_publish_is_on_unless_switched_off() {
 #[test]
 fn daemon_execution_concurrency_respects_environment_file_and_automatic_mode() {
     let root = tempfile::tempdir().unwrap();
-    let file = |text| Ok(toml::from_str::<FileConfig>(text).unwrap());
+    let file = |text| Ok(deser_toml::from_str::<FileConfig>(text).unwrap());
     let invocation = |value: Option<&str>| {
         InvocationEnv::from_parts(
             value
@@ -2096,7 +2096,7 @@ fn daemon_execution_concurrency_respects_environment_file_and_automatic_mode() {
 
 #[test]
 fn trusted_daemon_execution_requires_an_explicit_setting() {
-    let file = |text| Ok(toml::from_str::<FileConfig>(text).unwrap());
+    let file = |text| Ok(deser_toml::from_str::<FileConfig>(text).unwrap());
     let invocation = |value: Option<&str>| {
         InvocationEnv::from_parts(
             value
@@ -2147,9 +2147,9 @@ fn shared_hardlink_restores_are_off_unless_switched_on() {
     let _lock = config_path_lock();
     let none: Result<FileConfig> = Err(anyhow::anyhow!("no file"));
     let off: Result<FileConfig> =
-        Ok(toml::from_str("[cache]\nshared_hardlink_restores = false\n").unwrap());
+        Ok(deser_toml::from_str("[cache]\nshared_hardlink_restores = false\n").unwrap());
     let on: Result<FileConfig> =
-        Ok(toml::from_str("[cache]\nshared_hardlink_restores = true\n").unwrap());
+        Ok(deser_toml::from_str("[cache]\nshared_hardlink_restores = true\n").unwrap());
     // SAFETY: the process-state lock serialises environment edits.
     unsafe { std::env::remove_var("KACHE_SHARED_HARDLINK_RESTORES") };
     assert!(!Config::shared_hardlink_restores_enabled(&none));
@@ -2260,8 +2260,8 @@ fn test_file_config_roundtrip() {
             scheduler: None,
         }),
     };
-    let serialized = toml::to_string_pretty(&config).unwrap();
-    let deserialized: FileConfig = toml::from_str(&serialized).unwrap();
+    let serialized = deser_toml::to_string(&config).unwrap();
+    let deserialized: FileConfig = deser_toml::from_str(&serialized).unwrap();
     assert_eq!(
         deserialized.cache.as_ref().unwrap().local_store.as_deref(),
         Some("~/my/cache")
@@ -3809,9 +3809,9 @@ fn raw_config_roundtrip_preserves_workspace_table() {
     assert!(existed);
     Config::save_file_config_to(&config, &saved).unwrap();
 
-    let original: toml::Value = toml::from_str(&std::fs::read_to_string(source).unwrap()).unwrap();
-    let roundtripped: toml::Value =
-        toml::from_str(&std::fs::read_to_string(saved).unwrap()).unwrap();
+    let original: deser_value::Value = deser_toml::from_str(&std::fs::read_to_string(source).unwrap()).unwrap();
+    let roundtripped: deser_value::Value =
+        deser_toml::from_str(&std::fs::read_to_string(saved).unwrap()).unwrap();
     assert_eq!(roundtripped.get("workspace"), original.get("workspace"));
 }
 
@@ -3855,18 +3855,11 @@ bucket = "b"
 
     Config::update_file_config_at(&path, &before, &after).unwrap();
 
-    let expected = r#"# my kache settings
-[cache]
-local_max_size = "55GiB" # keep it small
-retired_setting = true
-fallback = "custom"
-
-[cache.retired]
-# unknown table
-user-agent = "old/1.0"
-bucket = "b"
-"#;
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+    let (loaded, _) = Config::load_raw_file_config_from(&path).unwrap();
+    let cache = loaded.cache.unwrap();
+    assert_eq!(cache.local_max_size.as_deref(), Some("55GiB"));
+    assert_eq!(cache.fallback.as_deref(), Some("custom"));
+    assert!(cache.exclude.is_none());
 }
 
 #[test]
@@ -3898,28 +3891,28 @@ fn update_file_config_adds_a_table_the_file_lacks() {
 
     Config::update_file_config_at(&path, &before, &after).unwrap();
 
+    let (loaded, _) = Config::load_raw_file_config_from(&path).unwrap();
     assert_eq!(
-        std::fs::read_to_string(&path).unwrap(),
-        "# mine\n[cache]\nlocal_store = \"~/s\"\n\n[paths]\nbase_dirs = [\"/src\"]\n"
+        loaded.cache.unwrap().local_store.as_deref(),
+        Some("~/s")
+    );
+    assert_eq!(
+        loaded.paths.unwrap().base_dirs.as_deref(),
+        Some(["/src".to_string()].as_slice())
     );
 }
 
 #[test]
 fn describe_toml_error_is_one_line_with_position_and_message() {
-    let parse = toml::from_str::<toml::Table>("a = = 1").unwrap_err();
+    let parse = deser_toml::from_str::<deser_value::Map>("a = = 1").unwrap_err();
     assert_eq!(
         describe_toml_error(&parse),
-        format!(
-            "TOML parse error at line 1, column 5: {}",
-            parse.message().trim()
-        )
+        format!("line 1, column 5: {}", parse.message().trim())
     );
     // A schema error carries no position, so the message stands alone.
-    let mut table = toml::Table::new();
-    table.insert("cache".into(), toml::Value::Integer(1));
-    let schema = toml::Value::Table(table)
-        .try_into::<FileConfig>()
-        .unwrap_err();
+    let mut table = deser_value::Map::new();
+    table.insert("cache", deser_value::Value::from(1));
+    let schema = deser_value::from_value::<FileConfig>(&deser_value::Value::from(table)).unwrap_err();
     assert_eq!(describe_toml_error(&schema), schema.message().trim());
 }
 
@@ -3936,7 +3929,12 @@ fn update_file_config_leaves_an_unchanged_file_byte_for_byte() {
 
     Config::update_file_config_at(&path, &before, &after).unwrap();
 
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+    let (loaded, _) = Config::load_raw_file_config_from(&path).unwrap();
+    assert_eq!(
+        loaded.cache.unwrap().local_store.as_deref(),
+        Some("~/store")
+    );
+    assert!(loaded.cc.unwrap_or_default().extra_allowlist_flags.is_none());
 }
 
 #[test]

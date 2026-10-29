@@ -56,7 +56,7 @@ const BIN: &str = ".kache-bin";
 const RECORD_VERSION: u32 = 1;
 
 /// What a sealed run printed. Its paths name the shared `OUT_DIR`.
-#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 struct Record {
     version: u32,
     stdout: String,
@@ -508,7 +508,7 @@ fn sealed(sandbox: &Sandbox) -> Result<Option<Record>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    let record: Record = serde_json::from_slice(&bytes)?;
+    let record: Record = deser_json::from_slice(&bytes)?;
     Ok((record.version == RECORD_VERSION && sandbox.out_dir.is_dir()).then_some(record))
 }
 
@@ -659,7 +659,7 @@ fn escape(sandbox: &Sandbox) -> Result<Option<PathBuf>> {
 fn seal(sandbox: &Sandbox, record: &Record) -> Result<()> {
     read_only(&sandbox.out_dir)?;
     let temporary = sandbox.root.join(format!("{SEALED}.tmp"));
-    std::fs::write(&temporary, serde_json::to_vec(record)?)?;
+    std::fs::write(&temporary, deser_json::to_string(record).map(String::into_bytes)?)?;
     std::fs::rename(&temporary, sandbox.root.join(SEALED))?;
     Ok(())
 }

@@ -155,24 +155,24 @@ fn deferred_cc_reuses_setup_and_still_invalidates_changed_headers() {
             String::from_utf8_lossy(&output.stderr)
         );
         let events = fs::read_to_string(cache.join("events.jsonl")).unwrap();
-        let event: serde_json::Value =
-            serde_json::from_str(events.lines().last().unwrap()).unwrap();
-        assert_eq!(event["result"] == "local_hit", hit, "{phase}: {event}");
-        assert_eq!(event["compiler_runs"], u32::from(!hit), "{phase}: {event}");
+        let event: deser_value::Value =
+            deser_json::from_str(events.lines().last().unwrap()).unwrap();
+        assert_eq!(event["result"] == "local_hit", hit, "{phase}: {event:?}");
+        assert_eq!(event["compiler_runs"], u32::from(!hit), "{phase}: {event:?}");
         assert!(
             event
                 .get("store_error")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .is_empty(),
-            "{phase}: {event}"
+            "{phase}: {event:?}"
         );
-        let spans: Vec<serde_json::Value> = fs::read_dir(&trace)
+        let spans: Vec<deser_value::Value> = fs::read_dir(&trace)
             .unwrap()
             .flat_map(|entry| {
-                let value: serde_json::Value =
-                    serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap();
-                value["traceEvents"].as_array().unwrap().clone()
+                let value: deser_value::Value =
+                    deser_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap();
+                value["traceEvents"].as_seq().unwrap().clone()
             })
             .collect();
         for name in ["cc_parse", "store_open"] {
@@ -187,11 +187,11 @@ fn deferred_cc_reuses_setup_and_still_invalidates_changed_headers() {
             .output()
             .unwrap();
         assert!(status.status.success(), "{status:?}");
-        let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
-        assert_eq!(status["daemon_running"], true, "{status}");
+        let status: deser_value::Value = deser_json::from_slice(&status.stdout).unwrap();
+        assert_eq!(status["daemon_running"], true, "{status:?}");
         let state =
             std::path::Path::new(status["socket"].as_str().unwrap()).with_extension("state.json");
-        let state: serde_json::Value = serde_json::from_slice(&fs::read(state).unwrap()).unwrap();
+        let state: deser_value::Value = deser_json::from_slice(&fs::read(state).unwrap()).unwrap();
         let daemon_pid = state["pid"].as_u64().unwrap();
         let pipeline_pid = spans
             .iter()
@@ -301,9 +301,9 @@ fn exchanged_header_contents_compile_current_output_and_keep_checkout_hits() {
                  (discovery={discovery})"
             );
             let events = fs::read_to_string(cache.join("events.jsonl")).unwrap();
-            let event: serde_json::Value =
-                serde_json::from_str(events.lines().last().unwrap()).unwrap();
-            assert_eq!(event["result"], result, "{phase}: {event}");
+            let event: deser_value::Value =
+                deser_json::from_str(events.lines().last().unwrap()).unwrap();
+            assert_eq!(event["result"], result, "{phase}: {event:?}");
         }
     }
 }
@@ -521,7 +521,7 @@ fn compile_and_run_unit(root: &std::path::Path, discovery: &str, args: &[&str]) 
         String::from_utf8_lossy(&compiled.stderr)
     );
     let events = fs::read_to_string(root.join("cache/events.jsonl")).unwrap();
-    let event: serde_json::Value = serde_json::from_str(events.lines().last().unwrap()).unwrap();
+    let event: deser_value::Value = deser_json::from_str(events.lines().last().unwrap()).unwrap();
     let linked = Command::new("/usr/bin/cc")
         .current_dir(root)
         .args(["unit.o", "-o", "check-value"])
@@ -908,16 +908,16 @@ fn cc_admission_reports_a_skip_reason_and_recompiles_until_admitted() {
         // Drain asynchronous publication before reading this compile's event.
         dir.stop_daemon();
         let events = fs::read_to_string(root.join("cache/events.jsonl")).unwrap();
-        let event: serde_json::Value =
-            serde_json::from_str(events.lines().last().unwrap()).unwrap();
-        assert_eq!(event["result"], result, "{event}");
+        let event: deser_value::Value =
+            deser_json::from_str(events.lines().last().unwrap()).unwrap();
+        assert_eq!(event["result"], result, "{event:?}");
         assert_eq!(
             event
                 .get("skip_reason")
                 .and_then(|value| value.as_str())
                 .unwrap_or(""),
             reason,
-            "{event}"
+            "{event:?}"
         );
         assert_eq!(event["compiler_runs"], u32::from(result != "local_hit"));
     }
@@ -1183,7 +1183,7 @@ fn key_first_cc_caches_a_header_stamped_ahead_of_the_clock() {
         );
         assert!(root.join("unit.o").is_file(), "{expected}");
         let event = last_cc_event(&root);
-        assert_eq!(event["result"], expected, "{event}");
+        assert_eq!(event["result"], expected, "{event:?}");
     }
 }
 
@@ -1211,11 +1211,11 @@ fn index_rows(root: &std::path::Path, table: &str) -> i64 {
         .unwrap()
 }
 
-fn last_cc_event(root: &std::path::Path) -> serde_json::Value {
+fn last_cc_event(root: &std::path::Path) -> deser_value::Value {
     // Local fallback may return before the daemon publishes its event.
     FixtureDir::stop_daemon_at(root);
     let events = fs::read_to_string(root.join("cache/events.jsonl")).unwrap();
-    serde_json::from_str(events.lines().last().unwrap()).unwrap()
+    deser_json::from_str(events.lines().last().unwrap()).unwrap()
 }
 
 fn cc_memo_count(root: &std::path::Path) -> i64 {
@@ -1255,7 +1255,7 @@ fn deferred_cc_records_its_memo_when_the_entry_already_exists() {
     };
 
     let seeded = compile("0");
-    assert_eq!(seeded["result"], "miss", "{seeded}");
+    assert_eq!(seeded["result"], "miss", "{seeded:?}");
     // A memo pruned or retired while its entry stays.
     rusqlite::Connection::open(root.join("cache/index.db"))
         .unwrap()
@@ -1263,8 +1263,8 @@ fn deferred_cc_records_its_memo_when_the_entry_already_exists() {
         .unwrap();
 
     let deferred = compile("1");
-    assert_eq!(deferred["result"], "miss", "{deferred}");
-    assert_eq!(deferred["compiler_runs"], 1, "{deferred}");
+    assert_eq!(deferred["result"], "miss", "{deferred:?}");
+    assert_eq!(deferred["compiler_runs"], 1, "{deferred:?}");
     assert_eq!(deferred["cache_key"], seeded["cache_key"]);
     assert_eq!(
         cc_memo_count(&root),
@@ -1273,8 +1273,8 @@ fn deferred_cc_records_its_memo_when_the_entry_already_exists() {
     );
 
     let next = compile("1");
-    assert_eq!(next["result"], "local_hit", "{next}");
-    assert_eq!(next["compiler_runs"], 0, "{next}");
+    assert_eq!(next["result"], "local_hit", "{next:?}");
+    assert_eq!(next["compiler_runs"], 0, "{next:?}");
 }
 
 /// Two byte-identical sources are still two translation units: each object

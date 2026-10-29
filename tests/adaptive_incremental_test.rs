@@ -3,7 +3,7 @@
 #![cfg(unix)]
 
 use filetime::FileTime;
-use serde_json::Value;
+use deser_value::Value;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -25,7 +25,7 @@ fn fixture_events(cache_dir: &Path) -> Vec<Value> {
     fs::read_to_string(cache_dir.join("events.jsonl"))
         .unwrap_or_default()
         .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|line| deser_json::from_str::<Value>(line).ok())
         .filter(|event| event["crate_name"] == "adaptive_fixture")
         .collect()
 }
@@ -274,12 +274,12 @@ fn newest_finalized_session(policy_root: &Path) -> Option<PathBuf> {
 }
 
 fn assert_passthrough(event: &Value, reason: &str) {
-    assert_eq!(event["result"], "passthrough", "event: {event:#}");
+    assert_eq!(event["result"], "passthrough", "event: {event:#?}");
     assert!(
         event["passthrough_reason"]
             .as_str()
             .is_some_and(|value| value.contains(reason)),
-        "expected passthrough reason containing {reason:?}; event: {event:#}",
+        "expected passthrough reason containing {reason:?}; event: {event:#?}",
     );
 }
 
@@ -359,7 +359,7 @@ fn source_churn_adapts_then_returns_to_exact_cache_hits() {
     };
 
     let first = build(1);
-    assert_eq!(first["result"], "miss", "event: {first:#}");
+    assert_eq!(first["result"], "miss", "event: {first:#?}");
     assert_eq!(first["compiler_runs"], 1);
 
     // The edit changes the package's tree, so the record no longer applies
@@ -370,13 +370,13 @@ fn source_churn_adapts_then_returns_to_exact_cache_hits() {
     assert_eq!(seed["compiler_runs"], 1);
     assert_eq!(
         seed["dep_info_runs"], 1,
-        "a seed discovers its closure once: {seed:#}"
+        "a seed discovers its closure once: {seed:#?}"
     );
     assert!(!seed["fallback"].as_bool().unwrap_or(false));
 
     let active = build(3);
     assert_passthrough(&active, "adaptive active");
-    assert_eq!(active["key_ms"], 0, "event: {active:#}");
+    assert_eq!(active["key_ms"], 0, "event: {active:#?}");
 
     // A newly configured exclusion must win over already-active policy state
     // and preserve the ordinary fallback contract.
@@ -393,7 +393,7 @@ fn source_churn_adapts_then_returns_to_exact_cache_hits() {
     let after_exclusion = build(5);
     assert_eq!(
         after_exclusion["result"], "miss",
-        "event: {after_exclusion:#}"
+        "event: {after_exclusion:#?}"
     );
     let reseed = build(6);
     assert_passthrough(&reseed, "adaptive seed");
@@ -405,7 +405,7 @@ fn source_churn_adapts_then_returns_to_exact_cache_hits() {
         assert!(!active["fallback"].as_bool().unwrap_or(false));
         assert_eq!(
             active["key_ms"], 0,
-            "active adaptation must run before cache-key work: {active:#}",
+            "active adaptation must run before cache-key work: {active:#?}",
         );
     }
 
@@ -418,7 +418,7 @@ fn source_churn_adapts_then_returns_to_exact_cache_hits() {
     );
 
     let restored = build(1);
-    assert_eq!(restored["result"], "local_hit", "event: {restored:#}");
+    assert_eq!(restored["result"], "local_hit", "event: {restored:#?}");
     assert_eq!(restored["compiler_runs"], 0);
 
     // A hit discards the incremental state it could not have used, but it
@@ -430,14 +430,14 @@ fn source_churn_adapts_then_returns_to_exact_cache_hits() {
     assert_eq!(after_hit["compiler_runs"], 1);
     assert_eq!(
         after_hit["dep_info_runs"], 1,
-        "the first edit after a hit discovers its closure once: {after_hit:#}"
+        "the first edit after a hit discovers its closure once: {after_hit:#?}"
     );
 
     // The predicted key may select incremental compilation, but must not
     // publish its output. With policy state removed, this variant still misses.
     fs::remove_dir_all(&policy_root).unwrap();
     let unseeded = build(15);
-    assert_eq!(unseeded["result"], "miss", "event: {unseeded:#}");
+    assert_eq!(unseeded["result"], "miss", "event: {unseeded:#?}");
 }
 
 /// A type error keeps the private rustc state, as plain Cargo keeps its own
@@ -479,12 +479,12 @@ fn compile_errors_keep_adaptive_state_through_the_fix() {
     };
 
     let first = build(1);
-    assert_eq!(first["result"], "miss", "event: {first:#}");
+    assert_eq!(first["result"], "miss", "event: {first:#?}");
 
     // A failed seed leaves the unit as it found it, so the fix seeds.
     let failed_seed = break_build();
     assert_passthrough(&failed_seed, "adaptive seed");
-    assert_eq!(failed_seed["exit_code"], 1, "event: {failed_seed:#}");
+    assert_eq!(failed_seed["exit_code"], 1, "event: {failed_seed:#?}");
     assert_passthrough(&build(2), "adaptive seed");
 
     assert_passthrough(&build(3), "adaptive active");
@@ -492,7 +492,7 @@ fn compile_errors_keep_adaptive_state_through_the_fix() {
 
     let failed_active = break_build();
     assert_passthrough(&failed_active, "adaptive active");
-    assert_eq!(failed_active["exit_code"], 1, "event: {failed_active:#}");
+    assert_eq!(failed_active["exit_code"], 1, "event: {failed_active:#?}");
     assert!(
         kept.is_dir(),
         "the failed compile removed {}",
@@ -507,7 +507,7 @@ fn compile_errors_keep_adaptive_state_through_the_fix() {
     // The consumer check in `build_variant` proves the fix's output is current.
     let fixed = build(4);
     assert_passthrough(&fixed, "adaptive active");
-    assert_eq!(fixed["key_ms"], 0, "event: {fixed:#}");
+    assert_eq!(fixed["key_ms"], 0, "event: {fixed:#?}");
     assert_passthrough(&build(5), "adaptive active");
 
     let events = fixture_events(cache.path());
@@ -548,18 +548,18 @@ fn local_source_churn_seeds_from_emitted_dep_info_without_a_pre_pass() {
     };
 
     let first = build(1);
-    assert_eq!(first["result"], "miss", "event: {first:#}");
-    assert_eq!(first["compiler_runs"], 1, "event: {first:#}");
+    assert_eq!(first["result"], "miss", "event: {first:#?}");
+    assert_eq!(first["compiler_runs"], 1, "event: {first:#?}");
 
     let seed = build(2);
     assert_passthrough(&seed, "adaptive seed");
-    assert_eq!(seed["compiler_runs"], 1, "event: {seed:#}");
-    assert_eq!(seed["dep_info_runs"], 0, "event: {seed:#}");
+    assert_eq!(seed["compiler_runs"], 1, "event: {seed:#?}");
+    assert_eq!(seed["dep_info_runs"], 0, "event: {seed:#?}");
     assert_eq!(
         seed["rebuilt_package"], "adaptive-fixture",
-        "event: {seed:#}"
+        "event: {seed:#?}"
     );
-    assert!(!seed["rebuilt_paths"].as_array().unwrap().is_empty());
+    assert!(!seed["rebuilt_paths"].as_seq().unwrap().is_empty());
     assert!(
         newest_finalized_session(&policy_root).is_some(),
         "the cold seed did not publish a private rustc session",
@@ -567,19 +567,19 @@ fn local_source_churn_seeds_from_emitted_dep_info_without_a_pre_pass() {
 
     let active = build(3);
     assert_passthrough(&active, "adaptive active");
-    assert_eq!(active["compiler_runs"], 1, "event: {active:#}");
-    assert_eq!(active["dep_info_runs"], 0, "event: {active:#}");
-    assert_eq!(active["key_ms"], 0, "event: {active:#}");
+    assert_eq!(active["compiler_runs"], 1, "event: {active:#?}");
+    assert_eq!(active["dep_info_runs"], 0, "event: {active:#?}");
+    assert_eq!(active["key_ms"], 0, "event: {active:#?}");
 
     // Removing policy state exposes any accidental artifact publication from
     // either the active compile or its seed. Each consumer checks the answer.
     fs::remove_dir_all(&policy_root).unwrap();
     let active_output = build(3);
-    assert_eq!(active_output["result"], "miss", "event: {active_output:#}");
+    assert_eq!(active_output["result"], "miss", "event: {active_output:#?}");
     assert_eq!(active_output["compiler_runs"], 1);
     fs::remove_dir_all(&policy_root).unwrap();
     let seed_output = build(2);
-    assert_eq!(seed_output["result"], "miss", "event: {seed_output:#}");
+    assert_eq!(seed_output["result"], "miss", "event: {seed_output:#?}");
     assert_eq!(seed_output["compiler_runs"], 1);
 }
 
@@ -608,8 +608,8 @@ fn local_learning_cache_hit_discards_the_provisional_graph() {
     };
 
     let first = build(1);
-    assert_eq!(first["result"], "miss", "event: {first:#}");
-    assert_eq!(first["compiler_runs"], 1, "event: {first:#}");
+    assert_eq!(first["result"], "miss", "event: {first:#?}");
+    assert_eq!(first["compiler_runs"], 1, "event: {first:#?}");
     assert_no_private_graph(&policy_root);
     let weight = cache
         .path()
@@ -622,9 +622,9 @@ fn local_learning_cache_hit_discards_the_provisional_graph() {
     // The changed mtime invalidates the learned closure; the cleared Cargo
     // fingerprint forces a build. The compiler must stop at the exact hit.
     let restored = build(1);
-    assert_eq!(restored["result"], "local_hit", "event: {restored:#}");
-    assert_eq!(restored["dep_info_runs"], 1, "event: {restored:#}");
-    assert_eq!(restored["compiler_runs"], 0, "event: {restored:#}");
+    assert_eq!(restored["result"], "local_hit", "event: {restored:#?}");
+    assert_eq!(restored["dep_info_runs"], 1, "event: {restored:#?}");
+    assert_eq!(restored["compiler_runs"], 0, "event: {restored:#?}");
     assert_no_private_graph(&policy_root);
     assert!(
         !weight.exists(),
@@ -633,8 +633,8 @@ fn local_learning_cache_hit_discards_the_provisional_graph() {
 
     let seed = build(2);
     assert_passthrough(&seed, "adaptive seed");
-    assert_eq!(seed["compiler_runs"], 1, "event: {seed:#}");
-    assert_eq!(seed["dep_info_runs"], 0, "event: {seed:#}");
+    assert_eq!(seed["compiler_runs"], 1, "event: {seed:#?}");
+    assert_eq!(seed["dep_info_runs"], 0, "event: {seed:#?}");
     assert!(
         newest_finalized_session(&policy_root).is_some(),
         "a cache hit prevented the next edit from seeding private state",
@@ -652,16 +652,16 @@ fn local_empty_cache_entry_does_not_stop_the_cold_compile() {
 
     let first_mtime = past_mtime();
     let first = build_variant_impl(project.path(), cache.path(), &target, None, first_mtime, 1);
-    assert_eq!(first["result"], "miss", "event: {first:#}");
+    assert_eq!(first["result"], "miss", "event: {first:#?}");
     let metadata_path = cache
         .path()
         .join("store")
         .join(first["cache_key"].as_str().unwrap())
         .join("meta.json");
-    let mut metadata: Value = serde_json::from_slice(&fs::read(&metadata_path).unwrap()).unwrap();
-    assert!(!metadata["files"].as_array().unwrap().is_empty());
-    metadata["files"] = serde_json::json!([]);
-    fs::write(&metadata_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+    let mut metadata: Value = deser_json::from_slice(&fs::read(&metadata_path).unwrap()).unwrap();
+    assert!(!metadata["files"].as_seq().unwrap().is_empty());
+    metadata["files"] = deser_value::value!([]);
+    fs::write(&metadata_path, deser_json::to_string(&metadata).map(String::into_bytes).unwrap()).unwrap();
 
     // The store can read this metadata, but it has no artifact to restore.
     // Cold discovery must finish compilation and discard unqualified state.
@@ -674,8 +674,8 @@ fn local_empty_cache_entry_does_not_stop_the_cold_compile() {
         1,
     );
     assert_passthrough(&compiled, "adaptive seed");
-    assert_eq!(compiled["compiler_runs"], 1, "event: {compiled:#}");
-    assert_eq!(compiled["dep_info_runs"], 0, "event: {compiled:#}");
+    assert_eq!(compiled["compiler_runs"], 1, "event: {compiled:#?}");
+    assert_eq!(compiled["dep_info_runs"], 0, "event: {compiled:#?}");
     assert_no_private_graph(&policy_root);
 }
 
@@ -704,8 +704,8 @@ fn local_unqualified_cold_seed_resets_learning_so_the_next_build_can_store() {
     };
 
     let first = build();
-    assert_eq!(first["result"], "miss", "event: {first:#}");
-    assert_eq!(first["compiler_runs"], 1, "event: {first:#}");
+    assert_eq!(first["result"], "miss", "event: {first:#?}");
+    assert_eq!(first["compiler_runs"], 1, "event: {first:#?}");
     let policy_state = fs::read_dir(policy_root.join("v2"))
         .unwrap()
         .map(|entry| entry.unwrap().path().join("state.json"))
@@ -717,8 +717,8 @@ fn local_unqualified_cold_seed_resets_learning_so_the_next_build_can_store() {
     fs::remove_dir_all(cache.path().join("store")).unwrap();
     let unqualified = build();
     assert_passthrough(&unqualified, "adaptive seed");
-    assert_eq!(unqualified["compiler_runs"], 1, "event: {unqualified:#}");
-    assert_eq!(unqualified["dep_info_runs"], 0, "event: {unqualified:#}");
+    assert_eq!(unqualified["compiler_runs"], 1, "event: {unqualified:#?}");
+    assert_eq!(unqualified["dep_info_runs"], 0, "event: {unqualified:#?}");
     assert_no_private_graph(&policy_root);
     assert!(
         !policy_state.exists(),
@@ -727,11 +727,11 @@ fn local_unqualified_cold_seed_resets_learning_so_the_next_build_can_store() {
     );
 
     let stored = build();
-    assert_eq!(stored["result"], "miss", "event: {stored:#}");
-    assert_eq!(stored["compiler_runs"], 1, "event: {stored:#}");
+    assert_eq!(stored["result"], "miss", "event: {stored:#?}");
+    assert_eq!(stored["compiler_runs"], 1, "event: {stored:#?}");
     let restored = build();
-    assert_eq!(restored["result"], "local_hit", "event: {restored:#}");
-    assert_eq!(restored["compiler_runs"], 0, "event: {restored:#}");
+    assert_eq!(restored["result"], "local_hit", "event: {restored:#?}");
+    assert_eq!(restored["compiler_runs"], 0, "event: {restored:#?}");
 }
 
 #[test]
@@ -760,25 +760,25 @@ fn local_failed_cold_seed_keeps_the_next_fix_on_the_seed_lane() {
     };
 
     let first = build(1);
-    assert_eq!(first["result"], "miss", "event: {first:#}");
+    assert_eq!(first["result"], "miss", "event: {first:#?}");
     let failed_seed = build_failing_impl(project.path(), cache.path(), &target, None, next_mtime());
     assert_passthrough(&failed_seed, "adaptive seed");
-    assert_eq!(failed_seed["exit_code"], 1, "event: {failed_seed:#}");
-    assert_eq!(failed_seed["compiler_runs"], 1, "event: {failed_seed:#}");
-    assert_eq!(failed_seed["dep_info_runs"], 0, "event: {failed_seed:#}");
+    assert_eq!(failed_seed["exit_code"], 1, "event: {failed_seed:#?}");
+    assert_eq!(failed_seed["compiler_runs"], 1, "event: {failed_seed:#?}");
+    assert_eq!(failed_seed["dep_info_runs"], 0, "event: {failed_seed:#?}");
     assert!(
         failed_seed.get("rebuilt_paths").is_none(),
-        "event: {failed_seed:#}"
+        "event: {failed_seed:#?}"
     );
 
     let fixed = build(2);
     assert_passthrough(&fixed, "adaptive seed");
-    assert_eq!(fixed["compiler_runs"], 1, "event: {fixed:#}");
-    assert_eq!(fixed["dep_info_runs"], 0, "event: {fixed:#}");
+    assert_eq!(fixed["compiler_runs"], 1, "event: {fixed:#?}");
+    assert_eq!(fixed["dep_info_runs"], 0, "event: {fixed:#?}");
     let active = build(3);
     assert_passthrough(&active, "adaptive active");
-    assert_eq!(active["compiler_runs"], 1, "event: {active:#}");
-    assert_eq!(active["dep_info_runs"], 0, "event: {active:#}");
+    assert_eq!(active["compiler_runs"], 1, "event: {active:#?}");
+    assert_eq!(active["dep_info_runs"], 0, "event: {active:#?}");
 }
 
 #[test]
@@ -836,10 +836,10 @@ fn user_facing_executable_without_fallback_uses_default_immediate_adaptive_lane(
     assert_eq!(events.len(), 1, "unexpected fixture events: {events:#?}");
     let event = &events[0];
     assert_passthrough(event, "adaptive passthrough");
-    assert_eq!(event["compiler_runs"], 1, "event: {event:#}");
+    assert_eq!(event["compiler_runs"], 1, "event: {event:#?}");
     assert!(
         !event["fallback"].as_bool().unwrap_or(false),
-        "event: {event:#}"
+        "event: {event:#?}"
     );
 
     let policy_version = target.join("debug/incremental.kache-auto/v2");
@@ -918,7 +918,7 @@ fn user_facing_executable_preserves_configured_fallback_contract() {
     assert_passthrough(event, "user-facing executable");
     assert!(
         event["fallback"].as_bool().unwrap_or(false),
-        "event: {event:#}"
+        "event: {event:#?}"
     );
 
     // Direct rustc callers may omit --crate-type; rustc still defaults to bin.
@@ -954,7 +954,7 @@ fn user_facing_executable_preserves_configured_fallback_contract() {
     );
     let event = only_new_event(cache.path(), 1);
     assert_passthrough(&event, "user-facing executable");
-    assert_eq!(event["fallback"], true, "event: {event:#}");
+    assert_eq!(event["fallback"], true, "event: {event:#?}");
 }
 
 #[test]

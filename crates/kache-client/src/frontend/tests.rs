@@ -134,9 +134,9 @@ fn run_case(arg0: OsString, flag: Option<&str>, expected_connections: usize) -> 
                         .set_write_timeout(Some(Duration::from_secs(1)))
                         .unwrap();
                     let mut decline =
-                        serde_json::to_vec(&kache_protocol::execution::ExecutionReply::Declined {
+                        deser_json::to_string(&kache_protocol::execution::ExecutionReply::Declined {
                             reason: "frontend boundary fixture".to_owned(),
-                        })
+                        }).map(String::into_bytes)
                         .unwrap();
                     decline.push(b'\n');
                     let _ = stream.write_all(&decline);

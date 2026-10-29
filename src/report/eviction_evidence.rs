@@ -1,6 +1,6 @@
 //! Store-wide observations have their own horizon, independent of build events.
 use kache_store::EvictionHorizonEvidence;
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 
 pub(super) const HORIZON_SECS: u64 = 604_800;
 const LIMITATIONS: &[&str] = &[

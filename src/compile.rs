@@ -540,12 +540,12 @@ pub fn isolate_incremental_flags(args: &[String]) -> Option<Vec<String>> {
 }
 
 /// Parse one artifact notification, ignoring diagnostics and non-JSON output.
-fn parse_rustc_artifact(line: &[u8]) -> Option<serde_json::Value> {
+fn parse_rustc_artifact(line: &[u8]) -> Option<deser_value::Value> {
     let line = line.trim_ascii_start();
     if !line.starts_with(b"{") {
         return None;
     }
-    let message: serde_json::Value = serde_json::from_slice(line).ok()?;
+    let message: deser_value::Value = deser_json::from_slice(line).ok()?;
     (message
         .get("$message_type")
         .and_then(|value| value.as_str())

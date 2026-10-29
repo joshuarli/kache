@@ -1,7 +1,7 @@
 //! Filesystem identity and physical reclamation.
 
 use crate::sharing::Sharing;
-use serde::Serialize;
+use deser::Serialize;
 use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]

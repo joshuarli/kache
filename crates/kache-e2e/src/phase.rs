@@ -1,12 +1,12 @@
 //! Shared lifecycle phase names.
 
-use serde::Deserialize;
+use deser::Deserialize;
 
 /// One scenario lifecycle phase. Order matters for the standard fixture path:
 /// `cold` populates the cache, `warm` consumes it, `noop` checks
 /// incrementality, and relocated phases exercise path portability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[deser(rename_all = "kebab-case")]
 pub enum Phase {
     Cold,
     /// Clone benchmarks only: rebuild the SAME worktree `cold` just built, with

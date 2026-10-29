@@ -26,7 +26,7 @@
 
 #![cfg(unix)]
 
-use serde_json::Value;
+use deser_value::Value;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -302,7 +302,7 @@ fn events(cache: &Path) -> Vec<Value> {
     std::fs::read_to_string(cache.join("events.jsonl"))
         .unwrap_or_default()
         .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|line| deser_json::from_str::<Value>(line).ok())
         .collect()
 }
 
@@ -387,11 +387,11 @@ fn proc_macro_bytes_and_dependent_keys_match_across_stores() {
         keys.push(["dumpmac", "app"].map(|krate| {
             let event = events
                 .iter()
-                .find(|event| event["crate_name"] == krate && event["cache_key"].is_string())
+                .find(|event| event["crate_name"] == krate && event["cache_key"].is_str())
                 .unwrap_or_else(|| panic!("no keyed event for {krate}: {events:?}"));
             assert_eq!(
                 event["result"], "miss",
-                "store {name} was not cold: {event}"
+                "store {name} was not cold: {event:?}"
             );
             assert!(!event["cache_key"].as_str().unwrap().is_empty());
             event["cache_key"].clone()

@@ -5,7 +5,7 @@
 //! Runtime policy and conversion from live application state stay with callers.
 
 use kache_core::timeline::{PrefetchAccounting, PrefetchOrigin};
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PrestageRequest {
@@ -25,7 +25,7 @@ pub struct StatsRequest {
     pub include_entries: bool,
     /// Include the bounded recent session-summary tail. False for polling
     /// so it does not rescan the append-only summary log every tick.
-    #[serde(default)]
+    #[deser(default)]
     pub include_summaries: bool,
     pub sort_by: Option<String>,
     /// Event window in whole hours. Older clients send only this; newer ones
@@ -34,15 +34,15 @@ pub struct StatsRequest {
     pub event_hours: Option<u64>,
     /// Event window in seconds (kunobi-ninja/kache#897). Wins over
     /// `event_hours` when present, so `--since 15m` is a 15 minute window.
-    #[serde(default)]
+    #[deser(default)]
     pub event_secs: Option<u64>,
     /// Client executable mtime, or zero for reads that must not request a
     /// drain. Daemons from 1.0.x and earlier drain when it is newer than their
     /// own; later daemons ignore it.
-    #[serde(default)]
+    #[deser(default)]
     pub client_epoch: u64,
     /// Release requesting an upgrade. Absent from legacy and read-only requests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub client_version: Option<String>,
 }
 
@@ -57,7 +57,7 @@ pub struct HashFileRequest {
     pub size: i64,
     pub mtime_ns: i64,
     pub ctime_ns: i64,
-    #[serde(default)]
+    #[deser(default)]
     pub inode: i64,
 }
 
@@ -67,15 +67,15 @@ pub struct HashFileResult {
     pub size: i64,
     pub mtime_ns: i64,
     pub ctime_ns: i64,
-    #[serde(default)]
+    #[deser(default)]
     pub inode: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     pub hash: Option<String>,
-    #[serde(default)]
+    #[deser(default)]
     pub cache_hit: bool,
-    #[serde(default)]
+    #[deser(default)]
     pub bytes_hashed: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     pub error: Option<String>,
 }
 
@@ -88,7 +88,7 @@ pub struct HashFileResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CompileStartedRequest {
     pub crate_name: String,
-    #[serde(default)]
+    #[deser(default)]
     pub root: String,
     /// PID of the compiler child (registry key; also lets the daemon drop
     /// entries whose process died without a CompileFinished).
@@ -98,13 +98,13 @@ pub struct CompileStartedRequest {
     pub started_at_ms: u64,
     /// Median historical compile cost when the wrapper has looked it up
     /// (lazily, on the first heartbeat tick).
-    #[serde(default)]
+    #[deser(default)]
     pub typical_ms: Option<u64>,
     /// No release drains on this field; clients send zero.
-    #[serde(default)]
+    #[deser(default)]
     pub client_epoch: u64,
     /// Release requesting an upgrade. Absent from legacy and read-only requests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub client_version: Option<String>,
 }
 
@@ -118,17 +118,17 @@ pub struct CompileFinishedRequest {
     /// entry only when it matches, so a delayed Finished from a monitor whose
     /// PID the OS already reused cannot delete the NEW compile's entry
     /// (cross-family review finding). `0` (an old client) matches anything.
-    #[serde(default)]
+    #[deser(default)]
     pub started_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DaemonHealth {
-    #[serde(default)]
+    #[deser(default)]
     pub version: String,
     /// Daemon executable mtime. Clients from 1.0.x and earlier replace a daemon
     /// whose executable is older than theirs; later clients only display it.
-    #[serde(default)]
+    #[deser(default)]
     pub build_epoch: u64,
 }
 
@@ -144,7 +144,7 @@ pub struct DaemonHealth {
 pub struct EffectiveConfig {
     /// Process identity and limits captured after daemon startup raised its limit.
     /// Absent from older daemons.
-    #[serde(default)]
+    #[deser(default)]
     pub process: Option<ProcessContext>,
     /// `[cache] local_max_size` / `KACHE_MAX_SIZE` as the daemon resolved it.
     pub max_size: u64,
@@ -152,7 +152,7 @@ pub struct EffectiveConfig {
     pub cache_dir: String,
     /// The job/process-lifetime state directory the daemon resolved.
     /// Empty when reported by a daemon that predates runtime-dir support.
-    #[serde(default)]
+    #[deser(default)]
     pub runtime_dir: String,
     /// The config-file path the daemon resolved at startup (the file its
     /// fingerprint watcher tracks). The file may not exist — defaults then
@@ -161,21 +161,21 @@ pub struct EffectiveConfig {
     /// Fingerprint of the exact path/presence/content snapshot parsed at
     /// daemon startup. This detects same-path edits beyond the rendered field
     /// subset and ties the watcher baseline to what was actually loaded.
-    #[serde(default)]
+    #[deser(default)]
     pub config_fingerprint: Option<String>,
     /// The socket endpoint the daemon serves on.
     pub socket_path: String,
     /// Unix millis when the daemon captured this config (process startup),
     /// so a mismatch warning can say how old the in-effect config is.
-    #[serde(default)]
+    #[deser(default)]
     pub started_at_ms: u64,
     /// The free-space floor the daemon recovers to. `None` from daemons that
     /// predate the field.
-    #[serde(default)]
+    #[deser(default)]
     pub auto_recover_min_free_bytes: Option<u64>,
     /// Whether the daemon's recovery also removes idle targets. `None` from
     /// daemons that predate the field.
-    #[serde(default)]
+    #[deser(default)]
     pub auto_recover_targets: Option<bool>,
 }
 
@@ -198,19 +198,19 @@ pub struct OpenFileLimits {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InFlightEntry {
     pub crate_name: String,
-    #[serde(default)]
+    #[deser(default)]
     pub root: String,
     pub pid: u32,
     pub elapsed_s: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub typical_s: Option<u64>,
-    #[serde(default)]
+    #[deser(default)]
     pub eta_s: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StatsEntry {
-    #[serde(default)]
+    #[deser(default)]
     pub store_dirs: Vec<std::path::PathBuf>,
     pub cache_key: String,
     pub crate_name: String,
@@ -226,27 +226,27 @@ pub struct StatsEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EventStatsResponse {
     pub local_hits: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub prefetch_hits: usize,
     pub remote_hits: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub dups: usize,
     pub misses: usize,
     pub errors: usize,
     pub total_elapsed_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub hit_elapsed_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub miss_elapsed_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub hit_compile_time_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub miss_compile_time_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub store_output_blobs: u32,
-    #[serde(default)]
+    #[deser(default)]
     pub store_duplicate_blobs: u32,
-    #[serde(default)]
+    #[deser(default)]
     pub store_new_blobs: u32,
 }
 
@@ -254,24 +254,24 @@ pub struct EventStatsResponse {
 pub struct GcPolicyOutcome {
     pub entries_evicted: usize,
     pub bytes_freed: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub entries_pinned: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub disk_bytes_reclaimed: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub entries_unreclaimable: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub entries_failed: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub entries_locked: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub evict_write_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub bytes_held: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 pub enum TransferDirection {
     Upload,
     #[default]
@@ -280,83 +280,83 @@ pub enum TransferDirection {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct TransferEvent {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub accounting: Option<PrefetchAccounting>,
-    #[serde(default = "default_transfer_schema")]
+    #[deser(default = default_transfer_schema())]
     pub schema: u32,
     pub crate_name: String,
     pub direction: TransferDirection,
-    #[serde(default)]
+    #[deser(default)]
     pub format: String,
-    #[serde(default)]
+    #[deser(default)]
     pub cache_key: String,
-    #[serde(default)]
+    #[deser(default)]
     pub object_key: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub prefetch: Option<PrefetchOrigin>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub outcome: String,
     pub compressed_bytes: u64,
     /// Wall-clock start of the transfer stage, in Unix epoch milliseconds.
     /// Zero for transfer-event schemas older than v3.
-    #[serde(default)]
+    #[deser(default)]
     pub started_at_unix_ms: u64,
     /// Wall-clock end of the complete transfer, including local import, in Unix
     /// epoch milliseconds. Zero for transfer-event schemas older than v3.
-    #[serde(default)]
+    #[deser(default)]
     pub finished_at_unix_ms: u64,
     /// End-to-end monotonic duration. Download events include SQLite import in
     /// transfer-event schema v3 and later.
     pub elapsed_ms: u64,
     /// Time spent on S3 GET + body collection only (excludes decompression/disk I/O).
-    #[serde(default)]
+    #[deser(default)]
     pub network_ms: u64,
     /// Time spent waiting for an S3 concurrency permit.
-    #[serde(default)]
+    #[deser(default)]
     pub semaphore_wait_ms: u64,
     /// Time spent on HEAD/existence checks before the transfer.
-    #[serde(default)]
+    #[deser(default)]
     pub head_ms: u64,
     /// Time spent waiting for response headers across all GET requests (ms).
-    #[serde(default)]
+    #[deser(default)]
     pub request_ms: u64,
     /// Time spent reading response bodies across all GET requests (ms).
-    #[serde(default)]
+    #[deser(default)]
     pub body_ms: u64,
     /// Backend invocation count; accounting specifies GET or LIST. Older
     /// records report GET counts without completeness metadata.
-    #[serde(default)]
+    #[deser(default)]
     pub request_count: u32,
     /// Uncompressed size in bytes (0 for older log entries or failed transfers).
-    #[serde(default)]
+    #[deser(default)]
     pub original_bytes: u64,
     /// Time spent in zstd decompression (ms). 0 for uploads or older entries.
-    #[serde(default)]
+    #[deser(default)]
     pub decompress_ms: u64,
     /// Time spent extracting the downloaded archive to the local store.
-    #[serde(default)]
+    #[deser(default)]
     pub extract_ms: u64,
     /// Time spent on disk I/O (fs::write + permissions + atomic rename), ms.
-    #[serde(default)]
+    #[deser(default)]
     pub disk_io_ms: u64,
     /// Time spent waiting to acquire the SQLite store lock.
-    #[serde(default)]
+    #[deser(default)]
     pub import_lock_wait_ms: u64,
     /// Time spent executing the SQLite import after acquiring the store lock.
     /// In transfer-event schemas older than v3 this included lock wait.
-    #[serde(default)]
+    #[deser(default)]
     pub import_ms: u64,
     /// Time spent in zstd compression for uploads (ms).
-    #[serde(default)]
+    #[deser(default)]
     pub compression_ms: u64,
     /// Total time for HEAD requests (existence checks) during uploads (ms).
-    #[serde(default)]
+    #[deser(default)]
     pub head_checks_ms: u64,
     /// Number of v2 blobs that were already local and skipped download.
-    #[serde(default)]
+    #[deser(default)]
     pub blobs_skipped: u32,
     /// Total number of v2 blobs for this entry.
-    #[serde(default)]
+    #[deser(default)]
     pub blobs_total: u32,
     pub ok: bool,
     pub timestamp: u64,

@@ -27,7 +27,7 @@ fn check_debug_bundle_policy(split: &str, expected_bundle: bool) {
     )
     .unwrap();
     let config = cache.join("config.toml");
-    let cache_path = toml::Value::String(cache.to_string_lossy().into_owned());
+    let cache_path = common::toml_basic(&cache.to_string_lossy());
     fs::write(
         &config,
         format!(
@@ -56,11 +56,11 @@ fn check_debug_bundle_policy(split: &str, expected_bundle: bool) {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let events: Vec<serde_json::Value> = fs::read_to_string(cache.join("events.jsonl"))
+        let events: Vec<deser_value::Value> = fs::read_to_string(cache.join("events.jsonl"))
             .unwrap()
             .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .filter(|event: &serde_json::Value| event["crate_name"] == "debug_bundle_policy")
+            .map(|line| deser_json::from_str(line).unwrap())
+            .filter(|event: &deser_value::Value| event["crate_name"] == "debug_bundle_policy")
             .collect();
         assert_eq!(
             events.last().unwrap()["result"],

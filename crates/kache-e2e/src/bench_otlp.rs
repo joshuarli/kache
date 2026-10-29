@@ -1,6 +1,6 @@
 //! OTLP JSON gauges for one completed bench run.
 //!
-//! Built with `serde_json` next to the human-readable report. There is no
+//! Built with `deser_json` next to the human-readable report. There is no
 //! OpenTelemetry SDK: the file is already the body of an OTLP/HTTP
 //! `ExportMetricsServiceRequest`, so a later collector can POST it as-is
 //! after adding the CI envelope.
@@ -10,7 +10,7 @@
 //! asserted here.
 
 use anyhow::{Context, Result};
-use serde_json::{Value, json};
+use deser_value::{Value, value};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -169,7 +169,7 @@ pub fn write_otlp(work_dir: &Path, run: &OtlpRun) -> Result<()> {
     let metrics_path = work_dir.join(METRICS_FILE);
     std::fs::write(
         &metrics_path,
-        serde_json::to_string(&body).context("serializing OTLP metrics")? + "\n",
+        deser_json::to_string(&body).context("serializing OTLP metrics")? + "\n",
     )
     .with_context(|| format!("writing {}", metrics_path.display()))?;
     let version_path = work_dir.join(SCHEMA_VERSION_FILE);
@@ -179,7 +179,7 @@ pub fn write_otlp(work_dir: &Path, run: &OtlpRun) -> Result<()> {
 }
 
 pub fn serialize_metrics(run: &OtlpRun) -> Value {
-    json!({
+    value!({
         "resourceMetrics": [{
             "resource": {
                 "attributes": [
@@ -509,7 +509,7 @@ fn unit_attrs(run: &OtlpRun, phase: &str, result: &str) -> Vec<Value> {
 }
 
 fn gauge(name: &str, unit: &str, data_points: Vec<Value>) -> Value {
-    json!({
+    value!({
         "name": name,
         "unit": unit,
         "gauge": { "dataPoints": data_points }
@@ -517,11 +517,11 @@ fn gauge(name: &str, unit: &str, data_points: Vec<Value>) -> Value {
 }
 
 fn str_attr(key: &str, value: &str) -> Value {
-    json!({"key": key, "value": {"stringValue": value}})
+    value!({"key": key, "value": {"stringValue": value}})
 }
 
 fn as_double(value: f64, time_unix_nano: &str, attributes: &[Value]) -> Value {
-    json!({
+    value!({
         "asDouble": value,
         "timeUnixNano": time_unix_nano,
         "attributes": attributes,
@@ -529,7 +529,7 @@ fn as_double(value: f64, time_unix_nano: &str, attributes: &[Value]) -> Value {
 }
 
 fn as_int(value: u64, time_unix_nano: &str, attributes: &[Value]) -> Value {
-    json!({
+    value!({
         "asInt": value.to_string(),
         "timeUnixNano": time_unix_nano,
         "attributes": attributes,
@@ -539,9 +539,9 @@ fn as_int(value: u64, time_unix_nano: &str, attributes: &[Value]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
+    use deser_value::Value;
 
-    pub(super) fn payload_for_kache_run() -> serde_json::Value {
+    pub(super) fn payload_for_kache_run() -> deser_value::Value {
         serialize_metrics(&kache_run())
     }
 
@@ -613,7 +613,7 @@ mod tests {
 
     fn names(body: &Value) -> Vec<&str> {
         body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .map(|m| m["name"].as_str().unwrap())
@@ -622,7 +622,7 @@ mod tests {
 
     fn metric<'a>(body: &'a Value, name: &str) -> &'a Value {
         body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .find(|m| m["name"] == name)
@@ -631,7 +631,7 @@ mod tests {
 
     fn attr_map(point: &Value) -> std::collections::BTreeMap<String, String> {
         point["attributes"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .map(|a| {
@@ -646,17 +646,17 @@ mod tests {
     fn all_attr_keys(body: &Value) -> std::collections::BTreeSet<String> {
         let mut keys = std::collections::BTreeSet::new();
         for attr in body["resourceMetrics"][0]["resource"]["attributes"]
-            .as_array()
+            .as_seq()
             .unwrap()
         {
             keys.insert(attr["key"].as_str().unwrap().to_string());
         }
         for metric in body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
-            .as_array()
+            .as_seq()
             .unwrap()
         {
-            for point in metric["gauge"]["dataPoints"].as_array().unwrap() {
-                for attr in point["attributes"].as_array().unwrap() {
+            for point in metric["gauge"]["dataPoints"].as_seq().unwrap() {
+                for attr in point["attributes"].as_seq().unwrap() {
                     keys.insert(attr["key"].as_str().unwrap().to_string());
                 }
             }
@@ -680,7 +680,7 @@ mod tests {
 
         let load = metric(&body, "kache.bench.host.load");
         assert_eq!(load["unit"], "{thread}");
-        let points = load["gauge"]["dataPoints"].as_array().unwrap();
+        let points = load["gauge"]["dataPoints"].as_seq().unwrap();
         assert_eq!(points.len(), 1);
         assert_eq!(points[0]["asDouble"], 12.5);
         assert_eq!(attr_map(&points[0])["kache.bench.phase"], "warm");
@@ -707,12 +707,12 @@ mod tests {
 
         let stages = metric(&body, "kache.bench.wrapper.time");
         assert_eq!(stages["unit"], "s");
-        let points = stages["gauge"]["dataPoints"].as_array().unwrap();
+        let points = stages["gauge"]["dataPoints"].as_seq().unwrap();
         let by_stage: Vec<(String, f64)> = points
             .iter()
             .map(|p| {
                 (
-                    attr_map(p)["kache.bench.stage"].to_string(),
+                    attr_map(p)["kache.bench.stage"].clone(),
                     p["asDouble"].as_f64().unwrap(),
                 )
             })
@@ -733,7 +733,7 @@ mod tests {
         assert_eq!(mismatches["gauge"]["dataPoints"][0]["asInt"], "1");
 
         let restored = metric(&body, "kache.bench.restore.bytes");
-        let points = restored["gauge"]["dataPoints"].as_array().unwrap();
+        let points = restored["gauge"]["dataPoints"].as_seq().unwrap();
         assert_eq!(points.len(), 2);
         assert_eq!(attr_map(&points[1])["kache.bench.method"], "copy");
         assert_eq!(points[1]["asInt"], "24");
@@ -768,7 +768,7 @@ mod tests {
     fn time_unix_nano_is_a_decimal_string() {
         let body = serialize_metrics(&kache_run());
         let point = &metric(&body, "kache.bench.speedup")["gauge"]["dataPoints"][0];
-        assert!(point["timeUnixNano"].is_string());
+        assert!(point["timeUnixNano"].is_str());
         assert_eq!(point["timeUnixNano"], "1700000000000000000");
         assert!(point.get("asDouble").is_some());
     }
@@ -831,7 +831,7 @@ mod tests {
     #[test]
     fn run_id_platform_and_cicd_are_absent() {
         let body = serialize_metrics(&kache_run());
-        let dumped = body.to_string();
+        let dumped = deser_json::to_string(&body).unwrap();
         assert!(!dumped.contains("run_id"));
         assert!(!dumped.contains("run-1"));
         assert!(!dumped.contains("cicd."));
@@ -898,7 +898,7 @@ mod tests {
     fn compile_units_carry_result_and_phase() {
         let body = serialize_metrics(&kache_run());
         let points = metric(&body, "kache.bench.compile.units")["gauge"]["dataPoints"]
-            .as_array()
+            .as_seq()
             .unwrap();
         let results: Vec<_> = points
             .iter()
@@ -994,7 +994,7 @@ mod tests {
         assert!(!listed.contains(&"kache.bench.passthrough.compiles"));
         assert!(!listed.contains(&"kache.bench.passthrough.time"));
         let units = metric(&body, "kache.bench.compile.units")["gauge"]["dataPoints"]
-            .as_array()
+            .as_seq()
             .unwrap();
         let results: Vec<_> = units
             .iter()
@@ -1016,7 +1016,7 @@ mod tests {
     fn build_duration_is_fractional_seconds() {
         let body = serialize_metrics(&kache_run());
         let points = metric(&body, "kache.bench.build.duration")["gauge"]["dataPoints"]
-            .as_array()
+            .as_seq()
             .unwrap();
         let warm = points
             .iter()
@@ -1034,7 +1034,7 @@ mod tests {
         run.phases[0].weighted_hit_rate_pct = None;
         let body = serialize_metrics(&run);
         let points = metric(&body, "kache.bench.cache.weighted_hit_rate")["gauge"]["dataPoints"]
-            .as_array()
+            .as_seq()
             .unwrap();
         assert_eq!(points.len(), 1);
         assert_eq!(attr_map(&points[0])["kache.bench.phase"], "warm");
@@ -1057,7 +1057,7 @@ mod tests {
         std::fs::write(dir.path().join(SCHEMA_VERSION_FILE), "1\n").unwrap();
         write_otlp(dir.path(), &kache_run()).unwrap();
         let body: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.path().join(METRICS_FILE)).unwrap())
+            deser_json::from_str(&std::fs::read_to_string(dir.path().join(METRICS_FILE)).unwrap())
                 .unwrap();
         assert_eq!(
             body["resourceMetrics"][0]["resource"]["attributes"][0]["value"]["stringValue"],
@@ -1072,22 +1072,22 @@ mod tests {
 
 #[cfg(test)]
 mod costliest_misses {
-    use serde_json::Value;
+    use deser_value::Value;
 
     fn points<'a>(body: &'a Value, name: &str) -> &'a Vec<Value> {
         body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .find(|m| m["name"] == name)
             .unwrap_or_else(|| panic!("{name} is not in the payload"))["gauge"]["dataPoints"]
-            .as_array()
+            .as_seq()
             .unwrap()
     }
 
     fn attr<'a>(point: &'a Value, key: &str) -> Option<&'a str> {
         point["attributes"]
-            .as_array()?
+            .as_seq()?
             .iter()
             .find(|a| a["key"] == key)?["value"]["stringValue"]
             .as_str()
@@ -1127,7 +1127,7 @@ mod costliest_misses {
     #[test]
     fn no_crate_name_is_emitted() {
         let body = super::tests::payload_for_kache_run();
-        let dumped = body.to_string();
+        let dumped = deser_json::to_string(&body).unwrap();
         assert!(
             !dumped.contains("gecko"),
             "a crate name reached the payload"
@@ -1166,22 +1166,22 @@ mod costliest_misses {
 
 #[cfg(test)]
 mod passthrough_split {
-    use serde_json::Value;
+    use deser_value::Value;
 
     fn points<'a>(body: &'a Value, name: &str) -> &'a Vec<Value> {
         body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .find(|m| m["name"] == name)
             .unwrap_or_else(|| panic!("{name} is not in the payload"))["gauge"]["dataPoints"]
-            .as_array()
+            .as_seq()
             .unwrap()
     }
 
     fn attr<'a>(point: &'a Value, key: &str) -> Option<&'a str> {
         point["attributes"]
-            .as_array()?
+            .as_seq()?
             .iter()
             .find(|a| a["key"] == key)?["value"]["stringValue"]
             .as_str()

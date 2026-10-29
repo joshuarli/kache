@@ -73,7 +73,7 @@ pub(crate) fn recent_events_for_build(path: &Path) -> Result<Vec<BuildEvent>> {
     let bytes = recent_bytes(path)?;
     Ok(bytes
         .split(|&b| b == b'\n')
-        .filter_map(|line| serde_json::from_slice(line).ok())
+        .filter_map(|line| deser_json::from_slice(line).ok())
         .collect())
 }
 
@@ -85,7 +85,7 @@ mod tests {
         let mut event = BuildEvent::new_for_test(name, EventResult::Miss);
         event.ts = UtcTime::from_timestamp(1_700_000_000, 0).unwrap();
         event.compile_time_ms = 100;
-        let mut bytes = serde_json::to_vec(&event).unwrap();
+        let mut bytes = deser_json::to_string(&event).map(String::into_bytes).unwrap();
         bytes.push(b'\n');
         bytes
     }
@@ -171,7 +171,7 @@ mod tests {
         writer
             .try_lock()
             .expect("snapshot must release its shared lock");
-        let event: BuildEvent = serde_json::from_slice(bytes.strip_suffix(b"\n").unwrap()).unwrap();
+        let event: BuildEvent = deser_json::from_slice(bytes.strip_suffix(b"\n").unwrap()).unwrap();
         assert_eq!(event.crate_name, "recent");
         assert!(recent_events_for_build(&path).is_err());
         writer.unlock().unwrap();

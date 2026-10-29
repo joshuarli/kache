@@ -1636,7 +1636,7 @@ Options:
 /// One flag or positional for the machine-readable help document. Field
 /// names match the document clients parse, so keep them in sync with
 /// `machine::emit_help` tests.
-#[derive(serde::Serialize)]
+#[derive(deser::Serialize)]
 pub(crate) struct HelpArgument {
     name: &'static str,
     long: Option<&'static str>,
@@ -1647,7 +1647,7 @@ pub(crate) struct HelpArgument {
 }
 
 /// One command for the machine-readable help document.
-#[derive(serde::Serialize)]
+#[derive(deser::Serialize)]
 pub(crate) struct HelpCommand {
     name: &'static str,
     description: Option<&'static str>,

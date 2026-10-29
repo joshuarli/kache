@@ -7,8 +7,8 @@ use std::path::Path;
 /// IDs can be reused after an unmount. Distinct IDs do not prove independent
 /// capacity: APFS volumes can share a container's free space.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[cfg_attr(feature = "deser", derive(deser::Serialize, deser::Deserialize))]
+#[cfg_attr(feature = "deser", deser(rename_all = "snake_case"))]
 #[non_exhaustive]
 pub enum VolumeId {
     /// Nonzero `statvfs.f_fsid`; zero means the OS did not identify the volume.
@@ -27,7 +27,7 @@ impl std::fmt::Display for VolumeId {
 /// Some filesystems allocate inodes dynamically; these are observations,
 /// not a promise of a fixed inode limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "deser", derive(deser::Serialize, deser::Deserialize))]
 pub struct InodeUsage {
     pub total: u64,
     pub available: u64,
@@ -36,7 +36,7 @@ pub struct InodeUsage {
 /// Capacity of the filesystem hosting a path. Missing identity or inode
 /// counters remain unknown; they do not mean zero capacity.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "deser", derive(deser::Serialize, deser::Deserialize))]
 pub struct VolumeStats {
     pub id: Option<VolumeId>,
     pub usage: VolumeUsage,
@@ -185,7 +185,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "serde")]
+    #[cfg(feature = "deser")]
     #[test]
     fn observations_round_trip_with_explicit_unknown_fields() {
         for stats in [
@@ -199,8 +199,8 @@ mod tests {
                 inodes: None,
             },
         ] {
-            let json = serde_json::to_string(&stats).unwrap();
-            assert_eq!(serde_json::from_str::<VolumeStats>(&json).unwrap(), stats);
+            let json = deser_json::to_string(&stats).unwrap();
+            assert_eq!(deser_json::from_str::<VolumeStats>(&json).unwrap(), stats);
         }
     }
 }

@@ -5,7 +5,7 @@
 //! this. Field shapes are intentionally stable; new optional fields are
 //! preferred over breaking renames.
 
-use serde::Serialize;
+use deser::Serialize;
 use std::collections::HashMap;
 
 use crate::assertions::AssertionCheck;
@@ -31,13 +31,13 @@ pub struct FixtureResult {
     /// without breaking consumers.
     pub status: String,
     /// Why a fixture did not execute. Absent for pass/fail results.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     pub skip_reason: Option<SkipReason>,
     pub phases: Vec<PhaseResult>,
 }
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[deser(tag = "kind", rename_all = "snake_case")]
 pub enum SkipReason {
     UnsupportedOs {
         current_os: String,
@@ -62,7 +62,7 @@ pub struct PhaseResult {
     /// Full `kache report --format json` output for the fixture's
     /// isolated cache dir. Forwarded raw so downstream consumers can
     /// read fields the harness doesn't currently assert on.
-    pub kache_report: serde_json::Value,
+    pub kache_report: deser_value::Value,
     /// Advisory numbers captured for trend/debugging. Warnings here do
     /// not affect `status`; only blocking assertions can fail a phase.
     pub measurements: Vec<Measurement>,
@@ -74,15 +74,15 @@ pub struct PhaseResult {
 #[derive(Debug, Serialize)]
 pub struct Measurement {
     pub name: String,
-    pub value: serde_json::Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: deser_value::Value,
+    #[deser(skip_serializing_if = Option::is_none)]
     pub unit: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     pub warning: Option<String>,
 }
 
 impl Measurement {
-    pub fn number(name: &str, value: impl Into<serde_json::Value>, unit: Option<&str>) -> Self {
+    pub fn number(name: &str, value: impl Into<deser_value::Value>, unit: Option<&str>) -> Self {
         Self {
             name: name.to_string(),
             value: value.into(),

@@ -181,7 +181,7 @@ pub fn run(config: FixtureRunConfig) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    let json = serde_json::to_string_pretty(&results)?;
+    let json = deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&results)?;
     std::fs::write(&config.out, &json)
         .with_context(|| format!("writing {}", config.out.display()))?;
     eprintln!("Results written to {}", config.out.display());

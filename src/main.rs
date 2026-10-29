@@ -596,7 +596,7 @@ fn run_main() -> Result<()> {
             if json {
                 machine::emit(
                     "version",
-                    serde_json::json!({ "version": VERSION }),
+                    deser_value::value!({ "version": VERSION }),
                     Vec::new(),
                 )?;
             } else {

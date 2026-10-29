@@ -51,7 +51,7 @@ fn rustc_sysroot() -> String {
 }
 
 fn toml_path(path: &Path) -> String {
-    toml::Value::String(path.to_string_lossy().into_owned()).to_string()
+    common::toml_basic(&path.to_string_lossy())
 }
 
 /// Compile a trivial rlib through kache-as-RUSTC_WRAPPER with `extra` flags
@@ -148,8 +148,8 @@ fn compiled_hit_counts(cache_dir: &Path) -> (u64, u64) {
         .output()
         .expect("failed to run kache report");
     assert!(output.status.success(), "kache report failed");
-    let report: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("report should be valid json");
+    let report: deser_value::Value =
+        deser_json::from_slice(&output.stdout).expect("report should be valid json");
     let s = &report["summary"];
     let compiled = s["dups"].as_u64().unwrap_or(0) + s["misses"].as_u64().unwrap_or(0);
     (compiled, s["local_hits"].as_u64().unwrap_or(0))
@@ -1097,12 +1097,12 @@ fn option_env_presence_changes_cached_behavior() {
             let last = events
                 .lines()
                 .rev()
-                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .map(|line| deser_json::from_str::<deser_value::Value>(line).unwrap())
                 .find(|event| event["crate_name"] == "presence")
                 .expect("presence compilation event");
             assert_eq!(
                 last["result"], "local_hit",
-                "unchanged value must actually hit: {last}"
+                "unchanged value must actually hit: {last:?}"
             );
         }
     }

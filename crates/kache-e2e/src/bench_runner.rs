@@ -84,7 +84,7 @@
 //! knobs, update the scenario's `[[file]]` / `[env]`, not this binary.
 
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, Write};
@@ -691,7 +691,7 @@ pub fn run_bench(config: BenchRunConfig) -> Result<()> {
     };
 
     let out = work_dir.join(format!("{}.json", profile.name));
-    std::fs::write(&out, serde_json::to_string_pretty(&result)? + "\n")
+    std::fs::write(&out, deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&result)? + "\n")
         .with_context(|| format!("writing {}", out.display()))?;
     write_otlp_or_warn(
         &work_dir,
@@ -848,28 +848,28 @@ fn fmt_wall_clock(wall_ms: u64) -> String {
 /// field. The backfilled value is a floor (a recorded 14s was anything up to
 /// 14.999s), which is what a whole-second record can give. The costliest
 /// misses get the same treatment for `compile_time_ms`.
-fn load_saved_phase<T: serde::de::DeserializeOwned>(mut saved: serde_json::Value) -> Result<T> {
+fn load_saved_phase<T: deser::de::DeserializeOwned>(mut saved: deser_value::Value) -> Result<T> {
     backfill_ms(&mut saved, "wall_s", "wall_ms");
     if let Some(misses) = saved
         .get_mut("top_misses")
-        .and_then(serde_json::Value::as_array_mut)
+        .and_then(|value| value.as_seq_mut())
     {
         for miss in misses {
             backfill_ms(miss, "compile_time_s", "compile_time_ms");
         }
     }
-    Ok(serde_json::from_value(saved)?)
+    Ok(deser_value::from_value(&saved)?)
 }
 
 /// Give `record` its `ms_key` from `seconds_key` when it has only the seconds.
-fn backfill_ms(record: &mut serde_json::Value, seconds_key: &str, ms_key: &str) {
-    if let Some(fields) = record.as_object_mut()
+fn backfill_ms(record: &mut deser_value::Value, seconds_key: &str, ms_key: &str) {
+    if let Some(fields) = record.as_map_mut()
         && !fields.contains_key(ms_key)
-        && let Some(seconds) = fields.get(seconds_key).and_then(serde_json::Value::as_u64)
+        && let Some(seconds) = fields.get(seconds_key).and_then(|value| value.as_u64())
     {
         fields.insert(
             ms_key.to_string(),
-            serde_json::Value::from(seconds.saturating_mul(1000)),
+            deser_value::Value::from(seconds.saturating_mul(1000)),
         );
     }
 }
@@ -1633,11 +1633,11 @@ fn capture_report(
     out_dir: &Path,
     phase: &str,
     root: &Path,
-) -> Result<(report::KacheReport, serde_json::Value)> {
+) -> Result<(report::KacheReport, deser_value::Value)> {
     let (parsed, raw) = report::fetch_since_with_root(kache, cache_dir, "365d", Some(root))?;
 
     let json_path = out_dir.join(format!("report-{phase}.json"));
-    std::fs::write(&json_path, serde_json::to_string_pretty(&raw)? + "\n")
+    std::fs::write(&json_path, deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&raw)? + "\n")
         .with_context(|| format!("writing {}", json_path.display()))?;
 
     let md = Command::new(kache)
@@ -1686,7 +1686,7 @@ fn run_cold_phase(
     event_log: &Path,
     trace_keys: bool,
     sh: &Path,
-) -> Result<(PhaseMetrics, serde_json::Value)> {
+) -> Result<(PhaseMetrics, deser_value::Value)> {
     daemon::drain(kache, cache_dir)?;
     if cache_dir.exists() {
         std::fs::remove_dir_all(cache_dir).context("clearing cache dir")?;
@@ -1741,7 +1741,7 @@ fn retry_load_cold(
     kache: &Path,
     cache_dir: &Path,
     work_dir: &Path,
-) -> Result<(PhaseMetrics, serde_json::Value)> {
+) -> Result<(PhaseMetrics, deser_value::Value)> {
     let snapshot = work_dir.join("cache-after-cold");
     let result_json = work_dir.join(format!("{profile_name}.json"));
     let report_cold = work_dir.join("report-cold.json");
@@ -1760,8 +1760,8 @@ fn retry_load_cold(
     daemon::drain(kache, cache_dir)?;
     source::snapshot_dir(&snapshot, cache_dir)?;
 
-    let cold_raw: serde_json::Value = read_json(&report_cold)?;
-    let prev: serde_json::Value = read_json(&result_json)?;
+    let cold_raw: deser_value::Value = read_json(&report_cold)?;
+    let prev: deser_value::Value = read_json(&result_json)?;
     let cold_metrics: PhaseMetrics = load_saved_phase(prev["cold"].clone()).with_context(|| {
         format!(
             "loading previous cold metrics from {}",
@@ -1929,7 +1929,7 @@ fn run_pull_bench(
     };
 
     let out = work_dir.join(format!("{}.json", profile.name));
-    std::fs::write(&out, serde_json::to_string_pretty(&result)? + "\n")
+    std::fs::write(&out, deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&result)? + "\n")
         .with_context(|| format!("writing {}", out.display()))?;
     write_otlp_or_warn(
         work_dir,
@@ -2103,7 +2103,7 @@ fn run_sccache_bench(
         result.warm_objdir_bytes,
     ));
     let out = work_dir.join(format!("{}.json", profile.name));
-    std::fs::write(&out, serde_json::to_string_pretty(&result)? + "\n")
+    std::fs::write(&out, deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&result)? + "\n")
         .with_context(|| format!("writing {}", out.display()))?;
     write_otlp_or_warn(
         work_dir,
@@ -2276,7 +2276,7 @@ fn retry_load_sccache_cold(
     );
     source::snapshot_dir(&snapshot, cache_dir)?;
 
-    let prev: serde_json::Value = read_json(&result_json)?;
+    let prev: deser_value::Value = read_json(&result_json)?;
     load_saved_phase(prev["cold"].clone()).with_context(|| {
         format!(
             "loading previous cold sccache metrics from {}",
@@ -2391,10 +2391,10 @@ fn capture_sccache_report(
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let raw: serde_json::Value =
-        serde_json::from_slice(&output.stdout).context("parsing sccache stats JSON")?;
+    let raw: deser_value::Value =
+        deser_json::from_slice(&output.stdout).context("parsing sccache stats JSON")?;
     let json_path = out_dir.join(format!("report-{phase}.sccache.json"));
-    std::fs::write(&json_path, serde_json::to_string_pretty(&raw)? + "\n")
+    std::fs::write(&json_path, deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&raw)? + "\n")
         .with_context(|| format!("writing {}", json_path.display()))?;
 
     let adv = sccache_command(sccache, cache_dir, Some(base_dir))
@@ -2441,10 +2441,15 @@ fn read_event_log(path: &Path) -> EventLogStats {
     // columns.
     // Value: (compiles, summed elapsed_ms).
     let mut reasons: HashMap<(String, String), (u64, u64)> = HashMap::new();
-    let stream = serde_json::Deserializer::from_reader(std::io::BufReader::new(file))
-        .into_iter::<serde_json::Value>();
-    for item in stream {
-        let Ok(ev) = item else { continue };
+    let mut reader = deser_json::DeserializerConfig::builder()
+        .trailing(deser_json::Trailing::Stop)
+        .build()
+        .reader(std::io::BufReader::new(file));
+    loop {
+        let ev = match reader.read::<deser_value::Value>() {
+            Ok(Some(ev)) => ev,
+            Ok(None) | Err(_) => break,
+        };
         stats.total += 1;
         // Annotations the wrapper adds to an event whose outcome alone does
         // not say it went wrong. They feed the phase's invalid reasons.
@@ -2518,7 +2523,7 @@ fn read_event_log(path: &Path) -> EventLogStats {
 
 /// A non-empty string field. The wrapper omits these when they are empty, and
 /// an older log may carry them as `""`.
-fn has_text(field: &serde_json::Value) -> bool {
+fn has_text(field: &deser_value::Value) -> bool {
     field.as_str().is_some_and(|text| !text.is_empty())
 }
 
@@ -2805,7 +2810,7 @@ fn compute_key_divergence(
 fn write_key_diff_reports(diff: &KeyDivergence, work_dir: &Path) -> Result<Option<String>> {
     let json_path = work_dir.join("key-diff.json");
     let md_path = work_dir.join("key-diff.md");
-    std::fs::write(&json_path, serde_json::to_string_pretty(&diff)? + "\n")
+    std::fs::write(&json_path, deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&diff)? + "\n")
         .with_context(|| format!("writing {}", json_path.display()))?;
 
     let mut md = String::new();
@@ -2898,10 +2903,10 @@ fn write_key_diff_reports(diff: &KeyDivergence, work_dir: &Path) -> Result<Optio
 ///
 /// Deterministic and device-independent — the headline correctness
 /// signal, where wall-clock can't be.
-fn key_stability(cold_raw: &serde_json::Value, warm_raw: &serde_json::Value) -> KeyStability {
-    fn crate_keys(raw: &serde_json::Value) -> HashMap<String, HashSet<String>> {
+fn key_stability(cold_raw: &deser_value::Value, warm_raw: &deser_value::Value) -> KeyStability {
+    fn crate_keys(raw: &deser_value::Value) -> HashMap<String, HashSet<String>> {
         let mut map: HashMap<String, HashSet<String>> = HashMap::new();
-        if let Some(events) = raw["all_events"].as_array() {
+        if let Some(events) = raw["all_events"].as_seq() {
             for ev in events {
                 if let (Some(name), Some(key)) =
                     (ev["crate_name"].as_str(), ev["cache_key"].as_str())
@@ -2960,9 +2965,9 @@ fn available_bytes(path: &Path) -> Option<u64> {
 }
 
 /// Deserialize a JSON file into `T`.
-fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+fn read_json<T: deser::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let s = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_str(&s).with_context(|| format!("parsing JSON from {}", path.display()))
+    deser_json::from_str(&s).with_context(|| format!("parsing JSON from {}", path.display()))
 }
 
 fn round1(v: f64) -> f64 {
@@ -3184,14 +3189,14 @@ struct MbxPhaseMetrics {
     /// Whole seconds, truncated from `wall_ms`; see [`PhaseMetrics::wall_s`].
     wall_s: u64,
     wall_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     report_version: u64,
     lookups: u64,
     hits: u64,
     misses: u64,
     unconsulted: u64,
     /// Bypass reason -> count, as reported.
-    #[serde(default)]
+    #[deser(default)]
     bypasses: BTreeMap<String, u64>,
     bypassed: u64,
     compiler_invocations_avoided: u64,
@@ -3204,12 +3209,12 @@ struct MbxPhaseMetrics {
     copied_output_bytes: u64,
     stored_bytes: u64,
     /// How contended the host was across the timed build.
-    #[serde(default)]
+    #[deser(default)]
     load: crate::bench_host::PhaseLoad,
 }
 
 impl MbxPhaseMetrics {
-    fn from_report(raw: &serde_json::Value, wall_ms: u64) -> Self {
+    fn from_report(raw: &deser_value::Value, wall_ms: u64) -> Self {
         let count = |key: &str| raw[key].as_u64().unwrap_or(0);
         let hits = count("hits");
         let misses = count("misses");
@@ -3220,11 +3225,16 @@ impl MbxPhaseMetrics {
             0.0
         };
         let bypasses: BTreeMap<String, u64> = raw["bypasses"]
-            .as_object()
+            .as_map()
             .map(|reasons| {
                 reasons
                     .iter()
-                    .map(|(reason, n)| (reason.clone(), n.as_u64().unwrap_or(0)))
+                    .map(|(reason, n)| {
+                        (
+                            reason.as_str().unwrap_or("").to_string(),
+                            n.as_u64().unwrap_or(0),
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -3262,11 +3272,11 @@ struct MbxBenchResult {
     cache_backend: String,
     run_id: String,
     artifact_dir: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     cache_tool_version: Option<String>,
     cold: MbxPhaseMetrics,
     warm: MbxPhaseMetrics,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     warm_same_tree: Option<MbxPhaseMetrics>,
     speedup: f64,
     cache_size_mb: f64,
@@ -3274,7 +3284,7 @@ struct MbxBenchResult {
     cold_objdir_bytes: u64,
     warm_objdir_bytes: u64,
     sum_apparent_bytes: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     disk_measured_bytes: Option<u64>,
     /// Cache and both objdirs on disk together, each inode once.
     disk_footprint_bytes: u64,
@@ -3286,7 +3296,7 @@ struct MbxBenchResult {
 /// reached its exit path, which is a failed run, not a zero.
 fn capture_mbx_report(work_dir: &Path, phase: &str, wall_ms: u64) -> Result<MbxPhaseMetrics> {
     let path = mbx_report_path(work_dir, phase);
-    let raw: serde_json::Value = read_json(&path).with_context(|| {
+    let raw: deser_value::Value = read_json(&path).with_context(|| {
         format!(
             "mbx wrote no stats report at {} (MBX_STATS_REPORT); the build did not finish through mbx",
             path.display()
@@ -3409,7 +3419,7 @@ fn retry_load_mbx_cold(
         snapshot.display()
     );
     source::snapshot_dir(&snapshot, cache_dir)?;
-    let prev: serde_json::Value = read_json(&result_json)?;
+    let prev: deser_value::Value = read_json(&result_json)?;
     load_saved_phase(prev["cold"].clone()).with_context(|| {
         format!(
             "loading previous cold mbx metrics from {}",
@@ -3541,7 +3551,7 @@ fn run_mbx_bench(
         );
     }
     let out = work_dir.join(format!("{}.json", profile.name));
-    std::fs::write(&out, serde_json::to_string_pretty(&result)? + "\n")
+    std::fs::write(&out, deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&result)? + "\n")
         .with_context(|| format!("writing {}", out.display()))?;
     write_otlp_or_warn(
         work_dir,
@@ -3598,13 +3608,17 @@ fn run_mbx_pull_bench(
     prepare_clone(profile, checkout, "pull", mbx, work, sh)?;
     let pull = measure_mbx_phase(profile, checkout, "pull", cache, mbx, work, sh)?;
     let disk = crate::disk_usage::measure(cache, &[checkout.join(&profile.objdir)]);
-    let result = serde_json::json!({"project": profile.name, "git_ref": profile.git_ref,
-        "ref_next": child, "cache_backend": "mbx", "cache_tool_version": version,
-        "host": crate::bench_host::HostInfo::collect(work), "cold": cold, "pull": pull,
-        "artifact_dir": archive, "verdict": {"ok": pull.hits > 0}});
+    let host = deser_value::to_value(&crate::bench_host::HostInfo::collect(work))?;
+    let cold_value = deser_value::to_value(&cold)?;
+    let pull_value = deser_value::to_value(&pull)?;
+    let version_value = deser_value::to_value(&version)?;
+    let result = deser_value::value!({"project": &profile.name, "git_ref": &profile.git_ref,
+        "ref_next": child, "cache_backend": "mbx", "cache_tool_version": version_value,
+        "host": host, "cold": cold_value, "pull": pull_value,
+        "artifact_dir": archive.display().to_string(), "verdict": {"ok": pull.hits > 0}});
     std::fs::write(
         work.join(format!("{}.json", profile.name)),
-        serde_json::to_vec_pretty(&result)?,
+        deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&result).map(String::into_bytes)?,
     )?;
     write_otlp_or_warn(
         work,
@@ -3709,14 +3723,14 @@ struct SccacheBenchResult {
     cache_backend: String,
     run_id: String,
     artifact_dir: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     cache_tool_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     sccache_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     cache_location: Option<String>,
     cold: SccachePhaseMetrics,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     warm_same_tree: Option<SccachePhaseMetrics>,
     warm: SccachePhaseMetrics,
     speedup: f64,
@@ -3725,7 +3739,7 @@ struct SccacheBenchResult {
     cold_objdir_bytes: u64,
     warm_objdir_bytes: u64,
     sum_apparent_bytes: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     disk_measured_bytes: Option<u64>,
     /// Cache and both objdirs on disk together, each inode once.
     disk_footprint_bytes: u64,
@@ -3751,23 +3765,23 @@ struct SccachePhaseMetrics {
     cache_write_errors: u64,
     hit_rate_pct: f64,
     top_not_cached: Vec<SccacheCount>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     cache_size_bytes: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     max_cache_size_bytes: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     cache_location: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[deser(default, skip_serializing_if = Vec::is_empty)]
     base_dirs: Vec<String>,
     /// How contended the host was across the timed build.
-    #[serde(default)]
+    #[deser(default)]
     load: crate::bench_host::PhaseLoad,
 }
 
 impl SccachePhaseMetrics {
-    fn from_raw(raw: &serde_json::Value, wall_ms: u64) -> Self {
+    fn from_raw(raw: &deser_value::Value, wall_ms: u64) -> Self {
         let stats = &raw["stats"];
         let cache_hits = sum_count_values(&stats["cache_hits"]["counts"]);
         let cache_misses = sum_count_values(&stats["cache_misses"]["counts"]);
@@ -3798,7 +3812,7 @@ impl SccachePhaseMetrics {
             version: raw["version"].as_str().map(ToString::to_string),
             cache_location: raw["cache_location"].as_str().map(ToString::to_string),
             base_dirs: raw["basedirs"]
-                .as_array()
+                .as_seq()
                 .map(|dirs| {
                     dirs.iter()
                         .filter_map(|dir| dir.as_str().map(ToString::to_string))
@@ -3816,16 +3830,20 @@ struct SccacheCount {
     count: u64,
 }
 
-fn sum_count_values(value: &serde_json::Value) -> u64 {
-    match value {
-        serde_json::Value::Number(n) => n.as_u64().unwrap_or(0),
-        serde_json::Value::Object(map) => map.values().map(sum_count_values).sum(),
-        serde_json::Value::Array(items) => items.iter().map(sum_count_values).sum(),
-        _ => 0,
+fn sum_count_values(value: &deser_value::Value) -> u64 {
+    if let Some(number) = value.as_u64() {
+        return number;
     }
+    if let Some(map) = value.as_map() {
+        return map.values().map(sum_count_values).sum();
+    }
+    if let Some(items) = value.as_seq() {
+        return items.iter().map(sum_count_values).sum();
+    }
+    0
 }
 
-fn top_sccache_counts(value: &serde_json::Value, limit: usize) -> Vec<SccacheCount> {
+fn top_sccache_counts(value: &deser_value::Value, limit: usize) -> Vec<SccacheCount> {
     let mut counts = Vec::new();
     collect_sccache_counts(value, "", &mut counts);
     counts.sort_by_key(|count| std::cmp::Reverse(count.count));
@@ -3833,28 +3851,27 @@ fn top_sccache_counts(value: &serde_json::Value, limit: usize) -> Vec<SccacheCou
     counts
 }
 
-fn collect_sccache_counts(value: &serde_json::Value, prefix: &str, out: &mut Vec<SccacheCount>) {
-    match value {
-        serde_json::Value::Number(n) => {
-            let count = n.as_u64().unwrap_or(0);
-            if count > 0 && !prefix.is_empty() {
-                out.push(SccacheCount {
-                    reason: prefix.to_string(),
-                    count,
-                });
-            }
+fn collect_sccache_counts(value: &deser_value::Value, prefix: &str, out: &mut Vec<SccacheCount>) {
+    if let Some(count) = value.as_u64() {
+        if count > 0 && !prefix.is_empty() {
+            out.push(SccacheCount {
+                reason: prefix.to_string(),
+                count,
+            });
         }
-        serde_json::Value::Object(map) => {
-            for (key, value) in map {
-                let next = if prefix.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{prefix}.{key}")
-                };
-                collect_sccache_counts(value, &next, out);
-            }
-        }
-        _ => {}
+        return;
+    }
+    let Some(map) = value.as_map() else {
+        return;
+    };
+    for (key, value) in map {
+        let name = key.as_str().unwrap_or("");
+        let next = if prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{prefix}.{name}")
+        };
+        collect_sccache_counts(value, &next, out);
     }
 }
 
@@ -4381,20 +4398,20 @@ struct BenchResult {
     /// the latest run for `--retry`.
     artifact_dir: String,
     /// Output of `<cache-tool> --version`.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     cache_tool_version: Option<String>,
     /// The machine that ran the bench. Kept out of the OTLP attributes.
     host: crate::bench_host::HostInfo,
     cold: PhaseMetrics,
     /// The same-worktree warm rebuild, present only under `--warm-same-tree`.
     /// Optional for subjects that do not request the same-checkout phase.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     warm_same_tree: Option<PhaseMetrics>,
     warm: PhaseMetrics,
     /// Cold wall-clock divided by warm wall-clock.
     speedup: f64,
     /// Cold wall-clock divided by the same-tree warm wall-clock.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     warm_same_tree_speedup: Option<f64>,
     cache_size_mb: f64,
     /// Bytes allocated to clone-a's objdir after the cold build, each inode
@@ -4410,7 +4427,7 @@ struct BenchResult {
     /// not checked; `disk_footprint_bytes` is what the storage stats are
     /// checked against. `None` on `--retry` (cold is restored, not built, so
     /// the delta wouldn't cover the full three-pool layout).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     disk_measured_bytes: Option<u64>,
     /// Cache and both objdirs on disk together, each inode once, read from
     /// the filesystem after the run. A hardlink shared between the cache and
@@ -4425,7 +4442,7 @@ struct BenchResult {
     verdict: Verdict,
     /// The same-tree phase's own verdict, from
     /// `[checks.assert.warm-same-tree]`. Also drives the exit code.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     warm_same_tree_verdict: Option<Verdict>,
     /// Advisory measurement threshold warnings. Never drives exit code.
     measure_warnings: Vec<String>,
@@ -4433,7 +4450,7 @@ struct BenchResult {
     /// run was invoked with `--trace-keys`. The full per-crate diff
     /// lives in `key-diff.json` / `key-diff.md`; this is the headline
     /// for the run summary.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     key_diff_top: Option<String>,
     /// Detailed per-phase artifacts written next to this file.
     reports: Vec<String>,
@@ -4452,7 +4469,7 @@ struct PullBenchResult {
     platform: String,
     run_id: String,
     artifact_dir: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     cache_tool_version: Option<String>,
     host: crate::bench_host::HostInfo,
     cold: PhaseMetrics,
@@ -4516,15 +4533,15 @@ struct PhaseMetrics {
     phases: PhaseTimes,
     /// The scenario's untimed `prepare` step, when it ran in this phase's
     /// clone before this phase's build. Its time is not part of `wall_ms`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     prepare: Option<PrepareMetrics>,
     /// Why this phase's numbers may not mean what they appear to, such as
     /// `store_errors:3` or `daemon_not_running`. Reported in the summary; the
     /// verdict does not read them yet. See [`invalid_reasons`].
-    #[serde(default)]
+    #[deser(default)]
     invalid_reasons: Vec<String>,
     /// How contended the host was across the timed build.
-    #[serde(default)]
+    #[deser(default)]
     load: crate::bench_host::PhaseLoad,
 }
 
@@ -4598,7 +4615,7 @@ fn prediction_summary_line(warm: &PhaseTimes, cold_dep_info_runs: u64) -> Option
 }
 
 impl PhaseTimes {
-    fn from_raw(raw: &serde_json::Value) -> Self {
+    fn from_raw(raw: &deser_value::Value) -> Self {
         // `timing`, not `summary`. Every field below is published under
         // `timing` in the report schema; reading `summary` returned zero for
         // all of them, which the perf gate's phase table renders as "no phase
@@ -4624,7 +4641,7 @@ impl PhaseTimes {
 impl PhaseMetrics {
     fn from_report(
         report: &report::KacheReport,
-        raw: &serde_json::Value,
+        raw: &deser_value::Value,
         wall_ms: u64,
         event_log: EventLogStats,
         leak_warnings: u64,
@@ -4632,7 +4649,7 @@ impl PhaseMetrics {
         let s = &report.summary;
         let sum = &raw["summary"];
         let top_misses = raw["top_misses"]
-            .as_array()
+            .as_seq()
             .map(|arr| {
                 arr.iter()
                     .filter_map(|m| {
@@ -4713,7 +4730,7 @@ struct MissEntry {
     /// older results.
     compile_time_s: u64,
     /// The compile time kache's report records for the miss.
-    #[serde(default)]
+    #[deser(default)]
     compile_time_ms: u64,
 }
 
@@ -4755,7 +4772,7 @@ impl StorageInfo {
     /// Pull the `storage` section out of a raw `kache report`. Missing
     /// fields default to zero, so a report from an older kache without
     /// the section degrades cleanly.
-    fn from_raw(raw: &serde_json::Value) -> Self {
+    fn from_raw(raw: &deser_value::Value) -> Self {
         let st = &raw["storage"];
         let u = |key: &str| st[key].as_u64().unwrap_or(0);
         StorageInfo {
@@ -4797,7 +4814,7 @@ struct EventLogStats {
     top_passthrough: Vec<ReasonCount>,
     /// Every passthrough reason with its count and summed time, most frequent
     /// first. `top_passthrough` is the head of this list.
-    #[serde(default)]
+    #[deser(default)]
     passthrough_reasons: Vec<ReasonCount>,
     /// Bytes of artifact data restored from cache (sum of `size`
     /// over `*_hit` events). The headline numerator of "what
@@ -4809,14 +4826,14 @@ struct EventLogStats {
     /// the summary report a bytes-version of the weighted hit rate.
     miss_bytes: u64,
     /// Events whose store failed after the compiler ran (`store_error`).
-    #[serde(default)]
+    #[deser(default)]
     store_errors: u64,
     /// Events whose existing entry was rejected before the compiler ran
     /// (`lookup_rejection`).
-    #[serde(default)]
+    #[deser(default)]
     lookup_rejections: u64,
     /// Events kache handed to a configured fallback wrapper (`fallback`).
-    #[serde(default)]
+    #[deser(default)]
     fallbacks: u64,
 }
 
@@ -4837,7 +4854,7 @@ fn passthrough_pct(event_log: &EventLogStats) -> Option<f64> {
 struct ReasonCount {
     /// What kache did: `reject` (ran the real compiler) or `fallback`
     /// (delegated to a configured fallback wrapper, e.g. sccache).
-    #[serde(default)]
+    #[deser(default)]
     action: String,
     /// The kache-emitted structured reason, `category|detail`.
     reason: String,
@@ -4845,7 +4862,7 @@ struct ReasonCount {
     /// Wall time of those compiles, summed. A reason that passes through a
     /// thousand 20 ms preprocessor runs costs less than one that passes through
     /// a single 100 s compile, and the count alone says the opposite.
-    #[serde(default)]
+    #[deser(default)]
     elapsed_ms: u64,
 }
 

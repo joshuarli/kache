@@ -2,7 +2,7 @@
 //! select.
 
 use filetime::FileTime;
-use serde_json::Value;
+use deser_value::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,18 +23,18 @@ fn crate_events(cache_dir: &Path, crate_name: &str) -> Vec<Value> {
     fs::read_to_string(cache_dir.join("events.jsonl"))
         .unwrap_or_default()
         .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|line| deser_json::from_str::<Value>(line).ok())
         .filter(|event| event["crate_name"] == crate_name)
         .collect()
 }
 
 fn assert_passthrough(event: &Value, reason: &str) {
-    assert_eq!(event["result"], "passthrough", "event: {event:#}");
+    assert_eq!(event["result"], "passthrough", "event: {event:#?}");
     assert!(
         event["passthrough_reason"]
             .as_str()
             .is_some_and(|value| value.contains(reason)),
-        "expected passthrough reason containing {reason:?}; event: {event:#}",
+        "expected passthrough reason containing {reason:?}; event: {event:#?}",
     );
 }
 
@@ -238,12 +238,12 @@ fn unselected_workspace_crates_seed_then_stay_active() {
     // before its key, and a source stamped after the build started would be
     // neither stored nor learned from.
     let (lib, mid) = build(None, 1);
-    assert_eq!(lib["result"], "miss", "event: {lib:#}");
+    assert_eq!(lib["result"], "miss", "event: {lib:#?}");
     assert_eq!(
         lib["dep_info_runs"], 0,
-        "a unit without policy state compiles before its key: {lib:#}"
+        "a unit without policy state compiles before its key: {lib:#?}"
     );
-    assert_eq!(mid["result"], "miss", "event: {mid:#}");
+    assert_eq!(mid["result"], "miss", "event: {mid:#?}");
 
     // Future, increasing mtimes make Cargo rebuild without sleeping.
     let (lib, mid) = build(Some(future), 2);
@@ -252,7 +252,7 @@ fn unselected_workspace_crates_seed_then_stay_active() {
 
     let (lib, mid) = build(Some(future + 1), 3);
     assert_passthrough(&lib, "adaptive active");
-    assert_eq!(lib["key_ms"], 0, "event: {lib:#}");
+    assert_eq!(lib["key_ms"], 0, "event: {lib:#?}");
     assert_passthrough(&mid, "adaptive active");
 
     // With the policy state gone, the unit cannot seed. Its record from the
@@ -261,10 +261,10 @@ fn unselected_workspace_crates_seed_then_stay_active() {
     // paying the dep-info pre-pass first.
     fs::remove_dir_all(target.join("debug/incremental.kache-auto")).unwrap();
     let (lib, _mid) = build(None, 4);
-    assert_eq!(lib["result"], "miss", "event: {lib:#}");
+    assert_eq!(lib["result"], "miss", "event: {lib:#?}");
     assert_eq!(
         lib["dep_info_runs"], 0,
-        "a unit whose policy state is gone compiles before its key: {lib:#}"
+        "a unit whose policy state is gone compiles before its key: {lib:#?}"
     );
 
     // That build taught the unit again and recorded its closure. The same
@@ -274,10 +274,10 @@ fn unselected_workspace_crates_seed_then_stay_active() {
     // compiles while the key is re-derived.
     purge_crate(&project, cache.path(), "adaptive_lib");
     let (lib, _mid) = build(None, 4);
-    assert_eq!(lib["result"], "miss", "event: {lib:#}");
+    assert_eq!(lib["result"], "miss", "event: {lib:#?}");
     assert_eq!(
         lib["dep_info_runs"], 0,
-        "a missed prediction that cannot seed compiles while re-deriving: {lib:#}"
+        "a missed prediction that cannot seed compiles while re-deriving: {lib:#?}"
     );
 }
 
@@ -432,10 +432,10 @@ impl RaceWorkspace {
 fn assert_unstored_after_a_save(event: &Value) {
     assert_eq!(
         event["dep_info_runs"], 1,
-        "the key came from the pre-pass: {event:#}"
+        "the key came from the pre-pass: {event:#?}"
     );
-    assert_eq!(event["result"], "skipped", "event: {event:#}");
-    assert_eq!(event["skip_reason"], "inputs-changed", "event: {event:#}");
+    assert_eq!(event["result"], "skipped", "event: {event:#?}");
+    assert_eq!(event["skip_reason"], "inputs-changed", "event: {event:#?}");
 }
 
 /// A learning library starts cold when its workspace guard changes. A changed
@@ -458,18 +458,18 @@ fn a_save_while_a_library_with_policy_state_compiles_is_not_stored() {
 
     let (printed, lib_event) = build("a", None);
     assert_eq!(printed, "1");
-    assert_eq!(lib_event["result"], "miss", "event: {lib_event:#}");
+    assert_eq!(lib_event["result"], "miss", "event: {lib_event:#?}");
 
     fs::write(fixture.project.join("README.md"), "race, edited\n").unwrap();
     let (printed, lib_event) = build("b", Some(&lib(2)));
     assert_eq!(printed, "2", "rustc read the saved source");
     assert_passthrough(&lib_event, "adaptive seed");
-    assert_eq!(lib_event["compiler_runs"], 1, "event: {lib_event:#}");
-    assert_eq!(lib_event["dep_info_runs"], 0, "event: {lib_event:#}");
+    assert_eq!(lib_event["compiler_runs"], 1, "event: {lib_event:#?}");
+    assert_eq!(lib_event["dep_info_runs"], 0, "event: {lib_event:#?}");
 
     fs::write(fixture.project.join("lib/src/lib.rs"), lib(1)).unwrap();
     let (printed, lib_event) = build("b", None);
-    assert_eq!(lib_event["result"], "miss", "event: {lib_event:#}");
+    assert_eq!(lib_event["result"], "miss", "event: {lib_event:#?}");
     assert_eq!(printed, "1", "the revert compiled");
 }
 
@@ -488,7 +488,7 @@ fn a_save_while_a_binary_with_policy_state_compiles_is_not_stored() {
 
     let (printed, app_event) = build("a", None);
     assert_eq!(printed, "old a");
-    assert_eq!(app_event["result"], "miss", "event: {app_event:#}");
+    assert_eq!(app_event["result"], "miss", "event: {app_event:#?}");
 
     fs::write(fixture.project.join("README.md"), "race, edited\n").unwrap();
     let (printed, app_event) = build("b", Some(&main("new")));
@@ -497,7 +497,7 @@ fn a_save_while_a_binary_with_policy_state_compiles_is_not_stored() {
 
     fs::write(fixture.project.join("app/src/main.rs"), main("old")).unwrap();
     let (printed, app_event) = build("b", None);
-    assert_eq!(app_event["result"], "miss", "event: {app_event:#}");
+    assert_eq!(app_event["result"], "miss", "event: {app_event:#?}");
     assert_eq!(printed, "old b", "the revert compiled");
 }
 
@@ -515,7 +515,7 @@ fn a_save_while_a_binary_re_derives_its_key_is_not_stored() {
 
     let (printed, app_event) = build(None);
     assert_eq!(printed, "old");
-    assert_eq!(app_event["result"], "miss", "event: {app_event:#}");
+    assert_eq!(app_event["result"], "miss", "event: {app_event:#?}");
 
     // The same bytes again: Cargo rebuilds, the first build's record still
     // applies, and it predicts the key whose entry is gone.
@@ -527,7 +527,7 @@ fn a_save_while_a_binary_re_derives_its_key_is_not_stored() {
 
     fs::write(fixture.project.join("app/src/main.rs"), main("old")).unwrap();
     let (printed, app_event) = build(None);
-    assert_eq!(app_event["result"], "miss", "event: {app_event:#}");
+    assert_eq!(app_event["result"], "miss", "event: {app_event:#?}");
     assert_eq!(printed, "old", "the revert compiled");
 }
 
@@ -555,7 +555,7 @@ fn the_modified_input_guard_refuses_a_save_after_a_key_taken_first() {
 
     let (printed, lib_event) = build("a", None);
     assert_eq!(printed, "1");
-    assert_eq!(lib_event["result"], "miss", "event: {lib_event:#}");
+    assert_eq!(lib_event["result"], "miss", "event: {lib_event:#?}");
 
     // The flag makes Cargo rebuild the library and keeps its record out.
     let (printed, lib_event) = build("b", Some(&lib(2)));
@@ -564,7 +564,7 @@ fn the_modified_input_guard_refuses_a_save_after_a_key_taken_first() {
 
     fs::write(fixture.project.join("lib/src/lib.rs"), lib(1)).unwrap();
     let (printed, lib_event) = build("b", None);
-    assert_eq!(lib_event["result"], "miss", "event: {lib_event:#}");
+    assert_eq!(lib_event["result"], "miss", "event: {lib_event:#?}");
     assert_eq!(printed, "1", "the revert compiled");
 }
 
@@ -684,15 +684,15 @@ fn a_seed_releases_the_discovery_flight_before_it_compiles() {
     // No policy state: the library holds the flight it found no record
     // under while it compiles before its key, and stores the result.
     let (lib, held) = build(None, 1, &[]);
-    assert_eq!(lib["result"], "miss", "event: {lib:#}");
-    assert_eq!(lib["dep_info_runs"], 0, "event: {lib:#}");
+    assert_eq!(lib["result"], "miss", "event: {lib:#?}");
+    assert_eq!(lib["dep_info_runs"], 0, "event: {lib:#?}");
     assert_eq!(held, "1", "a compile before the key holds the flight");
 
     // The edit voids the record. The seed releases the flight, then derives
     // its key from the compile's emitted dep-info.
     let (lib, held) = build(Some(future), 2, &[]);
     assert_passthrough(&lib, "adaptive seed");
-    assert_eq!(lib["dep_info_runs"], 0, "event: {lib:#}");
+    assert_eq!(lib["dep_info_runs"], 0, "event: {lib:#?}");
     assert_eq!(held, "0", "the seed released the flight");
 
     // With no lane to seed and no compile before the key, the library
@@ -705,7 +705,7 @@ fn a_seed_releases_the_discovery_flight_before_it_compiles() {
             ("KACHE_DEFERRED_DISCOVERY", "0"),
         ],
     );
-    assert_eq!(lib["result"], "miss", "event: {lib:#}");
-    assert_eq!(lib["dep_info_runs"], 1, "event: {lib:#}");
+    assert_eq!(lib["result"], "miss", "event: {lib:#?}");
+    assert_eq!(lib["dep_info_runs"], 1, "event: {lib:#?}");
     assert_eq!(held, "1", "a keyed miss holds the flight");
 }

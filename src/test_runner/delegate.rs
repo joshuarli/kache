@@ -73,7 +73,7 @@ pub(crate) fn exported_triple(vars: &[(String, String)]) -> Result<Option<String
 #[derive(Debug, Clone)]
 pub(crate) struct ConfigFile {
     pub(crate) root: PathBuf,
-    pub(crate) target: toml::Table,
+    pub(crate) target: deser_value::Map,
     pub(crate) cfg_rustflags: bool,
 }
 
@@ -120,20 +120,21 @@ fn read_with_includes(
     }
     let Some(table) = std::fs::read_to_string(path)
         .ok()
-        .and_then(|text| text.parse::<toml::Table>().ok())
+        .and_then(|text| deser_toml::from_str::<deser_value::Map>(&text).ok())
     else {
         return Ok(());
     };
-    let target = match table.get("target") {
-        Some(toml::Value::Table(target)) => target.clone(),
-        _ => toml::Table::new(),
-    };
+    let target = table
+        .get("target")
+        .and_then(|value| value.as_map())
+        .cloned()
+        .unwrap_or_default();
     let build_rustflags = table.get("build").and_then(|build| build.get("rustflags"));
     let target_rustflags = target.values().filter_map(|t| t.get("rustflags"));
     let cfg_rustflags = build_rustflags
         .into_iter()
         .chain(target_rustflags)
-        .any(|flags| flags.to_string().contains("--cfg"));
+        .any(value_contains_cfg);
     let dir = path.parent().unwrap_or(path);
     files.push(ConfigFile {
         root: dir.parent().unwrap_or(dir).to_path_buf(),
@@ -147,18 +148,38 @@ fn read_with_includes(
 }
 
 /// `include = "a.toml"`, `["a.toml", "b.toml"]` or `[{ path = "a.toml" }]`.
-fn includes(table: &toml::Table) -> Vec<&str> {
-    match table.get("include") {
-        Some(toml::Value::String(path)) => vec![path.as_str()],
-        Some(toml::Value::Array(items)) => items
-            .iter()
-            .filter_map(|item| {
-                item.as_str()
-                    .or_else(|| item.get("path").and_then(toml::Value::as_str))
-            })
-            .collect(),
-        _ => Vec::new(),
+fn includes(table: &deser_value::Map) -> Vec<&str> {
+    let Some(value) = table.get("include") else {
+        return Vec::new();
+    };
+    if let Some(path) = value.as_str() {
+        return vec![path];
     }
+    value
+        .as_seq()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.as_str()
+                        .or_else(|| item.get("path").and_then(|value| value.as_str()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn value_contains_cfg(value: &deser_value::Value) -> bool {
+    if let Some(text) = value.as_str() {
+        return text.contains("--cfg");
+    }
+    if let Some(items) = value.as_seq() {
+        return items.iter().any(value_contains_cfg);
+    }
+    if let Some(map) = value.as_map() {
+        return map.values().any(value_contains_cfg);
+    }
+    false
 }
 
 /// What the configuration says to run the test binary under.
@@ -184,15 +205,18 @@ pub(crate) fn shadowed_runner(
     flags_known: bool,
     host: impl FnOnce() -> Option<(String, Vec<HostCfg>)>,
 ) -> Shadowed {
-    let mut cfg_runners: BTreeMap<&str, (&toml::Value, &Path)> = BTreeMap::new();
+    let mut cfg_runners: BTreeMap<&str, (&deser_value::Value, &Path)> = BTreeMap::new();
     for file in files {
         for (key, table) in &file.target {
+            let Some(name) = key.as_str() else {
+                continue;
+            };
             let Some(runner) = table.get("runner") else {
                 continue;
             };
-            if let Some(expr) = key.strip_prefix("cfg(").and_then(|k| k.strip_suffix(')')) {
+            if let Some(expr) = name.strip_prefix("cfg(").and_then(|k| k.strip_suffix(')')) {
                 cfg_runners.entry(expr).or_insert((runner, &file.root));
-            } else if env_triple(key) == triple {
+            } else if env_triple(name) == triple {
                 return found(runner, &file.root);
             }
         }
@@ -236,7 +260,7 @@ pub(crate) fn shadowed_runner(
     }
 }
 
-fn found(runner: &toml::Value, root: &Path) -> Shadowed {
+fn found(runner: &deser_value::Value, root: &Path) -> Shadowed {
     match runner_words(runner) {
         Some(words) if !words.is_empty() && !is_kache_runner(&words) => {
             Shadowed::Runner(resolve(words, root))
@@ -246,15 +270,16 @@ fn found(runner: &toml::Value, root: &Path) -> Shadowed {
 }
 
 /// A runner is a string split on whitespace, or an array of strings.
-pub(crate) fn runner_words(value: &toml::Value) -> Option<Vec<String>> {
-    match value {
-        toml::Value::String(line) => Some(line.split_whitespace().map(str::to_owned).collect()),
-        toml::Value::Array(items) => items
+pub(crate) fn runner_words(value: &deser_value::Value) -> Option<Vec<String>> {
+    if let Some(line) = value.as_str() {
+        return Some(line.split_whitespace().map(str::to_owned).collect());
+    }
+    value.as_seq().and_then(|items| {
+        items
             .iter()
             .map(|item| item.as_str().map(str::to_owned))
-            .collect(),
-        _ => None,
-    }
+            .collect()
+    })
 }
 
 /// A program path with a separator is relative to the directory holding
@@ -597,13 +622,13 @@ mod tests {
     }
 
     fn file(root: &str, toml: &str) -> ConfigFile {
-        let table = toml.parse::<toml::Table>().unwrap();
+        let table: deser_value::Map = deser_toml::from_str(toml).unwrap();
         ConfigFile {
             cfg_rustflags: false,
             root: PathBuf::from(root),
             target: table
                 .get("target")
-                .and_then(|t| t.as_table())
+                .and_then(|t| t.as_map())
                 .cloned()
                 .unwrap_or_default(),
         }
@@ -1037,7 +1062,15 @@ mod tests {
             .unwrap()
             .into_iter()
             .filter(|file| file.root.starts_with(dir.path()))
-            .map(|file| (file.target.keys().cloned().collect::<Vec<_>>(), file.root))
+            .map(|file| {
+                (
+                    file.target
+                        .keys()
+                        .filter_map(|key| key.as_str().map(str::to_owned))
+                        .collect::<Vec<_>>(),
+                    file.root,
+                )
+            })
             .collect::<Vec<_>>();
         assert_eq!(
             order,
@@ -1048,7 +1081,7 @@ mod tests {
                 (vec!["c".to_owned()], cargo.clone()),
             ]
         );
-        assert!(includes(&"include = 3".parse().unwrap()).is_empty());
+        assert!(includes(&deser_toml::from_str("include = 3").unwrap()).is_empty());
         // A cycle is refused at the depth limit, not cut short.
         write("config.toml", "include = 'config.toml'\n");
         let error = config_files(&work, &home).unwrap_err();
@@ -1135,7 +1168,12 @@ mod tests {
                 .map(|f| {
                     (
                         f.root.clone(),
-                        f.target["a"]["runner"].as_str().unwrap().to_owned(),
+                        f.target
+                            .get("a")
+                            .and_then(|target| target.get("runner"))
+                            .and_then(|runner| runner.as_str())
+                            .unwrap()
+                            .to_owned(),
                     )
                 })
                 .collect::<Vec<_>>()

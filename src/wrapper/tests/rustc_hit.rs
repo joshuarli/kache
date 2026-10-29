@@ -111,7 +111,7 @@ impl Fixture {
         std::fs::create_dir_all(&entry_dir).unwrap();
         std::fs::write(
             entry_dir.join("meta.json"),
-            serde_json::to_vec(&self.meta).unwrap(),
+            deser_json::to_string(&self.meta).map(String::into_bytes).unwrap(),
         )
         .unwrap();
         self.store.insert_entry_row_for_test(CACHE_KEY);

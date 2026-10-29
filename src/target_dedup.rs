@@ -343,7 +343,7 @@ fn share_note(replaced: usize, matched_bytes: u64) -> Option<String> {
 
 fn present(report: &Report, apply: bool, json: bool) -> Result<Vec<String>> {
     if json {
-        #[derive(serde::Serialize)]
+        #[derive(deser::Serialize)]
         struct Body {
             targets: usize,
             examined: usize,

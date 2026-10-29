@@ -241,8 +241,8 @@ mod tests {
             detail: "denied output".into(),
         };
         assert_eq!(attempt.terminal_code(), None);
-        let json = serde_json::to_string(&attempt).unwrap();
+        let json = deser_json::to_string(&attempt).unwrap();
         assert!(json.contains("sandbox_denied"));
-        assert_eq!(serde_json::from_str::<Attempt>(&json).unwrap(), attempt);
+        assert_eq!(deser_json::from_str::<Attempt>(&json).unwrap(), attempt);
     }
 }

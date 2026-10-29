@@ -1,6 +1,6 @@
 //! Metadata and diagnostics must survive both streaming misses and verified hits.
 
-use serde_json::Value;
+use deser_value::Value;
 use std::fs;
 use std::path::Path;
 
@@ -38,11 +38,11 @@ fn compile(project: &Path, cache: &Path, verify: bool, expected_result: &str) ->
         );
     }
     let events = fs::read_to_string(cache.join("events.jsonl")).unwrap();
-    let event: Value = serde_json::from_str(events.lines().last().unwrap()).unwrap();
+    let event: Value = deser_json::from_str(events.lines().last().unwrap()).unwrap();
     assert_eq!(event["result"], expected_result);
     stderr
         .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter_map(|line| deser_json::from_str(line).ok())
         .collect()
 }
 
@@ -84,7 +84,7 @@ fn miss_and_verified_hit_emit_metadata_once_and_preserve_large_diagnostics() {
         .filter(|message| message["$message_type"] == "diagnostic")
         .collect();
     assert!(diagnostics.len() >= 256);
-    assert!(serde_json::to_vec(&diagnostics).unwrap().len() > 128 * 1024);
+    assert!(deser_json::to_string(&diagnostics).map(String::into_bytes).unwrap().len() > 128 * 1024);
 
     for verify in [false, true] {
         fs::remove_dir_all(project.path().join("out")).unwrap();
@@ -106,7 +106,7 @@ fn miss_and_verified_hit_emit_metadata_once_and_preserve_large_diagnostics() {
     }
 
     let state: Value =
-        serde_json::from_slice(&fs::read(cache.path().join("daemon.state.json")).unwrap()).unwrap();
+        deser_json::from_slice(&fs::read(cache.path().join("daemon.state.json")).unwrap()).unwrap();
     let pid =
         kunobi_daemon::ProcessId::new(state["pid"].as_u64().unwrap().try_into().unwrap()).unwrap();
     let mut process = kunobi_daemon::local::ProcessHandle::open(pid).unwrap();
@@ -183,7 +183,7 @@ fn changing_diagnostic_format_preserves_requested_output_and_reuse() {
         let messages: Vec<Value> = json
             .lines()
             .map(|line| {
-                serde_json::from_str(line).expect("JSON request replayed human diagnostics")
+                deser_json::from_str(line).expect("JSON request replayed human diagnostics")
             })
             .collect();
         assert!(
@@ -197,7 +197,7 @@ fn changing_diagnostic_format_preserves_requested_output_and_reuse() {
     let direct = run(false, "json");
     let direct_messages: Vec<Value> = direct
         .lines()
-        .map(|line| serde_json::from_str(line).expect("direct rustc emits JSON"))
+        .map(|line| deser_json::from_str(line).expect("direct rustc emits JSON"))
         .collect();
     assert!(
         direct_messages
@@ -207,7 +207,7 @@ fn changing_diagnostic_format_preserves_requested_output_and_reuse() {
     let events: Vec<Value> = fs::read_to_string(cache.join("events.jsonl"))
         .unwrap()
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| deser_json::from_str(line).unwrap())
         .collect();
     assert_eq!(events.len(), 3);
     assert_eq!(events[0]["result"], "miss");
@@ -301,7 +301,7 @@ fn explicit_metadata_destinations_are_materialized_without_cache_replay() {
     let events: Vec<Value> = fs::read_to_string(cache.join("events.jsonl"))
         .unwrap()
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| deser_json::from_str(line).unwrap())
         .collect();
     assert_eq!(events.len(), 5);
     for event in &events[..3] {

@@ -142,8 +142,8 @@ pub(crate) fn declared(source_file: Option<&Path>) -> bool {
 /// stray `remote`/`local_store`/etc. a loud parse error rather than a
 /// silently-honored crate-granularity setting — this file is *only* for
 /// extra inputs.
-#[derive(serde::Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
+#[derive(deser::Deserialize, Default)]
+#[deser(default, deny_unknown_fields)]
 struct ColocatedConfig {
     extra_inputs: Vec<String>,
 }
@@ -335,49 +335,49 @@ fn combine_snapshots(
     })
 }
 
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
+#[derive(deser::Deserialize, Default)]
+#[deser(default)]
 struct WorkspaceConfigEnvelope {
     workspace: Option<WorkspaceExtraInputsConfig>,
 }
 
-#[derive(serde::Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
+#[derive(deser::Deserialize, Default)]
+#[deser(default, deny_unknown_fields)]
 struct WorkspaceExtraInputsConfig {
     extra_inputs: Vec<WorkspaceExtraInputsRule>,
 }
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(deser::Deserialize)]
+#[deser(deny_unknown_fields)]
 struct WorkspaceExtraInputsRule {
     crates: Vec<String>,
     inputs: Vec<String>,
-    #[serde(default)]
+    #[deser(default)]
     propagate_to_dependents: bool,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(deser::Deserialize)]
 struct CargoWorkspaceManifest {
     package: Option<CargoPackage>,
     workspace: Option<CargoWorkspace>,
     lib: Option<CargoLib>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(deser::Deserialize)]
 struct CargoPackage {
     name: String,
     autolib: Option<bool>,
 }
 
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
+#[derive(deser::Deserialize, Default)]
+#[deser(default)]
 struct CargoWorkspace {
     members: Vec<String>,
     exclude: Vec<String>,
 }
 
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
+#[derive(deser::Deserialize, Default)]
+#[deser(default)]
 struct CargoLib {
     name: Option<String>,
     path: Option<String>,
@@ -429,7 +429,7 @@ fn resolve_workspace_snapshot(
             active_config.display()
         )
     })?;
-    let envelope: WorkspaceConfigEnvelope = toml::from_str(text).with_context(|| {
+    let envelope: WorkspaceConfigEnvelope = deser_toml::from_str(text).with_context(|| {
         format!(
             "parsing workspace extra_inputs config {}",
             active_config.display()
@@ -1070,7 +1070,7 @@ fn validate_rustc_crate_name(name: &str, manifest: &Path) -> Result<String> {
 fn read_cargo_manifest(path: &Path) -> Result<CargoWorkspaceManifest> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("reading workspace member manifest {}", path.display()))?;
-    toml::from_str(&raw)
+    deser_toml::from_str(&raw)
         .with_context(|| format!("parsing workspace member manifest {}", path.display()))
 }
 
@@ -1319,7 +1319,7 @@ fn resolve_snapshot(
             });
         }
     };
-    let config: ColocatedConfig = match toml::from_str(text) {
+    let config: ColocatedConfig = match deser_toml::from_str(text) {
         Ok(config) => config,
         Err(error) if strict_watches => {
             return Err(error).with_context(|| {
@@ -3777,9 +3777,9 @@ inputs = ["shared/value.txt"]
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let metadata: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
         let consumer_id = metadata["packages"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .find(|package| package["name"] == "auto-consumer")
@@ -3787,7 +3787,7 @@ inputs = ["shared/value.txt"]
             .expect("Cargo reports the in-root path dependency package");
         assert!(
             metadata["workspace_members"]
-                .as_array()
+                .as_seq()
                 .unwrap()
                 .contains(&consumer_id),
             "fixture must exercise Cargo's implicit workspace membership"

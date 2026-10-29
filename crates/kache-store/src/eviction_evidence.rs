@@ -3,7 +3,7 @@
 
 use anyhow::{Result, anyhow, ensure};
 use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 
 /// One observation per key: latest live eviction or first shadow-only sweep.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

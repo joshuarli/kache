@@ -11,8 +11,8 @@ use super::{Environment, Manifest, checked_relative};
 
 pub(super) const MANIFEST_VERSION: u32 = 5;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
+#[deser(rename_all = "snake_case")]
 enum Root {
     OutDir,
     Package,
@@ -20,7 +20,7 @@ enum Root {
     GitCheckout,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, deser::Serialize, deser::Deserialize)]
 pub(super) struct RootedSymlink {
     name: String,
     root: Root,
@@ -469,12 +469,12 @@ mod tests {
     #[test]
     fn schema_rejects_unknown_roots_and_older_manifest_versions_with_rooted_links() {
         let unknown = r#"{"name":"h","root":"arbitrary","suffix":"h"}"#;
-        assert!(serde_json::from_str::<RootedSymlink>(unknown).is_err());
+        assert!(deser_json::from_str::<RootedSymlink>(unknown).is_err());
         for version in 1..=5 {
             let plain = format!(
                 r#"{{"version":{version},"directories":[],"empty_files":[],"stdout":"","stderr":""}}"#
             );
-            let mut manifest: Manifest = serde_json::from_str(&plain).unwrap();
+            let mut manifest: Manifest = deser_json::from_str(&plain).unwrap();
             assert!(manifest.rooted_symlinks.is_empty());
             validate_manifest(&manifest).unwrap();
             manifest.rooted_symlinks.push(RootedSymlink {
@@ -484,7 +484,7 @@ mod tests {
             });
             assert_eq!(validate_manifest(&manifest).is_ok(), version == 5);
         }
-        let mut manifest: Manifest = serde_json::from_str(
+        let mut manifest: Manifest = deser_json::from_str(
             r#"{"version":5,"directories":[],"empty_files":[],"stdout":"","stderr":""}"#,
         )
         .unwrap();

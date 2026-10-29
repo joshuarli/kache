@@ -1971,7 +1971,7 @@ fn shared_prediction_args(args: &[String], target: &Path) -> Vec<String> {
             });
             // Tag every argument, including literals, so a user-supplied path
             // or cfg string cannot impersonate an encoded target-relative one.
-            serde_json::to_string(&mapped.unwrap_or(("literal", "", "", arg))).unwrap()
+            deser_json::to_string(&mapped.unwrap_or(("literal", "", "", arg))).unwrap()
         })
         .collect()
 }
@@ -2178,7 +2178,7 @@ fn prediction_sample_identity(
     });
     let package = ["CARGO_PKG_NAME", "CARGO_PKG_VERSION"]
         .map(|var| env(var).map(|value| value.to_string_lossy().into_owned()));
-    serde_json::to_string(&(
+    deser_json::to_string(&(
         args.crate_name.as_deref(),
         &args.crate_types,
         args.is_test,
@@ -2604,12 +2604,12 @@ fn workspace_prediction_identity(
         if let Some(neutral) = neutral
             && arg.starts_with("[\"literal\"")
         {
-            *arg = serde_json::to_string(&("workspace-link", "", "", neutral.as_str())).ok()?;
+            *arg = deser_json::to_string(&("workspace-link", "", "", neutral.as_str())).ok()?;
         }
     }
     // The crate root leads the closure arguments; spell it as above.
     *closure_args.first_mut()? =
-        serde_json::to_string(&("source", "", "", source_spelling.as_str())).ok()?;
+        deser_json::to_string(&("source", "", "", source_spelling.as_str())).ok()?;
     let vars = shared_prediction_vars(vars.into_iter(), &workspace.target)
         .into_iter()
         .map(|(name, value)| {
@@ -6346,7 +6346,7 @@ pub(crate) const PREDICTION_SCHEMA: u32 = 2;
 /// pre-pass found, and every field has to be re-validated against the current
 /// tree before a key may be derived from it. Recording is all this commit
 /// does; nothing reads a record back yet.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 pub(crate) struct InputPrediction {
     /// The [`PREDICTION_SCHEMA`] that wrote the row. A reader that does not
     /// recognise it must treat the record as absent.
@@ -6367,7 +6367,7 @@ pub(crate) struct InputPrediction {
     /// does not cover, and on rows written before it existed, which the
     /// guard then treats as unusable. A registry unit with no proc macro may
     /// carry its `OUT_DIR` guard here, which nothing checks on this row.
-    #[serde(default)]
+    #[deser(default)]
     pub(crate) tree: Option<String>,
 }
 
@@ -7684,7 +7684,7 @@ impl<'db> FileHasher<'db> {
             return;
         };
         let record = InputPrediction::from_dep_info(dep_info, tree);
-        let json = match serde_json::to_string(&record) {
+        let json = match deser_json::to_string(&record) {
             Ok(json) => json,
             Err(error) => {
                 log::debug!("input prediction encode failed: {error}");
@@ -7715,7 +7715,7 @@ impl<'db> FileHasher<'db> {
         if schema != PREDICTION_SCHEMA {
             return None;
         }
-        match serde_json::from_str::<InputPrediction>(&json) {
+        match deser_json::from_str::<InputPrediction>(&json) {
             Ok(record) if record.schema == PREDICTION_SCHEMA => Some(record),
             Ok(_) => None,
             Err(error) => {
@@ -7736,7 +7736,7 @@ impl<'db> FileHasher<'db> {
         let Some(cache) = self.cache.as_ref() else {
             return;
         };
-        let json = match serde_json::to_string(record) {
+        let json = match deser_json::to_string(record) {
             Ok(json) => json,
             Err(error) => {
                 log::debug!("portable prediction encode failed: {error}");
@@ -7763,7 +7763,7 @@ impl<'db> FileHasher<'db> {
         if schema != PORTABLE_PREDICTION_SCHEMA {
             return None;
         }
-        match serde_json::from_str::<PortablePrediction>(&json) {
+        match deser_json::from_str::<PortablePrediction>(&json) {
             Ok(record) if record.schema == PORTABLE_PREDICTION_SCHEMA => Some(record),
             Ok(_) => None,
             Err(error) => {
@@ -10293,7 +10293,7 @@ fn place_linux_crt_objects(driver: &Path, env: &InvocationEnv) -> BTreeMap<Strin
         .collect()
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(deser::Serialize, deser::Deserialize)]
 struct CrtPlacementMemo {
     /// Name to absolute path, for the names the driver placed.
     placed: BTreeMap<String, PathBuf>,
@@ -10355,7 +10355,7 @@ fn crt_placement_memo_for(
     let (_, digest) = crt_memo_material(driver, env)?;
     let path = probe_memo::memo_path(memo_dir, "crt-placements", "json", &digest);
     let body = probe_memo::read_verified(&path, &digest)?;
-    let memo: CrtPlacementMemo = serde_json::from_str(&body).ok()?;
+    let memo: CrtPlacementMemo = deser_json::from_str(&body).ok()?;
     if memo.stamps.is_empty() {
         return None;
     }
@@ -10401,7 +10401,7 @@ fn record_crt_placement_memo(
         placed: placed.clone(),
         stamps,
     };
-    if let Ok(body) = serde_json::to_string(&memo) {
+    if let Ok(body) = deser_json::to_string(&memo) {
         probe_memo::write_verified(
             &probe_memo::memo_path(memo_dir, "crt-placements", "json", &digest),
             &digest,
@@ -10703,7 +10703,7 @@ pub(crate) fn place_linker_memoized_for(
     Ok(placed)
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(deser::Serialize, deser::Deserialize)]
 struct LinkerPlacementMemo {
     placed: PathBuf,
     /// Searched location to its [`location_stamp`] when the memo was written.
@@ -10753,7 +10753,7 @@ fn linker_placement_memo_for(
     let (_, digest) = linker_memo_digest(driver, selection, env)?;
     let path = probe_memo::memo_path(memo_dir, "linker-placement", "json", &digest);
     let body = probe_memo::read_verified(&path, &digest)?;
-    let memo: LinkerPlacementMemo = serde_json::from_str(&body).ok()?;
+    let memo: LinkerPlacementMemo = deser_json::from_str(&body).ok()?;
     if memo.locations.is_empty() {
         return None;
     }
@@ -10800,7 +10800,7 @@ fn record_linker_placement_memo(
         placed: placed.to_path_buf(),
         locations,
     };
-    if let Ok(body) = serde_json::to_string(&memo) {
+    if let Ok(body) = deser_json::to_string(&memo) {
         probe_memo::write_verified(
             &probe_memo::memo_path(memo_dir, "linker-placement", "json", &digest),
             &digest,

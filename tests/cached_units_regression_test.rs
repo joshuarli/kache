@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use serde_json::Value;
+use deser_value::Value;
 use tempfile::TempDir;
 
 #[allow(dead_code)]
@@ -111,7 +111,7 @@ fn walkdir(root: &Path) -> Vec<PathBuf> {
 
 fn write_config(cache: &Path) -> PathBuf {
     let config = cache.join("config.toml");
-    let quoted = toml::Value::String(cache.to_string_lossy().into_owned()).to_string();
+    let quoted = common::toml_basic(&cache.to_string_lossy());
     std::fs::write(
         &config,
         format!(
@@ -182,7 +182,7 @@ fn events_since(cache: &Path, mark: usize) -> Vec<Value> {
     text.lines()
         .skip(mark)
         .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).expect("event json"))
+        .map(|line| deser_json::from_str(line).expect("event json"))
         .collect()
 }
 
@@ -336,10 +336,10 @@ fn concurrent_jobs_share_one_store_without_repeating_a_compile() {
         assert_eq!(
             field(event, "result"),
             "local_hit",
-            "{} in a fresh target directory should be a hit: {event}",
+            "{} in a fresh target directory should be a hit: {event:?}",
             field(event, "crate_name")
         );
-        assert_eq!(number(event, "compiler_runs"), 0, "{event}");
+        assert_eq!(number(event, "compiler_runs"), 0, "{event:?}");
     }
     assert_eq!(results_for(&events, "build_script_run"), vec!["local_hit"]);
 }
@@ -763,7 +763,7 @@ fn a_build_script_writing_into_its_inputs_is_recorded_once_it_settles() {
             .iter()
             .find(|e| field(e, "crate_name") == "build_script_run")
             .unwrap();
-        assert_eq!(field(event, "package"), "selfwriter", "{event}");
+        assert_eq!(field(event, "package"), "selfwriter", "{event:?}");
         let stderr = String::from_utf8_lossy(&output.stderr);
         let reason = field(event, "passthrough_reason").to_string();
         let ran = std::fs::read_to_string(&runs).map_or(0, |text| text.lines().count());

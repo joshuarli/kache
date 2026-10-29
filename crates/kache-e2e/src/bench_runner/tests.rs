@@ -116,7 +116,7 @@ fn the_prediction_line_counts_rustc_units_not_all_compiles() {
 /// So the oracle is the published schema, which is the actual contract.
 #[test]
 fn phase_times_read_the_fields_the_schema_publishes_under_timing() {
-    let schema: serde_json::Value = serde_json::from_str(
+    let schema: deser_value::Value = deser_json::from_str(
         &std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../docs/commands/report.schema.json"),
@@ -158,7 +158,7 @@ fn phase_times_read_the_fields_the_schema_publishes_under_timing() {
     }
 
     // And the values arrive, keyed off that object.
-    let raw = serde_json::json!({
+    let raw = deser_value::value!({
         "timing": {
             "total_startup_ms": 11, "total_key_ms": 22, "total_dep_info_ms": 33,
             "dep_info_runs": 44, "prediction_mismatches": 55, "total_lookup_ms": 66,
@@ -181,11 +181,11 @@ fn phase_times_read_the_fields_the_schema_publishes_under_timing() {
 
     // An external backend, or a report from before these fields existed.
     assert_eq!(
-        PhaseTimes::from_raw(&serde_json::json!({"timing": {}})),
+        PhaseTimes::from_raw(&deser_value::value!({"timing": {}})),
         PhaseTimes::default()
     );
     assert_eq!(
-        PhaseTimes::from_raw(&serde_json::json!({})),
+        PhaseTimes::from_raw(&deser_value::value!({})),
         PhaseTimes::default()
     );
 }
@@ -1175,7 +1175,7 @@ objdir = "target"
             Some("fixture 1"),
         )
         .unwrap();
-        let result: serde_json::Value = read_json(&work.join("bench-fixture.json")).unwrap();
+        let result: deser_value::Value = read_json(&work.join("bench-fixture.json")).unwrap();
         assert_eq!(result["cold"]["cache_hits"], 0);
         assert_eq!(result["warm_same_tree"]["cache_hits"], 4);
         assert_eq!(result["warm"]["cache_hits"], 4);
@@ -1413,7 +1413,7 @@ fn pull_bench_result_serializes_with_pull_phase() {
         measure_warnings: vec![],
         reports: vec!["report-pull.md".into()],
     };
-    let j = serde_json::to_value(&r).unwrap();
+    let j = deser_value::to_value(&r).unwrap();
     assert_eq!(j["ref_next"], "bbbb");
     assert!(j.get("pull").is_some());
     assert!(
@@ -1430,7 +1430,7 @@ fn pull_bench_result_serializes_with_pull_phase() {
 /// and the avoided compiler time is reduced to whole seconds.
 #[test]
 fn mbx_phase_metrics_reduce_the_stats_report() {
-    let raw = serde_json::json!({
+    let raw = deser_value::value!({
         "version": 4,
         "lookups": 300,
         "hits": 240,
@@ -1463,7 +1463,7 @@ fn mbx_phase_metrics_reduce_the_stats_report() {
     assert_eq!(m.copied_output_bytes, 10_000_000);
     assert_eq!(m.stored_bytes, 123);
 
-    let empty = MbxPhaseMetrics::from_report(&serde_json::json!({}), 0);
+    let empty = MbxPhaseMetrics::from_report(&deser_value::value!({}), 0);
     assert_eq!(
         empty.hit_rate_pct, 0.0,
         "no lookups is not a division by zero"
@@ -1576,15 +1576,15 @@ fn retry_load_mbx_cold_requires_both_artifacts() {
 
     std::fs::write(
         work.join("bench-hk-mbx.json"),
-        serde_json::json!({
+        deser_json::to_string(&deser_value::value!({
             "cold": { "wall_s": 94, "wall_ms": 94_200, "lookups": 300, "hits": 0,
                       "misses": 300, "unconsulted": 0, "bypassed": 0,
                       "compiler_invocations_avoided": 0, "time_saved_s": 0,
                       "hit_rate_pct": 0.0, "restored_output_files": 0,
                       "restored_output_bytes": 0, "reflinked_output_bytes": 0,
                       "copied_output_bytes": 0, "stored_bytes": 0 }
-        })
-        .to_string(),
+        }))
+        .unwrap(),
     )
     .unwrap();
     let cold = retry_load_mbx_cold("bench-hk-mbx", &cache, &work).unwrap();
@@ -1855,7 +1855,7 @@ fn external_measure_warnings_fire_per_threshold() {
 #[test]
 fn otlp_mbx_phase_maps_lookups_and_time_saved() {
     let m = MbxPhaseMetrics::from_report(
-        &serde_json::json!({"lookups": 10, "hits": 8, "misses": 2,
+        &deser_value::value!({"lookups": 10, "hits": 8, "misses": 2,
                 "estimated_compiler_duration_avoided_ns": 3_000_000_000u64}),
         4_000,
     );
@@ -1910,7 +1910,7 @@ fn fmt_wall_clock_prints_minutes_seconds_and_truncated_tenths() {
 /// seconds are derived, never recorded separately.
 #[test]
 fn from_report_records_milliseconds_and_derives_whole_seconds() {
-    let raw = serde_json::json!({
+    let raw = deser_value::value!({
         "schema_version": 1,
         "summary": {
             "hit_rate_pct": 100.0,
@@ -1927,7 +1927,7 @@ fn from_report_records_milliseconds_and_derives_whole_seconds() {
         "top_misses": []
     });
     let report: report::KacheReport =
-        serde_json::from_value(raw.clone()).expect("a minimal report parses");
+        deser_value::from_value(&raw.clone()).expect("a minimal report parses");
 
     let metrics = PhaseMetrics::from_report(&report, &raw, 14_600, EventLogStats::default(), 0);
 
@@ -1939,7 +1939,7 @@ fn from_report_records_milliseconds_and_derives_whole_seconds() {
 
 #[test]
 fn sccache_metrics_record_milliseconds_and_derive_whole_seconds() {
-    let raw = serde_json::json!({
+    let raw = deser_value::value!({
         "stats": {
             "compile_requests": 10,
             "cache_hits": { "counts": { "Rust": 8 } },
@@ -1962,7 +1962,7 @@ fn sccache_metrics_record_milliseconds_and_derive_whole_seconds() {
 fn sccache_cache_errors_are_budgeted_but_store_errors_are_not() {
     let metrics = |errors: u64, read: u64, write: u64| {
         SccachePhaseMetrics::from_raw(
-            &serde_json::json!({
+            &deser_value::value!({
                 "stats": {
                     "requests_executed": 5102,
                     "cache_hits": { "counts": { "Rust": 4272 } },
@@ -2000,7 +2000,7 @@ fn sccache_cache_errors_are_budgeted_but_store_errors_are_not() {
 /// there, under these names, for every phase the gate reads.
 #[test]
 fn result_json_carries_both_wall_clocks_for_every_phase() {
-    let j = serde_json::to_value(bench_result_fixture()).unwrap();
+    let j = deser_value::to_value(&bench_result_fixture()).unwrap();
 
     assert_eq!(j["cold"]["wall_ms"], 300_000);
     assert_eq!(j["cold"]["wall_s"], 300);
@@ -2016,7 +2016,7 @@ fn result_json_carries_both_wall_clocks_for_every_phase() {
 /// them keeps its own value.
 #[test]
 fn a_saved_phase_without_wall_ms_is_backfilled_from_its_seconds() {
-    let mut saved = serde_json::to_value(PhaseMetrics {
+    let mut saved = deser_value::to_value(&PhaseMetrics {
         wall_s: 14,
         wall_ms: 14_600,
         hits: 783,
@@ -2028,7 +2028,7 @@ fn a_saved_phase_without_wall_ms_is_backfilled_from_its_seconds() {
     assert_eq!(current.wall_ms, 14_600, "a recorded value is kept as is");
     assert_eq!(current.wall_s, 14);
 
-    saved.as_object_mut().unwrap().remove("wall_ms");
+    saved.as_map_mut().unwrap().remove("wall_ms");
     let older: PhaseMetrics = load_saved_phase(saved).unwrap();
     assert_eq!(older.wall_ms, 14_000, "backfilled from wall_s, as a floor");
     assert_eq!(older.wall_s, 14);
@@ -2063,17 +2063,17 @@ fn retry_load_cold_restores_the_snapshot_and_an_older_results_wall_clock() {
     )
     .unwrap();
     // Cold as a whole-second engine wrote it: `wall_s` only.
-    let mut previous_cold = serde_json::to_value(PhaseMetrics {
+    let mut previous_cold = deser_value::to_value(&PhaseMetrics {
         wall_s: 112,
         wall_ms: 0,
         total_crates: 783,
         ..Default::default()
     })
     .unwrap();
-    previous_cold.as_object_mut().unwrap().remove("wall_ms");
+    previous_cold.as_map_mut().unwrap().remove("wall_ms");
     std::fs::write(
         work_dir.join("pr-cargo.json"),
-        serde_json::json!({ "cold": previous_cold }).to_string(),
+        deser_json::to_string(&deser_value::value!({ "cold": previous_cold })).unwrap(),
     )
     .unwrap();
 
@@ -2202,10 +2202,26 @@ KACHE_SEED_NEW_TARGETS = "1"
     );
 }
 
+fn toml_basic(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '\\' | '"' => {
+                out.push('\\');
+                out.push(c);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn prepare_fixture(dir: &Path, prepare: Option<&str>) -> BenchProfile {
     let path = dir.join("prep.toml");
     let prepare = prepare
-        .map(|c| format!("prepare = {}\n", toml::Value::String(c.to_string())))
+        .map(|c| format!("prepare = {}\n", toml_basic(c)))
         .unwrap_or_default();
     std::fs::write(
         &path,
@@ -2387,12 +2403,12 @@ objdir = "target"
                 .unwrap()
                 .contains("child")
         );
-        let report: serde_json::Value = read_json(&work.join("bench-fixture.json")).unwrap();
+        let report: deser_value::Value = read_json(&work.join("bench-fixture.json")).unwrap();
         assert_eq!(report["verdict"]["ok"], hits == 1);
         assert_eq!(report["pull"]["hits"], hits);
-        let otlp: serde_json::Value = read_json(&work.join("metrics.otlp.json")).unwrap();
+        let otlp: deser_value::Value = read_json(&work.join("metrics.otlp.json")).unwrap();
         let metrics = otlp["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
-            .as_array()
+            .as_seq()
             .unwrap();
         let verdict = metrics
             .iter()
@@ -2500,9 +2516,9 @@ fn prepare_logs_are_archived_with_the_run() {
 /// saved phase from before the field existed still loads.
 #[test]
 fn phase_prepare_is_omitted_when_absent_and_recorded_when_present() {
-    let plain = serde_json::to_value(PhaseMetrics::default()).unwrap();
-    assert!(plain.get("prepare").is_none(), "{plain}");
-    let loaded: PhaseMetrics = serde_json::from_value(plain).unwrap();
+    let plain = deser_value::to_value(&PhaseMetrics::default()).unwrap();
+    assert!(plain.get("prepare").is_none(), "{plain:?}");
+    let loaded: PhaseMetrics = deser_value::from_value(&plain).unwrap();
     assert_eq!(loaded.prepare, None);
 
     let prepared = PhaseMetrics {
@@ -2512,7 +2528,7 @@ fn phase_prepare_is_omitted_when_absent_and_recorded_when_present() {
         }),
         ..Default::default()
     };
-    let j = serde_json::to_value(&prepared).unwrap();
+    let j = deser_value::to_value(&prepared).unwrap();
     assert_eq!(j["prepare"]["command"], "cargo fetch --locked");
     assert_eq!(j["prepare"]["wall_ms"], 41_200);
 }
@@ -2736,13 +2752,13 @@ fn the_load_a_phase_was_measured_under_reaches_the_payload() {
     };
     assert_eq!(otlp_phase("warm", &metrics, 0).load, Some(load.clone()));
 
-    let mut sccache = SccachePhaseMetrics::from_raw(&serde_json::json!({}), 1_000);
+    let mut sccache = SccachePhaseMetrics::from_raw(&deser_value::value!({}), 1_000);
     sccache.load = load.clone();
     assert_eq!(
         otlp_sccache_phase("warm", &sccache, 0).load,
         Some(load.clone())
     );
-    let mut mbx = MbxPhaseMetrics::from_report(&serde_json::json!({}), 1_000);
+    let mut mbx = MbxPhaseMetrics::from_report(&deser_value::value!({}), 1_000);
     mbx.load = load.clone();
     assert_eq!(otlp_mbx_phase("warm", &mbx, 0).load, Some(load));
 }
@@ -2784,7 +2800,7 @@ fn otlp_phases_carry_the_same_tree_warm_only_when_it_ran() {
 /// sub-second miss keeps its milliseconds instead of truncating to zero.
 #[test]
 fn from_report_keeps_unknown_rates_and_sub_second_misses() {
-    let raw = serde_json::json!({
+    let raw = deser_value::value!({
         "schema_version": 1,
         "summary": {
             "hit_rate_pct": 50.0,
@@ -2804,7 +2820,7 @@ fn from_report_keeps_unknown_rates_and_sub_second_misses() {
         ]
     });
     let report: report::KacheReport =
-        serde_json::from_value(raw.clone()).expect("a minimal report parses");
+        deser_value::from_value(&raw.clone()).expect("a minimal report parses");
 
     let metrics = PhaseMetrics::from_report(&report, &raw, 1, EventLogStats::default(), 0);
 
@@ -2827,7 +2843,7 @@ fn from_report_keeps_unknown_rates_and_sub_second_misses() {
 
 #[test]
 fn a_known_weighted_rate_is_rounded_and_carried() {
-    let raw = serde_json::json!({
+    let raw = deser_value::value!({
         "schema_version": 1,
         "summary": {
             "hit_rate_pct": 50.0, "total_crates": 2, "local_hits": 1,
@@ -2835,7 +2851,7 @@ fn a_known_weighted_rate_is_rounded_and_carried() {
             "weighted_hit_rate_pct": 97.46
         }
     });
-    let report: report::KacheReport = serde_json::from_value(raw.clone()).unwrap();
+    let report: report::KacheReport = deser_value::from_value(&raw.clone()).unwrap();
     let metrics = PhaseMetrics::from_report(&report, &raw, 1, EventLogStats::default(), 0);
     assert_eq!(metrics.weighted_hit_rate_pct, Some(97.5));
     assert_eq!(
@@ -2849,7 +2865,7 @@ fn a_known_weighted_rate_is_rounded_and_carried() {
 /// added since then default instead of failing the load.
 #[test]
 fn a_saved_miss_without_milliseconds_is_backfilled_from_its_seconds() {
-    let mut saved = serde_json::to_value(PhaseMetrics {
+    let mut saved = deser_value::to_value(&PhaseMetrics {
         top_misses: vec![
             MissEntry {
                 crate_name: "old".into(),
@@ -2866,14 +2882,14 @@ fn a_saved_miss_without_milliseconds_is_backfilled_from_its_seconds() {
     })
     .unwrap();
     saved["top_misses"][0]
-        .as_object_mut()
+        .as_map_mut()
         .unwrap()
         .remove("compile_time_ms");
     for key in ["invalid_reasons", "load"] {
-        saved.as_object_mut().unwrap().remove(key);
+        saved.as_map_mut().unwrap().remove(key);
     }
     for key in ["store_errors", "lookup_rejections", "fallbacks"] {
-        saved["event_log"].as_object_mut().unwrap().remove(key);
+        saved["event_log"].as_map_mut().unwrap().remove(key);
     }
 
     let loaded: PhaseMetrics = load_saved_phase(saved).unwrap();
@@ -2889,10 +2905,10 @@ fn a_saved_miss_without_milliseconds_is_backfilled_from_its_seconds() {
 #[test]
 fn key_stability_is_unknown_until_a_crate_was_cached_in_both_clones() {
     let events = |pairs: &[(&str, &str)]| {
-        serde_json::json!({
+        deser_value::value!({
             "all_events": pairs
                 .iter()
-                .map(|(name, key)| serde_json::json!({ "crate_name": name, "cache_key": key }))
+                .map(|(name, key)| deser_value::value!({ "crate_name": *name, "cache_key": *key }))
                 .collect::<Vec<_>>()
         })
     };

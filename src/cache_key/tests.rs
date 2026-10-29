@@ -4992,8 +4992,8 @@ fn portable_predictions_preserve_absent_and_empty_env_values() {
         env_deps: parse_env_dep_info("# env-dep:ABSENT\n# env-dep:EMPTY=\n# env-dep:VALUE=hello\n"),
     };
     let portable = portable_prediction(&dep_info, &roots, Some("tree")).unwrap();
-    let serialized = serde_json::to_string(&portable).unwrap();
-    let decoded: PortablePrediction = serde_json::from_str(&serialized).unwrap();
+    let serialized = deser_json::to_string(&portable).unwrap();
+    let decoded: PortablePrediction = deser_json::from_str(&serialized).unwrap();
     let resolved = decoded
         .resolve(&Places {
             out_dir: Some("/elsewhere/out"),
@@ -5168,7 +5168,7 @@ fn a_portable_prediction_round_trips_and_no_other_decoder_reads_it() {
         .put_input_prediction("corrupt", PORTABLE_PREDICTION_SCHEMA, None, "not json")
         .unwrap();
     assert_eq!(hasher.portable_prediction("corrupt"), None);
-    let stale = serde_json::to_string(&PortablePrediction {
+    let stale = deser_json::to_string(&PortablePrediction {
         schema: PREDICTION_SCHEMA,
         ..portable_test_record()
     })
@@ -12711,7 +12711,7 @@ fn cc_preprocess_memo_requires_every_input_fingerprint_to_match() {
         Some(pp_hash.as_str())
     );
 
-    let inputs_json = serde_json::to_string(&inputs).unwrap();
+    let inputs_json = deser_json::to_string(&inputs).unwrap();
     let cache = hasher.cache.as_ref().unwrap();
     cache
         .put_cc_preprocess_memo("short-hash", "a", &inputs_json)

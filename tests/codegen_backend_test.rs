@@ -87,9 +87,9 @@ printf 'binary' > app
     let events = fs::read_to_string(dir.path().join("cache/events.jsonl")).unwrap();
     let reasons: Vec<String> = events
         .lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .map(|line| deser_json::from_str::<deser_value::Value>(line).unwrap())
         .filter(|event| event["result"] == "passthrough")
-        .map(|event| event.to_string())
+        .map(|event| deser_json::to_string(&event).unwrap())
         .collect();
     assert_eq!(reasons.len(), 2, "{events}");
     assert!(

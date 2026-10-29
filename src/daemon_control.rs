@@ -331,7 +331,7 @@ fn legacy_exchange(path: &Path, request: &Request, deadline: Instant) -> Result<
     use std::io::{BufRead, Read, Write};
     let stream = connect(path, deadline)?;
     let (read, mut write) = stream.split()?;
-    let mut bytes = serde_json::to_vec(request)?;
+    let mut bytes = deser_json::to_string(request).map(String::into_bytes)?;
     bytes.push(b'\n');
     write.write_all(&bytes)?;
     write.flush()?;

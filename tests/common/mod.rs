@@ -218,6 +218,28 @@ fn reuse_outer_build() -> bool {
 /// shows up.
 static KACHE_BIN: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 
+/// A TOML basic string, with quotes and backslashes escaped.
+#[allow(dead_code)]
+pub fn toml_basic(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '\\' | '"' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Builds the `kache` binary under test if it isn't built yet.
 pub fn build_kache() {
     let _ = kache_binary();

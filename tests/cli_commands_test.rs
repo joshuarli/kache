@@ -118,13 +118,13 @@ fn write_legacy_events(e: &Env, crate_name: &str, events: &[(&str, &str)]) {
         .iter()
         .enumerate()
         .map(|(index, (result, key))| {
-            serde_json::to_string(&serde_json::json!({
+            deser_json::to_string(&deser_value::value!({
                 "ts": format!("2026-01-01T00:00:{index:02}Z"),
                 "crate_name": crate_name,
-                "result": result,
+                "result": *result,
                 "elapsed_ms": 1,
                 "size": 1,
-                "cache_key": key,
+                "cache_key": *key,
                 "schema": 14
             }))
             .unwrap()
@@ -455,7 +455,7 @@ fn broken_config_warns_once_on_stderr_and_keeps_json_clean() {
     std::fs::write(&config, "[cache]\nlocal_max_size = = \"1GiB\"\n").unwrap();
     let output = e.cmd().args(["--json", "stats"]).output().unwrap();
     assert!(output.status.success());
-    let _: serde_json::Value = serde_json::from_slice(&output.stdout).expect("clean JSON");
+    let _: deser_value::Value = deser_json::from_slice(&output.stdout).expect("clean JSON");
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(stderr.matches("warning:").count(), 1, "{stderr}");
     assert!(stderr.contains(&config.display().to_string()), "{stderr}");
@@ -474,19 +474,19 @@ fn doctor_fails_on_a_config_that_does_not_parse() {
         !stderr.contains("ignoring"),
         "doctor reports it as a check: {stderr}"
     );
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let value: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     let check = value["checks"]
-        .as_array()
+        .as_seq()
         .unwrap()
         .iter()
         .find(|check| check["label"] == "Config file")
         .expect("a Config file check");
-    assert_eq!(check["pass"], false, "{check}");
+    assert_eq!(check["pass"], false, "{check:?}");
     assert!(
         check["detail"].as_str().unwrap().contains("config.toml"),
-        "{check}"
+        "{check:?}"
     );
-    assert!(value["issues"].as_u64().unwrap() >= 1, "{value}");
+    assert!(value["issues"].as_u64().unwrap() >= 1, "{value:?}");
 }
 
 // ── empty-cache behavior ────────────────────────────────────────────────────
@@ -717,8 +717,8 @@ fn init_plan_matches_the_requested_components_and_keeps_prompt_lines_separate() 
         .output()
         .unwrap();
     assert!(output.status.success());
-    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let steps = plan["steps"].as_array().unwrap();
+    let plan: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
+    let steps = plan["steps"].as_seq().unwrap();
     assert!(!steps.iter().any(|step| step["component"] == "shell"));
     assert!(
         steps
@@ -748,8 +748,8 @@ fn init_check_steps_follow_the_plans() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let steps = plan["steps"].as_array().unwrap();
+    let plan: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
+    let steps = plan["steps"].as_seq().unwrap();
     let step = |component: &str| {
         steps
             .iter()
@@ -775,7 +775,7 @@ fn init_check_steps_follow_the_plans() {
         text.contains("Preview only. Run kache init --no-service to apply."),
         "{text}"
     );
-    let paths = shell["paths"].as_array().unwrap();
+    let paths = shell["paths"].as_seq().unwrap();
     assert!(!paths.is_empty());
     for path in paths {
         let path = std::path::Path::new(path.as_str().unwrap());
@@ -797,9 +797,9 @@ fn real_rustc() -> std::path::PathBuf {
 
 /// `component action [file name]` for each step.
 #[cfg(unix)]
-fn step_summary(plan: &serde_json::Value) -> Vec<String> {
+fn step_summary(plan: &deser_value::Value) -> Vec<String> {
     plan["steps"]
-        .as_array()
+        .as_seq()
         .unwrap()
         .iter()
         .map(|step| {
@@ -845,7 +845,7 @@ fn init_preview_backs_up_existing_startup_files_before_each_edit() {
         .env_remove(&var);
     let output = command.output().unwrap();
     assert!(output.status.success(), "{output:?}");
-    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let plan: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     let steps = step_summary(&plan);
     let shell = steps
         .iter()
@@ -865,7 +865,7 @@ fn init_preview_backs_up_existing_startup_files_before_each_edit() {
         2,
         "{steps:?}"
     );
-    assert_eq!(plan["test_activation_required"], true, "{plan}");
+    assert_eq!(plan["test_activation_required"], true, "{plan:?}");
 }
 
 #[cfg(unix)]
@@ -904,7 +904,7 @@ fn init_preview_for_an_unsupported_shell_plans_no_rustdoc_edit() {
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
-    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let plan: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     let steps = step_summary(&plan);
     assert!(
         steps.contains(&"shell unsupported".to_string()),
@@ -914,7 +914,7 @@ fn init_preview_for_an_unsupported_shell_plans_no_rustdoc_edit() {
         !steps.iter().any(|step| step.starts_with("rustdoc ")),
         "{steps:?}"
     );
-    assert_eq!(plan["shell_activation_required"], false, "{plan}");
+    assert_eq!(plan["shell_activation_required"], false, "{plan:?}");
     let text = String::from_utf8(output.stderr).unwrap();
     assert!(!text.contains("build.rustdoc"), "{text}");
 }
@@ -1086,9 +1086,9 @@ fn init_preview_reports_the_recovery_question_a_terminal_run_asks() {
         let (text, stderr, status) = terminal_session(command, 200, stdin_terminal);
         assert!(status.success(), "{text}{stderr}");
         let start = text.find('{').unwrap();
-        let body: serde_json::Value = serde_json::from_str(&text[start..]).unwrap();
+        let body: deser_value::Value = deser_json::from_str(&text[start..]).unwrap();
         let step = body["steps"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .find(|step| step["component"] == "free_space_recovery")
@@ -1179,16 +1179,16 @@ fn report_json_on_empty_cache_is_valid_json() {
         .get_output()
         .stdout
         .clone();
-    let v: serde_json::Value = serde_json::from_slice(&out).expect("valid json");
+    let v: deser_value::Value = deser_json::from_slice(&out).expect("valid json");
     assert_eq!(v["schema_version"].as_u64(), Some(1));
     assert_eq!(v["summary"]["misses"].as_u64(), Some(0));
     assert_eq!(v["summary"]["local_hits"].as_u64(), Some(0));
 
     let schema_text = include_str!("../docs/commands/report.schema.json");
-    let schema: serde_json::Value = serde_json::from_str(schema_text).expect("valid schema json");
+    let schema: deser_value::Value = deser_json::from_str(schema_text).expect("valid schema json");
     assert_eq!(
         schema["properties"]["schema_version"]["enum"],
-        serde_json::json!([1])
+        deser_value::value!([1])
     );
 }
 
@@ -1205,9 +1205,9 @@ fn last_build_commands_select_one_root_and_describe_session_scope() {
             (2, &root, "miss", "selected"),
         ]
         .map(|(minute, path, result, session)| {
-            serde_json::json!({
+            deser_json::to_string(&deser_value::value!({
                 "ts": format!("2026-01-01T00:{:02}:00Z", minute * 10),
-                "root": path,
+                "root": path.to_str().unwrap(),
                 "session_id": if recorded { session } else { "" },
                 "crate_name": format!("fixture{minute}"),
                 "result": result,
@@ -1218,8 +1218,8 @@ fn last_build_commands_select_one_root_and_describe_session_scope() {
                 "size": 128,
                 "cache_key": "fixture-key",
                 "schema": 18,
-            })
-            .to_string()
+            }))
+            .unwrap()
         });
         std::fs::write(e.cache.join("events.jsonl"), events.join("\n") + "\n").unwrap();
 
@@ -1247,7 +1247,7 @@ fn last_build_commands_select_one_root_and_describe_session_scope() {
                 cmd.args(["--format", "json"]);
             }
             let output = cmd.assert().success().get_output().stdout.clone();
-            let raw: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            let raw: deser_value::Value = deser_json::from_slice(&output).unwrap();
             let report = if command == "stats" {
                 assert_eq!(raw["command"], "stats");
                 assert_eq!(raw["schema_version"], 1);
@@ -1271,7 +1271,7 @@ fn last_build_commands_select_one_root_and_describe_session_scope() {
             .get_output()
             .stdout
             .clone();
-        let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        let report: deser_value::Value = deser_json::from_slice(&output).unwrap();
         assert_eq!(report["meta"]["session"]["root"], other.to_str().unwrap());
         assert_eq!(report["timeline"]["event_count"], 1);
     }
@@ -1309,7 +1309,7 @@ fn report_writes_to_output_file() {
         .assert()
         .success();
     let body = std::fs::read_to_string(&out).expect("report file written");
-    let _: serde_json::Value = serde_json::from_str(&body).expect("valid json on disk");
+    let _: deser_value::Value = deser_json::from_str(&body).expect("valid json on disk");
 }
 
 #[test]
@@ -1363,7 +1363,7 @@ fn why_miss_json_reports_the_last_recorded_miss() {
         .output()
         .expect("run why-miss JSON");
     assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let value: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["command"], "explain");
     assert_eq!(value["crate_name"], "serde");
     assert_eq!(value["cache_key"], "miss-key");
@@ -1377,7 +1377,7 @@ fn why_miss_json_reports_the_last_recorded_miss() {
 fn explain_reports_a_later_uncached_compile() {
     let e = env();
     let event = |second: u32, result: &str, reason: &str| {
-        serde_json::json!({
+        deser_json::to_string(&deser_value::value!({
             "ts": format!("2026-01-01T00:00:{second:02}Z"),
             "crate_name": "serde",
             "result": result,
@@ -1386,8 +1386,8 @@ fn explain_reports_a_later_uncached_compile() {
             "cache_key": format!("{result}-key-0123456789"),
             "passthrough_reason": reason,
             "schema": 14
-        })
-        .to_string()
+        }))
+        .unwrap()
     };
     std::fs::write(
         e.cache.join("events.jsonl"),
@@ -1404,7 +1404,7 @@ fn explain_reports_a_later_uncached_compile() {
         .output()
         .expect("run explain JSON");
     assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let value: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["command"], "explain");
     assert_eq!(value["last_result"], "miss");
     assert_eq!(value["latest_uncached_compile"]["reason"], "adaptive seed");
@@ -1440,10 +1440,10 @@ fn explain_reports_a_later_uncached_compile() {
 #[test]
 fn stats_reports_lifetime_totals_from_the_savings_ledger() {
     let e = env();
-    let stats_json = |e: &Env| -> serde_json::Value {
+    let stats_json = |e: &Env| -> deser_value::Value {
         let output = e.cmd().args(["--json", "stats"]).output().unwrap();
         assert!(output.status.success(), "{output:?}");
-        serde_json::from_slice(&output.stdout).unwrap()
+        deser_json::from_slice(&output.stdout).unwrap()
     };
     assert!(stats_json(&e).get("lifetime").is_none());
     e.cmd()
@@ -1508,11 +1508,11 @@ fn machine_readable_commands_emit_one_json_document() {
             "{args:?} failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let value: serde_json::Value = serde_json::from_slice(&output.stdout)
+        let value: deser_value::Value = deser_json::from_slice(&output.stdout)
             .unwrap_or_else(|error| panic!("{args:?} did not emit clean JSON: {error}"));
         assert_eq!(value["schema_version"], 1, "{args:?}");
         assert_eq!(value["success"], true, "{args:?}");
-        assert!(value["command"].is_string(), "{args:?}");
+        assert!(value["command"].is_str(), "{args:?}");
     }
 }
 
@@ -1528,7 +1528,7 @@ fn cache_clean_json_forms_emit_a_clean_document() {
     ] {
         let output = e.cmd().args(args).output().unwrap();
         assert!(output.status.success(), "{args:?}");
-        let value: serde_json::Value = serde_json::from_slice(&output.stdout)
+        let value: deser_value::Value = deser_json::from_slice(&output.stdout)
             .unwrap_or_else(|error| panic!("{args:?} did not emit JSON: {error}"));
         assert_eq!(value["command"], "clean", "{args:?}");
     }
@@ -1544,8 +1544,8 @@ fn gc_json_has_an_entries_failed_field() {
     let e = env();
     let output = e.cmd().args(["--json", "gc"]).output().unwrap();
     assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(value["entries_failed"].is_u64(), "{value}");
+    let value: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
+    assert!(value["entries_failed"].as_u64().is_some(), "{value:?}");
 }
 
 #[test]
@@ -1598,7 +1598,7 @@ fn json_failures_emit_one_document_and_nonzero_exit() {
     ] {
         let output = e.cmd().args(&args).output().unwrap();
         assert_eq!(output.status.code(), Some(exit), "{args:?}: {output:?}");
-        let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let body: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
         assert_eq!(body["schema_version"], 1);
         assert_eq!(body["success"], false);
         assert_eq!(body["error"]["code"], code);
@@ -1607,8 +1607,8 @@ fn json_failures_emit_one_document_and_nonzero_exit() {
                 .as_str()
                 .is_some_and(|message| !message.is_empty())
         );
-        assert!(body["error"]["causes"].is_array());
-        assert!(body["command"].is_string());
+        assert!(body["error"]["causes"].is_seq());
+        assert!(body["command"].is_str());
     }
     let output = e
         .cmd()
@@ -1617,7 +1617,7 @@ fn json_failures_emit_one_document_and_nonzero_exit() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let body: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(body["command"], "report");
     assert_eq!(body["success"], false);
 }
@@ -1628,7 +1628,7 @@ fn json_init_previews_without_writes_and_applies_without_prompts() {
     let args = ["init", "--json", "--no-service", "--no-shell"];
     let preview = e.cmd().args(args).arg("--check").output().unwrap();
     assert!(preview.status.success(), "{preview:?}");
-    let body: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
+    let body: deser_value::Value = deser_json::from_slice(&preview.stdout).unwrap();
     assert_eq!(body["command"], "init");
     assert_eq!(body["preview"], true);
     assert_eq!(body["steps"][0]["action"], "configure");
@@ -1641,11 +1641,11 @@ fn json_init_previews_without_writes_and_applies_without_prompts() {
     assert!(!e.cache.join("daemon.sock").exists());
     let applied = e.cmd().args(args).arg("--yes").output().unwrap();
     assert!(applied.status.success(), "{applied:?}");
-    let body: serde_json::Value = serde_json::from_slice(&applied.stdout).unwrap();
+    let body: deser_value::Value = deser_json::from_slice(&applied.stdout).unwrap();
     assert_eq!(body["success"], true);
     assert_eq!(body["preview"], false);
     // The run reports what it did: Cargo configured in a file it created.
-    let steps = body["steps"].as_array().unwrap();
+    let steps = body["steps"].as_seq().unwrap();
     assert_eq!(steps[0]["component"], "cargo");
     assert_eq!(steps[0]["action"], "configure");
     assert!(
@@ -1686,12 +1686,12 @@ fn json_report_file_returns_a_receipt_on_stdout() {
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
-    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let receipt: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(receipt["command"], "stats");
     assert_eq!(receipt["output"], path.to_str().unwrap());
     assert_eq!(receipt["format"], "json");
-    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    assert!(report["summary"].is_object());
+    let report: deser_value::Value = deser_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert!(report["summary"].is_map());
 }
 
 #[test]
@@ -1699,10 +1699,10 @@ fn json_help_and_version_are_machine_readable() {
     let e = env();
     let output = e.cmd().args(["--json", "--help"]).output().unwrap();
     assert!(output.status.success());
-    let help: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let help: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(help["command"], "help");
     assert_eq!(help["cli"]["name"], "kache");
-    let commands = help["cli"]["subcommands"].as_array().unwrap();
+    let commands = help["cli"]["subcommands"].as_seq().unwrap();
     assert!(commands.iter().any(|command| command["name"] == "init"));
     assert!(
         !commands
@@ -1715,16 +1715,16 @@ fn json_help_and_version_are_machine_readable() {
         .unwrap();
     assert!(
         init["arguments"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .any(|arg| arg["long"] == "yes")
     );
     let output = e.cmd().args(["--json", "--version"]).output().unwrap();
     assert!(output.status.success());
-    let version: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let version: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(version["command"], "version");
-    assert!(version["version"].is_string());
+    assert!(version["version"].is_str());
 }
 
 #[test]
@@ -1749,7 +1749,7 @@ fn tracked_clean_previews_and_removes_only_the_remembered_target() {
         .output()
         .expect("preview tracked clean");
     assert!(preview.status.success());
-    let preview: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
+    let preview: deser_value::Value = deser_json::from_slice(&preview.stdout).unwrap();
     assert_eq!(preview["changed"], false);
     assert_eq!(preview["targets"][0]["path"], target.display().to_string());
 
@@ -1760,7 +1760,7 @@ fn tracked_clean_previews_and_removes_only_the_remembered_target() {
         .output()
         .expect("run tracked clean");
     assert!(clean.status.success());
-    let clean: serde_json::Value = serde_json::from_slice(&clean.stdout).unwrap();
+    let clean: deser_value::Value = deser_json::from_slice(&clean.stdout).unwrap();
     assert_eq!(clean["changed"], true);
     assert!(!target.exists(), "tracked target should be removed");
     assert!(
@@ -1775,8 +1775,8 @@ fn tracked_clean_previews_and_removes_only_the_remembered_target() {
         .output()
         .expect("recheck tracked clean");
     assert!(after.status.success());
-    let after: serde_json::Value = serde_json::from_slice(&after.stdout).unwrap();
-    assert_eq!(after["targets"].as_array().unwrap().len(), 0);
+    let after: deser_value::Value = deser_json::from_slice(&after.stdout).unwrap();
+    assert_eq!(after["targets"].as_seq().unwrap().len(), 0);
 }
 
 #[test]
@@ -1804,15 +1804,15 @@ fn targets_lists_a_tracked_target_and_flags_its_deleted_worktree() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+        deser_json::from_slice::<deser_value::Value>(&output.stdout).unwrap()
     };
 
     let live = targets();
     assert_eq!(live["command"], "targets");
     assert_eq!(live["targets"][0]["path"], target.display().to_string());
     assert_eq!(live["targets"][0]["state"], "live");
-    assert!(live["apparent_bytes"].as_u64().unwrap() > 0, "{live}");
-    assert!(live.get("next").is_none(), "{live}");
+    assert!(live["apparent_bytes"].as_u64().unwrap() > 0, "{live:?}");
+    assert!(live.get("next").is_none(), "{live:?}");
     let text = e
         .cmd()
         .current_dir(elsewhere.path())
@@ -1833,7 +1833,7 @@ fn targets_lists_a_tracked_target_and_flags_its_deleted_worktree() {
     std::fs::remove_dir_all(project.path()).unwrap();
     let orphaned = targets();
     assert_eq!(orphaned["targets"][0]["state"], "worktree_deleted");
-    assert_eq!(orphaned["next"][0]["argv"][2], "--orphans", "{orphaned}");
+    assert_eq!(orphaned["next"][0]["argv"][2], "--orphans", "{orphaned:?}");
 }
 
 #[test]
@@ -1927,12 +1927,12 @@ fn a_clean_that_cannot_remove_a_target_says_so_and_fails() {
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     assert_eq!(output.status.code(), Some(1));
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let value: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["success"], false);
     // cli.schema.json: a failed document carries `error`.
     assert_eq!(
         value["error"],
-        serde_json::json!({
+        deser_value::value!({
             "code": "command_failed",
             "message": "could not remove 1 target directory",
             "causes": [],
@@ -1942,7 +1942,7 @@ fn a_clean_that_cannot_remove_a_target_says_so_and_fails() {
         value["failed"][0]["path"],
         root.join("target").display().to_string()
     );
-    assert!(value["removed_paths"].as_array().unwrap().is_empty());
+    assert!(value["removed_paths"].as_seq().unwrap().is_empty());
     assert_eq!(human.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&human.stdout).contains("  failed  "));
 }
@@ -2356,10 +2356,10 @@ fn init_rejects_unavailable_daemon_replacement() {
         // for the replacement. No coordinator PID means recovery cannot kill
         // this test process, which owns the old daemon's run lock.
         drop(listener);
-        let response = serde_json::json!({
+        let response = deser_value::value!({
             "ok": true, "health": { "version": "0.0.1", "build_epoch": 1 }
         });
-        writeln!(stream, "{response}").unwrap();
+        writeln!(stream, "{}", deser_json::to_string(&response).unwrap()).unwrap();
     });
     let output = e
         .cmd()
@@ -2413,15 +2413,15 @@ fn compiler_upgrades_a_legacy_daemon_without_another_init() {
             std::io::BufReader::new(&stream)
                 .read_line(&mut request)
                 .unwrap();
-            let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+            let request: deser_value::Value = deser_json::from_str(&request).unwrap();
             let shutdown = request == "shutdown";
             let response = if request == "health" {
-                serde_json::json!({"ok": true, "health": {"version": "1.2.2", "build_epoch": 1}})
+                deser_value::value!({"ok": true, "health": {"version": "1.2.2", "build_epoch": 1}})
             } else {
-                serde_json::json!({"ok": shutdown, "error": "legacy execution protocol"})
+                deser_value::value!({"ok": shutdown, "error": "legacy execution protocol"})
             };
             // Probes can disconnect as soon as they recognize a legacy reply.
-            let _ = writeln!(stream, "{response}");
+            let _ = writeln!(stream, "{}", deser_json::to_string(&response).unwrap());
             if shutdown {
                 return true;
             }
@@ -2447,7 +2447,7 @@ fn compiler_upgrades_a_legacy_daemon_without_another_init() {
         .args(["daemon", "status", "--json"])
         .output()
         .unwrap();
-    let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    let status: deser_value::Value = deser_json::from_slice(&status.stdout).unwrap();
     assert_eq!(status["daemon_running"], true);
     assert_eq!(status["daemon_version"], env!("CARGO_PKG_VERSION"));
     assert!(
@@ -2507,14 +2507,14 @@ fn init_recognizes_both_binaries_from_the_current_installation() {
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
-        let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let body: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
         let service = body["steps"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .find(|step| step["component"] == "login_service")
             .unwrap();
-        assert_eq!(service["action"], action, "{}: {body}", exe.display());
+        assert_eq!(service["action"], action, "{}: {body:?}", exe.display());
     }
 }
 
@@ -2565,11 +2565,11 @@ exit 0
             .output()
             .unwrap();
         assert_eq!(output.status.success(), !fails, "{output:?}");
-        let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(body["success"], !fails, "{body}");
+        let body: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(body["success"], !fails, "{body:?}");
         if !fails {
-            assert_eq!(body["daemon_running"], true, "{body}");
-            assert_eq!(body["service_installed"], true, "{body}");
+            assert_eq!(body["daemon_running"], true, "{body:?}");
+            assert_eq!(body["service_installed"], true, "{body:?}");
         }
     }
 }
@@ -2655,7 +2655,7 @@ fn init_upgrade_keeps_the_service_manager_in_charge() {
         .trim()
         .parse()
         .unwrap();
-    let state: serde_json::Value = serde_json::from_slice(&state.unwrap()).unwrap();
+    let state: deser_value::Value = deser_json::from_slice(&state.unwrap()).unwrap();
     assert_eq!(state["pid"], pid);
     let args = std::fs::read_to_string(e.home.join("service.args")).unwrap();
     assert!(!args.lines().any(|arg| arg == "-k" || arg == "restart"));
@@ -2675,10 +2675,10 @@ fn daemon_restart_preserves_another_cache_daemon() {
     let b = env();
     b.cmd().args(["daemon", "start"]).assert().success();
     let before = std::fs::read(b.cache.join("daemon.state.json")).unwrap();
-    let before: serde_json::Value = serde_json::from_slice(&before).unwrap();
+    let before: deser_value::Value = deser_json::from_slice(&before).unwrap();
     a.cmd().args(["daemon", "start"]).assert().success();
-    let own_before: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(a.cache.join("daemon.state.json")).unwrap()).unwrap();
+    let own_before: deser_value::Value =
+        deser_json::from_slice(&std::fs::read(a.cache.join("daemon.state.json")).unwrap()).unwrap();
     let restart = a.cmd().args(["daemon", "restart"]).output().unwrap();
     let other = b
         .cmd()
@@ -2695,11 +2695,11 @@ fn daemon_restart_preserves_another_cache_daemon() {
         "{}",
         String::from_utf8_lossy(&restart.stderr)
     );
-    let other: serde_json::Value = serde_json::from_slice(&other.stdout).unwrap();
-    assert_eq!(other["daemon_running"], true, "{other}");
-    let after: serde_json::Value = serde_json::from_slice(&after.unwrap()).unwrap();
+    let other: deser_value::Value = deser_json::from_slice(&other.stdout).unwrap();
+    assert_eq!(other["daemon_running"], true, "{other:?}");
+    let after: deser_value::Value = deser_json::from_slice(&after.unwrap()).unwrap();
     assert_eq!(before["pid"], after["pid"]);
-    let own_after: serde_json::Value = serde_json::from_slice(&own_after.unwrap()).unwrap();
+    let own_after: deser_value::Value = deser_json::from_slice(&own_after.unwrap()).unwrap();
     assert_ne!(
         own_before["pid"], own_after["pid"],
         "explicit restart must replace a compatible owner"
@@ -2922,7 +2922,7 @@ fn init_exports_the_test_runner_for_the_host() {
         assert!(backups.is_empty(), "{backups:?}");
     }
     // On a configured machine the preview keeps every step.
-    let plan: serde_json::Value = serde_json::from_str(&init(
+    let plan: deser_value::Value = deser_json::from_str(&init(
         &e,
         &["--no-service", "--check", "--json"],
         Some("kache test-runner"),
@@ -2931,14 +2931,14 @@ fn init_exports_the_test_runner_for_the_host() {
     .unwrap();
     for component in ["cargo", "shell", "rustdoc", "test_runner"] {
         let step = plan["steps"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .find(|step| step["component"] == component)
-            .unwrap_or_else(|| panic!("{component}: {plan}"));
-        assert_eq!(step["action"], "keep", "{component}: {plan}");
+            .unwrap_or_else(|| panic!("{component}: {plan:?}"));
+        assert_eq!(step["action"], "keep", "{component}: {plan:?}");
     }
-    assert_eq!(plan["test_activation_required"], false, "{plan}");
+    assert_eq!(plan["test_activation_required"], false, "{plan:?}");
     let out = init(
         &e,
         &["--no-service", "--check"],
@@ -3056,7 +3056,7 @@ fn init_saves_shell_setup_preserves_cargo_choices_and_is_idempotent() {
     assert!(configured.contains("rustc-wrapper = \"kache\""));
     assert!(configured.contains("HOST_CC = \"custom-cc\""));
     assert!(configured.contains("HOST_CXX = \"kache c++\""));
-    let parsed: toml::Value = toml::from_str(&configured).unwrap();
+    let parsed: deser_value::Value = deser_toml::from_str(&configured).unwrap();
     let rustdoc = parsed["build"]["rustdoc"]
         .as_str()
         .expect("init sets build.rustdoc when the shim exists");
@@ -3529,7 +3529,7 @@ fn init_adds_native_caching_to_an_existing_rust_setup() {
         .write_stdin("y\nn\n")
         .assert()
         .success();
-    let config: toml::Value = toml::from_str(&std::fs::read_to_string(cargo).unwrap()).unwrap();
+    let config: deser_value::Value = deser_toml::from_str(&std::fs::read_to_string(cargo).unwrap()).unwrap();
     assert_eq!(config["build"]["rustc-wrapper"].as_str(), Some("kache"));
     assert_eq!(
         config["env"]["CC_KNOWN_WRAPPER_CUSTOM"].as_str(),
@@ -3549,14 +3549,14 @@ fn init_preserves_a_commented_cargo_build_table() {
     let original = "[build] # compiler settings\nrustc-wrapper = \"kache\"\n\
                     [env]\nHOST_CC = \"clang\"\nHOST_CXX = \"clang++\"\n\
                     CC_KNOWN_WRAPPER_CUSTOM = \"kache\"\n";
-    toml::from_str::<toml::Value>(original).expect("valid original Cargo config");
+    deser_toml::from_str::<deser_value::Value>(original).expect("valid original Cargo config");
     std::fs::write(&cargo, original).unwrap();
     e.cmd()
         .args(["init", "--yes", "--no-service"])
         .assert()
         .success();
     let edited = std::fs::read_to_string(&cargo).unwrap();
-    let parsed: toml::Value = toml::from_str(&edited).expect("init preserves valid Cargo config");
+    let parsed: deser_value::Value = deser_toml::from_str(&edited).expect("init preserves valid Cargo config");
     assert_eq!(parsed["build"]["rustc-wrapper"].as_str(), Some("kache"));
     let rustdoc = parsed["build"]["rustdoc"].as_str().unwrap();
     let rustdoc = Path::new(rustdoc);
@@ -3576,7 +3576,7 @@ fn init_preserves_cargo_config_when_the_rustdoc_text_edit_is_unsafe() {
     let original = "[ build ]\nrustc-wrapper = \"kache\"\n\
                     [env]\nHOST_CC = \"clang\"\nHOST_CXX = \"clang++\"\n\
                     CC_KNOWN_WRAPPER_CUSTOM = \"kache\"\n";
-    toml::from_str::<toml::Value>(original).expect("valid original Cargo config");
+    deser_toml::from_str::<deser_value::Value>(original).expect("valid original Cargo config");
     std::fs::write(&cargo, original).unwrap();
 
     for mode in ["--yes", "--check"] {
@@ -3623,7 +3623,7 @@ fn init_without_a_shell_edit_leaves_rustdoc_unset_even_when_the_shim_exists() {
         .args(["init", "--no-service", "--no-shell", "--yes"])
         .assert()
         .success();
-    let config: toml::Value = toml::from_str(&std::fs::read_to_string(&cargo).unwrap()).unwrap();
+    let config: deser_value::Value = deser_toml::from_str(&std::fs::read_to_string(&cargo).unwrap()).unwrap();
     assert!(config["build"].get("rustdoc").is_none());
 }
 
@@ -3767,22 +3767,22 @@ fn commands_operate_on_a_populated_cache() {
         .get_output()
         .stdout
         .clone();
-    let v: serde_json::Value = serde_json::from_slice(&out).expect("valid json");
+    let v: deser_value::Value = deser_json::from_slice(&out).expect("valid json");
     assert_eq!(v["schema_version"].as_u64(), Some(1));
     // The clean+rebuild produced exactly one cache miss (cold) and one local
     // hit (warm) for our crate, with the artifact blobs stored.
-    assert_eq!(v["summary"]["local_hits"].as_u64(), Some(1), "report: {v}");
-    assert_eq!(v["summary"]["misses"].as_u64(), Some(1), "report: {v}");
+    assert_eq!(v["summary"]["local_hits"].as_u64(), Some(1), "report: {v:?}");
+    assert_eq!(v["summary"]["misses"].as_u64(), Some(1), "report: {v:?}");
     assert!(
         v["top_hits"]
-            .as_array()
+            .as_seq()
             .map(|a| !a.is_empty())
             .unwrap_or(false),
-        "expected a non-empty top_hits list: {v}"
+        "expected a non-empty top_hits list: {v:?}"
     );
     assert!(
         v["storage"]["store_blobs"].as_u64().unwrap_or(0) >= 1,
-        "expected stored blobs: {v}"
+        "expected stored blobs: {v:?}"
     );
 
     // `stats` against real data renders the full summary end-to-end (drives the
@@ -3849,8 +3849,8 @@ fn why_miss_reports_key_mismatch_after_source_edit() {
         .output()
         .unwrap();
     assert!(first_diagnosis.status.success());
-    let first_diagnosis: serde_json::Value =
-        serde_json::from_slice(&first_diagnosis.stdout).unwrap();
+    let first_diagnosis: deser_value::Value =
+        deser_json::from_slice(&first_diagnosis.stdout).unwrap();
     let first_key = first_diagnosis["cache_key"].as_str().unwrap();
 
     // Edit the source -> different key -> a second miss + second stored entry.
@@ -3906,8 +3906,8 @@ fn why_miss_compares_features_from_a_volume_shard() {
                 e.cache.join("config.toml"),
                 format!(
                     "{config}[cache.volumes]\n{} = {}\n",
-                    serde_json::to_string(&project.path().display().to_string()).unwrap(),
-                    serde_json::to_string(&shard.display().to_string()).unwrap(),
+                    deser_json::to_string(&project.path().display().to_string()).unwrap(),
+                    deser_json::to_string(&shard.display().to_string()).unwrap(),
                 ),
             )
             .unwrap();
@@ -3937,9 +3937,12 @@ fn why_miss_compares_features_from_a_volume_shard() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    let diagnosis: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let diagnosis: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(diagnosis["stored_entries"], 2);
-    assert_eq!(diagnosis["store_dirs"], serde_json::json!([shard]));
+    assert_eq!(
+        diagnosis["store_dirs"],
+        deser_value::value!([shard.display().to_string()])
+    );
 }
 
 #[test]
@@ -4049,10 +4052,10 @@ fn cc_link_invocation_passes_through() {
         .get_output()
         .stdout
         .clone();
-    let v: serde_json::Value = serde_json::from_slice(&out).expect("valid json");
+    let v: deser_value::Value = deser_json::from_slice(&out).expect("valid json");
     assert!(
         v["summary"]["passthroughs"].as_u64().unwrap_or(0) >= 1,
-        "report should record a passthrough: {v}"
+        "report should record a passthrough: {v:?}"
     );
 }
 
@@ -4108,18 +4111,18 @@ fn cc_compile_roundtrips_through_cache() {
         .get_output()
         .stdout
         .clone();
-    let v: serde_json::Value = serde_json::from_slice(&out).expect("valid json");
+    let v: deser_value::Value = deser_json::from_slice(&out).expect("valid json");
     assert!(
         v["summary"]["local_hits"].as_u64().unwrap_or(0) >= 1,
-        "report should record a local hit after the second compile: {v}"
+        "report should record a local hit after the second compile: {v:?}"
     );
     assert_eq!(
         v["all_events"]
-            .as_array()
+            .as_seq()
             .and_then(|events| events.last())
             .and_then(|event| event["preprocessor_runs"].as_u64()),
         Some(0),
-        "plain warm compiles should reuse the private dependency memo: {v}"
+        "plain warm compiles should reuse the private dependency memo: {v:?}"
     );
 }
 
@@ -4459,7 +4462,7 @@ fn why_miss_json_preserves_legacy_repeat_uncertainty() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let value: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["diagnosis"], "repeated_same_key");
     assert_eq!(value["dependency_recording_missing"], true);
     assert!(value["dependency_chain"].is_null());
@@ -4468,13 +4471,17 @@ fn why_miss_json_preserves_legacy_repeat_uncertainty() {
 #[test]
 fn why_miss_both_formats_prioritize_store_failure_over_lookup_and_cold_history() {
     let e = env();
-    let event = serde_json::json!({
+    let event = deser_value::value!({
         "ts": "2026-01-01T00:00:00Z", "crate_name": "example",
         "result": "miss", "elapsed_ms": 1, "size": 1,
         "cache_key": "same-key", "schema": 15,
         "store_error": "disk full", "lookup_rejection": "invalid metadata"
     });
-    std::fs::write(e.cache.join("events.jsonl"), format!("{event}\n")).unwrap();
+    std::fs::write(
+        e.cache.join("events.jsonl"),
+        format!("{}\n", deser_json::to_string(&event).unwrap()),
+    )
+    .unwrap();
     e.cmd()
         .args(["why-miss", "example"])
         .assert()
@@ -4489,7 +4496,7 @@ fn why_miss_both_formats_prioritize_store_failure_over_lookup_and_cold_history()
         .output()
         .unwrap();
     assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let value: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["diagnosis"], "not_cached");
     assert_eq!(value["store_error"], "disk full");
     assert_eq!(value["lookup_rejection"], "invalid metadata");
@@ -4502,13 +4509,13 @@ fn why_miss_both_formats_include_unresolved_dependency_cascade() {
         .iter()
         .enumerate()
         .map(|(index, digest)| {
-            serde_json::json!({
+            deser_json::to_string(&deser_value::value!({
                 "ts": format!("2026-01-01T00:00:0{index}Z"), "crate_name": "example",
                 "result": "miss", "elapsed_ms": 1, "size": 1,
-                "cache_key": digest, "schema": 15, "root": "/project",
-                "key_externs_recorded": true, "key_externs": {"dep": digest}
-            })
-            .to_string()
+                "cache_key": *digest, "schema": 15, "root": "/project",
+                "key_externs_recorded": true, "key_externs": {"dep": *digest}
+            }))
+            .unwrap()
         })
         .collect();
     std::fs::write(
@@ -4528,7 +4535,7 @@ fn why_miss_both_formats_include_unresolved_dependency_cascade() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let value: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["dependency_recording_missing"], false);
     assert_eq!(value["dependency_chain"]["direct"][0]["name"], "dep");
     assert_eq!(value["dependency_chain"]["direct"][0]["from"], "before");
@@ -4554,38 +4561,38 @@ fn write_checkout_builds(e: &Env, builds: &[(&str, &str, &str)]) {
                 0,
                 "leaf",
                 *leaf_env,
-                serde_json::json!({}),
-                serde_json::json!({}),
+                deser_value::value!({}),
+                deser_value::value!({}),
                 format!("leaf-{leaf_env}"),
             ),
             (
                 1,
                 "mid",
                 "e",
-                serde_json::json!({"leaf": leaf_out}),
-                serde_json::json!({"leaf": "uleaf"}),
+                deser_value::value!({"leaf": *leaf_out}),
+                deser_value::value!({"leaf": "uleaf"}),
                 format!("mid-{leaf_out}"),
             ),
             (
                 2,
                 "app",
                 "e",
-                serde_json::json!({"mid": mid_out}),
-                serde_json::json!({"mid": "umid"}),
+                deser_value::value!({"mid": &mid_out}),
+                deser_value::value!({"mid": "umid"}),
                 format!("app-{mid_out}"),
             ),
         ] {
             events.push(
-                serde_json::json!({
+                deser_json::to_string(&deser_value::value!({
                     "ts": format!("2026-01-01T00:0{minute}:0{offset}Z"), "crate_name": name,
                     "result": "miss", "elapsed_ms": 1, "size": 1,
-                    "cache_key": key, "schema": 19, "root": root,
+                    "cache_key": key, "schema": 19, "root": *root,
                     "key_fields": {"env_deps": env_deps, "sources": "s"},
                     "key_env_deps": {"BUILD_MODE": env_deps},
                     "key_externs_recorded": true, "key_externs": externs,
                     "unit_id": format!("u{name}"), "extern_units": extern_units
-                })
-                .to_string(),
+                }))
+                .unwrap(),
             );
         }
     }
@@ -4632,7 +4639,7 @@ fn why_miss_compares_a_second_checkout_with_the_first() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let value: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         value["checkout_comparison"]["baseline_root"],
         "/checkouts/a"
@@ -4652,7 +4659,7 @@ fn why_miss_compares_a_second_checkout_with_the_first() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let value: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["checkout_comparison"]["verdict"], "dependencies");
     assert_eq!(value["dependency_chain"]["baseline_root"], "/checkouts/a");
     assert_eq!(value["dependency_chain"]["roots"][0]["crate_name"], "leaf");
@@ -4693,7 +4700,7 @@ fn why_miss_reports_a_path_only_root_across_checkouts() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let value: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         value["dependency_chain"]["roots"][0]["kind"]["kind"],
         "path_only"
@@ -4985,8 +4992,8 @@ fn daemon_readiness_channel_precedes_a_fresh_running_status() {
         "{}",
         String::from_utf8_lossy(&status.stderr)
     );
-    let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
-    assert_eq!(status["daemon_running"], true, "{status}");
+    let status: deser_value::Value = deser_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["daemon_running"], true, "{status:?}");
 }
 
 fn write_diff_sessions(e: &Env, sessions: &[(&str, &[&str])]) {
@@ -4995,18 +5002,18 @@ fn write_diff_sessions(e: &Env, sessions: &[(&str, &[&str])]) {
     for &(session, crates) in sessions {
         for crate_name in crates {
             lines.push(
-                serde_json::json!({
+                deser_json::to_string(&deser_value::value!({
                     "ts": format!("2026-01-01T00:00:{second:02}Z"),
                     "root": "/w",
                     "session_id": session,
-                    "crate_name": crate_name,
+                    "crate_name": *crate_name,
                     "result": "miss",
                     "elapsed_ms": 1,
                     "size": 1,
-                    "cache_key": crate_name,
+                    "cache_key": *crate_name,
                     "schema": 22
-                })
-                .to_string(),
+                }))
+                .unwrap(),
             );
             second += 1;
         }
@@ -5089,11 +5096,11 @@ fn same_release_copy_keeps_the_running_daemon() {
             .output()
             .unwrap();
         assert!(out.status.success());
-        let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-        assert_eq!(value["daemon_running"], true, "{value}");
+        let value: deser_value::Value = deser_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(value["daemon_running"], true, "{value:?}");
         let socket = Path::new(value["socket"].as_str().unwrap());
-        let state: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(socket.with_extension("state.json")).unwrap())
+        let state: deser_value::Value =
+            deser_json::from_slice(&std::fs::read(socket.with_extension("state.json")).unwrap())
                 .unwrap();
         state["pid"].as_u64().unwrap()
     };
@@ -5134,14 +5141,14 @@ fn doctor_probe_restores_a_rust_library_without_touching_the_configured_store() 
         .output()
         .unwrap();
     assert!(output.status.success(), "{:?}", output);
-    let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let body: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     let check = body["checks"]
-        .as_array()
+        .as_seq()
         .unwrap()
         .iter()
         .find(|check| check["label"] == "Cache probe")
         .unwrap();
-    assert_eq!(check["pass"], true, "{check}");
+    assert_eq!(check["pass"], true, "{check:?}");
     assert!(
         check["detail"]
             .as_str()
@@ -5178,14 +5185,14 @@ fn doctor_probe_reports_a_missing_compiler_without_polluting_json() {
         .output()
         .unwrap();
     assert!(output.status.success(), "{:?}", output);
-    let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let body: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     let check = body["checks"]
-        .as_array()
+        .as_seq()
         .unwrap()
         .iter()
         .find(|check| check["label"] == "Cache probe")
         .unwrap();
-    assert_eq!(check["pass"], false, "{check}");
+    assert_eq!(check["pass"], false, "{check:?}");
     assert!(check["detail"].as_str().unwrap().contains("compilation"));
     assert!(check["fix"].as_str().unwrap().contains("Rust toolchain"));
     assert!(body["issues"].as_u64().unwrap() > 0);
@@ -5197,20 +5204,20 @@ fn doctor_compares_the_running_daemons_context_with_this_invocation() {
     e.cmd().args(["daemon", "start"]).assert().success();
     let output = e.cmd().args(["--json", "doctor"]).output().unwrap();
     assert!(output.status.success());
-    let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let checks = body["checks"].as_array().unwrap();
+    let body: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
+    let checks = body["checks"].as_seq().unwrap();
     let config = checks
         .iter()
         .find(|check| check["label"] == "Daemon config")
         .unwrap();
-    assert_eq!(config["pass"], true, "{config}");
+    assert_eq!(config["pass"], true, "{config:?}");
     let process = checks
         .iter()
         .find(|check| check["label"] == "Daemon process")
         .unwrap();
     assert!(
         process["detail"].as_str().unwrap().contains("pid "),
-        "{process}"
+        "{process:?}"
     );
     #[cfg(unix)]
     assert!(
@@ -5218,7 +5225,7 @@ fn doctor_compares_the_running_daemons_context_with_this_invocation() {
             .as_str()
             .unwrap()
             .contains("open-file limits at startup: soft"),
-        "{process}"
+        "{process:?}"
     );
 }
 
@@ -5236,16 +5243,20 @@ fn explain_json_distinguishes_uncached_compiles_hits_and_compiler_queries() {
             "no_cache_lookups",
         ),
     ] {
-        let event = serde_json::json!({"ts": kache_core::time::UtcTime::now(), "crate_name":"demo", "result":result, "elapsed_ms":1, "size":1, "passthrough_reason":reason, "schema":26});
-        std::fs::write(e.cache.join("events.jsonl"), format!("{event}\n")).unwrap();
+        let event = deser_value::value!({"ts": deser_value::to_value(&kache_core::time::UtcTime::now()).unwrap(), "crate_name":"demo", "result":result, "elapsed_ms":1, "size":1, "passthrough_reason":reason, "schema":26});
+        std::fs::write(
+            e.cache.join("events.jsonl"),
+            format!("{}\n", deser_json::to_string(&event).unwrap()),
+        )
+        .unwrap();
         let output = e
             .cmd()
             .args(["--json", "explain", "demo"])
             .output()
             .unwrap();
         assert!(output.status.success(), "{:?}", output);
-        let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(body["diagnosis"], expected, "{body}");
+        let body: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(body["diagnosis"], expected, "{body:?}");
     }
 }
 
@@ -5267,11 +5278,11 @@ fn doctor_reports_recent_store_warning_when_database_is_healthy() {
         .output()
         .unwrap();
     assert!(output.status.success(), "{:?}", output);
-    let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let checks = body["checks"].as_array().unwrap();
+    let body: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
+    let checks = body["checks"].as_seq().unwrap();
     for label in ["Store DB", "Store access"] {
         let check = checks.iter().find(|check| check["label"] == label).unwrap();
-        assert_eq!(check["pass"], true, "{check}");
+        assert_eq!(check["pass"], true, "{check:?}");
     }
     let warning = checks
         .iter()
@@ -5295,9 +5306,9 @@ fn quarantine_backups_are_reported_and_only_removed_by_confirmed_full_clean() {
     }
     let output = e.cmd().args(["--json", "doctor"]).output().unwrap();
     assert!(output.status.success());
-    let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let body: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     let check = body["checks"]
-        .as_array()
+        .as_seq()
         .unwrap()
         .iter()
         .find(|check| check["label"] == "Store quarantine")
@@ -5352,10 +5363,10 @@ fn explain_all_lists_complete_history() {
     let root_b = e.home.join("b").to_string_lossy().into_owned();
     let mut events = (0..15)
         .map(|index| {
-            serde_json::json!({
+            deser_value::value!({
                 "ts": format!("2026-01-01T00:00:{index:02}Z"),
                 "crate_name": format!("crate_{index}"),
-                "root": root_a,
+                "root": &root_a,
                 "session_id": "earlier",
                 "result": "passthrough",
                 "passthrough_reason": format!("unsupported|flag {index}"),
@@ -5389,7 +5400,7 @@ fn explain_all_lists_complete_history() {
         e.cache.join("events.jsonl"),
         events
             .iter()
-            .map(|event| format!("{event}\n"))
+            .map(|event| format!("{}\n", deser_json::to_string(event).unwrap()))
             .collect::<String>(),
     )
     .unwrap();
@@ -5401,7 +5412,7 @@ fn explain_all_lists_complete_history() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+        deser_json::from_slice::<deser_value::Value>(&output.stdout).unwrap()
     };
     let all = read(&["--json", "explain", "--all"]);
     assert_eq!(all["command"], "explain");
@@ -5409,8 +5420,8 @@ fn explain_all_lists_complete_history() {
     assert_eq!(all["passthroughs"], 15);
     assert_eq!(all["skipped"], 2);
     assert_eq!(all["probes"], 1);
-    assert_eq!(all["entries"].as_array().unwrap().len(), 18);
-    assert_eq!(all["reasons"].as_array().unwrap().len(), 17);
+    assert_eq!(all["entries"].as_seq().unwrap().len(), 18);
+    assert_eq!(all["reasons"].as_seq().unwrap().len(), 17);
     assert_eq!(all["reasons"][0]["reason"], "inputs-changed");
     assert_eq!(all["reasons"][0]["count"], 2);
     assert_eq!(all["entries"][0]["crate_name"], "crate_14");
@@ -5424,10 +5435,10 @@ fn explain_all_lists_complete_history() {
         "plain explain keeps its build summary"
     );
     let rooted = read(&["--json", "explain", "--all", "--root", &root_a]);
-    assert_eq!(rooted["entries"].as_array().unwrap().len(), 15);
+    assert_eq!(rooted["entries"].as_seq().unwrap().len(), 15);
     assert_eq!(rooted["root"], root_a);
     let rooted_all = read(&["--json", "explain", "--all", "--root", &root_b]);
-    assert_eq!(rooted_all["entries"].as_array().unwrap().len(), 3);
+    assert_eq!(rooted_all["entries"].as_seq().unwrap().len(), 3);
     let missing_root = e.home.join("missing");
     let empty = read(&[
         "--json",
@@ -5436,7 +5447,7 @@ fn explain_all_lists_complete_history() {
         "--root",
         missing_root.to_str().unwrap(),
     ]);
-    assert!(empty["entries"].as_array().unwrap().is_empty());
+    assert!(empty["entries"].as_seq().unwrap().is_empty());
 
     e.cmd()
         .args(["explain", "--all"])
@@ -5474,7 +5485,7 @@ fn explain_all_includes_rotated_history() {
     let e = env();
     let archive = e.cache.join("events.jsonl.archive");
     std::fs::create_dir(&archive).unwrap();
-    let event = serde_json::json!({
+    let event = deser_value::value!({
         "ts": "2026-01-01T00:00:00Z",
         "crate_name": "archived_crate",
         "root": e.home.to_str().unwrap(),
@@ -5485,7 +5496,11 @@ fn explain_all_includes_rotated_history() {
         "cache_key": "",
         "schema": 14
     });
-    let compressed = zstd::stream::encode_all(format!("{event}\n").as_bytes(), 1).unwrap();
+    let compressed = zstd::stream::encode_all(
+        format!("{}\n", deser_json::to_string(&event).unwrap()).as_bytes(),
+        1,
+    )
+    .unwrap();
     std::fs::write(
         archive.join("1767225600-1767225600-1-1.jsonl.zst"),
         compressed,
@@ -5498,8 +5513,8 @@ fn explain_all_includes_rotated_history() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["entries"].as_array().unwrap().len(), 1);
+    let value: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["entries"].as_seq().unwrap().len(), 1);
     assert_eq!(value["entries"][0]["crate_name"], "archived_crate");
     e.cmd()
         .args(["explain", "--all"])

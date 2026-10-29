@@ -3,19 +3,19 @@
 use crate::file_hash::{FileFingerprint, FileHashCache, stamp_is_settled};
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 pub struct CcPreprocessMemoInput {
     pub name: String,
     /// For a row read back whose stamp was never proven, `size` is -1,
     /// which no file has.
-    #[serde(flatten)]
+    #[deser(flatten)]
     pub fingerprint: FileFingerprint,
     pub content: String,
-    #[serde(default)]
+    #[deser(default)]
     pub mapped: String,
     /// Wall clock read just before `fingerprint` was taken. 0 when unknown:
     /// an input read back from the index, or one sent by an older wrapper.
-    #[serde(default)]
+    #[deser(default)]
     pub observed_ns: i64,
 }
 
@@ -550,7 +550,7 @@ impl FileHashCache<'_> {
         hash: &str,
         json: &str,
     ) -> rusqlite::Result<()> {
-        let inputs: Vec<CcPreprocessMemoInput> = serde_json::from_str(json)
+        let inputs: Vec<CcPreprocessMemoInput> = deser_json::from_str(json)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         self.put_cc_preprocess_memo_inputs(memo_key, hash, &inputs)
     }
@@ -881,9 +881,9 @@ mod tests {
     /// none, and its stamps count as unsettled.
     #[test]
     fn an_input_without_an_observation_time_is_unsettled() {
-        let mut json = serde_json::to_value(input("a.h", "a")).unwrap();
-        json.as_object_mut().unwrap().remove("observed_ns");
-        let old: CcPreprocessMemoInput = serde_json::from_value(json).unwrap();
+        let mut json = deser_value::to_value(&input("a.h", "a")).unwrap();
+        json.as_map_mut().unwrap().remove("observed_ns");
+        let old: CcPreprocessMemoInput = deser_value::from_value(&json).unwrap();
         assert_eq!(old.observed_ns, 0);
         assert!(!old.stamp_settled());
         assert!(input("a.h", "a").stamp_settled());
@@ -1280,7 +1280,7 @@ mod tests {
                 )
             })
             .collect();
-        let old_payload_bytes = serde_json::to_vec(&inputs).unwrap().len() * 200;
+        let old_payload_bytes = deser_json::to_string(&inputs).map(String::into_bytes).unwrap().len() * 200;
         for i in 0..200 {
             cache
                 .put_cc_preprocess_memo_inputs(&format!("{i:064}"), "hash", &inputs)
@@ -1409,7 +1409,7 @@ mod tests {
             cache.get_cc_preprocess_memo("empty").unwrap().is_none(),
             "a preprocess always reads at least the source"
         );
-        let json = serde_json::to_string(&[input("a.h", "one")]).unwrap();
+        let json = deser_json::to_string(&[input("a.h", "one")]).unwrap();
         cache
             .put_cc_preprocess_memo("json", "hash-j", &json)
             .unwrap();

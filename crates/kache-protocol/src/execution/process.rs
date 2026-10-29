@@ -1,10 +1,10 @@
 //! Native compiler inputs shared by every transport.
 
 use super::NativeString;
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 pub enum Stream {
     Inherit,
     Null,

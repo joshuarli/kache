@@ -159,8 +159,8 @@ fn send_commit(writer: &mut impl Write, committed: &mut bool) -> Result<()> {
     write_message(writer, &ExecutionCommand::Commit)
 }
 
-fn write_message(writer: &mut impl Write, message: &impl serde::Serialize) -> Result<()> {
-    let mut frame = serde_json::to_vec(message)?;
+fn write_message(writer: &mut impl Write, message: &impl deser::Serialize) -> Result<()> {
+    let mut frame = deser_json::to_string(message).map(String::into_bytes)?;
     frame.push(b'\n');
     writer.write_all(&frame)?;
     writer.flush()?;
@@ -174,7 +174,7 @@ fn read_reply(reader: &mut impl BufRead) -> Result<ExecutionReply> {
         frame.last() == Some(&b'\n'),
         "incomplete compiler execution response"
     );
-    Ok(serde_json::from_slice(&frame)?)
+    Ok(deser_json::from_slice(&frame)?)
 }
 
 #[cfg(test)]
@@ -248,7 +248,7 @@ mod tests {
                 line.clear();
                 reader.read_line(&mut line).unwrap();
                 assert_eq!(
-                    serde_json::from_str::<ExecutionCommand>(&line).unwrap(),
+                    deser_json::from_str::<ExecutionCommand>(&line).unwrap(),
                     ExecutionCommand::Commit
                 );
                 write_message(&mut stream, &ExecutionReply::Accepted).unwrap();
@@ -273,7 +273,7 @@ mod tests {
                 let mut reply = || {
                     let mut line = String::new();
                     control.read_line(&mut line).unwrap();
-                    serde_json::from_str::<Reply>(&line).unwrap()
+                    deser_json::from_str::<Reply>(&line).unwrap()
                 };
                 let Reply::Spawned { id, pid } = reply() else {
                     panic!("missing native child");
@@ -299,7 +299,7 @@ mod tests {
                     let mut line = String::new();
                     control.read_line(&mut line).unwrap();
                     let Reply::Waited { status, .. } =
-                        serde_json::from_str::<Reply>(&line).unwrap()
+                        deser_json::from_str::<Reply>(&line).unwrap()
                     else {
                         panic!("missing status");
                     };
@@ -311,7 +311,7 @@ mod tests {
                 write_message(control.get_mut(), &Command::Release { id }).unwrap();
                 let mut line = String::new();
                 control.read_line(&mut line).unwrap();
-                assert_eq!(serde_json::from_str::<Reply>(&line).unwrap(), Reply::Done);
+                assert_eq!(deser_json::from_str::<Reply>(&line).unwrap(), Reply::Done);
                 write_message(&mut stream, &ExecutionReply::Complete { exit_code: 19 }).unwrap();
             });
             let descriptors = fixture.files.iter().map(AsFd::as_fd).collect::<Vec<_>>();
@@ -393,7 +393,7 @@ mod tests {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 let kache_protocol::Request::ExecuteV1(request) =
-                    serde_json::from_str(&line).unwrap()
+                    deser_json::from_str(&line).unwrap()
                 else {
                     panic!("wrong request: {line}");
                 };
@@ -451,7 +451,7 @@ mod tests {
                 line.clear();
                 reader.read_line(&mut line).unwrap();
                 assert_eq!(
-                    serde_json::from_str::<ExecutionCommand>(&line).unwrap(),
+                    deser_json::from_str::<ExecutionCommand>(&line).unwrap(),
                     ExecutionCommand::Commit
                 );
                 if matches!(stage, Disconnect::AfterCommit) {

@@ -97,14 +97,14 @@ pub(super) fn resolve(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(_) => return None,
         };
-        let table: toml::Table = text.parse().ok()?;
+        let table: deser_value::Map = deser_toml::from_str(&text).ok()?;
         if table.contains_key("include") {
             return None;
         }
         let Some(settings) = table.get("build") else {
             continue;
         };
-        let settings = settings.as_table()?;
+        let settings = settings.as_map()?;
         let base = directory.parent()?;
         if let Some(value) = settings.get("target-dir") {
             target = base.join(value.as_str().filter(|value| !value.is_empty())?);

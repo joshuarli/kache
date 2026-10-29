@@ -114,11 +114,11 @@ fn cached_check_outputs_allow_cargo_and_clippy_fix() {
                     );
                 }
             }
-            let events: Vec<serde_json::Value> = fs::read_to_string(cache.join("events.jsonl"))
+            let events: Vec<deser_value::Value> = fs::read_to_string(cache.join("events.jsonl"))
                 .unwrap()
                 .lines()
-                .map(|line| serde_json::from_str(line).unwrap())
-                .filter(|event: &serde_json::Value| event["crate_name"] == "fix_fixture")
+                .map(|line| deser_json::from_str(line).unwrap())
+                .filter(|event: &deser_value::Value| event["crate_name"] == "fix_fixture")
                 .collect();
             assert_eq!(
                 events.last().unwrap()["result"],

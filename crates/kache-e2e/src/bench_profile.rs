@@ -11,7 +11,7 @@
 
 use anyhow::{Context, Result, bail};
 use indexmap::IndexMap;
-use serde::Deserialize;
+use deser::Deserialize;
 use std::path::{Path, PathBuf};
 
 use crate::scenario::{ScenarioChecks, Selectors, SourceKind, discover_metadata};
@@ -19,66 +19,66 @@ use crate::scenario::{ScenarioChecks, Selectors, SourceKind, discover_metadata};
 /// A project the clone benchmark engine can benchmark, parsed from
 /// `scenarios/bench-*/scenario.toml`.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 pub struct BenchProfile {
     /// Scenario id; must match the scenario directory (`bench-firefox`).
     pub name: String,
 
     /// Clone source metadata. New scenarios declare this under `[source]`;
     /// legacy profile TOMLs may still use top-level `repo` / `ref` / `objdir`.
-    #[serde(default)]
+    #[deser(default)]
     source: Option<BenchSourceConfig>,
 
     /// Git URL to clone.
-    #[serde(default)]
+    #[deser(default)]
     pub repo: String,
 
     /// Tag / branch / commit to pin for reproducibility. Overridable on
     /// the CLI with `--ref`.
-    #[serde(default, rename = "ref")]
+    #[deser(default, rename = "ref")]
     pub git_ref: String,
 
     /// Optional second pinned ref. When set, this scenario is a "daily pull"
     /// temporal benchmark: `cold` builds `git_ref`, then the same worktree is
     /// checked out to `ref_next` and rebuilt (`Phase::Pull`). Absent for the
     /// cross-clone scenarios. See docs/…/firefox-daily-pull-bench-design.md.
-    #[serde(default)]
+    #[deser(default)]
     pub ref_next: Option<String>,
 
     /// Build output directory, wiped before each phase so every build is
     /// genuinely from-scratch (`obj-bench` for Firefox, `target` for a
     /// Cargo project).
-    #[serde(default)]
+    #[deser(default)]
     pub objdir: String,
 
     /// Declarative selection tags, e.g. `suite:bench`, `project:firefox`.
     /// The source kind (`source:clone`) is implicit, and `tier:nightly` is
     /// added unless the scenario declares another tier.
-    #[serde(default)]
+    #[deser(default)]
     pub tags: Vec<String>,
 
     /// Shared scenario checks. `checks.assert` drives the bench verdict;
     /// `checks.measure` is advisory only.
-    #[serde(default)]
+    #[deser(default)]
     pub checks: ScenarioChecks,
 
     /// Executables that must be on `PATH`; the run is SKIPPED (not
     /// failed) if any is missing — same falsifiability convention as
     /// e2e fixtures' `requires`.
-    #[serde(default)]
+    #[deser(default)]
     pub requires: Vec<String>,
 
     /// One-time setup shell steps run once after a fresh clone (e.g.
     /// `./mach bootstrap`, `rustup target add`). Each runs via `sh -c`
     /// in the checkout. Skipped on `--skip-clone` / `--retry`, or when
     /// [`Self::setup_marker`] already exists.
-    #[serde(default)]
+    #[deser(default)]
     pub setup: Vec<String>,
 
     /// Optional path whose existence means "setup already done, skip it"
     /// (e.g. `~/.mozbuild`). `~` expands to the home dir. `--force-setup`
     /// overrides. Without a marker, `setup` runs on every fresh clone.
-    #[serde(default)]
+    #[deser(default)]
     pub setup_marker: Option<String>,
 
     /// Untimed preparation, run via `sh -c` in each checkout after the file
@@ -88,7 +88,7 @@ pub struct BenchProfile {
     /// and every later run on the same machine, gets for free. Runs with
     /// the scenario `[env]` but without the cache wrapper, so it cannot seed
     /// or observe the cache; it must fetch, not compile.
-    #[serde(default)]
+    #[deser(default)]
     pub prepare: Option<String>,
 
     /// Build command, run via `sh -c` in the checkout with the kache env
@@ -97,29 +97,29 @@ pub struct BenchProfile {
 
     /// Extra env vars for every build, added on top of the baseline kache
     /// env (`KACHE_CACHE_DIR` / `KACHE_CONFIG` / `RUSTC_WRAPPER` / …).
-    #[serde(default)]
+    #[deser(default)]
     pub env: IndexMap<String, String>,
 
     /// File injections applied to the (freshly reset) checkout before each
     /// build — how kache gets wired in when env alone is not enough.
     /// Declared in TOML as `[[file]]` (array-of-tables).
-    #[serde(default, rename = "file")]
+    #[deser(default, rename = "file")]
     pub files: Vec<FileInject>,
 
     /// Absolute path to the scenario file's directory (set at load time,
     /// used to resolve a relative `content_file`). Not in the TOML.
-    #[serde(skip)]
+    #[deser(skip)]
     pub dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 struct BenchSourceConfig {
     kind: SourceKind,
     repo: String,
-    #[serde(rename = "ref")]
+    #[deser(rename = "ref")]
     git_ref: String,
-    #[serde(default)]
+    #[deser(default)]
     ref_next: Option<String>,
     objdir: String,
 }
@@ -127,27 +127,27 @@ struct BenchSourceConfig {
 /// One file injection. The `mode` selects how `content` is applied; it
 /// defaults to [`FileMode::Write`].
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 pub struct FileInject {
     /// Path relative to the checkout root.
     pub path: String,
     /// How to apply the payload. Default: `write`.
-    #[serde(default)]
+    #[deser(default)]
     pub mode: FileMode,
     /// The payload. For `write`/`append` it is the literal file text; for
     /// `patch` it is a unified diff. `{kache}` / `{objdir}` are
     /// interpolated. Exactly one of `content` / `content_file` is set.
-    #[serde(default)]
+    #[deser(default)]
     pub content: Option<String>,
     /// Read the payload from a file relative to the scenario dir instead of
     /// inline `content` (handy for large patches).
-    #[serde(default)]
+    #[deser(default)]
     pub content_file: Option<String>,
 }
 
 /// How a [`FileInject`] payload is applied to the checkout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[deser(rename_all = "lowercase")]
 pub enum FileMode {
     /// Create or replace the file. Use only for files the repo does NOT
     /// own (e.g. Firefox ships no `mozconfig`). Idempotent.
@@ -224,7 +224,7 @@ impl BenchProfile {
         let raw =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let mut profile: Self =
-            toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+            deser_toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
 
         let expected_name = expected_name_for_path(path);
         if profile.name != expected_name {

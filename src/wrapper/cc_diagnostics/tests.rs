@@ -99,15 +99,15 @@ fn root_priority_then_specificity_and_designated_consumer_spelling_are_preserved
 fn json_file_locations_round_trip_escaped_windows_paths_and_keep_messages() {
     let producer = roots(r#"C:\producer\a"quoted"#);
     let consumer = roots(r#"D:\consumer\b"quoted"#);
-    let value = serde_json::json!([{
+    let value = deser_value::value!([{
         "locations": [{"caret": {"file": "C:\\producer\\a\"quoted\\unit.c", "line": 2}}],
         "message": "C:\\producer\\a\"quoted\\message remains literal"
     }]);
-    let original = serde_json::to_string_pretty(&value).unwrap();
+    let original = deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&value).unwrap();
     let stored = store(&original, &producer);
     assert!(stored.starts_with(PREFIX));
     let restored = restore(&stored, &consumer).unwrap();
-    let restored: serde_json::Value = serde_json::from_str(&restored).unwrap();
+    let restored: deser_value::Value = deser_json::from_str(&restored).unwrap();
     assert_eq!(
         restored[0]["locations"][0]["caret"]["file"],
         "D:\\consumer\\b\"quoted\\unit.c"
@@ -150,7 +150,7 @@ fn malformed_ranges_and_missing_roots_are_rejected_without_panics() {
     let encoded = |text: &str, paths: Vec<Location>| {
         format!(
             "{PREFIX}{}",
-            serde_json::to_string(&Record {
+            deser_json::to_string(&Record {
                 text: text.into(),
                 paths
             })

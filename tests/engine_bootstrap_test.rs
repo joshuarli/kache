@@ -216,12 +216,12 @@ fn trusted_linux_frontend_keeps_native_children_and_reports_execution_separately
         std::fs::canonicalize(FRONTEND).unwrap().to_str().unwrap()
     );
     let (_, status) = fixture.run(fixture.command(FRONTEND).args(["doctor", "--json"]));
-    let report: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(fixture.root.path().join("stdout")).unwrap())
+    let report: deser_value::Value =
+        deser_json::from_slice(&std::fs::read(fixture.root.path().join("stdout")).unwrap())
             .unwrap();
     assert!(status.success(), "{report}");
     let check = report["checks"]
-        .as_array()
+        .as_seq()
         .unwrap()
         .iter()
         .find(|check| check["label"] == "Compiler execution")
@@ -241,8 +241,8 @@ fn trusted_linux_frontend_keeps_native_children_and_reports_execution_separately
         "--no-service",
         "--json",
     ]));
-    let report: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(fixture.root.path().join("stdout")).unwrap())
+    let report: deser_value::Value =
+        deser_json::from_slice(&std::fs::read(fixture.root.path().join("stdout")).unwrap())
             .unwrap();
     assert!(status.success(), "{report}");
     assert_eq!(report["compiler_execution"]["eligible"], true);
@@ -289,7 +289,7 @@ fn trusted_unix_pipeline_restores_real_rust_outputs_without_recompiling() {
     let stats = || {
         let (_, status) = fixture.run(fixture.command(FRONTEND).args(["stats", "--json"]));
         assert!(status.success());
-        serde_json::from_slice::<serde_json::Value>(
+        deser_json::from_slice::<deser_value::Value>(
             &std::fs::read(fixture.root.path().join("stdout")).unwrap(),
         )
         .unwrap()
@@ -298,8 +298,8 @@ fn trusted_unix_pipeline_restores_real_rust_outputs_without_recompiling() {
     compile();
     let original = std::fs::read(output.join("libbroker_smoke.rlib")).unwrap();
     let first = stats();
-    assert_eq!(first["misses"], 1, "{first}");
-    assert_eq!(first["local_hits"], 0, "{first}");
+    assert_eq!(first["misses"], 1, "{first:?}");
+    assert_eq!(first["local_hits"], 0, "{first:?}");
     std::fs::remove_dir_all(&output).unwrap();
     std::fs::create_dir(&output).unwrap();
     compile();
@@ -309,8 +309,8 @@ fn trusted_unix_pipeline_restores_real_rust_outputs_without_recompiling() {
     );
     assert!(output.join("broker_smoke.d").exists());
     let second = stats();
-    assert_eq!(second["misses"], 1, "{second}");
-    assert_eq!(second["local_hits"], 1, "{second}");
+    assert_eq!(second["misses"], 1, "{second:?}");
+    assert_eq!(second["local_hits"], 1, "{second:?}");
 }
 
 #[test]
@@ -345,11 +345,11 @@ fn trusted_unix_pipeline_restores_c_objects_through_client_owned_stages() {
     assert_eq!(std::fs::read(&target).unwrap(), original);
     let (_, status) = fixture.run(fixture.command(FRONTEND).args(["stats", "--json"]));
     assert!(status.success());
-    let stats: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(fixture.root.path().join("stdout")).unwrap())
+    let stats: deser_value::Value =
+        deser_json::from_slice(&std::fs::read(fixture.root.path().join("stdout")).unwrap())
             .unwrap();
-    assert_eq!(stats["misses"], 1, "{stats}");
-    assert_eq!(stats["local_hits"], 1, "{stats}");
+    assert_eq!(stats["misses"], 1, "{stats:?}");
+    assert_eq!(stats["local_hits"], 1, "{stats:?}");
     assert!(
         !std::fs::read_dir(fixture.root.path())
             .unwrap()

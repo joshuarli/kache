@@ -1,6 +1,6 @@
 //! Terminal width can be shared only when rustc cannot emit lint warnings.
 
-use serde_json::Value;
+use deser_value::Value;
 use std::fs;
 use std::path::Path;
 use std::process::Output;
@@ -22,7 +22,7 @@ fn events(cache: &Path, name: &str) -> Vec<Value> {
     fs::read_to_string(cache.join("events.jsonl"))
         .unwrap()
         .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .map(|line| deser_json::from_str::<Value>(line).unwrap())
         .filter(|event| event["crate_name"] == name)
         .collect()
 }

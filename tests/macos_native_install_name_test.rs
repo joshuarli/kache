@@ -114,7 +114,7 @@ impl Fixture {
             .output()
             .unwrap();
         assert!(report.status.success());
-        let value: serde_json::Value = serde_json::from_slice(&report.stdout).unwrap();
+        let value: deser_value::Value = deser_json::from_slice(&report.stdout).unwrap();
         value["summary"]["local_hits"].as_u64().unwrap()
     }
 }

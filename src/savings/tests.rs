@@ -153,7 +153,7 @@ fn rotation_folds_what_it_drops_and_counts_nothing_twice() {
     let dir = tempfile::tempdir().unwrap();
     let config = crate::test_support::test_config(dir.path().to_path_buf());
     let events: Vec<BuildEvent> = (1..=60).map(|n| hit(n, "")).collect();
-    let line_len = serde_json::to_string(&events[59]).unwrap().len() as u64 + 1;
+    let line_len = deser_json::to_string(&events[59]).unwrap().len() as u64 + 1;
 
     log_and_rotate(&config, &events[..30], line_len * 20, 5);
     let ledger = read(&config.cache_dir).expect("a rotation happened");
@@ -179,7 +179,7 @@ fn a_session_tail_kept_by_rotation_is_not_folded() {
     let config = crate::test_support::test_config(dir.path().to_path_buf());
     let mut events: Vec<BuildEvent> = (1..=40).map(|n| hit(n, "old")).collect();
     events.extend((41..=70).map(|n| hit(n, "current")));
-    let line_len = serde_json::to_string(&events[69]).unwrap().len() as u64 + 1;
+    let line_len = deser_json::to_string(&events[69]).unwrap().len() as u64 + 1;
     for event in &events {
         log_event(&config.event_log_path(), event).unwrap();
     }
@@ -217,7 +217,7 @@ fn lines_without_build_events_fold_nothing() {
     prepare_rotation_fold(dir.path()).unwrap()(&[heartbeat, "{\"torn\n", "\n"]).unwrap();
     assert!(!ledger_path(dir.path()).exists());
 
-    let line = format!("{}\n", serde_json::to_string(&hit(7, "")).unwrap());
+    let line = format!("{}\n", deser_json::to_string(&hit(7, "")).unwrap());
     prepare_rotation_fold(dir.path()).unwrap()(&[heartbeat, &line]).unwrap();
     assert_eq!(read(dir.path()).unwrap().hits, 1);
 }
@@ -323,11 +323,11 @@ fn a_newer_ledger_is_neither_read_nor_overwritten() {
 fn ledger_file_shape() {
     let dir = tempfile::tempdir().unwrap();
     record_pruned(dir.path(), SweepOrigin::Requested, 7, at(1)).unwrap();
-    let value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(ledger_path(dir.path())).unwrap()).unwrap();
+    let value: deser_value::Value =
+        deser_json::from_str(&std::fs::read_to_string(ledger_path(dir.path())).unwrap()).unwrap();
     assert_eq!(
         value,
-        serde_json::json!({
+        deser_value::value!({
             "schema": 1,
             "since": "2026-09-01T12:00:00Z",
             "hits": 0,

@@ -34,7 +34,7 @@ fn run_fake_rustc(
     disabled: bool,
     long_codegen_form: bool,
     response_file: bool,
-) -> (Vec<String>, String, Option<serde_json::Value>) {
+) -> (Vec<String>, String, Option<deser_value::Value>) {
     run_fake_compiler(
         if preserve_incremental {
             PreserveMode::Global
@@ -53,7 +53,7 @@ fn run_fake_forced_rustc(
     force_list: &str,
     disabled: bool,
     failing_fallback: bool,
-) -> (Vec<String>, String, Option<serde_json::Value>) {
+) -> (Vec<String>, String, Option<deser_value::Value>) {
     run_fake_compiler(
         PreserveMode::ForceList {
             list: force_list,
@@ -71,7 +71,7 @@ fn run_fake_configured_rustc(
     preserve_incremental: bool,
     disabled: bool,
     response_file: bool,
-) -> (Vec<String>, String, Option<serde_json::Value>) {
+) -> (Vec<String>, String, Option<deser_value::Value>) {
     run_fake_compiler(
         if preserve_incremental {
             PreserveMode::Global
@@ -93,7 +93,7 @@ fn run_fake_compiler(
     response_file: bool,
     compiler_name: &str,
     configured_rustc: bool,
-) -> (Vec<String>, String, Option<serde_json::Value>) {
+) -> (Vec<String>, String, Option<deser_value::Value>) {
     let dir = tempfile::tempdir().unwrap();
     let _daemon = common::DaemonGuard::new(kache_binary(), dir.path().join("cache"));
     let argv_dump = dir.path().join("argv.txt");
@@ -225,7 +225,7 @@ fn run_fake_compiler(
             contents
                 .lines()
                 .next_back()
-                .map(|line| serde_json::from_str(line).unwrap())
+                .map(|line| deser_json::from_str(line).unwrap())
         });
     (argv, incremental_env, event)
 }
@@ -408,12 +408,12 @@ fn unlisted_crate_keeps_the_normal_cache_path() {
     let reason = event["passthrough_reason"].as_str().unwrap_or_default();
     assert!(
         !reason.starts_with("incremental force-list"),
-        "unlisted crate must not take the force-list passthrough lane: {event}"
+        "unlisted crate must not take the force-list passthrough lane: {event:?}"
     );
     assert!(
         reason.starts_with("uncacheable|"),
         "unlisted crate must reach the normal cache path (which the fake \
-         compiler then fails out of): {event}"
+         compiler then fails out of): {event:?}"
     );
 }
 

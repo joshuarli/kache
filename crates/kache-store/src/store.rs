@@ -5,7 +5,7 @@ use crate::blob_validation::validate_blob_metadata;
 use anyhow::{Context, Result};
 pub use kache_format::{CachedFile, EntryMeta};
 use rusqlite::{Connection, Error as SqlError, ErrorCode, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -903,7 +903,7 @@ pub struct GcStats {
     pub bytes_freed: u64,
     pub blobs_removed: usize,
     pub duration_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub skipped: bool,
     /// Entries eviction selected but could not remove because they were
     /// accessed within [`EVICTION_IDLE_GRACE`] — a live build may be mid-restore
@@ -913,54 +913,54 @@ pub struct GcStats {
     /// Recorded so the CLI can explain "evicted 0" while the store is over its
     /// limit. Without it that reads as "GC is broken", which is what #509 was
     /// filed about and plausibly what turned #497 into a 113 GB bug report.
-    #[serde(default)]
+    #[deser(default)]
     pub entries_pinned: usize,
     /// Entries eviction selected but left in place because unlinking their
     /// last-ref blobs would not free disk (hardlink or CoW clone still live
     /// in a worktree). Distinct from [`Self::entries_pinned`].
-    #[serde(default)]
+    #[deser(default)]
     pub entries_unreclaimable: usize,
     /// Best-effort private bytes actually returned by unlinking store names.
-    #[serde(default)]
+    #[deser(default)]
     pub disk_bytes_reclaimed: u64,
     /// Entries eviction selected but failed to remove: an unreadable
     /// `meta.json` (#276), a SQLite error. Counted rather than only logged, so
     /// a sweep that keeps failing shows up in its own stats instead of only
     /// as warning lines nobody reads.
-    #[serde(default)]
+    #[deser(default)]
     pub entries_failed: usize,
     /// The part of [`Self::entries_failed`] that was SQLite write contention
     /// (`SQLITE_BUSY` / `SQLITE_LOCKED`): the sweep lost the write lock to live
     /// builds, as opposed to finding a damaged entry.
-    #[serde(default)]
+    #[deser(default)]
     pub entries_locked: usize,
     /// Failed evictions caused by upgrading a stale WAL read snapshot to a
     /// writer. These fail immediately and cannot be cured by busy_timeout.
-    #[serde(default)]
+    #[deser(default)]
     pub entries_busy_snapshot: usize,
     /// Recently accessed candidates skipped before loading metadata or
     /// starting a SQLite transaction. Included in entries_pinned.
-    #[serde(default)]
+    #[deser(default)]
     pub entries_recent_prefiltered: usize,
     /// Candidates an automatic sweep kept because the remote delivered them
     /// within [`IMPORT_PIN`] (#1008). Included in entries_pinned.
-    #[serde(default)]
+    #[deser(default)]
     pub entries_import_pinned: usize,
     /// Time spent in the eviction writes themselves, each entry's removal
     /// with its busy waits, summed over the run. Next to `entries_locked` it
     /// shows how much of a sweep went to waiting on builds for the index
     /// write lock.
-    #[serde(default)]
+    #[deser(default)]
     pub evict_write_ms: u64,
     /// Bytes a size-driven sweep found held by live files outside the store:
     /// last-reference blobs a target directory still clones or hardlinks.
     /// Evicting them frees nothing, so the sweep leaves them out of the bytes
     /// it has to free (kunobi-ninja/kache#1206).
-    #[serde(default)]
+    #[deser(default)]
     pub bytes_held: u64,
     /// What the run's housekeeping did. `None` for a run that did none, such
     /// as the eviction after an upload.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub housekeeping: Option<HousekeepingStats>,
 }
 
@@ -2365,7 +2365,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         let Ok(content) = fs::read_to_string(entry_dir.join("meta.json")) else {
             return Ok(None);
         };
-        let Ok(meta) = serde_json::from_str::<EntryMeta>(&content) else {
+        let Ok(meta) = deser_json::from_str::<EntryMeta>(&content) else {
             return Ok(None);
         };
         if meta.files.iter().any(|f| entry_dir.join(&f.name).exists()) {
@@ -2490,7 +2490,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
     /// just stored the entry and wants its file list.
     pub fn stored_meta(&self, cache_key: &str) -> Option<EntryMeta> {
         let content = fs::read(self.entry_dir(cache_key).join("meta.json")).ok()?;
-        serde_json::from_slice(&content).ok()
+        deser_json::from_slice(&content).ok()
     }
 
     /// Load metadata for a cached entry and record a hit.
@@ -2510,7 +2510,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         let entry_dir = self.entry_dir(cache_key);
         let meta_path = entry_dir.join("meta.json");
         let content = fs::read_to_string(&meta_path).context("reading entry meta.json")?;
-        let meta: EntryMeta = serde_json::from_str(&content).context("parsing entry meta.json")?;
+        let meta: EntryMeta = deser_json::from_str(&content).context("parsing entry meta.json")?;
 
         // Lazy migration: if legacy artifacts still live in the entry dir, migrate them
         let needs_migration = meta.files.iter().any(|f| entry_dir.join(&f.name).exists());
@@ -2920,7 +2920,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             emit_kinds,
         };
         let meta_json =
-            serde_json::to_string_pretty(&meta).context("serializing entry metadata")?;
+            deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).context("serializing entry metadata")?;
         let meta_path = entry_dir.join("meta.json");
 
         // Phase 2: register the entry and all of its blob references in a single
@@ -3023,7 +3023,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         let meta_path = entry_dir.join("meta.json");
         let content = fs::read_to_string(&meta_path).context("reading downloaded meta.json")?;
         let meta: EntryMeta =
-            serde_json::from_str(&content).context("parsing downloaded meta.json")?;
+            deser_json::from_str(&content).context("parsing downloaded meta.json")?;
 
         // Remote `meta.json` is untrusted (a shared / MITM'd bucket can poison
         // its `files[]`), so validate the trust boundary before any field reaches
@@ -3269,7 +3269,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             let entry_dir = self.entry_dir(&entry.cache_key);
             let meta_bytes = fs::read(entry_dir.join("meta.json"))
                 .context("reading stream-verified entry metadata")?;
-            let disk_meta: EntryMeta = serde_json::from_slice(&meta_bytes)
+            let disk_meta: EntryMeta = deser_json::from_slice(&meta_bytes)
                 .context("parsing stream-verified entry metadata")?;
             if disk_meta != entry.meta {
                 anyhow::bail!("verified restore metadata changed after extraction");
@@ -3466,7 +3466,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         let meta_path = self.entry_dir(key).join("meta.json");
         let content = fs::read_to_string(&meta_path)
             .with_context(|| format!("entry {key}: reading authoritative meta.json"))?;
-        let meta: EntryMeta = serde_json::from_str(&content)
+        let meta: EntryMeta = deser_json::from_str(&content)
             .with_context(|| format!("entry {key}: parsing authoritative meta.json"))?;
         for file in &meta.files {
             if !kache_format::is_blob_hash(&file.hash)
@@ -3728,7 +3728,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             return Ok(None);
         }
         let content = fs::read_to_string(&meta_path).context("reading entry meta.json")?;
-        let meta: EntryMeta = serde_json::from_str(&content).context("parsing entry meta.json")?;
+        let meta: EntryMeta = deser_json::from_str(&content).context("parsing entry meta.json")?;
 
         // Validate the whole entry before writing anything, so a half-present
         // entry never lands as a row that would resolve to a missing blob.
@@ -4427,7 +4427,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         let Ok(meta_bytes) = fs::read(&meta_path) else {
             return Ok(false);
         };
-        let Ok(meta) = serde_json::from_slice::<EntryMeta>(&meta_bytes) else {
+        let Ok(meta) = deser_json::from_slice::<EntryMeta>(&meta_bytes) else {
             return Ok(false);
         };
         if meta.cache_key != cache_key || compute_content_hash(&meta.files) != content_hash {
@@ -5696,7 +5696,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         for key in &keys {
             let meta_path = self.entry_dir(key).join("meta.json");
             if let Ok(content) = fs::read_to_string(&meta_path)
-                && let Ok(meta) = serde_json::from_str::<EntryMeta>(&content)
+                && let Ok(meta) = deser_json::from_str::<EntryMeta>(&content)
             {
                 let content_hash = compute_content_hash(&meta.files);
                 self.db.execute(
@@ -5761,7 +5761,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         for key in &keys {
             let meta_path = self.entry_dir(key).join("meta.json");
             if let Ok(content) = fs::read_to_string(&meta_path)
-                && let Ok(meta) = serde_json::from_str::<EntryMeta>(&content)
+                && let Ok(meta) = deser_json::from_str::<EntryMeta>(&content)
                 && !meta.files.is_empty()
             {
                 let tx = self.db.unchecked_transaction()?;
@@ -6164,7 +6164,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         let meta_content: String;
         let hashes: Vec<String> = match fs::read_to_string(&meta_path) {
             Ok(content) => {
-                let meta: EntryMeta = serde_json::from_str(&content).with_context(|| {
+                let meta: EntryMeta = deser_json::from_str(&content).with_context(|| {
                     format!(
                         "entry {cache_key}: meta.json unparseable — refusing removal so blob \
                          refcounts are not leaked (#276)"
@@ -6681,7 +6681,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         let mut metadata_bytes = Vec::new();
         std::io::Read::read_to_end(&mut metadata_file, &mut metadata_bytes)?;
         anyhow::ensure!(
-            serde_json::from_slice::<EntryMeta>(&metadata_bytes)? == *meta,
+            deser_json::from_slice::<EntryMeta>(&metadata_bytes)? == *meta,
             "legacy metadata changed before migration"
         );
         let mut sync_file = sync_durability_file;
@@ -6791,7 +6791,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                     continue;
                 }
             };
-            let meta: EntryMeta = match serde_json::from_str(&content) {
+            let meta: EntryMeta = match deser_json::from_str(&content) {
                 Ok(m) => m,
                 Err(_) => {
                     stats.entries_skipped += 1;

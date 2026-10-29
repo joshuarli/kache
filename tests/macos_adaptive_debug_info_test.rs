@@ -3,7 +3,7 @@
 #![cfg(target_os = "macos")]
 
 use filetime::FileTime;
-use serde_json::Value;
+use deser_value::Value;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -132,7 +132,7 @@ impl Fixture {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let executable = stdout
             .lines()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter_map(|line| deser_json::from_str::<Value>(line).ok())
             .find(|message| {
                 message["reason"] == "compiler-artifact" && message["target"]["name"] == "it"
             })
@@ -161,7 +161,7 @@ impl Fixture {
         self.crate_events("adaptive_debug_fixture")
             .into_iter()
             .filter(|event| {
-                event["rebuilt_paths"].as_array().is_some_and(|paths| {
+                event["rebuilt_paths"].as_seq().is_some_and(|paths| {
                     paths
                         .iter()
                         .any(|path| path.as_str().is_some_and(|path| path.ends_with(".rlib")))
@@ -174,7 +174,7 @@ impl Fixture {
         fs::read_to_string(self.cache.path().join("events.jsonl"))
             .unwrap_or_default()
             .lines()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter_map(|line| deser_json::from_str::<Value>(line).ok())
             .filter(|event| event["crate_name"] == crate_name)
             .collect()
     }
@@ -225,12 +225,12 @@ fn frame_has_location(backtrace: &str, function: &str, file: &str) -> bool {
 }
 
 fn assert_passthrough(event: &Value, reason: &str) {
-    assert_eq!(event["result"], "passthrough", "event: {event:#}");
+    assert_eq!(event["result"], "passthrough", "event: {event:#?}");
     assert!(
         event["passthrough_reason"]
             .as_str()
             .is_some_and(|value| value.contains(reason)),
-        "expected passthrough reason containing {reason:?}; event: {event:#}",
+        "expected passthrough reason containing {reason:?}; event: {event:#?}",
     );
 }
 
@@ -243,7 +243,7 @@ fn adaptive_test_binaries_keep_a_readable_debug_map() {
     let fixture = Fixture::new();
 
     let first = fixture.build(1);
-    assert_eq!(first.event["result"], "miss", "event: {:#}", first.event);
+    assert_eq!(first.event["result"], "miss", "event: {:#?}", first.event);
 
     // Each build replaces the previous test binary, so run it before the next build.
     let seed = fixture.build(2);

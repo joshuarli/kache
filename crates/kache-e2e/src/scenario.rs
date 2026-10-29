@@ -7,7 +7,7 @@
 //! directory layout backs each scenario.
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use deser::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -17,7 +17,7 @@ use crate::phase::Phase;
 
 /// Where a scenario's source comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[deser(rename_all = "kebab-case")]
 pub enum SourceKind {
     /// Checked-in fixture source directory.
     Fixture,
@@ -159,7 +159,7 @@ pub struct ScenarioMetadata {
 #[derive(Debug, Deserialize)]
 struct ScenarioMetadataConfig {
     name: String,
-    #[serde(default)]
+    #[deser(default)]
     tags: Vec<String>,
     source: Option<ScenarioSourceConfig>,
 }
@@ -179,7 +179,7 @@ pub fn discover_metadata(root: &Path) -> Result<Vec<ScenarioMetadata>> {
         let raw = std::fs::read_to_string(&toml_path)
             .with_context(|| format!("reading {}", toml_path.display()))?;
         let cfg: ScenarioMetadataConfig =
-            toml::from_str(&raw).with_context(|| format!("parsing {}", toml_path.display()))?;
+            deser_toml::from_str(&raw).with_context(|| format!("parsing {}", toml_path.display()))?;
         scenarios.push(ScenarioMetadata {
             name: cfg.name,
             tags: cfg.tags,
@@ -200,28 +200,28 @@ pub fn discover_metadata(root: &Path) -> Result<Vec<ScenarioMetadata>> {
 /// gives clone-style scenarios a shared blocking verdict surface, while
 /// `checks.measure` is advisory only.
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 pub struct ScenarioChecks {
-    #[serde(default, rename = "assert")]
+    #[deser(default, rename = "assert")]
     pub assertions: PhaseAssertSpecs,
-    #[serde(default)]
+    #[deser(default)]
     pub measure: PhaseMeasureSpecs,
 }
 
 /// Blocking assertion specs by phase.
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[deser(default, deny_unknown_fields)]
 pub struct PhaseAssertSpecs {
     pub cold: Option<ScenarioAssertSpec>,
-    #[serde(rename = "warm-same-tree")]
+    #[deser(rename = "warm-same-tree")]
     pub warm_same_tree: Option<ScenarioAssertSpec>,
     pub warm: Option<ScenarioAssertSpec>,
     pub pull: Option<ScenarioAssertSpec>,
     pub noop: Option<ScenarioAssertSpec>,
     pub relocate: Option<ScenarioAssertSpec>,
-    #[serde(rename = "relocate-modified")]
+    #[deser(rename = "relocate-modified")]
     pub relocate_modified: Option<ScenarioAssertSpec>,
-    #[serde(rename = "relocate-noop")]
+    #[deser(rename = "relocate-noop")]
     pub relocate_noop: Option<ScenarioAssertSpec>,
 }
 
@@ -243,7 +243,7 @@ impl PhaseAssertSpecs {
 
 /// Blocking thresholds currently used by clone-scale scenarios.
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 pub struct ScenarioAssertSpec {
     pub min_key_stability_pct: Option<f64>,
     pub max_passthrough_pct: Option<f64>,
@@ -261,18 +261,18 @@ pub struct ScenarioAssertSpec {
 
 /// Warn-only measurement specs by phase.
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[deser(default, deny_unknown_fields)]
 pub struct PhaseMeasureSpecs {
     pub cold: Option<MeasureSpec>,
-    #[serde(rename = "warm-same-tree")]
+    #[deser(rename = "warm-same-tree")]
     pub warm_same_tree: Option<MeasureSpec>,
     pub warm: Option<MeasureSpec>,
     pub pull: Option<MeasureSpec>,
     pub noop: Option<MeasureSpec>,
     pub relocate: Option<MeasureSpec>,
-    #[serde(rename = "relocate-modified")]
+    #[deser(rename = "relocate-modified")]
     pub relocate_modified: Option<MeasureSpec>,
-    #[serde(rename = "relocate-noop")]
+    #[deser(rename = "relocate-noop")]
     pub relocate_noop: Option<MeasureSpec>,
 }
 
@@ -295,7 +295,7 @@ impl PhaseMeasureSpecs {
 /// Advisory thresholds. Violations are recorded as warnings in results JSON
 /// and never change phase/scenario status.
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 pub struct MeasureSpec {
     pub max_wall_s: Option<u64>,
     pub min_hit_rate_pct: Option<f64>,
@@ -306,7 +306,7 @@ pub struct MeasureSpec {
     /// raises a warning, so a newly unsupported flag or file shows up the first
     /// night it appears. Probes (`not-a-compile`) are never checked. Fixing a
     /// reason means deleting its entry.
-    #[serde(default)]
+    #[deser(default)]
     pub known_passthrough: Vec<String>,
 }
 
@@ -399,14 +399,14 @@ pub struct ScenarioCommands {
 pub struct ScenarioConfig {
     pub name: String,
     pub source: ScenarioSourceConfig,
-    #[serde(default)]
+    #[deser(default)]
     pub tags: Vec<String>,
-    #[serde(default)]
+    #[deser(default)]
     pub phases: Vec<Phase>,
-    #[serde(default)]
+    #[deser(default)]
     pub env: HashMap<String, String>,
     pub commands: ScenarioCommandsConfig,
-    #[serde(default)]
+    #[deser(default)]
     pub checks: ScenarioChecks,
 }
 
@@ -455,16 +455,16 @@ impl ScenarioConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+#[deser(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ScenarioSourceConfig {
     Fixture {
         path: PathBuf,
     },
     Clone {
         repo: String,
-        #[serde(rename = "ref")]
+        #[deser(rename = "ref")]
         git_ref: String,
-        #[serde(default)]
+        #[deser(default)]
         ref_next: Option<String>,
         objdir: String,
     },
@@ -481,10 +481,10 @@ impl ScenarioSourceConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScenarioCommandsConfig {
-    #[serde(default)]
+    #[deser(default)]
     pub setup: Vec<String>,
     pub build: String,
-    #[serde(default)]
+    #[deser(default)]
     pub clean: Option<String>,
 }
 
@@ -599,7 +599,7 @@ mod tests {
 
     #[test]
     fn parses_unified_fixture_scenario_config() {
-        let cfg: ScenarioConfig = toml::from_str(
+        let cfg: ScenarioConfig = deser_toml::from_str(
             r#"
 name = "c-hello"
 tags = ["lang:cc"]
@@ -641,7 +641,7 @@ min_hit_rate_pct = 90.0
 
     #[test]
     fn fixture_negative_control_exempt_must_be_top_level() {
-        let cfg: Fixture = toml::from_str(
+        let cfg: Fixture = deser_toml::from_str(
             r#"
 name = "e2e-exempt"
 negative_control_exempt = true
@@ -661,7 +661,7 @@ clean = "make clean"
 
     #[test]
     fn source_table_rejects_misplaced_fixture_fields() {
-        let err = toml::from_str::<Fixture>(
+        let err = deser_toml::from_str::<Fixture>(
             r#"
 name = "e2e-exempt"
 
@@ -681,7 +681,7 @@ clean = "make clean"
 
     #[test]
     fn parses_unified_clone_scenario_config() {
-        let cfg: ScenarioConfig = toml::from_str(
+        let cfg: ScenarioConfig = deser_toml::from_str(
             r#"
 name = "substrate"
 tags = ["lang:rust"]
@@ -716,7 +716,7 @@ max_errors = 0
 
     #[test]
     fn pull_phase_gates_bind() {
-        let checks: ScenarioChecks = toml::from_str(
+        let checks: ScenarioChecks = deser_toml::from_str(
             r#"
 [assert.pull]
 max_passthrough_pct = 40.0
@@ -748,7 +748,7 @@ min_hit_rate_pct = 50.0
     /// that silently stops binding is a validity gate that no longer runs.
     #[test]
     fn warm_same_tree_phase_gates_bind() {
-        let checks: ScenarioChecks = toml::from_str(
+        let checks: ScenarioChecks = deser_toml::from_str(
             r#"
 [assert.warm-same-tree]
 max_passthrough_pct = 40.0
@@ -792,14 +792,14 @@ max_wall_s = 900
             "[assert.warm]\nmax_erors = 0\n",
             "[measure.warm]\nmin_hit_rate_pxt = 90.0\n",
         ] {
-            let err = toml::from_str::<ScenarioChecks>(raw).unwrap_err();
+            let err = deser_toml::from_str::<ScenarioChecks>(raw).unwrap_err();
             assert!(err.to_string().contains("unknown field"), "{err}");
         }
     }
 
     #[test]
     fn scenario_source_config_parses_ref_next() {
-        let cfg: ScenarioConfig = toml::from_str(
+        let cfg: ScenarioConfig = deser_toml::from_str(
             r#"
 name = "bench-firefox-pull"
 

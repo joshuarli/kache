@@ -110,10 +110,10 @@ printf 'complete-object' > "$TEST_OBJECT"
     fn run(&self, compiler_exit: i32) -> Output {
         self.command(compiler_exit).output().unwrap()
     }
-    fn event(&self) -> serde_json::Value {
+    fn event(&self) -> deser_value::Value {
         let log = fs::read_to_string(self.dir.path().join("cache/events.jsonl")).unwrap();
         log.lines()
-            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .map(|line| deser_json::from_str::<deser_value::Value>(line).unwrap())
             .find(|event| event["result"] == "passthrough")
             .unwrap()
     }

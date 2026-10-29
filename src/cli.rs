@@ -431,7 +431,7 @@ fn cloned_targets_row(disk: &crate::machine::DiskView) -> Option<StatsRow> {
 
 /// The volume holding the cache: its size, what is free, and the free-space
 /// floor below which kache recovers space.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, deser::Serialize)]
 pub(crate) struct VolumeView {
     total_bytes: u64,
     free_bytes: u64,
@@ -549,31 +549,31 @@ pub fn stats(
     let lifetime = crate::savings::lifetime(config);
 
     if json {
-        #[derive(serde::Serialize)]
+        #[derive(deser::Serialize)]
         struct Body<'a> {
             disk: crate::machine::DiskView,
             /// The volume holding the cache. Absent where its usage cannot
             /// be read.
-            #[serde(skip_serializing_if = "Option::is_none")]
+            #[deser(skip_serializing_if = Option::is_none)]
             volume: Option<VolumeView>,
             stores: &'a [crate::store_view::StoreSummary],
             /// This machine's shared index (`index.db` plus `-wal`) and each
             /// table's largest rowid, as `kache telemetry write` reports them.
             /// The rowid grows with every insert and replacement; it is not
             /// a row count.
-            #[serde(skip_serializing_if = "Option::is_none")]
+            #[deser(skip_serializing_if = Option::is_none)]
             index_bytes: Option<u64>,
             /// The `-wal` file alone, also counted in `index_bytes`.
-            #[serde(skip_serializing_if = "Option::is_none")]
+            #[deser(skip_serializing_if = Option::is_none)]
             index_wal_bytes: Option<u64>,
-            #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+            #[deser(skip_serializing_if = std::collections::BTreeMap::is_empty)]
             index_rowid_high_water: std::collections::BTreeMap<&'static str, u64>,
             /// The last GC run, from `gc_stats.json`.
-            #[serde(skip_serializing_if = "Option::is_none")]
+            #[deser(skip_serializing_if = Option::is_none)]
             gc: Option<crate::report::GcStatsPersisted>,
             /// Totals since counting began: the savings ledger plus the
             /// event log. Absent while nothing is recorded.
-            #[serde(skip_serializing_if = "Option::is_none")]
+            #[deser(skip_serializing_if = Option::is_none)]
             lifetime: Option<crate::savings::Totals>,
             entries: usize,
             hit_rate_pct: f64,
@@ -598,7 +598,7 @@ pub fn stats(
             since: String,
             /// The host config file merged under the chosen one, when there is
             /// one in effect.
-            #[serde(skip_serializing_if = "Option::is_none")]
+            #[deser(skip_serializing_if = Option::is_none)]
             host_config: Option<&'a str>,
         }
         let hit_rate = count_hit_rate(&snap.event_stats);
@@ -1195,7 +1195,7 @@ pub fn stats_last_build(
         Ok(())
     };
     let printed = if json {
-        #[derive(serde::Serialize)]
+        #[derive(deser::Serialize)]
         struct Body {
             report: crate::report::BuildReport,
         }
@@ -1319,7 +1319,7 @@ pub fn report(
             .with_context(|| format!("writing report to {}", path.display()))?;
         eprintln!("Report written to {}", path.display());
         if crate::machine::is_json() {
-            #[derive(serde::Serialize)]
+            #[derive(deser::Serialize)]
             struct Written {
                 output: std::path::PathBuf,
                 format: String,
@@ -1336,8 +1336,8 @@ pub fn report(
     } else if crate::machine::is_json() {
         // The standalone report already has schema_version. Keep all its
         // fields while adding the common command and success metadata.
-        let mut body = serde_json::to_value(&report)?;
-        body.as_object_mut()
+        let mut body = deser_value::to_value(&report)?;
+        body.as_map_mut()
             .context("report is not an object")?
             .remove("schema_version");
         crate::report::scrub_json(&mut body, &terms);
@@ -1450,7 +1450,7 @@ pub fn why_miss(config: &Config, crate_name: &str, json: bool) -> Result<()> {
 
     if crate_events.is_empty() {
         if json {
-            #[derive(serde::Serialize)]
+            #[derive(deser::Serialize)]
             struct Body<'a> {
                 crate_name: &'a str,
                 diagnosis: &'static str,
@@ -1496,7 +1496,7 @@ pub fn why_miss(config: &Config, crate_name: &str, json: bool) -> Result<()> {
 
     if last_miss.is_none() {
         if json {
-            #[derive(serde::Serialize)]
+            #[derive(deser::Serialize)]
             struct Body<'a> {
                 crate_name: &'a str,
                 diagnosis: &'static str,
@@ -1695,7 +1695,7 @@ fn missed_entry<'a>(
 
 fn read_entry_meta(entry: &daemon::StatsEntry) -> Option<crate::store::EntryMeta> {
     let content = std::fs::read_to_string(crate::store_view::entry_meta_path(entry)?).ok()?;
-    serde_json::from_str(&content).ok()
+    deser_json::from_str(&content).ok()
 }
 
 /// The "Last miss" rows of `kache explain <crate>`: the miss, its key and
@@ -2099,7 +2099,7 @@ fn why_miss_json(
     diagnosis: &MissDiagnosis,
     latest_uncached: Option<&events::BuildEvent>,
 ) -> Result<()> {
-    #[derive(serde::Serialize)]
+    #[derive(deser::Serialize)]
     struct Body<'a> {
         crate_name: &'a str,
         diagnosis: Cause,
@@ -2144,7 +2144,7 @@ fn why_miss_json(
 }
 
 /// A compile kache ran without caching, in `kache --json explain <crate>`.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, deser::Serialize)]
 struct UncachedCompile<'a> {
     ts: String,
     /// `passthrough`, or `skipped` for a compile whose store kache declined.
@@ -3101,7 +3101,7 @@ pub fn list(
     let inventory = crate::store_view::read(config, true, sort_by)?;
 
     if json {
-        #[derive(serde::Serialize)]
+        #[derive(deser::Serialize)]
         struct EntryBody<'a> {
             cache_key: &'a str,
             store_dirs: &'a [std::path::PathBuf],
@@ -3136,7 +3136,7 @@ pub fn list(
                 last_accessed: &e.last_accessed,
             })
             .collect();
-        #[derive(serde::Serialize)]
+        #[derive(deser::Serialize)]
         struct Body<T> {
             entries: Vec<T>,
             stores: Vec<crate::store_view::StoreSummary>,
@@ -3172,7 +3172,7 @@ pub fn list(
 
             if let Some(meta_path) = crate::store_view::entry_meta_path(entry)
                 && let Ok(content) = std::fs::read_to_string(&meta_path)
-                && let Ok(meta) = serde_json::from_str::<crate::store::EntryMeta>(&content)
+                && let Ok(meta) = deser_json::from_str::<crate::store::EntryMeta>(&content)
             {
                 push_nonempty_detail(&mut lines, "  Features: ", &meta.features.join(", "));
                 push_nonempty_detail(&mut lines, "  Target:   ", &meta.target);
@@ -3827,7 +3827,7 @@ fn emit_gc_json(config: &Config, skipped: bool, stats: &crate::store::GcStats) -
     let store = Store::open(config)?;
     let store_bytes = store.physical_size().unwrap_or(0);
     let disk = crate::machine::disk_view(&config.store_dir(), store_bytes, config.max_size);
-    #[derive(serde::Serialize)]
+    #[derive(deser::Serialize)]
     struct Body {
         skipped: bool,
         disk: crate::machine::DiskView,
@@ -4111,7 +4111,7 @@ pub fn purge(config: &Config, crate_filter: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, deser::Serialize)]
 struct CleanSkipped {
     path: String,
     reason: String,
@@ -4120,7 +4120,7 @@ struct CleanSkipped {
     missing: bool,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, deser::Serialize)]
 struct CleanFailed {
     path: String,
     reason: String,
@@ -4229,13 +4229,13 @@ pub fn clean_cache(
     }
     match action {
         CacheAction::Say(message) if json => {
-            #[derive(serde::Serialize)]
+            #[derive(deser::Serialize)]
             struct Body {
                 preview: bool,
                 entries: usize,
                 bytes: u64,
                 message: String,
-                #[serde(skip_serializing_if = "Option::is_none")]
+                #[deser(skip_serializing_if = Option::is_none)]
                 notice: Option<String>,
             }
             crate::machine::emit(
@@ -4469,7 +4469,7 @@ fn path_was_removed(path: &std::path::Path) -> bool {
     std::fs::symlink_metadata(path).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
 }
 
-#[derive(serde::Serialize)]
+#[derive(deser::Serialize)]
 struct UnitCleanRow {
     path: String,
     workspace: String,
@@ -4604,7 +4604,7 @@ fn clean_units_with_output(
         }
     }
     if json {
-        #[derive(serde::Serialize)]
+        #[derive(deser::Serialize)]
         struct Body {
             preview: bool,
             targets: Vec<UnitCleanRow>,
@@ -4737,7 +4737,7 @@ fn clean_with_terminal(
                            failed: &[CleanFailed],
                            removed_paths: Vec<String>,
                            reclaimed: u64| {
-        #[derive(serde::Serialize)]
+        #[derive(deser::Serialize)]
         struct TargetBody {
             path: String,
             apparent_bytes: u64,
@@ -4746,16 +4746,16 @@ fn clean_with_terminal(
             /// The workspace this target was built from no longer exists.
             orphaned: bool,
         }
-        #[derive(serde::Serialize)]
+        #[derive(deser::Serialize)]
         struct Body<'a> {
             targets: Vec<TargetBody>,
             /// Tracked targets this clean leaves, in a preview or when it
             /// removes nothing: the rows the text shows under Keep.
-            #[serde(skip_serializing_if = "Option::is_none")]
+            #[deser(skip_serializing_if = Option::is_none)]
             kept: Option<&'a [TargetRow]>,
             skipped: Vec<CleanSkipped>,
             /// Running commands that keep clean from deleting now.
-            #[serde(skip_serializing_if = "Vec::is_empty")]
+            #[deser(skip_serializing_if = Vec::is_empty)]
             waiting_for: Vec<WaitingFor>,
             /// Targets this clean tried and failed to remove.
             failed: Vec<CleanFailed>,
@@ -4763,7 +4763,7 @@ fn clean_with_terminal(
             changed: bool,
             estimated_reclaimed_bytes: u64,
         }
-        #[derive(serde::Serialize)]
+        #[derive(deser::Serialize)]
         struct WaitingFor {
             pid: u32,
             command: String,
@@ -5263,15 +5263,15 @@ pub(crate) struct TargetEntry {
 }
 
 /// Whether the worktree a tracked target was built from is still there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, deser::Serialize)]
+#[deser(rename_all = "snake_case")]
 pub(crate) enum TargetState {
     Live,
     WorktreeDeleted,
 }
 
 /// One tracked target directory, as `kache targets` reports it.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, deser::Serialize)]
 pub(crate) struct TargetRow {
     path: String,
     workspace: String,
@@ -5827,7 +5827,7 @@ fn targets_next_actions(rows: &[TargetRow], auto_orphans: bool) -> Vec<crate::ma
 pub fn targets(config: &Config, json: bool) -> Result<()> {
     let rows = target_rows(config, kache_store::markers::now_epoch_secs() as i64)?;
     if json {
-        #[derive(serde::Serialize)]
+        #[derive(deser::Serialize)]
         struct Body {
             targets: Vec<TargetRow>,
             apparent_bytes: u64,
@@ -6767,20 +6767,20 @@ fn cargo_workspace_root(cwd: &std::path::Path) -> Option<std::path::PathBuf> {
         if !manifest.is_file() {
             continue;
         }
-        let table = std::fs::read_to_string(&manifest)
-            .ok()?
-            .parse::<toml::Table>()
-            .ok()?;
+        let table = deser_toml::from_str::<deser_value::Map>(
+            &std::fs::read_to_string(&manifest).ok()?,
+        )
+        .ok()?;
         if let Some(workspace) = table
             .get("package")
-            .and_then(toml::Value::as_table)
+            .and_then(|value| value.as_map())
             .and_then(|package| package.get("workspace"))
         {
             let root = dir.join(workspace.as_str()?).canonicalize().ok()?;
             return cargo_manifest_is_workspace(&root.join("Cargo.toml")).then_some(root);
         }
         package.get_or_insert(dir);
-        if table.get("workspace").is_some_and(toml::Value::is_table) {
+        if table.get("workspace").is_some_and(|value| value.is_map()) {
             return Some(dir.to_path_buf());
         }
     }
@@ -6792,10 +6792,10 @@ fn cargo_manifest_is_workspace(manifest: &std::path::Path) -> bool {
     let Ok(text) = std::fs::read_to_string(manifest) else {
         return false;
     };
-    let Ok(table) = text.parse::<toml::Table>() else {
+    let Ok(table) = deser_toml::from_str::<deser_value::Map>(&text) else {
         return false;
     };
-    table.get("workspace").is_some_and(toml::Value::is_table)
+    table.get("workspace").is_some_and(|value| value.is_map())
 }
 
 /// Probe the first existing directory on the output path. An existing file
@@ -7367,7 +7367,7 @@ pub fn doctor(
         .count();
 
     if json {
-        #[derive(serde::Serialize)]
+        #[derive(deser::Serialize)]
         struct CheckBody {
             label: &'static str,
             pass: bool,
@@ -7375,7 +7375,7 @@ pub fn doctor(
             detail: String,
             fix: Option<String>,
         }
-        #[derive(serde::Serialize)]
+        #[derive(deser::Serialize)]
         struct Body {
             version: &'static str,
             rustc: String,
@@ -7902,7 +7902,7 @@ fn verify_store(config: &Config, checksums: bool, repair: bool) -> Result<Verify
 
         // Check metadata file exists and parses
         let meta = match std::fs::read_to_string(&meta_path) {
-            Ok(content) => match serde_json::from_str::<crate::store::EntryMeta>(&content) {
+            Ok(content) => match deser_json::from_str::<crate::store::EntryMeta>(&content) {
                 Ok(m) => m,
                 Err(e) => {
                     log::warn!(
@@ -8237,8 +8237,8 @@ pub(crate) fn plan_cargo_wrapper_edit(path: &std::path::Path) -> Result<CargoWra
     }
     let content =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let parsed: toml::Value =
-        toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
+    let parsed: deser_value::Value =
+        deser_toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
     let current = parsed
         .get("build")
         .and_then(|b| b.get("rustc-wrapper"))
@@ -8385,7 +8385,7 @@ pub(crate) fn is_rustdoc_assignment(line: &str) -> bool {
 
 #[cfg(any(test, unix))]
 fn closes_toml_table(trimmed: &str) -> bool {
-    trimmed.starts_with('[') && toml::from_str::<toml::Table>(trimmed).is_ok()
+    trimmed.starts_with('[') && deser_toml::from_str::<deser_value::Map>(trimmed).is_ok()
 }
 
 #[cfg(any(test, unix))]
@@ -8484,16 +8484,16 @@ pub(crate) fn apply_rustdoc_edit(existing: &str, shim_path: &str) -> String {
 #[cfg(any(test, unix))]
 fn checked_rustdoc_edit(existing: &str, shim_path: &str) -> Result<String> {
     let updated = apply_rustdoc_edit(existing, shim_path);
-    let mut expected: toml::Value = toml::from_str(existing)?;
+    let mut expected: deser_value::Value = deser_toml::from_str(existing)?;
     let build = expected
         .get_mut("build")
-        .and_then(toml::Value::as_table_mut)
+        .and_then(|value| value.as_map_mut())
         .context("Cargo config has no build table")?;
     build.insert(
         "rustdoc".to_string(),
-        toml::Value::String(shim_path.to_string()),
+        deser_value::Value::from(shim_path.to_string()),
     );
-    let actual: toml::Value = toml::from_str(&updated)?;
+    let actual: deser_value::Value = deser_toml::from_str(&updated)?;
     anyhow::ensure!(
         actual == expected,
         "could not safely set build.rustdoc; edit Cargo config manually"
@@ -8553,12 +8553,12 @@ pub(crate) fn rustdoc_doctor_fields(
 /// formatting-preserving editor cannot replace every way of writing the old
 /// value.
 fn ensure_cargo_wrapper_is_kache(updated: &str, cargo_path: &std::path::Path) -> Result<()> {
-    let parsed: toml::Value = toml::from_str(updated)?;
+    let parsed: deser_value::Value = deser_toml::from_str(updated)?;
     anyhow::ensure!(
         parsed
             .get("build")
             .and_then(|v| v.get("rustc-wrapper"))
-            .and_then(toml::Value::as_str)
+            .and_then(|value| value.as_str())
             == Some("kache"),
         "could not update Cargo's existing wrapper; edit {} manually",
         cargo_path.display()
@@ -8597,7 +8597,7 @@ fn plan_cargo_rustdoc(
     }
     let shim_path = shim.to_str()?;
     let existing = std::fs::read_to_string(cargo_config_target_path()).unwrap_or_default();
-    let parsed: Option<toml::Value> = toml::from_str(&existing).ok();
+    let parsed: Option<deser_value::Value> = deser_toml::from_str(&existing).ok();
     let build = parsed.as_ref().and_then(|value| value.get("build"));
     let setting = |key: &str| build.and_then(|build| build.get(key))?.as_str();
     let wrapper = if wrapper_coming {
@@ -8666,7 +8666,7 @@ fn configure_cargo_rustdoc(
     Ok(rustdoc_action(edit))
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, deser::Serialize)]
 struct SetupStep {
     component: &'static str,
     action: &'static str,
@@ -8683,7 +8683,7 @@ impl SetupStep {
     }
 }
 
-#[derive(serde::Serialize)]
+#[derive(deser::Serialize)]
 struct SetupResult {
     preview: bool,
     steps: Vec<SetupStep>,
@@ -8692,7 +8692,7 @@ struct SetupResult {
     test_activation_required: bool,
     service_installed: bool,
     daemon_running: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     compiler_execution: Option<kache_protocol::execution::ExecutionStatus>,
 }
 
@@ -9012,7 +9012,7 @@ struct RecoverySettings {
 
 impl RecoverySettings {
     fn of(text: &str, env: &dyn Fn(&str) -> Option<String>, in_ci: bool) -> Self {
-        let cache = toml::from_str::<toml::Value>(text)
+        let cache = deser_toml::from_str::<deser_value::Value>(text)
             .ok()
             .and_then(|value| value.get("cache").cloned());
         let file = |key: &str| cache.as_ref().and_then(|cache| cache.get(key).cloned());
@@ -9022,7 +9022,7 @@ impl RecoverySettings {
             .and_then(|value| value.parse().ok())
             .or_else(|| {
                 file("auto_recover_min_free_bytes")?
-                    .as_integer()?
+                    .as_i64()?
                     .try_into()
                     .ok()
             })
@@ -9039,7 +9039,7 @@ impl RecoverySettings {
 /// Whether `text` sets `auto_recover_targets` in its `[cache]` table, either
 /// way: then the choice is already made.
 fn sets_target_recovery(text: &str) -> bool {
-    toml::from_str::<toml::Value>(text).is_ok_and(|value| {
+    deser_toml::from_str::<deser_value::Value>(text).is_ok_and(|value| {
         value
             .get("cache")
             .and_then(|cache| cache.get("auto_recover_targets"))
@@ -9075,7 +9075,7 @@ fn enable_target_recovery(text: &str) -> Option<String> {
             updated
         }
     };
-    let parsed: toml::Value = toml::from_str(&updated).ok()?;
+    let parsed: deser_value::Value = deser_toml::from_str(&updated).ok()?;
     (parsed.get("cache")?.get("auto_recover_targets")?.as_bool() == Some(true)).then_some(updated)
 }
 

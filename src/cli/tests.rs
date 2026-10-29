@@ -728,7 +728,7 @@ fn local_gc_appends_to_the_gc_history_only_when_record_sessions_is_on() {
     let log = std::fs::read_to_string(crate::report::gc_runs_log_path(&config.cache_dir)).unwrap();
     let records: Vec<crate::report::GcRunRecord> = log
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| deser_json::from_str(line).unwrap())
         .collect();
     assert_eq!(records.len(), 1, "{log}");
     assert_eq!(records[0].source, "auto");
@@ -1550,7 +1550,7 @@ fn report_records_without_the_flag_when_record_sessions_is_on() {
     let log = std::fs::read_to_string(session_log_path(&config)).unwrap();
     assert_eq!(log.lines().count(), 1, "{log}");
     let record: crate::report::SessionRecord =
-        serde_json::from_str(log.lines().next().unwrap()).unwrap();
+        deser_json::from_str(log.lines().next().unwrap()).unwrap();
     assert_eq!(record.schema, crate::report::SESSION_RECORD_SCHEMA);
 }
 
@@ -1600,7 +1600,7 @@ fn report_record_appends_one_line_to_the_cache_dir_not_the_runtime_dir() {
         !log.contains("secret-repo"),
         "the root is hashed, never written"
     );
-    let record: crate::report::SessionRecord = serde_json::from_str(lines[0]).unwrap();
+    let record: crate::report::SessionRecord = deser_json::from_str(lines[0]).unwrap();
     assert_eq!(record.schema, crate::report::SESSION_RECORD_SCHEMA);
     assert_eq!(record.root_hash.as_deref().map(str::len), Some(16));
     assert_eq!(record.summary.total_crates, 0);
@@ -2636,10 +2636,10 @@ fn apply_rustdoc_edit_inserts_replaces_and_leaves_a_correct_line() {
 fn apply_rustdoc_edit_preserves_commented_table_boundaries() {
     let original = "[build] # compiler settings\nrustc-wrapper = \"kache\"\n\
                     [env] # retained environment\nrustdoc = \"keep\"\n";
-    toml::from_str::<toml::Value>(original).expect("valid original Cargo config");
+    deser_toml::from_str::<deser_value::Value>(original).expect("valid original Cargo config");
     let edited = checked_rustdoc_edit(original, "/shim/rustdoc").unwrap();
-    let parsed: toml::Value =
-        toml::from_str(&edited).expect("valid Cargo config after rustdoc edit");
+    let parsed: deser_value::Value =
+        deser_toml::from_str(&edited).expect("valid Cargo config after rustdoc edit");
     assert_eq!(parsed["build"]["rustc-wrapper"].as_str(), Some("kache"));
     assert_eq!(parsed["build"]["rustdoc"].as_str(), Some("/shim/rustdoc"));
     assert_eq!(parsed["env"]["rustdoc"].as_str(), Some("keep"));
@@ -2661,7 +2661,7 @@ fn checked_rustdoc_edit_refuses_unsupported_layouts_and_changes_to_other_values(
         "[metadata]\nexample = '''\n[build] # an example, inside a string\n'''\n\
          [build]\nrustc-wrapper = 'kache'\n",
     ] {
-        toml::from_str::<toml::Value>(original).expect("valid original Cargo config");
+        deser_toml::from_str::<deser_value::Value>(original).expect("valid original Cargo config");
         assert!(
             checked_rustdoc_edit(original, "/shim/rustdoc").is_err(),
             "an unsafe text edit must be rejected: {original}"
@@ -3138,7 +3138,7 @@ fn overwrite_entry_meta(
     meta.crate_name = crate_name.to_string();
     std::fs::write(
         config.store_dir().join(key).join("meta.json"),
-        serde_json::to_vec(&meta).unwrap(),
+        deser_json::to_string(&meta).map(String::into_bytes).unwrap(),
     )
     .unwrap();
 }
@@ -3950,7 +3950,7 @@ fn render_stats_cache_shards_use_blob_bytes_and_label_missing_metadata() {
 fn prefetch_session_lines_follow_the_summaries() {
     assert!(prefetch_session_lines(&[]).is_empty());
     let summary: crate::events::BuildSummaryEvent =
-        serde_json::from_str(r#"{"ts":"2026-09-30T12:00:00Z","schema":1,"session_id":"sess"}"#)
+        deser_json::from_str(r#"{"ts":"2026-09-30T12:00:00Z","schema":1,"session_id":"sess"}"#)
             .unwrap();
     let lines = prefetch_session_lines(&[summary]);
     let text = lines.join("\n");
@@ -7432,16 +7432,16 @@ fn compile_time_backfill_message_does_not_claim_completion_or_hide_errors() {
 /// stays a valid value instead of breaking the file: a Windows path is
 /// `C:\Users\...`, and an unescaped one makes the whole config unreadable.
 fn cargo_build_config(settings: &[(&str, &std::path::Path)]) -> String {
-    let mut build = toml::Table::new();
+    let mut build = deser_value::Map::new();
     for (key, value) in settings {
         build.insert(
             (*key).to_string(),
-            toml::Value::String(value.to_string_lossy().into_owned()),
+            deser_value::Value::from(value.to_string_lossy().into_owned()),
         );
     }
-    let mut table = toml::Table::new();
-    table.insert("build".to_string(), toml::Value::Table(build));
-    toml::to_string(&table).unwrap()
+    let mut table = deser_value::Map::new();
+    table.insert("build".to_string(), deser_value::Value::from(build));
+    deser_toml::to_string(&table).unwrap()
 }
 
 /// Write a Cargo config naming `target_dir`, creating the `.cargo` directory

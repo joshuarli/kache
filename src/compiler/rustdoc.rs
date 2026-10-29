@@ -4122,7 +4122,7 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        let encoded = serde_json::to_string(&root).unwrap();
+        let encoded = deser_json::to_string(&root).unwrap();
         assert!(log.contains(&format!("\"root\":{encoded}")), "{log}");
         let version = run(&config, &argv(&[&program, "--version"])).unwrap();
         assert_eq!(version, 7);

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, ensure};
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::{borrow::Cow, collections::BTreeMap, path::PathBuf};
 
 // Keep the original text and explicit replacement ranges. A literal sentinel
@@ -33,7 +33,7 @@ pub(super) fn store<'a>(text: &'a str, roots: &Roots) -> Cow<'a, str> {
         })
         .collect::<Vec<_>>();
     roots.sort_by_key(|(path, _, priority)| std::cmp::Reverse((**priority, path.len())));
-    let json = serde_json::from_str::<serde_json::Value>(text).is_ok();
+    let json = deser_json::from_str::<deser_value::Value>(text).is_ok();
     let mut paths = BTreeMap::<usize, Location>::new();
     for (path, token, _) in roots {
         let spelling = if json {
@@ -79,7 +79,7 @@ pub(super) fn store<'a>(text: &'a str, roots: &Roots) -> Cow<'a, str> {
     };
     Cow::Owned(format!(
         "{PREFIX}{}",
-        serde_json::to_string(&record).expect("diagnostic strings and offsets are serializable")
+        deser_json::to_string(&record).expect("diagnostic strings and offsets are serializable")
     ))
 }
 
@@ -87,7 +87,7 @@ pub(super) fn restore<'a>(text: &'a str, roots: &Roots) -> Result<Cow<'a, str>> 
     let Some(record) = text.strip_prefix(PREFIX) else {
         return Ok(Cow::Borrowed(text));
     };
-    let record: Record = serde_json::from_str(record).context("invalid cached cc diagnostics")?;
+    let record: Record = deser_json::from_str(record).context("invalid cached cc diagnostics")?;
     let mut restored = String::new();
     let mut offset = 0;
     for location in record.paths {
@@ -126,7 +126,7 @@ pub(super) fn restore<'a>(text: &'a str, roots: &Roots) -> Result<Cow<'a, str>> 
 }
 
 fn json_fragment(text: &str) -> String {
-    let quoted = serde_json::to_string(text).expect("a UTF-8 string is serializable");
+    let quoted = deser_json::to_string(text).expect("a UTF-8 string is serializable");
     quoted[1..quoted.len() - 1].to_string()
 }
 

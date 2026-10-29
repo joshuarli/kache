@@ -67,8 +67,8 @@ impl Fixture {
     }
 
     fn assert_stopped(self) {
-        let state: serde_json::Value =
-            serde_json::from_slice(&fs::read(self.path().join("k.state.json")).unwrap()).unwrap();
+        let state: deser_value::Value =
+            deser_json::from_slice(&fs::read(self.path().join("k.state.json")).unwrap()).unwrap();
         let pid = kunobi_daemon::ProcessId::new(state["pid"].as_u64().unwrap().try_into().unwrap())
             .unwrap();
         let mut process = kunobi_daemon::local::ProcessHandle::open(pid).unwrap();
@@ -132,9 +132,9 @@ fn an_install_failure_records_why_the_script_will_run_uncached() {
     let output = fixture.command(&script).output().unwrap();
     assert!(output.status.success(), "{output:?}");
     let log = fs::read_to_string(fixture.cache().join("events.jsonl")).unwrap();
-    let events: Vec<serde_json::Value> = log
+    let events: Vec<deser_value::Value> = log
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| deser_json::from_str(line).unwrap())
         .collect();
     let event = events
         .iter()

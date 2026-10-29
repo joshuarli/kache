@@ -2687,7 +2687,7 @@ fn durability_verification_bounds_handles_at_the_64_record_boundary() {
         assert_eq!(store.pending_durability().unwrap(), 0);
 
         put();
-        let meta: EntryMeta = serde_json::from_slice(
+        let meta: EntryMeta = deser_json::from_slice(
             &fs::read(store.entry_dir("many-artifacts").join("meta.json")).unwrap(),
         )
         .unwrap();
@@ -2752,9 +2752,9 @@ fn durability_deduplicates_shared_hashes_but_rejects_contradictory_sizes() {
     );
     put();
     let meta_path = store.entry_dir("duplicate-blob").join("meta.json");
-    let mut meta: EntryMeta = serde_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
+    let mut meta: EntryMeta = deser_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
     meta.files[1].size += 1;
-    fs::write(&meta_path, serde_json::to_vec_pretty(&meta).unwrap()).unwrap();
+    fs::write(&meta_path, deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).map(String::into_bytes).unwrap()).unwrap();
     store
         .db
         .execute(
@@ -2791,7 +2791,7 @@ fn durability_flush_rejects_untrusted_pending_metadata_without_promotion() {
             "malformed" => fs::write(&meta_path, b"not json").unwrap(),
             "binding" => {
                 meta.cache_key = "different-key".to_string();
-                fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+                fs::write(&meta_path, deser_json::to_string(&meta).map(String::into_bytes).unwrap()).unwrap();
             }
             "aggregate" => {
                 store.db.execute(
@@ -2804,7 +2804,7 @@ fn durability_flush_rejects_untrusted_pending_metadata_without_promotion() {
                 } else {
                     meta.files[0].size += 1;
                 }
-                fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+                fs::write(&meta_path, deser_json::to_string(&meta).map(String::into_bytes).unwrap()).unwrap();
                 store.db.execute(
                     "UPDATE entries SET content_hash = ?1 WHERE cache_key = 'metadata-boundary'",
                     params![compute_content_hash(&meta.files)],
@@ -2966,11 +2966,11 @@ fn durability_flush_checks_metadata_even_when_blob_content_is_unchanged() {
                 )
                 .unwrap();
                 let mut meta: EntryMeta =
-                    serde_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
+                    deser_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
                 meta.stdout = "replacement diagnostics".to_string();
                 crate::atomic::atomic_replace_deferrable(
                     &meta_path,
-                    &serde_json::to_vec_pretty(&meta).unwrap(),
+                    &deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).map(String::into_bytes).unwrap(),
                     false,
                 )
                 .unwrap();
@@ -3680,13 +3680,13 @@ fn reconcile_blob_index_rejects_each_invalid_metadata_dimension() {
             .unwrap();
         let meta_path = store.entry_dir("repair_invalid_metadata").join("meta.json");
         let mut meta: EntryMeta =
-            serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
+            deser_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
         if invalid_hash {
             meta.files[0].hash = "not-a-content-hash".to_string();
         } else {
             meta.files[0].name = "../unsafe.rlib".to_string();
         }
-        fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+        fs::write(&meta_path, deser_json::to_string(&meta).map(String::into_bytes).unwrap()).unwrap();
 
         let error = store.reconcile_blob_index().unwrap_err().to_string();
         assert!(error.contains("invalid blob metadata"), "{error}");
@@ -3762,9 +3762,9 @@ fn rebuild_index_from_store_adopts_build_script_names_and_refuses_escaping_ones(
     // registered.
     let meta_path = store.entry_dir(&key).join("meta.json");
     let mut meta: EntryMeta =
-        serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
+        deser_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
     meta.files[0].name = "../escape.s".to_string();
-    fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+    fs::write(&meta_path, deser_json::to_string(&meta).map(String::into_bytes).unwrap()).unwrap();
 
     store.db.execute("DELETE FROM entries", []).unwrap();
     let stats = store.rebuild_index_from_store().unwrap();
@@ -4073,7 +4073,7 @@ fn rebuild_index_skips_entries_whose_blobs_are_missing_or_wrong_size() {
     // Break two of the three blobs, then lose the index.
     let meta_of = |k: &str| -> EntryMeta {
         let p = config.store_dir().join(k).join("meta.json");
-        serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+        deser_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
     };
     let gone_hash = meta_of(&gone).files[0].hash.clone();
     let trunc_hash = meta_of(&truncated).files[0].hash.clone();
@@ -4128,7 +4128,7 @@ fn rebuild_index_validates_artifact_names_and_hashes_independently() {
             put_entry(&store, dir.path(), 30, "foo", b"compiled artifact")
         };
         let meta_path = config.store_dir().join(&key).join("meta.json");
-        let mut meta: EntryMeta = serde_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
+        let mut meta: EntryMeta = deser_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
         meta.files[0].name = name.into();
         if invalid_hash {
             let original = blob_path_in_store_dir(&config.store_dir(), &meta.files[0].hash);
@@ -4139,7 +4139,7 @@ fn rebuild_index_validates_artifact_names_and_hashes_independently() {
             // of its hash spelling may reject this entry.
             fs::copy(original, malformed).unwrap();
         }
-        fs::write(meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+        fs::write(meta_path, deser_json::to_string(&meta).map(String::into_bytes).unwrap()).unwrap();
         fs::remove_file(config.index_db_path()).unwrap();
 
         let store = Store::open(&config).unwrap();
@@ -5140,7 +5140,7 @@ fn recover_legacy_compile_cost(blocking_rows: usize) -> (Vec<usize>, i64, i64) {
             60_000,
         )
         .unwrap();
-    let mut template = serde_json::to_value(store.stored_meta("template").unwrap()).unwrap();
+    let mut template = deser_value::to_value(&store.stored_meta("template").unwrap()).unwrap();
     let hash = template["files"][0]["hash"].as_str().unwrap().to_owned();
     store
         .db
@@ -5161,7 +5161,7 @@ fn recover_legacy_compile_cost(blocking_rows: usize) -> (Vec<usize>, i64, i64) {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("meta.json"),
-            serde_json::to_vec(&template).unwrap(),
+            deser_json::to_string(&template).map(String::into_bytes).unwrap(),
         )
         .unwrap();
         tx.execute("INSERT INTO entries(cache_key,crate_name,size,committed,compile_time_ms) VALUES(?1,'legacy',21,1,0)", params![key]).unwrap();
@@ -5467,7 +5467,7 @@ fn import_test_entry(store: &Store, key: &str, bytes: usize) {
     };
     std::fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_vec_pretty(&meta).unwrap(),
+        deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).map(String::into_bytes).unwrap(),
     )
     .unwrap();
     store.import_downloaded_entry(key).unwrap();
@@ -6206,7 +6206,7 @@ fn claim_build_evicts_empty_committed_entry() {
     };
     fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_string_pretty(&meta).unwrap(),
+        deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).unwrap(),
     )
     .unwrap();
     store
@@ -7031,7 +7031,7 @@ fn extract_download(store: &Store, key: &str, outputs: &[(&str, &[u8])]) -> Entr
     };
     std::fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_string_pretty(&meta).unwrap(),
+        deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).unwrap(),
     )
     .unwrap();
     meta
@@ -7361,7 +7361,7 @@ fn claiming_an_unowned_key_releases_its_leftover_mapping() {
     fs::create_dir_all(&rebuild_dir).unwrap();
     fs::write(
         rebuild_dir.join("meta.json"),
-        serde_json::to_string(&meta).unwrap(),
+        deser_json::to_string(&meta).unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -7384,7 +7384,7 @@ fn owner_and_uncounted_mapping(store: &Store, dir: &Path) -> String {
     fs::create_dir_all(&entry_dir).unwrap();
     fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_string(&meta).unwrap(),
+        deser_json::to_string(&meta).unwrap(),
     )
     .unwrap();
     store
@@ -7860,12 +7860,12 @@ fn entry_meta_key_schema_defaults_to_unknown_for_legacy_json() {
         .unwrap();
 
     let content = std::fs::read_to_string(store.entry_dir("key").join("meta.json")).unwrap();
-    let current: EntryMeta = serde_json::from_str(&content).unwrap();
+    let current: EntryMeta = deser_json::from_str(&content).unwrap();
     assert_eq!(current.key_schema, kache_format::CACHE_KEY_VERSION);
 
-    let mut legacy: serde_json::Value = serde_json::from_str(&content).unwrap();
-    legacy.as_object_mut().unwrap().remove("key_schema");
-    let parsed: EntryMeta = serde_json::from_value(legacy).unwrap();
+    let mut legacy: deser_value::Value = deser_json::from_str(&content).unwrap();
+    legacy.as_map_mut().unwrap().remove("key_schema");
+    let parsed: EntryMeta = deser_value::from_value(&legacy).unwrap();
     assert_eq!(parsed.key_schema, 0);
 }
 
@@ -7904,7 +7904,7 @@ fn test_store_import_downloaded_entry() {
         compile_time_ms: 0,
         emit_kinds: Vec::new(),
     };
-    let meta_json = serde_json::to_string_pretty(&meta).unwrap();
+    let meta_json = deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).unwrap();
     std::fs::write(entry_dir.join("meta.json"), meta_json).unwrap();
 
     store.import_downloaded_entry("downloaded_key").unwrap();
@@ -7951,7 +7951,7 @@ fn test_store_import_downloaded_entry_missing_file() {
         compile_time_ms: 0,
         emit_kinds: Vec::new(),
     };
-    let meta_json = serde_json::to_string_pretty(&meta).unwrap();
+    let meta_json = deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).unwrap();
     std::fs::write(entry_dir.join("meta.json"), meta_json).unwrap();
     // Deliberately NOT creating lib.rlib
 
@@ -7973,7 +7973,7 @@ fn failed_restore_cleanup_preserves_a_concurrent_committed_generation() {
         .to_hex()
         .to_string();
     let entry_dir = config.store_dir().join(&key);
-    let meta_json = serde_json::to_string_pretty(&EntryMeta {
+    let meta_json = deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&EntryMeta {
         cache_key: key.clone(),
         key_schema: kache_format::CACHE_KEY_VERSION,
         crate_name: "published".into(),
@@ -8191,7 +8191,7 @@ fn test_import_downloaded_entry_creates_blobs() {
     };
     fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_string_pretty(&meta).unwrap(),
+        deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).unwrap(),
     )
     .unwrap();
 
@@ -8260,7 +8260,7 @@ fn test_store_get_evicts_entry_with_missing_file() {
     // Simulate corruption: delete the blob file from the store
     let meta_content =
         std::fs::read_to_string(store.entry_dir("damaged_key").join("meta.json")).unwrap();
-    let meta: EntryMeta = serde_json::from_str(&meta_content).unwrap();
+    let meta: EntryMeta = deser_json::from_str(&meta_content).unwrap();
     let blob = store.blob_path(&meta.files[0].hash);
     // Make writable so we can delete
     let mut perms = std::fs::metadata(&blob).unwrap().permissions();
@@ -8307,7 +8307,7 @@ fn test_store_get_evicts_entry_with_corrupted_file() {
     // Simulate corruption: truncate the blob to a different size
     let meta_content =
         std::fs::read_to_string(store.entry_dir("corrupt_key").join("meta.json")).unwrap();
-    let meta: EntryMeta = serde_json::from_str(&meta_content).unwrap();
+    let meta: EntryMeta = deser_json::from_str(&meta_content).unwrap();
     let blob = store.blob_path(&meta.files[0].hash);
     let mut perms = std::fs::metadata(&blob).unwrap().permissions();
     perms.set_readonly(false);
@@ -8548,7 +8548,7 @@ fn test_store_import_rejects_size_mismatch() {
         compile_time_ms: 0,
         emit_kinds: Vec::new(),
     };
-    let meta_json = serde_json::to_string_pretty(&meta).unwrap();
+    let meta_json = deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).unwrap();
     std::fs::write(entry_dir.join("meta.json"), meta_json).unwrap();
     std::fs::write(entry_dir.join("lib.rlib"), b"small content").unwrap();
 
@@ -8595,7 +8595,7 @@ fn import_with_poisoned_meta(
     };
     std::fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_string_pretty(&meta).unwrap(),
+        deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).unwrap(),
     )
     .unwrap();
     store.import_downloaded_entry(key)
@@ -9038,7 +9038,7 @@ fn test_put_creates_blob() {
     // Blob should exist
     let meta_path = store.entry_dir("k1").join("meta.json");
     let content = fs::read_to_string(&meta_path).unwrap();
-    let meta: EntryMeta = serde_json::from_str(&content).unwrap();
+    let meta: EntryMeta = deser_json::from_str(&content).unwrap();
     let blob = store.blob_path(&meta.files[0].hash);
     assert!(
         blob.exists(),
@@ -9101,10 +9101,10 @@ fn test_put_deduplicates_identical_content() {
 
     // Both entries should reference the same blob hash
     let m1: EntryMeta =
-        serde_json::from_str(&fs::read_to_string(store.entry_dir("k1").join("meta.json")).unwrap())
+        deser_json::from_str(&fs::read_to_string(store.entry_dir("k1").join("meta.json")).unwrap())
             .unwrap();
     let m2: EntryMeta =
-        serde_json::from_str(&fs::read_to_string(store.entry_dir("k2").join("meta.json")).unwrap())
+        deser_json::from_str(&fs::read_to_string(store.entry_dir("k2").join("meta.json")).unwrap())
             .unwrap();
     assert_eq!(m1.files[0].hash, m2.files[0].hash);
 
@@ -9174,7 +9174,7 @@ fn test_get_evicts_when_blob_missing() {
 
     // Read meta to get the hash
     let meta_content = fs::read_to_string(store.entry_dir("k1").join("meta.json")).unwrap();
-    let meta: EntryMeta = serde_json::from_str(&meta_content).unwrap();
+    let meta: EntryMeta = deser_json::from_str(&meta_content).unwrap();
     let blob = store.blob_path(&meta.files[0].hash);
 
     // Delete the blob to simulate corruption
@@ -9212,7 +9212,7 @@ fn test_put_blob_is_readonly() {
         .unwrap();
 
     let meta: EntryMeta =
-        serde_json::from_str(&fs::read_to_string(store.entry_dir("k1").join("meta.json")).unwrap())
+        deser_json::from_str(&fs::read_to_string(store.entry_dir("k1").join("meta.json")).unwrap())
             .unwrap();
     let blob = store.blob_path(&meta.files[0].hash);
     let perms = fs::metadata(&blob).unwrap().permissions();
@@ -9257,7 +9257,7 @@ fn test_remove_entry_decrements_refcount() {
 
     // Get the hash from meta.json
     let meta_content = fs::read_to_string(store.entry_dir("k1").join("meta.json")).unwrap();
-    let meta: EntryMeta = serde_json::from_str(&meta_content).unwrap();
+    let meta: EntryMeta = deser_json::from_str(&meta_content).unwrap();
     let hash = meta.files[0].hash.clone();
     let blob = store.blob_path(&hash);
 
@@ -9850,7 +9850,7 @@ fn persistent_directory_cleanup_failure_is_an_error() {
     // the failed cleanup.
     let stashed_hash = {
         let meta: EntryMeta =
-            serde_json::from_str(&std::fs::read_to_string(entry_dir.join("meta.json")).unwrap())
+            deser_json::from_str(&std::fs::read_to_string(entry_dir.join("meta.json")).unwrap())
                 .unwrap();
         meta.files[0].hash.clone()
     };
@@ -10623,7 +10623,7 @@ fn test_get_lazily_migrates_legacy_entry() {
     };
     fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_string_pretty(&meta).unwrap(),
+        deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).unwrap(),
     )
     .unwrap();
     store
@@ -10682,7 +10682,7 @@ fn get_preserves_a_retryable_legacy_entry_when_migration_fails() {
     };
     fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_string_pretty(&meta).unwrap(),
+        deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).unwrap(),
     )
     .unwrap();
     store
@@ -10755,7 +10755,7 @@ fn test_migrate_to_blobs_bulk() {
         };
         fs::write(
             entry_dir.join("meta.json"),
-            serde_json::to_string_pretty(&meta).unwrap(),
+            deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).unwrap(),
         )
         .unwrap();
         store
@@ -10859,7 +10859,7 @@ fn rewrite_source(path: &Path, content: &[u8]) {
 fn read_meta(store: &Store, cache_key: &str) -> EntryMeta {
     let meta_path = store.entry_dir(cache_key).join("meta.json");
     let content = fs::read_to_string(&meta_path).unwrap();
-    serde_json::from_str(&content).unwrap()
+    deser_json::from_str(&content).unwrap()
 }
 
 /// Helper: query refcount for a blob hash, returns None if blob doesn't exist in DB.
@@ -11988,7 +11988,7 @@ fn test_migration_of_legacy_entry() {
     };
     fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_string_pretty(&meta).unwrap(),
+        deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).unwrap(),
     )
     .unwrap();
 
@@ -12194,7 +12194,7 @@ fn migrate_entry_to_blobs_bumps_refcount_when_insert_loses_race() {
 
     fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_vec_pretty(&meta).unwrap(),
+        deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).map(String::into_bytes).unwrap(),
     )
     .unwrap();
 
@@ -12563,7 +12563,7 @@ fn test_import_downloaded_entry_stores_content_hash() {
     };
     std::fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_string_pretty(&meta).unwrap(),
+        deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).unwrap(),
     )
     .unwrap();
 
@@ -12618,7 +12618,7 @@ fn verified_batch_import_is_atomic_and_registers_every_entry() {
         };
         std::fs::write(
             entry_dir.join("meta.json"),
-            serde_json::to_vec_pretty(&meta).unwrap(),
+            deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).map(String::into_bytes).unwrap(),
         )
         .unwrap();
         verified.push(VerifiedRestoredEntry {
@@ -12711,7 +12711,7 @@ fn write_verified_fixture(
     };
     std::fs::write(
         entry_dir.join("meta.json"),
-        serde_json::to_vec_pretty(&meta).unwrap(),
+        deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).map(String::into_bytes).unwrap(),
     )
     .unwrap();
     VerifiedRestoredEntry {
@@ -12760,7 +12760,7 @@ fn verified_batch_import_checks_each_artifact_field_independently() {
     entry.meta.files.push(entry.meta.files[0].clone());
     std::fs::write(
         store.entry_dir(&key).join("meta.json"),
-        serde_json::to_vec_pretty(&entry.meta).unwrap(),
+        deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&entry.meta).map(String::into_bytes).unwrap(),
     )
     .unwrap();
     assert!(store.import_verified_restored_entries(&[entry]).is_err());

@@ -322,7 +322,7 @@ fn volume_inventory_reaches_direct_stats_daemon_stats_and_reports() {
             .any(|line| line.contains(&shard_config.cache_dir.display().to_string()))
     );
     let daemon = crate::daemon::Daemon::new(config.clone());
-    let req: crate::daemon::StatsRequest = serde_json::from_value(serde_json::json!({
+    let req: crate::daemon::StatsRequest = deser_value::from_value(&deser_value::value!({
         "include_entries": true, "sort_by": "size", "event_hours": null
     }))
     .unwrap();
@@ -396,7 +396,7 @@ fn volume_inventory_deduplicates_symlinked_stores() {
 
 #[test]
 fn legacy_stats_without_store_locations_have_no_metadata_path() {
-    let entry: StatsEntry = serde_json::from_value(serde_json::json!({
+    let entry: StatsEntry = deser_value::from_value(&deser_value::value!({
         "cache_key": "old-key", "crate_name": "old-crate", "crate_type": "lib",
         "profile": "release", "size": 10, "hit_count": 1,
         "created_at": "2026-01-01", "last_accessed": "2026-01-01",

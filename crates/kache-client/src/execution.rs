@@ -162,7 +162,7 @@ mod tests {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 let kache_protocol::Request::ExecuteV1(request) =
-                    serde_json::from_str(&line).unwrap()
+                    deser_json::from_str(&line).unwrap()
                 else {
                     panic!("wrong execution request");
                 };
@@ -171,7 +171,7 @@ mod tests {
                 assert_eq!(request.env.len(), 1);
                 assert_eq!(request.env[0].1.decode().unwrap(), "one-invocation");
                 let mut reply = |reply: &ExecutionReply| {
-                    serde_json::to_writer(&mut stream, reply).unwrap();
+                    deser_json::to_writer(&mut stream, reply).unwrap();
                     stream.write_all(b"\n").unwrap();
                 };
                 let ticket = DescriptorTicket {
@@ -197,7 +197,7 @@ mod tests {
                 line.clear();
                 reader.read_line(&mut line).unwrap();
                 assert_eq!(
-                    serde_json::from_str::<ExecutionCommand>(&line).unwrap(),
+                    deser_json::from_str::<ExecutionCommand>(&line).unwrap(),
                     ExecutionCommand::Commit
                 );
                 reply(&ExecutionReply::Accepted);

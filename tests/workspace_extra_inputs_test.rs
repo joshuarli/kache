@@ -1,7 +1,7 @@
 //! Real-Cargo regression for #368: a workspace-owned input read while a
 //! proc-macro provider executes must re-key that provider's direct consumers.
 
-use serde_json::Value;
+use deser_value::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -231,7 +231,7 @@ fn events(cache: &Path) -> Vec<Value> {
     std::fs::read_to_string(cache.join("events.jsonl"))
         .unwrap_or_default()
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| deser_json::from_str(line).unwrap())
         .collect()
 }
 
@@ -248,7 +248,7 @@ fn latest_by_crate(events: &[Value]) -> BTreeMap<String, &Value> {
 fn event_key<'a>(events: &'a BTreeMap<String, &Value>, name: &str) -> &'a str {
     events[name]["cache_key"]
         .as_str()
-        .unwrap_or_else(|| panic!("{name} event has no cache key: {}", events[name]))
+        .unwrap_or_else(|| panic!("{name} event has no cache key: {:?}", events[name]))
 }
 
 fn copy_tree(source: &Path, destination: &Path) {

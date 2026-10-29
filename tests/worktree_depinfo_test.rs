@@ -5,7 +5,7 @@
 //! must rebase it to the consuming worktree. Otherwise Cargo watches the donor
 //! and can keep a stale rlib `Fresh` after the consumer's asset changes.
 
-use serde_json::Value;
+use deser_value::Value;
 use std::path::Path;
 use std::process::{Command, Output};
 use std::time::Duration;
@@ -133,7 +133,7 @@ fn crate_events(cache: &Path, crate_name: &str) -> Vec<Value> {
     std::fs::read_to_string(cache.join("events.jsonl"))
         .unwrap_or_default()
         .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|line| deser_json::from_str::<Value>(line).ok())
         .filter(|event| event["crate_name"] == crate_name)
         .collect()
 }

@@ -3100,7 +3100,7 @@ mod tests {
         let lease = scheduler.acquire_test_lease(TestWant::Fixed(2)).unwrap();
         fs::write(
             cache.join("lease-marker.json"),
-            serde_json::to_vec(lease.marker_path()).unwrap(),
+            deser_json::to_string(lease.marker_path()).map(String::into_bytes).unwrap(),
         )
         .unwrap();
         fs::write(cache.join("lock-ready"), b"ready").unwrap();
@@ -3125,7 +3125,7 @@ mod tests {
         );
         wait_ready(dir.path(), &mut child);
         let marker: PathBuf =
-            serde_json::from_slice(&fs::read(dir.path().join("lease-marker.json")).unwrap())
+            deser_json::from_slice(&fs::read(dir.path().join("lease-marker.json")).unwrap())
                 .unwrap();
         let probe = fs::File::open(&marker).unwrap();
         assert!(matches!(

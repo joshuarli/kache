@@ -1,10 +1,10 @@
 //! Process operations on a private, invocation-owned Unix broker connection.
 
 use super::process::Spawn;
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "operation", rename_all = "snake_case")]
+#[deser(tag = "operation", rename_all = "snake_case")]
 pub enum Command {
     Spawn {
         command: Box<Spawn>,
@@ -23,7 +23,7 @@ pub enum Command {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "operation_result", rename_all = "snake_case")]
+#[deser(tag = "operation_result", rename_all = "snake_case")]
 pub enum Reply {
     Spawned {
         id: u64,

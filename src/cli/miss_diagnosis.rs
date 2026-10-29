@@ -3,8 +3,8 @@
 use crate::events::BuildEvent;
 use crate::miss_chain::{Chain, CheckoutComparison};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, deser::Serialize)]
+#[deser(rename_all = "snake_case")]
 pub(super) enum Cause {
     NotCached,
     LookupRejected,
@@ -82,7 +82,7 @@ mod tests {
     use super::*;
 
     fn miss() -> BuildEvent {
-        serde_json::from_value(serde_json::json!({
+        deser_value::from_value(&deser_value::value!({
             "ts": "2026-01-01T00:00:00Z", "crate_name": "example",
             "result": "miss", "elapsed_ms": 1, "size": 1,
             "cache_key": "same-key", "schema": 14

@@ -37,7 +37,7 @@ fn rustc_path() -> String {
 }
 
 fn toml_path(path: &Path) -> String {
-    toml::Value::String(path.to_string_lossy().into_owned()).to_string()
+    common::toml_basic(&path.to_string_lossy())
 }
 
 /// Hermetic config for exactly one flag setting. The flag travels in the
@@ -234,8 +234,8 @@ fn summary_local_hits(cache_dir: &Path) -> u64 {
         .output()
         .expect("failed to run kache report");
     assert!(output.status.success(), "kache report failed");
-    let report: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("report should be valid json");
+    let report: deser_value::Value =
+        deser_json::from_slice(&output.stdout).expect("report should be valid json");
     report["summary"]["local_hits"].as_u64().unwrap_or(u64::MAX)
 }
 
@@ -260,10 +260,10 @@ fn last_event_with(cache_dir: &Path, env: &[(&str, std::ffi::OsString)]) -> Last
         .output()
         .expect("failed to run kache report");
     assert!(output.status.success(), "kache report failed");
-    let report: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("report should be valid json");
+    let report: deser_value::Value =
+        deser_json::from_slice(&output.stdout).expect("report should be valid json");
     let event = report["all_events"]
-        .as_array()
+        .as_seq()
         .expect("report should include all_events")
         .iter()
         .rev()
@@ -390,18 +390,18 @@ fn a_stale_record_is_re_derived_from_the_running_compile() {
 }
 
 /// The latest raw `kt` event. `kache report` leaves out skipped compiles.
-fn last_raw_event(cache_dir: &Path) -> serde_json::Value {
+fn last_raw_event(cache_dir: &Path) -> deser_value::Value {
     std::fs::read_to_string(cache_dir.join("events.jsonl"))
         .expect("events.jsonl")
         .lines()
         .rev()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|line| deser_json::from_str::<deser_value::Value>(line).ok())
         .find(|event| event["crate_name"] == "kt")
         .expect("a kt event")
 }
 
 /// Store entries under the key `event` names.
-fn entries_for(cache_dir: &Path, event: &serde_json::Value) -> i64 {
+fn entries_for(cache_dir: &Path, event: &deser_value::Value) -> i64 {
     let key = event["cache_key"].as_str().expect("a keyed event");
     rusqlite::Connection::open(cache_dir.join("index.db"))
         .unwrap()
@@ -472,8 +472,8 @@ fn a_source_saved_while_rustc_ran_is_not_restored_for_its_new_content() {
         "pub fn g() -> u32 { 42 }\n"
     );
     let raced = last_raw_event(cache_dir);
-    assert_eq!(raced["result"], "skipped", "{raced}");
-    assert_eq!(raced["skip_reason"], "inputs-changed", "{raced}");
+    assert_eq!(raced["result"], "skipped", "{raced:?}");
+    assert_eq!(raced["skip_reason"], "inputs-changed", "{raced:?}");
     assert_eq!(entries_for(cache_dir, &raced), 0);
 
     // A fresh target with the new content compiles it.
@@ -488,8 +488,8 @@ fn a_source_saved_while_rustc_ran_is_not_restored_for_its_new_content() {
         Invocation::Cargo,
     );
     let next = last_raw_event(cache_dir);
-    assert_eq!(next["result"], "miss", "{next}");
-    assert_eq!(next["cache_key"], raced["cache_key"], "{next}");
+    assert_eq!(next["result"], "miss", "{next:?}");
+    assert_eq!(next["cache_key"], raced["cache_key"], "{next:?}");
 }
 
 /// A key derived after the compile hashes its inputs after rustc read them,
@@ -517,9 +517,9 @@ fn a_too_new_input_leaves_a_compile_first_result_unstored() {
     stamp(SystemTime::now() + hour);
     run_kache_rustc_as_cargo(cache_dir, out_dir, &src, true);
     let cold = last_raw_event(cache_dir);
-    assert_eq!(cold["result"], "skipped", "{cold}");
-    assert_eq!(cold["skip_reason"], "inputs-changed", "{cold}");
-    assert_eq!(cold["dep_info_runs"], 0, "compiled before keying: {cold}");
+    assert_eq!(cold["result"], "skipped", "{cold:?}");
+    assert_eq!(cold["skip_reason"], "inputs-changed", "{cold:?}");
+    assert_eq!(cold["dep_info_runs"], 0, "compiled before keying: {cold:?}");
     assert!(
         out_dir.join("libkt.rlib").is_file(),
         "the compile succeeded"
@@ -530,7 +530,7 @@ fn a_too_new_input_leaves_a_compile_first_result_unstored() {
     stamp(SystemTime::now() - hour);
     run_kache_rustc_as_cargo(cache_dir, out_dir, &src, true);
     let stored = last_raw_event(cache_dir);
-    assert_eq!(stored["result"], "miss", "{stored}");
+    assert_eq!(stored["result"], "miss", "{stored:?}");
     assert_eq!(entries_for(cache_dir, &stored), 1);
 
     // An edit misses the predicted key, and the compile re-derives it.
@@ -538,9 +538,9 @@ fn a_too_new_input_leaves_a_compile_first_result_unstored() {
     stamp(SystemTime::now() + hour);
     run_kache_rustc_as_cargo(cache_dir, out_dir, &src, true);
     let rederived = last_raw_event(cache_dir);
-    assert_eq!(rederived["result"], "skipped", "{rederived}");
-    assert_eq!(rederived["skip_reason"], "inputs-changed", "{rederived}");
-    assert_eq!(rederived["dep_info_runs"], 0, "{rederived}");
+    assert_eq!(rederived["result"], "skipped", "{rederived:?}");
+    assert_eq!(rederived["skip_reason"], "inputs-changed", "{rederived:?}");
+    assert_eq!(rederived["dep_info_runs"], 0, "{rederived:?}");
     assert_ne!(rederived["cache_key"], stored["cache_key"]);
     assert_eq!(entries_for(cache_dir, &rederived), 0);
 }

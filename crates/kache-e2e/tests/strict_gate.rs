@@ -47,8 +47,8 @@ fn run(
     command.arg("--out").arg(results).status().unwrap()
 }
 
-fn read_results(path: &std::path::Path) -> serde_json::Value {
-    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+fn read_results(path: &std::path::Path) -> deser_value::Value {
+    deser_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
 #[test]

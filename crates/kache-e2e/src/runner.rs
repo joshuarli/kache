@@ -286,7 +286,7 @@ pub fn run_fixture(fixture: &Fixture, kache_path: &Path) -> Result<FixtureResult
                     build_wall_s: 0,
                     build_exit_code: -1,
                     verify: None,
-                    kache_report: serde_json::json!({}),
+                    kache_report: deser_value::value!({}),
                     measurements: Vec::new(),
                     assertions: vec![AssertionCheck {
                         name: "prepare_relocated_dir",
@@ -438,7 +438,7 @@ fn run_relocate_modified(
         build_wall_s: 0,
         build_exit_code: -1,
         verify: None,
-        kache_report: serde_json::json!({}),
+        kache_report: deser_value::value!({}),
         measurements: Vec::new(),
         assertions: vec![AssertionCheck {
             name,
@@ -660,7 +660,7 @@ fn run_phase(
                     build_wall_s: 0,
                     build_exit_code: status.exit.code().unwrap_or(1),
                     verify: None,
-                    kache_report: serde_json::json!({}),
+                    kache_report: deser_value::value!({}),
                     measurements: Vec::new(),
                     assertions: vec![AssertionCheck {
                         name: "clean_step",
@@ -709,7 +709,7 @@ fn run_phase(
                 build_wall_s,
                 build_exit_code,
                 verify: None,
-                kache_report: serde_json::json!({}),
+                kache_report: deser_value::value!({}),
                 measurements: Vec::new(),
                 assertions: vec![AssertionCheck {
                     name: "build_exit_code",

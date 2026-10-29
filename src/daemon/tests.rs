@@ -313,7 +313,7 @@ fn client_request_keep_open(socket_path: &Path, req: &Request) -> (Response, Uni
     use std::io::{BufRead, Write};
     let mut stream = connect_stream(socket_path);
 
-    let mut line = serde_json::to_string(req).expect("serialize request");
+    let mut line = deser_json::to_string(req).expect("serialize request");
     line.push('\n');
     stream.write_all(line.as_bytes()).expect("write request");
 
@@ -324,7 +324,7 @@ fn client_request_keep_open(socket_path: &Path, req: &Request) -> (Response, Uni
     }
 
     (
-        serde_json::from_str(&resp_line).expect("parse response"),
+        deser_json::from_str(&resp_line).expect("parse response"),
         stream,
     )
 }
@@ -455,14 +455,14 @@ fn compile_started_wire_tags_and_stats_default() {
         client_epoch: 0,
         client_version: None,
     });
-    let wire = serde_json::to_string(&req).unwrap();
+    let wire = deser_json::to_string(&req).unwrap();
     assert!(wire.contains("\"compile_started\""), "{wire}");
-    let round: Request = serde_json::from_str(&wire).unwrap();
+    let round: Request = deser_json::from_str(&wire).unwrap();
     assert_eq!(round, req);
 
     // A StatsResponse serialized by an OLD daemon (no in_flight field)
     // must deserialize with an empty registry view.
-    let mut old = serde_json::to_value(StatsResponse {
+    let mut old = deser_value::to_value(&StatsResponse {
         stores: Vec::new(),
         total_size: 0,
         max_size: 0,
@@ -512,22 +512,22 @@ fn compile_started_wire_tags_and_stats_default() {
     })
     .unwrap();
     {
-        let old_obj = old.as_object_mut().unwrap();
+        let old_obj = old.as_map_mut().unwrap();
         old_obj.remove("in_flight");
         old_obj.remove("blob_stats");
         old_obj.remove("recent_summaries");
         old_obj.remove("gc_policy_version");
     }
     let mut old_effective = old.get("effective_config").unwrap().clone();
-    let old_effective_obj = old_effective.as_object_mut().unwrap();
+    let old_effective_obj = old_effective.as_map_mut().unwrap();
     old_effective_obj.remove("runtime_dir");
-    let parsed_effective: EffectiveConfig = serde_json::from_value(old_effective).unwrap();
+    let parsed_effective: EffectiveConfig = deser_value::from_value(&old_effective).unwrap();
     assert!(parsed_effective.runtime_dir.is_empty());
     // A pre-#689 daemon reports no effective config either; the CLI must
     // see `None` (and fall back to labeled client-config values), not a
     // parse error or a zeroed report.
-    old.as_object_mut().unwrap().remove("effective_config");
-    let parsed: StatsResponse = serde_json::from_value(old).unwrap();
+    old.as_map_mut().unwrap().remove("effective_config");
+    let parsed: StatsResponse = deser_value::from_value(&old).unwrap();
     assert!(parsed.in_flight.is_empty());
     assert!(parsed.blob_stats.is_none());
     assert!(parsed.recent_summaries.is_empty());
@@ -811,7 +811,7 @@ fn request_release_controls_drain_and_legacy_timestamps_do_not() {
 }
 
 fn stats_at_version(version: &str) -> StatsResponse {
-    serde_json::from_value(serde_json::json!({
+    deser_value::from_value(&deser_value::value!({
         "total_size": 0, "max_size": 0, "entry_count": 0,
         "entries": null, "version": version, "build_epoch": 999,
         "events": { "local_hits": 0, "remote_hits": 0, "misses": 0, "errors": 0,
@@ -829,14 +829,14 @@ fn diagnostic_stats_send_no_upgrade_metadata_to_legacy_daemons() {
         let mut stream = accept_one(&listener, "accept");
         let mut line = String::new();
         std::io::BufRead::read_line(&mut std::io::BufReader::new(&stream), &mut line).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let value: deser_value::Value = deser_json::from_str(&line).unwrap();
         assert_eq!(value["stats"]["client_epoch"], 0);
         assert!(value["stats"].get("client_version").is_none());
         let response = Response {
             stats: Some(stats_at_version("0.0.1")),
             ..Response::ok()
         };
-        let line = format!("{}\n", serde_json::to_string(&response).unwrap());
+        let line = format!("{}\n", deser_json::to_string(&response).unwrap());
         std::io::Write::write_all(&mut stream, line.as_bytes()).unwrap();
     });
     let stats = send_stats_request_without_restart(&config, false).unwrap();
@@ -869,7 +869,7 @@ fn only_build_requests_count_as_activity() {
     };
     assert!(!probe.is_build_activity());
     assert_eq!(probe.client_version(), None);
-    let stats: Request = serde_json::from_str(
+    let stats: Request = deser_json::from_str(
         r#"{"stats":{"include_entries":false,"sort_by":null,"event_hours":null}}"#,
     )
     .unwrap();
@@ -1016,10 +1016,10 @@ for (response, accepted) in [
         let mut request = String::new();
         std::io::BufRead::read_line(&mut std::io::BufReader::new(&peer), &mut request).unwrap();
         assert!(matches!(
-            serde_json::from_str::<Request>(&request).unwrap(),
+            deser_json::from_str::<Request>(&request).unwrap(),
             Request::Health
         ));
-        let mut response = serde_json::to_vec(&response).unwrap();
+        let mut response = deser_json::to_string(&response).map(String::into_bytes).unwrap();
         response.push(b'\n');
         std::io::Write::write_all(&mut peer, &response).unwrap();
     });
@@ -1113,7 +1113,7 @@ fn release_precedence_ignores_build_metadata_and_unknown_versions() {
         );
     }
     assert_eq!(
-        serde_json::from_str::<DaemonHealth>("{}").unwrap().version,
+        deser_json::from_str::<DaemonHealth>("{}").unwrap().version,
         ""
     );
 }
@@ -1360,8 +1360,8 @@ fn starting_daemon_epoch_reports_only_a_live_starting_daemon() {
 #[test]
 fn test_request_gc_serde() {
     let req = Request::Gc(GcRequest::explicit_age(168));
-    let json = serde_json::to_string(&req).unwrap();
-    let parsed: Request = serde_json::from_str(&json).unwrap();
+    let json = deser_json::to_string(&req).unwrap();
+    let parsed: Request = deser_json::from_str(&json).unwrap();
     assert_eq!(req, parsed);
 
     assert!(json.contains("\"gc\""));
@@ -1371,22 +1371,22 @@ fn test_request_gc_serde() {
 #[test]
 fn test_request_gc_null_age_serde() {
     let req = Request::Gc(GcRequest::legacy(None));
-    let json = serde_json::to_string(&req).unwrap();
-    let parsed: Request = serde_json::from_str(&json).unwrap();
+    let json = deser_json::to_string(&req).unwrap();
+    let parsed: Request = deser_json::from_str(&json).unwrap();
     assert_eq!(req, parsed);
     assert!(json.contains("\"max_age_hours\":null"));
 
-    let old_wire: Request = serde_json::from_str(r#"{"gc":{"max_age_hours":null}}"#).unwrap();
+    let old_wire: Request = deser_json::from_str(r#"{"gc":{"max_age_hours":null}}"#).unwrap();
     assert_eq!(old_wire, Request::Gc(GcRequest::legacy(None)));
 }
 
 #[test]
 fn test_request_gc_automatic_carries_effective_age() {
     let req = Request::Gc(GcRequest::automatic(72));
-    let json = serde_json::to_string(&req).unwrap();
+    let json = deser_json::to_string(&req).unwrap();
     assert!(json.contains("\"mode\":\"automatic\""));
     assert!(json.contains("\"effective_max_age_hours\":72"));
-    assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
+    assert_eq!(deser_json::from_str::<Request>(&json).unwrap(), req);
 }
 
 #[test]
@@ -1394,18 +1394,18 @@ fn gc_v2_is_atomic_compatibility_gate_for_old_daemons() {
     // Only the serde shape matters; the payloads are never read.
     #[allow(dead_code)]
     #[derive(Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[deser(rename_all = "snake_case")]
     enum LegacyRequest {
         Gc(GcRequest),
         Stats(StatsRequest),
     }
 
     let req = Request::GcV2(GcRequest::automatic(72));
-    let json = serde_json::to_string(&req).unwrap();
+    let json = deser_json::to_string(&req).unwrap();
     assert!(json.contains("\"gc_v2\""));
-    assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
+    assert_eq!(deser_json::from_str::<Request>(&json).unwrap(), req);
     assert!(
-        serde_json::from_str::<LegacyRequest>(&json).is_err(),
+        deser_json::from_str::<LegacyRequest>(&json).is_err(),
         "a pre-v2 daemon must reject the request before mutation"
     );
 }
@@ -1435,22 +1435,22 @@ fn daemon_start_requirement_distinguishes_success_and_failure() {
 #[test]
 fn test_response_ok_serde() {
     let resp = Response::ok();
-    let json = serde_json::to_string(&resp).unwrap();
+    let json = deser_json::to_string(&resp).unwrap();
     assert_eq!(json, r#"{"ok":true}"#);
 }
 
 #[test]
 fn test_response_ok_evicted_serde() {
     let resp = Response::ok_evicted(5);
-    let json = serde_json::to_string(&resp).unwrap();
+    let json = deser_json::to_string(&resp).unwrap();
     assert_eq!(json, r#"{"ok":true,"evicted":5}"#);
 }
 
 #[test]
 fn test_response_gc_skipped_serde() {
     let resp = Response::ok_gc_skipped(GcRunReport::skipped(GcRequestMode::Automatic).breakdown());
-    let json = serde_json::to_string(&resp).unwrap();
-    let parsed: Response = serde_json::from_str(&json).unwrap();
+    let json = deser_json::to_string(&resp).unwrap();
+    let parsed: Response = deser_json::from_str(&json).unwrap();
     assert!(parsed.skipped);
     assert_eq!(parsed.evicted, Some(0));
     assert_eq!(parsed.gc.unwrap().mode, GcRequestMode::Automatic);
@@ -1463,7 +1463,7 @@ fn test_response_gc_skipped_serde() {
 
 #[test]
 fn test_invalid_request_json() {
-    let result = serde_json::from_str::<Request>(r#"{"bogus": 42}"#);
+    let result = deser_json::from_str::<Request>(r#"{"bogus": 42}"#);
     assert!(result.is_err());
 }
 
@@ -2492,7 +2492,7 @@ fn a_gc_hint_does_nothing_at_the_trigger_and_clears_the_backoff_once_the_store_f
 #[test]
 fn gc_hint_wire_name_and_ack_timeout_are_pinned() {
     assert_eq!(
-        serde_json::to_string(&Request::GcHint).unwrap(),
+        deser_json::to_string(&Request::GcHint).unwrap(),
         "\"gc_hint\""
     );
     assert!(Request::GcHint.is_build_activity());

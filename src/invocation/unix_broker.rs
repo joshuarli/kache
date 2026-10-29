@@ -69,7 +69,9 @@ impl Broker {
             .channel
             .lock()
             .map_err(|_| io::Error::other("native process channel poisoned"))?;
-        let mut frame = serde_json::to_vec(&command)?;
+        let mut frame = deser_json::to_string(&command)
+            .map(String::into_bytes)
+            .map_err(|error| io::Error::other(error.to_string()))?;
         frame.push(b'\n');
         if frame.len() as u64 > MAX_FRAME_BYTES {
             return Err(io::Error::other(
@@ -109,7 +111,8 @@ impl Broker {
                     "native process client disconnected",
                 ));
             }
-            let reply = serde_json::from_slice(&frame)?;
+            let reply = deser_json::from_slice(&frame)
+                .map_err(|error| io::Error::other(error.to_string()))?;
             let files = if pipes == 0 || matches!(reply, Reply::Failed { .. }) {
                 Vec::new()
             } else {
@@ -369,14 +372,14 @@ mod tests {
                 path: NativeString::Unix(units),
             })
         };
-        let overhead = serde_json::to_vec(&command(Vec::new())).unwrap().len() + 1;
+        let overhead = deser_json::to_string(&command(Vec::new())).map(String::into_bytes).unwrap().len() + 1;
         let count = (bytes - overhead).div_ceil(2);
         let mut units = vec![0; count];
         if overhead + count * 2 - 1 < bytes {
             units[0] = 99;
         }
         let command = command(units);
-        assert_eq!(serde_json::to_vec(&command).unwrap().len() + 1, bytes);
+        assert_eq!(deser_json::to_string(&command).map(String::into_bytes).unwrap().len() + 1, bytes);
         command
     }
 
@@ -418,7 +421,7 @@ mod tests {
                 let Command::Workspace(kache_protocol::execution::unix::Workspace::Permissions {
                     mode,
                     ..
-                }) = serde_json::from_str(&frame).unwrap()
+                }) = deser_json::from_str(&frame).unwrap()
                 else {
                     panic!("missing permissions operation");
                 };
@@ -517,7 +520,7 @@ mod tests {
                 let mut frame = String::new();
                 reader.read_line(&mut frame).unwrap();
                 assert!(matches!(
-                    serde_json::from_str::<Command>(&frame).unwrap(),
+                    deser_json::from_str::<Command>(&frame).unwrap(),
                     Command::Workspace(_)
                 ));
                 reader.get_mut().write_all(b"{\"operation_").unwrap();
@@ -576,7 +579,7 @@ mod tests {
                 let mut frame = String::new();
                 reader.read_line(&mut frame).unwrap();
                 assert_eq!(
-                    serde_json::from_str::<Command>(&frame).unwrap(),
+                    deser_json::from_str::<Command>(&frame).unwrap(),
                     Command::Kill { id: 1 }
                 );
                 std::thread::sleep(std::time::Duration::from_millis(100));
@@ -644,8 +647,8 @@ mod tests {
                 ] {
                     let mut frame = String::new();
                     reader.read_line(&mut frame).unwrap();
-                    assert_eq!(serde_json::from_str::<Command>(&frame).unwrap(), expected);
-                    let mut bytes = serde_json::to_vec(&reply).unwrap();
+                    assert_eq!(deser_json::from_str::<Command>(&frame).unwrap(), expected);
+                    let mut bytes = deser_json::to_string(&reply).map(String::into_bytes).unwrap();
                     bytes.push(b'\n');
                     reader.get_mut().write_all(&bytes).unwrap();
                 }
@@ -709,7 +712,7 @@ mod tests {
                     let mut line = String::new();
                     reader.read_line(&mut line).unwrap();
                     assert!(!line.is_empty());
-                    let mut bytes = serde_json::to_vec(&reply).unwrap();
+                    let mut bytes = deser_json::to_string(&reply).map(String::into_bytes).unwrap();
                     bytes.push(b'\n');
                     reader.get_mut().write_all(&bytes).unwrap();
                 }

@@ -17,7 +17,7 @@
 //! [`compile_outcome`]).
 
 use crate::args::RustcArgs;
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Component, Path, PathBuf};
@@ -148,9 +148,9 @@ fn blames_incremental_state(line: &str) -> bool {
     if !names_incremental_state(line) {
         return false;
     }
-    match serde_json::from_str::<serde_json::Value>(line) {
+    match deser_json::from_str::<deser_value::Value>(line) {
         Ok(json) => {
-            let field = |name: &str| json.get(name).and_then(serde_json::Value::as_str);
+            let field = |name: &str| json.get(name).and_then(|value| value.as_str());
             field("level") != Some("warning")
                 && field("message").is_some_and(names_incremental_state)
         }
@@ -173,19 +173,19 @@ pub(crate) struct KeyFingerprint {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 struct Observation {
     cache_key: String,
     stable: String,
     sources_externs: String,
     at_secs: u64,
     /// A cheap edit signal for a private compile, never an artifact key.
-    #[serde(default)]
+    #[deser(default)]
     primary_source: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 enum Phase {
     Learning,
     Seed,
@@ -193,7 +193,7 @@ enum Phase {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 struct DiskState {
     schema: u32,
     unit_key: String,
@@ -668,7 +668,7 @@ impl AdaptiveUnit {
         let Ok(bytes) = fs::read(&self.state_path) else {
             return LoadedState::Unavailable;
         };
-        let state: DiskState = match serde_json::from_slice(&bytes) {
+        let state: DiskState = match deser_json::from_slice(&bytes) {
             Ok(state) => state,
             Err(_) => return LoadedState::Corrupt,
         };
@@ -689,7 +689,7 @@ impl AdaptiveUnit {
         if durable && state.in_flight && self.publish_in_flight_record() {
             return true;
         }
-        let Ok(bytes) = serde_json::to_vec(state) else {
+        let Ok(bytes) = deser_json::to_string(state).map(String::into_bytes) else {
             return false;
         };
         let stored =
@@ -710,7 +710,7 @@ impl AdaptiveUnit {
         use std::os::unix::fs::PermissionsExt;
 
         let path = self.unit_dir.join("in-flight.json");
-        let bytes = serde_json::to_vec(&self.in_flight_marker()).ok()?;
+        let bytes = deser_json::to_string(&self.in_flight_marker()).map(String::into_bytes).ok()?;
         if fs::symlink_metadata(&path)
             .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
         {
@@ -1283,13 +1283,13 @@ mod tests {
     }
 
     fn read_state(unit: &AdaptiveUnit) -> DiskState {
-        serde_json::from_slice(&fs::read(&unit.state_path).unwrap()).unwrap()
+        deser_json::from_slice(&fs::read(&unit.state_path).unwrap()).unwrap()
     }
 
     fn write_state(unit: &AdaptiveUnit, state: &DiskState) {
         crate::atomic::atomic_replace_deferrable(
             &unit.state_path,
-            &serde_json::to_vec(state).unwrap(),
+            &deser_json::to_string(state).map(String::into_bytes).unwrap(),
             false,
         )
         .unwrap();
@@ -3047,7 +3047,7 @@ mod tests {
                     last_used_secs: 11,
                     in_flight: true,
                 };
-                fs::write(&unit.state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+                fs::write(&unit.state_path, deser_json::to_string(&state).map(String::into_bytes).unwrap()).unwrap();
             } else {
                 fs::write(&unit.state_path, b"{not json").unwrap();
             }

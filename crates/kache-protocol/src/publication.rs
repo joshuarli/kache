@@ -1,5 +1,5 @@
 use crate::BuildEvent;
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HandoffFile {
@@ -13,10 +13,10 @@ pub struct HandoffFile {
 pub struct PublishCcRequest {
     /// Client executable mtime. Daemons from 1.0.x and earlier drain when it
     /// is newer than their own; later daemons ignore it.
-    #[serde(default)]
+    #[deser(default)]
     pub client_epoch: u64,
     /// Release requesting an upgrade. Absent from legacy and read-only requests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub client_version: Option<String>,
     pub cache_key: String,
     pub crate_name: String,
@@ -31,7 +31,7 @@ pub struct PublishCcRequest {
     /// The read-set memo of a deferred compile, recorded here instead of in
     /// the wrapper: a hundred-row write transaction the next compile of the
     /// build script would otherwise wait for.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub memo: Option<CcMemoHandoff>,
 }
 
@@ -46,12 +46,12 @@ pub struct CcMemoHandoff {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CcPreprocessMemoInput {
     pub name: String,
-    #[serde(flatten)]
+    #[deser(flatten)]
     pub fingerprint: FileFingerprint,
     pub content: String,
-    #[serde(default)]
+    #[deser(default)]
     pub mapped: String,
-    #[serde(default)]
+    #[deser(default)]
     pub observed_ns: i64,
 }
 

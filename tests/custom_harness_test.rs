@@ -72,7 +72,7 @@ fn cargo_test(project: &Path, cache_dir: &Path, target_dir: &Path) -> std::proce
         .expect("failed to run cargo test")
 }
 
-fn kache_report(cache_dir: &Path) -> serde_json::Value {
+fn kache_report(cache_dir: &Path) -> deser_value::Value {
     let output = hermetic_command(
         kache_binary(),
         cache_dir,
@@ -88,21 +88,21 @@ fn kache_report(cache_dir: &Path) -> serde_json::Value {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    serde_json::from_slice(&output.stdout).expect("report should be valid json")
+    deser_json::from_slice(&output.stdout).expect("report should be valid json")
 }
 
 /// The most recent event for `crate_name`. `all_events` is in event-log order,
 /// so after the warm run the last `harness` entry is the warm one.
-fn last_event_for<'a>(report: &'a serde_json::Value, crate_name: &str) -> &'a serde_json::Value {
+fn last_event_for<'a>(report: &'a deser_value::Value, crate_name: &str) -> &'a deser_value::Value {
     report["all_events"]
-        .as_array()
+        .as_seq()
         .expect("report should include all_events")
         .iter()
         .rfind(|event| event["crate_name"].as_str() == Some(crate_name))
         .unwrap_or_else(|| {
             panic!(
                 "no `{crate_name}` event in report: {}",
-                serde_json::to_string_pretty(report).unwrap()
+                deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(report).unwrap()
             )
         })
 }
@@ -159,7 +159,7 @@ fn custom_harness_test_binary_is_executable_after_restore() {
     assert_eq!(
         cold_event["compiler_runs"].as_u64(),
         Some(1),
-        "cold run should have compiled `harness`: {cold_event}"
+        "cold run should have compiled `harness`: {cold_event:?}"
     );
 
     // Drop every build output so the second run has to restore the test binary
@@ -193,12 +193,12 @@ fn custom_harness_test_binary_is_executable_after_restore() {
     assert_eq!(
         warm_event["result"].as_str(),
         Some("local_hit"),
-        "warm run should have restored `harness` from the cache: {warm_event}"
+        "warm run should have restored `harness` from the cache: {warm_event:?}"
     );
     assert_eq!(
         warm_event["compiler_runs"].as_u64(),
         Some(0),
-        "warm run should not have spawned the compiler: {warm_event}"
+        "warm run should not have spawned the compiler: {warm_event:?}"
     );
 
     #[cfg(unix)]

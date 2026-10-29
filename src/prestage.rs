@@ -70,7 +70,7 @@ const ACTIVITY_PREFIX: &str = ".activity-";
 const LATEST_PREFIX: &str = "latest-";
 
 /// A large executable a build of some target directory produced.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 struct Record {
     dest: PathBuf,
     /// `dest` under its target directory, for another target to borrow.
@@ -80,13 +80,13 @@ struct Record {
 }
 
 /// What the daemon wrote about a staged copy.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 struct Staged {
     blob: String,
     fingerprint: FileFingerprint,
 }
 
-#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 enum Activity {
     Pending {
         record: Record,
@@ -124,7 +124,7 @@ fn with_activity<T>(
 
 fn activity_at(path: &Path) -> anyhow::Result<Option<Activity>> {
     match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+        Ok(bytes) => Ok(Some(deser_json::from_slice(&bytes)?)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
@@ -165,10 +165,10 @@ pub(crate) fn complete(
         let previous = activity_at(path)?;
         write_atomic(
             path,
-            &serde_json::to_vec(&Activity::Completed {
+            &deser_json::to_string(&Activity::Completed {
                 dest: dest.to_path_buf(),
                 generation: generation.clone(),
-            })?,
+            }).map(String::into_bytes)?,
         )?;
         if let Some(Activity::Pending { record, .. }) = previous
             && belongs_to_artifact(target_dir, &record.dest, rel)
@@ -216,10 +216,10 @@ fn begin_stage(
         }
         write_atomic(
             path,
-            &serde_json::to_vec(&Activity::Pending {
+            &deser_json::to_string(&Activity::Pending {
                 record: record.clone(),
                 generation: generation.clone(),
-            })?,
+            }).map(String::into_bytes)?,
         )?;
         Ok(true)
     })
@@ -366,7 +366,7 @@ pub(crate) fn remember(cache_dir: &Path, target_dir: &Path, dest: &Path, blob: &
     };
     // Paths that are not UTF-8 cannot go into a record; such a target just
     // copies as before.
-    let Ok(bytes) = serde_json::to_vec(&record) else {
+    let Ok(bytes) = deser_json::to_string(&record).map(String::into_bytes) else {
         return;
     };
     let directory = records_dir(cache_dir, target_dir);
@@ -412,7 +412,7 @@ fn read_records(directory: &Path) -> Vec<(PathBuf, Record)> {
         .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
         .filter_map(|entry| {
             let bytes = std::fs::read(entry.path()).ok()?;
-            let record = serde_json::from_slice::<Record>(&bytes).ok()?;
+            let record = deser_json::from_slice::<Record>(&bytes).ok()?;
             Some((entry.path(), record))
         })
         .collect()
@@ -490,7 +490,7 @@ pub(crate) fn take(dest: &Path, blob: &str) -> bool {
         return false;
     };
     let current = FileFingerprint::from_path(&staged).ok();
-    let intact = serde_json::from_slice::<Staged>(&bytes)
+    let intact = deser_json::from_slice::<Staged>(&bytes)
         .ok()
         .is_some_and(|recorded| recorded.blob == blob && Some(recorded.fingerprint) == current);
     if intact && std::fs::rename(&staged, dest).is_ok() {
@@ -619,7 +619,7 @@ impl PreparedStage {
         };
         write_atomic(
             &fingerprint_path(&self.staged),
-            &serde_json::to_vec(&staged_file)?,
+            &deser_json::to_string(&staged_file).map(String::into_bytes)?,
         )?;
         Ok(())
     }
@@ -985,10 +985,10 @@ mod tests {
         with_activity(&cache, &target, &own.rel, |path| {
             write_atomic(
                 path,
-                &serde_json::to_vec(&Activity::Pending {
+                &deser_json::to_string(&Activity::Pending {
                     record: foreign.clone(),
                     generation: None,
-                })?,
+                }).map(String::into_bytes)?,
             )?;
             Ok(())
         })
@@ -1185,10 +1185,10 @@ mod tests {
             with_activity(&cache, &target, rel, |path| {
                 write_atomic(
                     path,
-                    &serde_json::to_vec(&Activity::Pending {
+                    &deser_json::to_string(&Activity::Pending {
                         record: foreign.clone(),
                         generation: None,
-                    })?,
+                    }).map(String::into_bytes)?,
                 )?;
                 Ok(())
             })
@@ -1468,10 +1468,10 @@ mod tests {
             );
             write_atomic(
                 path,
-                &serde_json::to_vec(&Activity::Pending {
+                &deser_json::to_string(&Activity::Pending {
                     record: record.clone(),
                     generation: None,
-                })?,
+                }).map(String::into_bytes)?,
             )?;
             // GC also must not expire a state while its publisher owns it.
             prune(

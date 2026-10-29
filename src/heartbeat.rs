@@ -475,7 +475,7 @@ mod tests {
                         if let Ok(contents) = std::fs::read_to_string(&event_log)
                             && let Some(event) = contents
                                 .lines()
-                                .find_map(|line| serde_json::from_str::<HeartbeatEvent>(line).ok())
+                                .find_map(|line| deser_json::from_str::<HeartbeatEvent>(line).ok())
                         {
                             break event;
                         }
@@ -597,7 +597,7 @@ mod tests {
         };
         drop(monitor);
 
-        let event: HeartbeatEvent = serde_json::from_str(
+        let event: HeartbeatEvent = deser_json::from_str(
             heartbeat
                 .as_deref()
                 .expect("monitor must append a heartbeat after one cadence"),

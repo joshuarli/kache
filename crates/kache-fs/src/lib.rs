@@ -51,7 +51,7 @@ mod linux;
 
 /// How a file's blocks are shared with other files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "deser", derive(deser::Serialize, deser::Deserialize))]
 #[non_exhaustive]
 pub enum Sharing {
     /// The platform gave us no sharing information.
@@ -71,7 +71,7 @@ pub enum Sharing {
 /// Linux reverse-mapping ioctls generally need `CAP_SYS_ADMIN`. So a sum of
 /// per-file unique bytes is a defensible lower bound, and says so.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "deser", derive(deser::Serialize, deser::Deserialize))]
 #[non_exhaustive]
 pub enum Confidence {
     Exact,
@@ -99,7 +99,7 @@ impl Confidence {
 
 /// What one file costs, and what dies with it.
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "deser", derive(deser::Serialize, deser::Deserialize))]
 pub struct FileSizing {
     /// Logical length (`st_size` / `ATTR_FILE_DATALENGTH`).
     pub logical: u64,
@@ -120,7 +120,7 @@ pub struct FileSizing {
     /// platform reports it (APFS `ATTR_CMNEXT_CLONE_REFCNT`). At most one
     /// means no other file shares these blocks: whatever is not private is
     /// held by filesystem snapshots, and is freed once those snapshots go.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "deser", deser(default))]
     pub clone_refcount: Option<u32>,
 }
 
@@ -173,13 +173,13 @@ impl FileSizing {
 /// does not establish independence: the bounded sample may have missed a group.
 /// Compare sketches from the same observation period; device IDs can be reused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "deser", derive(deser::Serialize, deser::Deserialize))]
 pub struct CloneSketch {
-    ids: [u64; Self::CAP],
+    ids: [u64; CloneSketch::CAP],
     len: usize,
     /// Older serialized sketches have no device scope and cannot prove sharing.
-    #[cfg_attr(feature = "serde", serde(default))]
-    devices: [Option<u64>; Self::CAP],
+    #[cfg_attr(feature = "deser", deser(default))]
+    devices: [Option<u64>; CloneSketch::CAP],
 }
 
 impl Default for CloneSketch {
@@ -244,25 +244,25 @@ impl CloneSketch {
 
 /// Aggregate over a directory.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "deser", derive(deser::Serialize, deser::Deserialize))]
 pub struct DirSizing {
     pub logical: u64,
     pub allocated: u64,
     pub unique: u64,
     /// Files whose physical reclaim could not be measured.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "deser", deser(default))]
     pub unknown_files: u64,
     /// Allocated bytes excluded from `unique` because sharing is unknown.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "deser", deser(default))]
     pub unknown_allocated_bytes: u64,
     pub files: u64,
     /// Files whose blocks were reported fully shared.
     pub fully_shared_files: u64,
     /// Multiply-linked inodes with at least one name outside this tree.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "deser", deser(default))]
     pub hardlink_pinned_inodes: u64,
     /// Otherwise-unique bytes retained by those outside names.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "deser", deser(default))]
     pub hardlink_pinned_bytes: u64,
     /// A sample of the clone groups this directory's shared files belong to,
     /// for identifying which other directories hold the other half.
@@ -428,7 +428,7 @@ fn walk(
 /// a container shares free space across volumes, and snapshots can hold deleted
 /// bytes for hours.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "deser", derive(deser::Serialize, deser::Deserialize))]
 pub struct VolumeUsage {
     pub total: u64,
     pub free: u64,
@@ -878,28 +878,28 @@ mod tests {
         assert_eq!(a.shares_with(&other_device), 1);
     }
 
-    #[cfg(feature = "serde")]
+    #[cfg(feature = "deser")]
     #[test]
     fn legacy_clone_samples_cannot_prove_sharing() {
         let mut a = CloneSketch::default();
         a.insert(1, 42);
-        let mut value = serde_json::to_value(a).unwrap();
-        let round_trip: CloneSketch = serde_json::from_value(value.clone()).unwrap();
+        let mut value = deser_value::to_value(&a).unwrap();
+        let round_trip: CloneSketch = deser_value::from_value(&value.clone()).unwrap();
         assert_eq!(a, round_trip);
         let mut uncounted = value.clone();
-        uncounted["len"] = serde_json::json!(0);
-        let mut uncounted: CloneSketch = serde_json::from_value(uncounted).unwrap();
+        uncounted["len"] = deser_value::value!(0);
+        let mut uncounted: CloneSketch = deser_value::from_value(&uncounted).unwrap();
         assert!(uncounted.is_empty());
         uncounted.insert(1, 42);
         assert_eq!(
             uncounted, a,
             "an unused slot cannot suppress an observation"
         );
-        value.as_object_mut().unwrap().remove("devices");
-        let legacy: CloneSketch = serde_json::from_value(value.clone()).unwrap();
+        value.as_map_mut().unwrap().remove("devices");
+        let legacy: CloneSketch = deser_value::from_value(&value.clone()).unwrap();
         assert_eq!(legacy.shares_with(&a), 0);
-        value["len"] = serde_json::json!(1000);
-        let mut malformed: CloneSketch = serde_json::from_value(value).unwrap();
+        value["len"] = deser_value::value!(1000);
+        let mut malformed: CloneSketch = deser_value::from_value(&value).unwrap();
         assert_eq!(malformed.shares_with(&a), 0);
         malformed.insert(1, 42);
         assert_eq!(malformed, a);

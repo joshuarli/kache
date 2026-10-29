@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use kache_core::time::UtcTime;
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -36,7 +36,7 @@ pub struct HeartbeatEvent {
     pub ts: UtcTime,
     pub crate_name: String,
     /// Build tree/root, same derivation as [`BuildEvent::root`].
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub root: String,
     /// PID of the compiler child being waited on.
     pub pid: u32,
@@ -44,12 +44,12 @@ pub struct HeartbeatEvent {
     pub elapsed_s: u64,
     /// Median historical compile time for this crate (see
     /// [`typical_compile_ms`]), when history exists.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub typical_s: Option<u64>,
     /// `typical_s - elapsed_s`, floored at zero — omitted with no history.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub eta_s: Option<u64>,
-    #[serde(default)]
+    #[deser(default)]
     pub schema: u32,
 }
 
@@ -104,7 +104,7 @@ impl CleanupEvent {
 pub fn log_cleanup(event_log_path: &Path, event: &CleanupEvent) -> Result<()> {
     append_log_line(
         event_log_path,
-        serde_json::to_string(event).context("serializing cleanup event")?,
+        deser_json::to_string(event).context("serializing cleanup event")?,
         LogLock::Build,
     )
 }
@@ -127,13 +127,13 @@ pub enum EventRecord {
 /// required `event` tag guarantees.
 #[cfg(test)]
 fn parse_event_line(line: &str) -> Option<EventRecord> {
-    if let Ok(hb) = serde_json::from_str::<HeartbeatEvent>(line) {
+    if let Ok(hb) = deser_json::from_str::<HeartbeatEvent>(line) {
         if hb.event == HEARTBEAT_EVENT_TAG {
             return Some(EventRecord::Heartbeat(hb));
         }
         return None;
     }
-    serde_json::from_str::<BuildEvent>(line)
+    deser_json::from_str::<BuildEvent>(line)
         .ok()
         .map(|e| EventRecord::Build(Box::new(e)))
 }
@@ -186,7 +186,7 @@ fn append_log_line(event_log_path: &Path, line: String, lock_mode: LogLock) -> R
 /// as the event log, for logs outside the event, summary and transfer set such
 /// as the machine-level session records in the cache dir.
 pub fn append_json_line<T: Serialize>(log_path: &Path, record: &T) -> Result<()> {
-    let line = serde_json::to_string(record).context("serializing log record")?;
+    let line = deser_json::to_string(record).context("serializing log record")?;
     append_log_line(log_path, line, LogLock::Wait)
 }
 
@@ -197,7 +197,7 @@ pub fn append_json_line<T: Serialize>(log_path: &Path, record: &T) -> Result<()>
 pub fn log_event(event_log_path: &Path, event: &BuildEvent) -> Result<()> {
     append_log_line(
         event_log_path,
-        serde_json::to_string(event).context("serializing event")?,
+        deser_json::to_string(event).context("serializing event")?,
         LogLock::Wait,
     )
 }
@@ -206,7 +206,7 @@ pub fn log_event(event_log_path: &Path, event: &BuildEvent) -> Result<()> {
 pub(crate) fn log_event_for_build(event_log_path: &Path, event: &BuildEvent) -> Result<()> {
     append_log_line(
         event_log_path,
-        serde_json::to_string(event).context("serializing event")?,
+        deser_json::to_string(event).context("serializing event")?,
         LogLock::Build,
     )
 }
@@ -215,7 +215,7 @@ pub(crate) fn log_event_for_build(event_log_path: &Path, event: &BuildEvent) -> 
 pub fn log_heartbeat(event_log_path: &Path, event: &HeartbeatEvent) -> Result<()> {
     append_log_line(
         event_log_path,
-        serde_json::to_string(event).context("serializing heartbeat")?,
+        deser_json::to_string(event).context("serializing heartbeat")?,
         LogLock::Build,
     )
 }
@@ -308,7 +308,7 @@ pub fn read_events_and<T>(
 
     for line in reader.split(b'\n') {
         let line = line?;
-        match serde_json::from_slice::<BuildEvent>(&line) {
+        match deser_json::from_slice::<BuildEvent>(&line) {
             Ok(event) => events.push(event),
             Err(e) => {
                 log::debug!("skipping invalid event line: {}", e);
@@ -547,7 +547,7 @@ fn read_segment(path: &Path) -> Result<impl Iterator<Item = Result<BuildEvent>>>
     Ok(std::io::BufReader::new(decoder)
         .split(b'\n')
         .filter_map(|line| match line {
-            Ok(line) => serde_json::from_slice::<BuildEvent>(&line).ok().map(Ok),
+            Ok(line) => deser_json::from_slice::<BuildEvent>(&line).ok().map(Ok),
             Err(error) => Some(Err(error.into())),
         }))
 }
@@ -569,7 +569,7 @@ fn archive_dropped_events(
     }
     let times: Vec<i64> = dropped
         .iter()
-        .filter_map(|line| serde_json::from_str::<TsOnly>(line.trim_end()).ok())
+        .filter_map(|line| deser_json::from_str::<TsOnly>(line.trim_end()).ok())
         .map(|event| event.ts.timestamp())
         .collect();
     let (Some(newest), Some(oldest)) = (times.iter().max(), times.iter().min()) else {
@@ -636,7 +636,7 @@ struct RotationMarker {
     /// The build session this rotation had to cut into because the session
     /// alone outgrew the retention cap; reports on it are incomplete
     /// (kunobi-ninja/kache#1209). Absent when the whole session was kept.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     cut_session: Option<String>,
 }
 
@@ -648,7 +648,7 @@ fn rotation_marker_path(log_path: &Path) -> PathBuf {
 
 fn read_rotation_marker(log_path: &Path) -> Option<RotationMarker> {
     let content = fs::read_to_string(rotation_marker_path(log_path)).ok()?;
-    serde_json::from_str(&content).ok()
+    deser_json::from_str(&content).ok()
 }
 
 /// Tail the event log, returning new events since the last known position.
@@ -892,10 +892,10 @@ fn retained_suffix(lines: &[&str], keep_lines: usize, max_size: u64) -> Retained
 fn line_session(line: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct SessionOnly {
-        #[serde(default)]
+        #[deser(default)]
         session_id: String,
     }
-    let parsed: SessionOnly = serde_json::from_str(line.trim_end()).ok()?;
+    let parsed: SessionOnly = deser_json::from_str(line.trim_end()).ok()?;
     (!parsed.session_id.is_empty()).then_some(parsed.session_id)
 }
 
@@ -904,7 +904,7 @@ fn line_session(line: &str) -> Option<String> {
 fn session_needle(session: &str) -> String {
     format!(
         "\"session_id\":{}",
-        serde_json::to_string(session).unwrap_or_default()
+        deser_json::to_string(session).unwrap_or_default()
     )
 }
 
@@ -995,7 +995,7 @@ fn rotate_log_impl(
             retained_len: output.len() as u64,
             cut_session: retained.cut_session,
         };
-        if let Ok(json) = serde_json::to_string(&marker) {
+        if let Ok(json) = deser_json::to_string(&marker) {
             let _ = crate::atomic::atomic_replace(&rotation_marker_path(log_path), json.as_bytes());
         }
 
@@ -1083,7 +1083,7 @@ pub fn read_summaries(summary_log_path: &Path) -> Result<Vec<BuildSummaryEvent>>
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str::<BuildSummaryEvent>(&line) {
+        match deser_json::from_str::<BuildSummaryEvent>(&line) {
             Ok(event) => events.push(event),
             Err(e) => {
                 log::debug!("skipping invalid summary line: {}", e);
@@ -1116,7 +1116,7 @@ pub fn read_transfers(transfer_log_path: &Path) -> Result<Vec<TransferEvent>> {
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str::<TransferEvent>(&line) {
+        match deser_json::from_str::<TransferEvent>(&line) {
             Ok(event) => events.push(event),
             Err(e) => {
                 log::debug!("skipping invalid transfer line: {}", e);
@@ -1240,7 +1240,7 @@ pub struct EventStats {
     /// Bytes ingested into the store by a full physical copy (a real second copy).
     pub store_copied_bytes: u64,
     /// Copy-fallback reasons (#835), still as bytes so the report can show
-    /// *why* zero-copy did not happen. All `serde(default)` on the event, so
+    /// *why* zero-copy did not happen. All `deser(default)` on the event, so
     /// old readers stay compatible.
     pub store_copy_cross_device_bytes: u64,
     pub store_copy_permission_bytes: u64,
@@ -1484,7 +1484,7 @@ mod tests {
         );
 
         let none = BuildEvent::new_for_test("a", EventResult::LocalHit);
-        let json = serde_json::to_value(&none).unwrap();
+        let json = deser_value::to_value(&none).unwrap();
         assert!(json.get("miss_reason").is_none());
         assert!(json.get("object_output").is_none());
 
@@ -1492,11 +1492,11 @@ mod tests {
         other.miss_reason = MissReason::Other;
         other.passthrough_reason = "compiler spawn failed".to_string();
         other.object_output = "a.o".to_string();
-        let json = serde_json::to_value(&other).unwrap();
+        let json = deser_value::to_value(&other).unwrap();
         assert_eq!(json["miss_reason"], "other");
         assert_eq!(json["object_output"], "a.o");
 
-        let parsed: BuildEvent = serde_json::from_value(serde_json::json!({
+        let parsed: BuildEvent = deser_value::from_value(&deser_value::value!({
             "ts": "2026-01-01T00:00:00Z",
             "crate_name": "a",
             "result": "miss",
@@ -1630,20 +1630,20 @@ mod tests {
         event.flight_wait_ms = 7;
         event.permit_wait_ms = 8;
 
-        let mut value = serde_json::to_value(&event).unwrap();
+        let mut value = deser_value::to_value(&event).unwrap();
         assert_eq!(value["startup_ms"], 5);
         assert_eq!(value["dep_info_ms"], 6);
         assert_eq!(value["dep_info_runs"], 1);
         assert_eq!(value["flight_wait_ms"], 7);
         assert_eq!(value["permit_wait_ms"], 8);
-        let round_trip: BuildEvent = serde_json::from_value(value.clone()).unwrap();
+        let round_trip: BuildEvent = deser_value::from_value(&value.clone()).unwrap();
         assert_eq!(round_trip.startup_ms, 5);
         assert_eq!(round_trip.dep_info_ms, 6);
         assert_eq!(round_trip.dep_info_runs, 1);
         assert_eq!(round_trip.flight_wait_ms, 7);
         assert_eq!(round_trip.permit_wait_ms, 8);
 
-        let object = value.as_object_mut().unwrap();
+        let object = value.as_map_mut().unwrap();
         for field in [
             "startup_ms",
             "dep_info_ms",
@@ -1653,7 +1653,7 @@ mod tests {
         ] {
             object.remove(field);
         }
-        let legacy: BuildEvent = serde_json::from_value(value).unwrap();
+        let legacy: BuildEvent = deser_value::from_value(&value).unwrap();
         assert_eq!(legacy.startup_ms, 0);
         assert_eq!(legacy.dep_info_ms, 0);
         assert_eq!(legacy.dep_info_runs, 0);
@@ -1666,14 +1666,14 @@ mod tests {
     fn skip_reason_round_trips_and_defaults_for_older_events() {
         let mut event = BuildEvent::new_for_test("lib", EventResult::Skipped);
         event.skip_reason = "peer-already-committed".into();
-        let mut value = serde_json::to_value(&event).unwrap();
-        let current: BuildEvent = serde_json::from_value(value.clone()).unwrap();
+        let mut value = deser_value::to_value(&event).unwrap();
+        let current: BuildEvent = deser_value::from_value(&value.clone()).unwrap();
         assert_eq!(current.skip_reason, "peer-already-committed");
-        value.as_object_mut().unwrap().remove("skip_reason");
-        let legacy: BuildEvent = serde_json::from_value(value).unwrap();
+        value.as_map_mut().unwrap().remove("skip_reason");
+        let legacy: BuildEvent = deser_value::from_value(&value).unwrap();
         assert!(legacy.skip_reason.is_empty());
         assert!(
-            serde_json::to_value(legacy)
+            deser_value::to_value(&legacy)
                 .unwrap()
                 .get("skip_reason")
                 .is_none()
@@ -1686,16 +1686,16 @@ mod tests {
         event.lookup_rejection =
             "matching entry lacks dep-info required by this invocation".to_string();
 
-        let mut value = serde_json::to_value(&event).unwrap();
+        let mut value = deser_value::to_value(&event).unwrap();
         assert_eq!(
             value["lookup_rejection"],
             "matching entry lacks dep-info required by this invocation"
         );
-        let round_trip: BuildEvent = serde_json::from_value(value.clone()).unwrap();
+        let round_trip: BuildEvent = deser_value::from_value(&value.clone()).unwrap();
         assert_eq!(round_trip.lookup_rejection, event.lookup_rejection);
 
-        value.as_object_mut().unwrap().remove("lookup_rejection");
-        let legacy: BuildEvent = serde_json::from_value(value).unwrap();
+        value.as_map_mut().unwrap().remove("lookup_rejection");
+        let legacy: BuildEvent = deser_value::from_value(&value).unwrap();
         assert!(legacy.lookup_rejection.is_empty());
     }
 
@@ -1704,16 +1704,16 @@ mod tests {
         let mut event = BuildEvent::new_for_test("foo", EventResult::LocalHit);
         event.verify_compare = "content: libfoo.rlib (byte mismatch)".to_string();
 
-        let mut value = serde_json::to_value(&event).unwrap();
+        let mut value = deser_value::to_value(&event).unwrap();
         assert_eq!(
             value["verify_compare"],
             "content: libfoo.rlib (byte mismatch)"
         );
-        let round_trip: BuildEvent = serde_json::from_value(value.clone()).unwrap();
+        let round_trip: BuildEvent = deser_value::from_value(&value.clone()).unwrap();
         assert_eq!(round_trip.verify_compare, event.verify_compare);
 
-        value.as_object_mut().unwrap().remove("verify_compare");
-        let legacy: BuildEvent = serde_json::from_value(value).unwrap();
+        value.as_map_mut().unwrap().remove("verify_compare");
+        let legacy: BuildEvent = deser_value::from_value(&value).unwrap();
         assert!(legacy.verify_compare.is_empty());
     }
 
@@ -1759,15 +1759,15 @@ mod tests {
             "BuildEvent readers must skip the heartbeat line"
         );
 
-        let hb_line = serde_json::to_string(&test_heartbeat("gkrust", 260)).unwrap();
+        let hb_line = deser_json::to_string(&test_heartbeat("gkrust", 260)).unwrap();
         assert!(
-            serde_json::from_str::<BuildEvent>(&hb_line).is_err(),
+            deser_json::from_str::<BuildEvent>(&hb_line).is_err(),
             "heartbeat must not deserialize as BuildEvent"
         );
         let build_line =
-            serde_json::to_string(&test_event("gkrust", EventResult::Miss, 1, 1, 1, "k")).unwrap();
+            deser_json::to_string(&test_event("gkrust", EventResult::Miss, 1, 1, 1, "k")).unwrap();
         assert!(
-            serde_json::from_str::<HeartbeatEvent>(&build_line).is_err(),
+            deser_json::from_str::<HeartbeatEvent>(&build_line).is_err(),
             "BuildEvent must not deserialize as heartbeat"
         );
     }
@@ -1780,7 +1780,7 @@ mod tests {
         let line = r#"{"ts":"2026-07-01T00:00:00Z","crate_name":"serde",
             "result":"miss","elapsed_ms":1,"size":2,"cache_key":"k","schema":11,
             "key_fields":{"externs":"aaaa"}}"#;
-        let event: BuildEvent = serde_json::from_str(line).expect("schema 11 must still parse");
+        let event: BuildEvent = deser_json::from_str(line).expect("schema 11 must still parse");
         assert_eq!(event.schema, 11);
         assert!(event.key_externs.is_empty());
         assert_eq!(
@@ -1794,7 +1794,7 @@ mod tests {
     #[test]
     fn empty_extern_digests_are_not_serialized() {
         let event = test_event("serde", EventResult::Miss, 1, 1, 1, "k");
-        let line = serde_json::to_string(&event).unwrap();
+        let line = deser_json::to_string(&event).unwrap();
         assert!(
             !line.contains("key_externs"),
             "empty key_externs must not be written: {line}"
@@ -1988,7 +1988,7 @@ mod tests {
 
             let mut abandoned = test_event("abandoned", EventResult::Miss, 90, 70, 512, "lost");
             abandoned.root = "/work/€".to_string();
-            let serialized = serde_json::to_vec(&abandoned).unwrap();
+            let serialized = deser_json::to_string(&abandoned).map(String::into_bytes).unwrap();
             let split_at = serialized.iter().position(|&byte| byte == 0xe2).unwrap();
             OpenOptions::new()
                 .append(true)
@@ -2094,7 +2094,7 @@ mod tests {
 
         let mut event = test_event("kept", EventResult::Miss, 1, 1, 1, "k");
         event.ts = now - std::time::Duration::from_secs(2 * 3600);
-        let line = serde_json::to_string(&event).unwrap() + "\n";
+        let line = deser_json::to_string(&event).unwrap() + "\n";
         archive_dropped_events(&log_path, &[line.as_str()], now).unwrap();
 
         let events = read_events_since(&log_path, now - std::time::Duration::from_secs(24 * 3600)).unwrap();
@@ -2147,7 +2147,7 @@ mod tests {
             .map(|h| {
                 let mut event = test_event("c", EventResult::Miss, 1, 1, 1, "k");
                 event.ts = now - std::time::Duration::from_secs(*h * 3600);
-                serde_json::to_string(&event).unwrap() + "\n"
+                deser_json::to_string(&event).unwrap() + "\n"
             })
             .collect();
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
@@ -2304,7 +2304,7 @@ mod tests {
         let line = |result: EventResult, ts: UtcTime| {
             let mut event = test_event("c", result, 1, 1, 1, "k");
             event.ts = ts;
-            serde_json::to_string(&event).unwrap() + "\n"
+            deser_json::to_string(&event).unwrap() + "\n"
         };
         // Hits before the window, misses inside it.
         for before in [
@@ -2336,7 +2336,7 @@ mod tests {
                 .map(|i| {
                     let mut event = test_event("c", EventResult::Miss, 1, 1, 1, "k");
                     event.ts = now - std::time::Duration::from_secs(10_u64 * count as u64 + i as u64 * 60);
-                    serde_json::to_string(&event).unwrap() + "\n"
+                    deser_json::to_string(&event).unwrap() + "\n"
                 })
                 .collect();
             let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
@@ -2384,7 +2384,7 @@ mod tests {
         for age in [2, 1] {
             let mut event = test_event("archived", EventResult::Miss, 1, 2, 3, "k");
             event.ts = now - std::time::Duration::from_secs(age * 3600);
-            let line = serde_json::to_string(&event).unwrap() + "\n";
+            let line = deser_json::to_string(&event).unwrap() + "\n";
             archive_dropped_events(&log, &[&line], now).unwrap();
         }
         let segments = archive_segments(&log);
@@ -2423,7 +2423,7 @@ mod tests {
         let now = UtcTime::now();
         let mut event = test_event("memo", EventResult::Miss, 1, 2, 3, "k");
         event.ts = now - std::time::Duration::from_secs(3600);
-        let line = serde_json::to_string(&event).unwrap() + "\n";
+        let line = deser_json::to_string(&event).unwrap() + "\n";
         archive_dropped_events(&log, &[&line], now).unwrap();
         let segments = archive_segments(&log);
         let memo = std::sync::Mutex::new(Vec::new());
@@ -2447,7 +2447,7 @@ mod tests {
         let mut event = test_event("edge", EventResult::Miss, 1, 2, 3, "k");
         event.ts = since + std::time::Duration::from_secs(10 * 60);
         event.crate_name = "long_edge_".repeat(2048);
-        let line = serde_json::to_string(&event).unwrap() + "\n";
+        let line = deser_json::to_string(&event).unwrap() + "\n";
         let mut frame = zstd::encode_all(line.repeat(4).as_bytes(), 3).unwrap();
         let mut tail = zstd::encode_all(line.as_bytes(), 3).unwrap();
         tail.truncate(tail.len() - 1);
@@ -2481,7 +2481,7 @@ mod tests {
         let now = UtcTime::now();
         let mut event = test_event("retry", EventResult::Miss, 1, 2, 3, "k");
         event.ts = now - std::time::Duration::from_secs(3600);
-        let line = serde_json::to_string(&event).unwrap() + "\n";
+        let line = deser_json::to_string(&event).unwrap() + "\n";
         archive_dropped_events(&log, &[&line], now).unwrap();
         let segments = archive_segments(&log);
         let path = &segments[0].path;
@@ -2508,7 +2508,7 @@ mod tests {
         let mut archived = test_event("large_record", EventResult::Miss, 1, 2, 3, "k");
         archived.crate_name = "large_record_".repeat(2048);
         archived.ts = now - std::time::Duration::from_secs(3600);
-        let line = serde_json::to_string(&archived).unwrap() + "\n";
+        let line = deser_json::to_string(&archived).unwrap() + "\n";
         let mut frame = zstd::encode_all(line.repeat(4).as_bytes(), 3).unwrap();
         let mut broken = zstd::encode_all(line.as_bytes(), 3).unwrap();
         broken.truncate(broken.len() - 1);
@@ -2545,7 +2545,7 @@ mod tests {
             let log = dir.path().join(format!("events-{i}.jsonl"));
             let mut event = test_event("bounded", EventResult::Miss, 1, 2, 3, "k");
             event.ts = now - std::time::Duration::from_secs(3600);
-            let line = serde_json::to_string(&event).unwrap() + "\n";
+            let line = deser_json::to_string(&event).unwrap() + "\n";
             archive_dropped_events(&log, &[&line], now).unwrap();
             assert_eq!(
                 inside_segments_stats(&mut memo, event_archive_dir(&log), &archive_segments(&log))
@@ -3036,7 +3036,7 @@ mod tests {
         log_event(&log_path, &whole).unwrap();
 
         let torn = test_event("torn", EventResult::Miss, 100, 80, 1024, "key");
-        let torn_line = serde_json::to_string(&torn).unwrap();
+        let torn_line = deser_json::to_string(&torn).unwrap();
         let (head, tail) = torn_line.split_at(torn_line.len() / 2);
         {
             let mut f = OpenOptions::new().append(true).open(&log_path).unwrap();
@@ -3157,7 +3157,7 @@ mod tests {
                 continue;
             }
             let event: BuildEvent =
-                serde_json::from_str(line).expect("each line must be valid JSON");
+                deser_json::from_str(line).expect("each line must be valid JSON");
             let id: usize = event
                 .crate_name
                 .parse()
@@ -3238,7 +3238,7 @@ mod cleanup_and_rebuild_tests {
         );
         log_cleanup(&path, &cleanup).unwrap();
         let raw = fs::read_to_string(&path).unwrap();
-        let json: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
+        let json: deser_value::Value = deser_json::from_str(raw.trim()).unwrap();
         assert_eq!(json["event"], "target-cleanup");
         assert_eq!(json["schema"], 1);
         assert_eq!(json["target"], "/work/target");
@@ -3251,10 +3251,10 @@ mod cleanup_and_rebuild_tests {
             "/work/target/debug/deps/stale.rlib"
         );
         assert_eq!(
-            serde_json::from_str::<CleanupEvent>(raw.trim()).unwrap(),
+            deser_json::from_str::<CleanupEvent>(raw.trim()).unwrap(),
             cleanup
         );
-        assert!(serde_json::from_str::<BuildEvent>(raw.trim()).is_err());
+        assert!(deser_json::from_str::<BuildEvent>(raw.trim()).is_err());
         assert!(parse_event_line(raw.trim()).is_none());
         assert!(read_events(&path).unwrap().is_empty());
         let build = BuildEvent::new_for_test("current", EventResult::LocalHit);
@@ -3266,7 +3266,7 @@ mod cleanup_and_rebuild_tests {
     #[test]
     fn legacy_build_event_omits_rebuilt_claims_and_new_fields_round_trip() {
         let event = BuildEvent::new_for_test("example", EventResult::Miss);
-        let legacy = serde_json::to_value(&event).unwrap();
+        let legacy = deser_value::to_value(&event).unwrap();
         for field in [
             "rebuilt_package",
             "rebuilt_fingerprint",
@@ -3275,7 +3275,7 @@ mod cleanup_and_rebuild_tests {
         ] {
             assert!(legacy.get(field).is_none());
         }
-        let restored: BuildEvent = serde_json::from_value(legacy).unwrap();
+        let restored: BuildEvent = deser_value::from_value(&legacy).unwrap();
         assert!(restored.rebuilt_package.is_none());
         assert!(restored.rebuilt_fingerprint.is_none());
         assert!(restored.rebuilt_path.is_none());
@@ -3286,7 +3286,7 @@ mod cleanup_and_rebuild_tests {
         rebuilt.rebuilt_fingerprint = Some("input-key".into());
         rebuilt.rebuilt_path = Some("/target/example".into());
         rebuilt.rebuilt_paths = vec!["/target/example".into(), "/target/example.d".into()];
-        let raw = serde_json::to_string(&rebuilt).unwrap();
-        assert_eq!(serde_json::from_str::<BuildEvent>(&raw).unwrap(), rebuilt);
+        let raw = deser_json::to_string(&rebuilt).unwrap();
+        assert_eq!(deser_json::from_str::<BuildEvent>(&raw).unwrap(), rebuilt);
     }
 }

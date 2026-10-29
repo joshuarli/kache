@@ -95,7 +95,7 @@ fn decide_for(
 
 /// The last failed repair. Kept on disk because a CI daemon restarts per job
 /// and would otherwise retry on every start.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 struct FailedHeal {
     /// Unix seconds.
     failed_at: u64,
@@ -108,7 +108,7 @@ fn state_path(cache_dir: &Path) -> PathBuf {
 
 fn read_failure(cache_dir: &Path) -> Option<FailedHeal> {
     let json = std::fs::read(state_path(cache_dir)).ok()?;
-    serde_json::from_slice(&json).ok()
+    deser_json::from_slice(&json).ok()
 }
 
 fn record_failure(cache_dir: &Path, failed_at: u64, reason: &str) {
@@ -116,7 +116,7 @@ fn record_failure(cache_dir: &Path, failed_at: u64, reason: &str) {
         failed_at,
         reason: reason.to_string(),
     };
-    if let Ok(json) = serde_json::to_vec(&state)
+    if let Ok(json) = deser_json::to_string(&state).map(String::into_bytes)
         && let Err(error) = crate::atomic::atomic_replace(&state_path(cache_dir), &json)
     {
         log::debug!("blob index heal: could not record the failure: {error:#}");

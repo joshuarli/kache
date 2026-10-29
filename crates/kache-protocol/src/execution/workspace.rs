@@ -1,12 +1,12 @@
 //! Artifact operations shared by all native clients.
 
 use super::NativeString;
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 
 /// Placement and restore policy stay in the engine. These operations execute
 /// with the original client's filesystem permissions and syscall filters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "file_operation", rename_all = "snake_case")]
+#[deser(tag = "file_operation", rename_all = "snake_case")]
 pub enum Command {
     Reflink {
         source: NativeString,

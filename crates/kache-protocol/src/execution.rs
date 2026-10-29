@@ -1,5 +1,5 @@
 //! Compiler execution messages. Sending Commit ends the client's right to retry locally.
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::ffi::{OsStr, OsString};
 
 pub mod process;
@@ -12,9 +12,11 @@ pub const EXECUTION_VERSION: u32 = 2;
 /// Native strings retain Unix bytes, including values that
 /// cannot be represented by a Rust String.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "encoding", content = "units", rename_all = "snake_case")]
+#[deser(tag = "encoding", content = "units", rename_all = "snake_case")]
 pub enum NativeString {
-    Unix(Vec<u8>),
+    Unix(
+        #[deser(as = deser::adapters::BytesFallback<deser::adapters::IntSeq>)] Vec<u8>,
+    ),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,12 +57,12 @@ impl NativeString {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionRequest {
     pub version: u32,
-    #[serde(default)]
+    #[deser(default)]
     pub entry: ExecutionEntry,
     pub client_version: String,
     pub client_pid: u32,
     /// Unix file creation policy. Missing values require local execution.
-    #[serde(default)]
+    #[deser(default)]
     pub creation_mask: Option<u32>,
     /// Original includes argv[0]; Compiler starts with the resolved compiler.
     pub argv: Vec<NativeString>,
@@ -75,7 +77,7 @@ pub struct ExecutionRequest {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 pub enum ExecutionEntry {
     #[default]
     Original,
@@ -95,7 +97,7 @@ impl std::fmt::Debug for ExecutionRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "platform", rename_all = "snake_case")]
+#[deser(tag = "platform", rename_all = "snake_case")]
 pub enum ExecutionChannels {
     /// Descriptors arrive in stdin/stdout/stderr, optional terminal, jobserver order.
     Unix { terminal: bool, jobserver: Vec<i32> },
@@ -104,7 +106,7 @@ pub enum ExecutionChannels {
     UnixClient {
         terminal: bool,
         jobserver: Vec<i32>,
-        #[serde(default)]
+        #[deser(default)]
         trusted_pipeline: bool,
     },
 }
@@ -123,7 +125,7 @@ impl ExecutionChannels {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "execution", rename_all = "snake_case")]
+#[deser(tag = "execution", rename_all = "snake_case")]
 pub enum ExecutionReply {
     /// No compilation has started. The client may still fall back locally.
     Ready {
@@ -146,7 +148,7 @@ pub enum ExecutionReply {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 pub enum ExecutionCommand {
     Commit,
 }
@@ -156,6 +158,7 @@ pub enum ExecutionCommand {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DescriptorTicket {
     pub endpoint: NativeString,
+    #[deser(as = deser::adapters::BytesFallback<deser::adapters::IntSeq>)]
     pub key: [u8; 16],
 }
 
@@ -170,7 +173,7 @@ impl std::fmt::Debug for DescriptorTicket {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionStatus {
-    #[serde(default)]
+    #[deser(default)]
     pub protocol_version: u32,
     pub eligible: bool,
     pub client_trust_enabled: bool,
@@ -190,17 +193,17 @@ mod tests {
     fn pipeline_trust_requires_both_peers_and_defaults_to_false() {
         use super::ExecutionChannels;
         let legacy = r#"{"platform":"unix_client","terminal":false,"jobserver":[]}"#;
-        let channels: ExecutionChannels = serde_json::from_str(legacy).unwrap();
+        let channels: ExecutionChannels = deser_json::from_str(legacy).unwrap();
         assert!(!channels.trusted_pipeline(true));
         for client in [false, true] {
-            let mut json: serde_json::Value = serde_json::from_str(legacy).unwrap();
+            let mut json: deser_value::Value = deser_json::from_str(legacy).unwrap();
             json["trusted_pipeline"] = client.into();
-            let channels: ExecutionChannels = serde_json::from_value(json).unwrap();
+            let channels: ExecutionChannels = deser_value::from_value(&json).unwrap();
             for daemon in [false, true] {
                 assert_eq!(channels.trusted_pipeline(daemon), client && daemon);
             }
             let round_trip: ExecutionChannels =
-                serde_json::from_str(&serde_json::to_string(&channels).unwrap()).unwrap();
+                deser_json::from_str(&deser_json::to_string(&channels).unwrap()).unwrap();
             assert_eq!(round_trip, channels);
         }
         assert!(
@@ -214,7 +217,7 @@ mod tests {
 
     #[test]
     fn execution_diagnostics_reject_legacy_and_foreign_protocols() {
-        let mut status: super::ExecutionStatus = serde_json::from_str(r#"{"eligible":true,"client_trust_enabled":false,"daemon_trust_enabled":false,"detail":"old daemon"}"#).unwrap();
+        let mut status: super::ExecutionStatus = deser_json::from_str(r#"{"eligible":true,"client_trust_enabled":false,"daemon_trust_enabled":false,"detail":"old daemon"}"#).unwrap();
         assert!(!status.compatible());
         for (version, compatible) in [(0, false), (1, false), (2, true), (3, false)] {
             status.protocol_version = version;
@@ -294,20 +297,20 @@ mod tests {
         let native = OsString::from_vec(vec![b'x', 255, 128]);
         let nul = NativeString::Unix(vec![0]);
         let captured = NativeString::capture(&native);
-        let json = serde_json::to_vec(&captured).unwrap();
-        let decoded: NativeString = serde_json::from_slice(&json).unwrap();
+        let json = deser_json::to_string(&captured).map(String::into_bytes).unwrap();
+        let decoded: NativeString = deser_json::from_slice(&json).unwrap();
         assert_eq!(decoded.decode().unwrap(), native);
         assert_eq!(nul.decode(), Err(NativeStringError::Nul));
     }
 
     #[test]
     fn handoff_states_have_distinct_wire_messages() {
-        let prepared = serde_json::to_string(&ExecutionReply::Prepared).unwrap();
-        let accepted = serde_json::to_string(&ExecutionReply::Accepted).unwrap();
+        let prepared = deser_json::to_string(&ExecutionReply::Prepared).unwrap();
+        let accepted = deser_json::to_string(&ExecutionReply::Accepted).unwrap();
         assert_eq!(prepared, r#"{"execution":"prepared"}"#);
         assert_eq!(accepted, r#"{"execution":"accepted"}"#);
         assert_eq!(
-            serde_json::to_string(&ExecutionCommand::Commit).unwrap(),
+            deser_json::to_string(&ExecutionCommand::Commit).unwrap(),
             "\"commit\""
         );
     }

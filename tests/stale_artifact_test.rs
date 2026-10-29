@@ -598,8 +598,8 @@ fn make_depinfo_blobs_unreadable(cache_dir: &Path) -> usize {
         let Ok(content) = std::fs::read_to_string(dir.join("meta.json")) else {
             continue;
         };
-        let meta: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let Some(files) = meta["files"].as_array() else {
+        let meta: deser_value::Value = deser_json::from_str(&content).unwrap();
+        let Some(files) = meta["files"].as_seq() else {
             continue;
         };
         for file in files {

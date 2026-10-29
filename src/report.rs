@@ -1,6 +1,6 @@
 use anyhow::Result;
 use kache_core::time::UtcTime;
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
@@ -19,7 +19,7 @@ pub struct GcStatsPersisted {
     pub last_run: String,
     pub entries_evicted: usize,
     pub bytes_freed: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub disk_bytes_reclaimed: u64,
     pub blobs_removed: usize,
     pub duration_ms: u64,
@@ -27,41 +27,41 @@ pub struct GcStatsPersisted {
     /// detached worker a wrapper spawns when the store outgrows its limit) or
     /// `manual` (`kache gc` with no daemon). Empty in files written before the
     /// field existed.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub source: String,
-    #[serde(default)]
+    #[deser(default)]
     pub entries_pinned: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub entries_unreclaimable: usize,
     /// Bytes the size pass found held by target directories (#1206).
-    #[serde(default)]
+    #[deser(default)]
     pub bytes_held: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub entries_failed: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub entries_locked: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub entries_busy_snapshot: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub entries_recent_prefiltered: usize,
     /// Kept because the remote delivered them within the import pin (#1008).
-    #[serde(default)]
+    #[deser(default)]
     pub entries_import_pinned: usize,
     /// Time the run spent in its eviction writes, busy waits included.
-    #[serde(default)]
+    #[deser(default)]
     pub evict_write_ms: u64,
     /// Stale key lock files the run unlinked. Absent, like the two below,
     /// when the run did no housekeeping.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub key_locks_removed: Option<usize>,
     /// Key lock files left in `store/` after the run.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub key_locks_remaining: Option<usize>,
     /// Input predictions deleted as unused.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub predictions_pruned: Option<usize>,
     /// File hash memo rows deleted as not written for a month.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub file_hashes_pruned: Option<usize>,
 }
 
@@ -73,7 +73,7 @@ pub(crate) const GC_STATS_FILE: &str = "gc_stats.json";
 pub(crate) fn read_gc_stats(cache_dir: &Path) -> Option<GcStatsPersisted> {
     let path = cache_dir.join(GC_STATS_FILE);
     let content = std::fs::read_to_string(&path).ok()?;
-    match serde_json::from_str(&content) {
+    match deser_json::from_str(&content) {
         Ok(stats) => Some(stats),
         Err(e) => {
             log::warn!(
@@ -105,30 +105,30 @@ pub struct GcRunRecord {
     /// The failed evictions that lost the index write lock.
     pub entries_locked: usize,
     /// Failed read-to-write upgrades on stale WAL snapshots.
-    #[serde(default)]
+    #[deser(default)]
     pub entries_busy_snapshot: usize,
     /// Recent candidates skipped before reading metadata or opening a txn.
-    #[serde(default)]
+    #[deser(default)]
     pub entries_recent_prefiltered: usize,
     /// Kept because the remote delivered them within the import pin (#1008).
-    #[serde(default)]
+    #[deser(default)]
     pub entries_import_pinned: usize,
     pub entries_pinned: usize,
     pub entries_unreclaimable: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub bytes_held: u64,
     pub duration_ms: u64,
     /// Time spent in eviction writes, busy waits included.
-    #[serde(default)]
+    #[deser(default)]
     pub evict_write_ms: u64,
     /// Housekeeping counts, as in `gc_stats.json`; absent when none ran.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub key_locks_removed: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub key_locks_remaining: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub predictions_pruned: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub file_hashes_pruned: Option<usize>,
 }
 
@@ -224,7 +224,7 @@ pub(crate) fn write_last_gc_run(
         predictions_pruned: stats.housekeeping.map(|h| h.predictions_pruned),
         file_hashes_pruned: stats.housekeeping.map(|h| h.file_hashes_pruned),
     };
-    let json = serde_json::to_string_pretty(&persisted)?;
+    let json = deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&persisted)?;
     kache_store::atomic::atomic_replace(&cache_dir.join(GC_STATS_FILE), json.as_bytes())
 }
 
@@ -244,9 +244,9 @@ pub struct SessionRecord {
     /// First 16 hex digits of blake3(root), never the path itself: enough to
     /// tell builds of one tree apart across jobs without recording where the
     /// tree lives.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub root_hash: Option<String>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub session_id: String,
     pub summary: ReportSummary,
     pub timing: TimingBreakdown,
@@ -257,11 +257,11 @@ pub struct SessionRecord {
 /// cache from a busy machine.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SessionMachine {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub load_1m: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub cpus: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub index_bytes: Option<u64>,
     pub store_max: u64,
 }
@@ -311,12 +311,12 @@ pub const REPORT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BuildReport {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub eviction_evidence: Option<eviction_evidence::EvictionEvidenceReport>,
     pub schema_version: u32,
     pub meta: ReportMeta,
     pub summary: ReportSummary,
-    #[serde(default)]
+    #[deser(default)]
     pub timeline: ReportTimeline,
     pub timing: TimingBreakdown,
     pub storage: StorageBreakdown,
@@ -325,22 +325,22 @@ pub struct BuildReport {
     pub top_misses: Vec<CrateDetail>,
     pub top_hits: Vec<CrateDetail>,
     pub all_events: Vec<CrateDetail>,
-    #[serde(default, rename = "traceEvents", alias = "trace_events")]
+    #[deser(default, rename = "traceEvents", alias = "trace_events")]
     pub trace_events: Vec<TraceEvent>,
-    #[serde(
-        default = "default_trace_display_time_unit",
+    #[deser(
+        default = default_trace_display_time_unit(),
         rename = "displayTimeUnit"
     )]
     pub display_time_unit: String,
-    #[serde(default)]
+    #[deser(default)]
     pub bypass: BypassAnalysis,
     pub errors_detail: Vec<ErrorDetail>,
     pub suggestions: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub gc: Option<GcSummary>,
     /// Transfers with both a start and a finish, in log order. Empty for a
     /// root-filtered report, which does not load the transfer log.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[deser(default, skip_serializing_if = Vec::is_empty)]
     pub timed_transfers: Vec<TransferSpan>,
 }
 
@@ -352,23 +352,23 @@ pub struct ReportMeta {
     /// Kept for consumers that predate `since_secs`.
     pub since_hours: u64,
     /// The window in seconds (kunobi-ninja/kache#897). Authoritative.
-    #[serde(default)]
+    #[deser(default)]
     pub since_secs: u64,
     /// The window as requested: `15m`, `2h`, `24h`. Empty in reports written
     /// before this field existed; render through [`ReportMeta::window_label`].
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub since: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub root_filter: Option<String>,
     /// Present when the report selects one activity session instead of a window.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub session: Option<ReportSession>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReportSession {
     pub root: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub session_id: String,
     /// Local and older events lack session IDs; group their activity by idle gap.
     pub inferred: bool,
@@ -420,31 +420,31 @@ pub struct ReportSummary {
     pub local_hits: usize,
     pub prefetch_hits: usize,
     pub remote_hits: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub dups: usize,
     pub misses: usize,
     pub errors: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub passthroughs: usize,
     /// Query / probe invocations (`--print`, `-vV`, `cc -###`) that ran
     /// uncached. Counted separately from `passthroughs` because a probe is
     /// not a compilation — lumping it in inflates the "couldn't cache"
     /// signal (a clean build does many probes, zero real passthroughs).
-    #[serde(default)]
+    #[deser(default)]
     pub probes: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub skipped: usize,
     /// Compiles that ran and produced outputs kache then failed to store
     /// (kunobi-ninja/kache#629). Still counted in `misses` — the compiler did
     /// run — but broken out because these are the misses that repeat on every
     /// build instead of warming up.
-    #[serde(default)]
+    #[deser(default)]
     pub store_failures: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub fallbacks: usize,
     pub total_duration_ms: u64,
     /// Percentage of total compile time avoided by cache: time_saved / (time_saved + miss_compile_time).
-    #[serde(default)]
+    #[deser(default)]
     pub cache_efficiency_pct: f64,
 }
 
@@ -457,13 +457,13 @@ impl ReportSummary {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ReportTimeline {
-    #[serde(default)]
+    #[deser(default)]
     pub start_time: Option<String>,
-    #[serde(default)]
+    #[deser(default)]
     pub end_time: Option<String>,
-    #[serde(default)]
+    #[deser(default)]
     pub start_unix_ms: Option<i64>,
-    #[serde(default)]
+    #[deser(default)]
     pub end_unix_ms: Option<i64>,
     pub duration_ms: u64,
     pub event_count: usize,
@@ -473,7 +473,7 @@ pub struct ReportTimeline {
     pub passthrough_count: usize,
     /// Query / probe invocations, split out of `passthrough_count` (see
     /// [`ReportSummary::probes`]).
-    #[serde(default)]
+    #[deser(default)]
     pub probe_count: usize,
     pub skipped_count: usize,
     pub error_count: usize,
@@ -487,57 +487,57 @@ pub struct TimingBreakdown {
     pub avg_miss_ms: f64,
     pub avg_hit_overhead_ms: f64,
     pub miss_compile_time_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub avg_key_ms: f64,
-    #[serde(default)]
+    #[deser(default)]
     pub avg_lookup_ms: f64,
-    #[serde(default)]
+    #[deser(default)]
     pub avg_restore_ms: f64,
-    #[serde(default)]
+    #[deser(default)]
     pub avg_store_ms: f64,
-    #[serde(default)]
+    #[deser(default)]
     pub total_key_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub total_lookup_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub total_restore_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub total_store_ms: u64,
     /// Process start to wrapper entry, summed over cacheable crates. Zero
     /// for events written before schema 17.
-    #[serde(default)]
+    #[deser(default)]
     pub total_startup_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub avg_startup_ms: f64,
     /// The rustc dep-info pre-pass: inside `total_key_ms`, split out because
     /// it is a full extra compiler start per invocation. Average is per run.
-    #[serde(default)]
+    #[deser(default)]
     pub total_dep_info_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub dep_info_runs: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub avg_dep_info_ms: f64,
     /// Sampled verifications where a predicted input closure disagreed with
     /// the dep-info pre-pass. Zero unless `KACHE_VERIFY_INPUT_PREDICTIONS`
     /// asked for the comparison; the pre-pass answer always won regardless.
-    #[serde(default)]
+    #[deser(default)]
     pub prediction_mismatches: u64,
     /// Scheduler wait: flight join plus permit acquisition, kept apart so a
     /// saturated pool and a shared flight stay distinguishable.
-    #[serde(default)]
+    #[deser(default)]
     pub total_wait_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub total_flight_wait_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub total_permit_wait_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub avg_wait_ms: f64,
     /// Wrapper overhead no measured phase accounts for: overhead minus
     /// startup, key, lookup, wait, restore and store, clamped at zero per
     /// event. Overhead excludes the compile on a compiled crate.
-    #[serde(default)]
+    #[deser(default)]
     pub total_unattributed_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub avg_unattributed_ms: f64,
 }
 
@@ -570,9 +570,9 @@ fn pct_of(part: u64, total: u64) -> f64 {
 /// unavailable (shared inode), then a full copy.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StorageBreakdown {
-    #[serde(default)]
+    #[deser(default)]
     pub store_entries: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub stores: Vec<crate::store_view::StoreSummary>,
     /// Bytes restored by CoW reflink — zero physical copy.
     pub reflinked_bytes: u64,
@@ -589,28 +589,28 @@ pub struct StorageBreakdown {
     pub store_reflinked_bytes: u64,
     /// Bytes ingested into the store by a hardlink (shares an inode with the
     /// build's output — zero-copy on filesystems without CoW).
-    #[serde(default)]
+    #[deser(default)]
     pub store_hardlinked_bytes: u64,
     /// Bytes ingested into the store by a full physical copy (a real second
     /// copy — the fallback when neither reflink nor hardlink is available).
     pub store_copied_bytes: u64,
-    /// Copy-fallback reasons (#835), still as bytes. All `serde(default)` so
+    /// Copy-fallback reasons (#835), still as bytes. All `deser(default)` so
     /// old reports without them still parse; new reports always write them.
-    #[serde(default)]
+    #[deser(default)]
     pub store_copy_cross_device_bytes: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub store_copy_permission_bytes: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub store_copy_ineligible_bytes: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub store_copy_other_bytes: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub restore_copy_cross_device_bytes: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub restore_copy_permission_bytes: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub restore_copy_exclusive_bytes: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub restore_copy_other_bytes: u64,
     /// Unique content-addressed blobs in the local store.
     pub store_blobs: u64,
@@ -624,7 +624,7 @@ pub struct StorageBreakdown {
     /// Whether indexed unique blob bytes fit within the logical bytes held by
     /// live entries. False means the store index needs repair; in that state a
     /// dedup saving cannot be reported truthfully.
-    #[serde(default = "default_true")]
+    #[deser(default = default_true())]
     pub accounting_consistent: bool,
 }
 
@@ -670,20 +670,20 @@ pub struct NetworkAnalysis {
     /// the sum of per-download durations; it is not an observed wall-clock rate.
     pub throughput_mbps: f64,
     /// Bytes represented by download events carrying exact v3 wall timestamps.
-    #[serde(default)]
+    #[deser(default)]
     pub observed_bytes_down: u64,
     /// Number of successful downloads represented in the observed wall span.
-    #[serde(default)]
+    #[deser(default)]
     pub observed_downloads: usize,
     /// Span from the earliest timed download start to the latest timed download
     /// finish. It includes overlap and local import work.
-    #[serde(default)]
+    #[deser(default)]
     pub observed_span_ms: u64,
     /// Bytes per observed wall span, accounting for concurrent downloads.
-    #[serde(default)]
+    #[deser(default)]
     pub observed_throughput_mbps: f64,
     /// Peak overlap among successful downloads carrying exact wall timestamps.
-    #[serde(default)]
+    #[deser(default)]
     pub max_concurrent_downloads: usize,
     /// The remote backend CONFIGURED WHEN THIS REPORT WAS GENERATED: `"s3"`,
     /// `"filesystem"`, or `""` when no remote is configured.
@@ -697,34 +697,34 @@ pub struct NetworkAnalysis {
     /// so a report whose window spans a backend switch carries a single label that
     /// does not describe all of its transfers. Hence the explicit name — treat it
     /// as "how the remote is configured now", not "what produced these bytes".
-    #[serde(default)]
+    #[deser(default)]
     pub configured_backend: String,
     /// Legacy cumulative open+read service-time rate.
     pub network_throughput_mbps: f64,
     /// Legacy cumulative response-body service-time rate.
-    #[serde(default)]
+    #[deser(default)]
     pub body_throughput_mbps: f64,
     /// Largest cumulative phase for successful downloads, derived from raw phase totals.
-    #[serde(default)]
+    #[deser(default)]
     pub dominant_download_phase: String,
-    #[serde(default)]
+    #[deser(default)]
     pub dominant_download_phase_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub dominant_download_phase_pct: f64,
     /// Time spent waiting for response headers across GET requests.
-    #[serde(default)]
+    #[deser(default)]
     pub total_request_ms: u64,
     /// Time spent reading response bodies across GET requests.
-    #[serde(default)]
+    #[deser(default)]
     pub total_body_ms: u64,
     /// Time spent waiting for remote-operation concurrency permits.
-    #[serde(default)]
+    #[deser(default)]
     pub total_semaphore_wait_ms: u64,
     /// Time spent on HEAD/existence checks before downloads.
-    #[serde(default)]
+    #[deser(default)]
     pub total_head_ms: u64,
     /// Total number of GET requests issued for successful downloads.
-    #[serde(default)]
+    #[deser(default)]
     pub total_get_requests: u32,
     /// Compression ratio (original / compressed). 0 if no data.
     pub compression_ratio: f64,
@@ -733,33 +733,33 @@ pub struct NetworkAnalysis {
     /// Total time spent in zstd decompression (ms).
     pub total_decompress_ms: u64,
     /// Total time spent extracting downloaded archives (ms).
-    #[serde(default)]
+    #[deser(default)]
     pub total_extract_ms: u64,
     /// Disk I/O time for downloads (directly measured when available), ms.
     pub total_disk_io_ms: u64,
     /// Total time spent importing downloaded entries into SQLite.
-    #[serde(default)]
+    #[deser(default)]
     pub total_import_ms: u64,
     /// Total time spent waiting for the SQLite store lock before import.
-    #[serde(default)]
+    #[deser(default)]
     pub total_import_lock_wait_ms: u64,
     /// Total upload compression time (ms).
-    #[serde(default)]
+    #[deser(default)]
     pub total_compression_ms: u64,
     /// Total upload HEAD check time (ms).
-    #[serde(default)]
+    #[deser(default)]
     pub total_head_checks_ms: u64,
     /// Number of v2 blobs that were already local (dedup savings).
     pub blobs_skipped: u32,
     /// Total v2 blobs across all downloads.
     pub blobs_total: u32,
-    #[serde(default)]
+    #[deser(default)]
     pub v1_downloads: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub v2_downloads: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub v3_downloads: usize,
-    #[serde(default)]
+    #[deser(default)]
     pub unknown_format_downloads: usize,
     pub slowest_downloads: Vec<TransferDetail>,
 }
@@ -776,20 +776,20 @@ pub struct BypassAnalysis {
     pub passthroughs: usize,
     /// Query / probe invocations, excluded from `passthroughs` (see
     /// [`ReportSummary::probes`]).
-    #[serde(default)]
+    #[deser(default)]
     pub probes: usize,
     /// Passthroughs the adaptive incremental policy chose for a crate under
     /// edit (`adaptive seed`, `adaptive active`). Included in `passthroughs`.
-    #[serde(default)]
+    #[deser(default)]
     pub edit_rebuilds: usize,
     /// Compiles kache ran itself and did not store: passthroughs it ran
     /// directly, and compiles whose store it declined (`skipped` with a
     /// reason). Probes and fallback-wrapper runs are excluded; the event
     /// cannot say whether a fallback compiled or served its own hit.
-    #[serde(default)]
+    #[deser(default)]
     pub uncached_compiles: usize,
     /// Wrapper time of `uncached_compiles`.
-    #[serde(default)]
+    #[deser(default)]
     pub uncached_compile_time_ms: u64,
     pub skipped: usize,
     pub fallbacks: usize,
@@ -811,26 +811,26 @@ pub struct BypassReason {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BypassDetail {
     pub crate_name: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub root: String,
     /// Package of a build-script run. Empty for compiles.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub package: String,
     pub result: String,
     pub route: String,
     pub reason: String,
-    #[serde(default)]
+    #[deser(default)]
     pub start_time: String,
-    #[serde(default)]
+    #[deser(default)]
     pub end_time: String,
-    #[serde(default)]
+    #[deser(default)]
     pub start_unix_ms: i64,
-    #[serde(default)]
+    #[deser(default)]
     pub end_unix_ms: i64,
     pub elapsed_ms: u64,
     pub exit_code: Option<i32>,
     pub timestamp: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub fallback_attempt: Option<crate::fallback::Attempt>,
 }
 
@@ -848,7 +848,7 @@ pub struct TraceEvent {
     /// Perfetto color hint keyed to the result (hit / miss / passthrough …), so
     /// the timeline is legible at a glance. Top-level chrome-trace field;
     /// omitted when absent (#456).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub cname: Option<String>,
     pub args: TraceArgs,
 }
@@ -862,10 +862,10 @@ pub struct TraceArgs {
     pub reason: String,
     pub cache_key: String,
     /// Object file recorded on a C or C++ event. Empty for rustc.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub object_output: String,
     /// Package of a build-script run. Empty for compiles.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub package: String,
     pub elapsed_ms: u64,
     pub compile_time_ms: u64,
@@ -880,27 +880,27 @@ pub struct TraceArgs {
     /// Wrapper phases (ms), the numbers the nested phase slices are drawn
     /// from. `dep_info_ms` is inside `key_ms`; `wait_ms` is flight plus
     /// permit; `unattributed_ms` is the overhead no phase accounts for.
-    #[serde(default)]
+    #[deser(default)]
     pub startup_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub key_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub dep_info_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub dep_info_runs: u32,
-    #[serde(default)]
+    #[deser(default)]
     pub lookup_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub wait_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub flight_wait_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub permit_wait_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub restore_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub store_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub unattributed_ms: u64,
     pub exit_code: Option<i32>,
 }
@@ -939,62 +939,62 @@ pub struct TracePhaseArgs {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrateDetail {
     pub crate_name: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub root: String,
     pub result: String,
-    #[serde(default)]
+    #[deser(default)]
     pub start_time: String,
-    #[serde(default)]
+    #[deser(default)]
     pub end_time: String,
-    #[serde(default)]
+    #[deser(default)]
     pub start_unix_ms: i64,
-    #[serde(default)]
+    #[deser(default)]
     pub end_unix_ms: i64,
     pub elapsed_ms: u64,
     pub compile_time_ms: u64,
     pub overhead_ms: u64,
     pub size: u64,
     pub cache_key: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub object_output: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub package: String,
-    #[serde(default)]
+    #[deser(default)]
     pub store_output_blobs: u32,
-    #[serde(default)]
+    #[deser(default)]
     pub store_duplicate_blobs: u32,
-    #[serde(default)]
+    #[deser(default)]
     pub store_new_blobs: u32,
     /// Times kache spawned the underlying compiler (0 on a hit, 1 on a
     /// dup/miss). Deterministic; the e2e harness asserts on it.
-    #[serde(default)]
+    #[deser(default)]
     pub compiler_runs: u32,
     /// Times kache spawned the preprocessor (`cc -E`) — once per C/C++
     /// compile for the cache key, 0 for rustc.
-    #[serde(default)]
+    #[deser(default)]
     pub preprocessor_runs: u32,
     /// Times kache spawned a compiler probe (`cc --version` / `cc -###`).
     /// Memoized on disk — one per build per flag set, 0 once warm.
-    #[serde(default)]
+    #[deser(default)]
     pub probe_runs: u32,
     /// Times kache spawned the rustc dep-info pre-pass for this event.
     /// `0` on a warm predicted hit. Deterministic; the e2e harness asserts
     /// on it.
-    #[serde(default)]
+    #[deser(default)]
     pub dep_info_runs: u32,
     /// Sampled verifications this event's key computation ran where the
     /// prediction disagreed with the pre-pass. Zero unless verification was
     /// asked for; the e2e harness asserts on it.
-    #[serde(default)]
+    #[deser(default)]
     pub prediction_mismatches: u32,
     /// Why this compile's outputs were not cached, when `Store::put` failed
     /// (kunobi-ninja/kache#629). Empty on every normal outcome; when set, this
     /// row is a miss that will recur on every build until the cause is fixed.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub store_error: String,
-    #[serde(default)]
+    #[deser(default)]
     pub store_handed_off: bool,
-    #[serde(default)]
+    #[deser(default)]
     pub daemon_store_ms: u64,
 }
 
@@ -1002,43 +1002,43 @@ pub struct CrateDetail {
 pub struct TransferDetail {
     pub crate_name: String,
     pub direction: String,
-    #[serde(default)]
+    #[deser(default)]
     pub format: String,
-    #[serde(default)]
+    #[deser(default)]
     pub cache_key: String,
-    #[serde(default)]
+    #[deser(default)]
     pub object_key: String,
     pub compressed_bytes: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub started_at_unix_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub finished_at_unix_ms: u64,
     pub elapsed_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub network_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub semaphore_wait_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub head_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub request_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub body_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub decompress_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub extract_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub disk_io_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub import_lock_wait_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub import_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub request_count: u32,
-    #[serde(default)]
+    #[deser(default)]
     pub blobs_skipped: u32,
-    #[serde(default)]
+    #[deser(default)]
     pub blobs_total: u32,
     pub throughput_mbps: f64,
     pub ok: bool,
@@ -1049,9 +1049,9 @@ pub struct TransferDetail {
 pub struct TransferSpan {
     pub direction: String,
     pub crate_name: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub cache_key: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub object_key: String,
     pub started_at_unix_ms: u64,
     pub finished_at_unix_ms: u64,
@@ -1485,7 +1485,7 @@ fn load_gc_summary_all(config: &Config, cutoff: UtcTime) -> Option<GcSummary> {
 fn load_gc_summary(cache_dir: &std::path::Path, cutoff: UtcTime) -> Option<GcSummary> {
     let path = cache_dir.join("gc_stats.json");
     let content = std::fs::read_to_string(&path).ok()?;
-    let persisted: GcStatsPersisted = serde_json::from_str(&content).ok()?;
+    let persisted: GcStatsPersisted = deser_json::from_str(&content).ok()?;
 
     // Only include if GC ran within the report window
     let last_run = UtcTime::parse_rfc3339(&persisted.last_run)?;
@@ -2043,7 +2043,7 @@ fn bypass_reason(e: &BuildEvent) -> String {
 /// their original reason.
 fn concise_diagnostic_reason(reason: &str) -> Option<String> {
     reason.match_indices('{').find_map(|(start, _)| {
-        let diagnostic: serde_json::Value = serde_json::from_str(&reason[start..]).ok()?;
+        let diagnostic: deser_value::Value = deser_json::from_str(&reason[start..]).ok()?;
         if diagnostic.get("$message_type")?.as_str()? != "diagnostic" {
             return None;
         }
@@ -2808,7 +2808,7 @@ fn transfer_trace_us(unix_ms: u64) -> i64 {
     (unix_ms as i64) * 1000
 }
 
-fn append_transfer_spans(out: &mut Vec<serde_json::Value>, spans: &[TransferSpan]) {
+fn append_transfer_spans(out: &mut Vec<deser_value::Value>, spans: &[TransferSpan]) {
     for (index, span) in spans.iter().enumerate() {
         let id = format!("transfer-{index}");
         out.push(transfer_edge(span, "b", &id));
@@ -2816,13 +2816,13 @@ fn append_transfer_spans(out: &mut Vec<serde_json::Value>, spans: &[TransferSpan
     }
 }
 
-fn transfer_edge(span: &TransferSpan, ph: &str, id: &str) -> serde_json::Value {
+fn transfer_edge(span: &TransferSpan, ph: &str, id: &str) -> deser_value::Value {
     let ms = if ph == "b" {
         span.started_at_unix_ms
     } else {
         span.finished_at_unix_ms
     };
-    serde_json::json!({
+    deser_value::value!({
         "name": format!("{} {}", span.direction, span.crate_name),
         "cat": "kache.transfer",
         "ph": ph,
@@ -2831,9 +2831,9 @@ fn transfer_edge(span: &TransferSpan, ph: &str, id: &str) -> serde_json::Value {
         "tid": 0,
         "id": id,
         "args": {
-            "cache_key": span.cache_key,
-            "object_key": span.object_key,
-            "crate_name": span.crate_name,
+            "cache_key": &span.cache_key,
+            "object_key": &span.object_key,
+            "crate_name": &span.crate_name,
         }
     })
 }
@@ -2933,15 +2933,17 @@ pub fn scrub(text: &str, terms: &[String]) -> String {
 }
 
 /// [`scrub`] over every string in a JSON document.
-pub fn scrub_json(value: &mut serde_json::Value, terms: &[String]) {
-    match value {
-        serde_json::Value::String(text) => *text = scrub(text, terms),
-        serde_json::Value::Array(items) => {
-            items.iter_mut().for_each(|item| scrub_json(item, terms))
+pub fn scrub_json(value: &mut deser_value::Value, terms: &[String]) {
+    match value.kind_mut() {
+        deser_value::Kind::Str(text) => *text = scrub(text, terms),
+        deser_value::Kind::Seq(items) => {
+            items.iter_mut().for_each(|item| scrub_json(item, terms));
         }
-        serde_json::Value::Object(fields) => fields
-            .values_mut()
-            .for_each(|field| scrub_json(field, terms)),
+        deser_value::Kind::Map(fields) => {
+            for field in fields.values_mut() {
+                scrub_json(field, terms);
+            }
+        }
         _ => {}
     }
 }
@@ -2988,24 +2990,24 @@ pub fn redact_report(report: &mut BuildReport) {
 }
 
 pub fn format_json(report: &BuildReport) -> Result<String> {
-    Ok(serde_json::to_string_pretty(report)?)
+    Ok(deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(report)?)
 }
 
 pub fn format_trace_json(report: &BuildReport) -> Result<String> {
     #[derive(Serialize)]
     struct TraceOutput<'a> {
-        #[serde(rename = "displayTimeUnit")]
+        #[deser(rename = "displayTimeUnit")]
         display_time_unit: &'a str,
-        #[serde(rename = "traceEvents")]
-        trace_events: Vec<serde_json::Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[deser(rename = "traceEvents")]
+        trace_events: Vec<deser_value::Value>,
+        #[deser(skip_serializing_if = Option::is_none)]
         session: Option<&'a ReportSession>,
     }
 
     // Lead with chrome-trace metadata events that name the process and each
     // worker lane, so Perfetto labels them "kache" / "worker N" instead of
     // "Process 1" / "Thread <n>" (#456).
-    let mut trace_events: Vec<serde_json::Value> = Vec::new();
+    let mut trace_events: Vec<deser_value::Value> = Vec::new();
     trace_events.push(trace_metadata_event("process_name", 0, "kache"));
     let mut lanes: Vec<u32> = report.trace_events.iter().map(|e| e.tid).collect();
     lanes.sort_unstable();
@@ -3021,14 +3023,14 @@ pub fn format_trace_json(report: &BuildReport) -> Result<String> {
     // and keeps file order for equal timestamps, so the crate slice must
     // precede the `startup` slice that starts with it.
     for event in &report.trace_events {
-        trace_events.push(serde_json::to_value(event)?);
+        trace_events.push(deser_value::to_value(&event)?);
         for phase in trace_phase_events(event) {
-            trace_events.push(serde_json::to_value(phase)?);
+            trace_events.push(deser_value::to_value(&phase)?);
         }
     }
     append_transfer_spans(&mut trace_events, &report.timed_transfers);
 
-    Ok(serde_json::to_string_pretty(&TraceOutput {
+    Ok(deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&TraceOutput {
         display_time_unit: &report.display_time_unit,
         trace_events,
         session: report.meta.session.as_ref(),
@@ -3036,8 +3038,8 @@ pub fn format_trace_json(report: &BuildReport) -> Result<String> {
 }
 
 /// A chrome-trace `M` (metadata) event used to label the process / worker lanes.
-fn trace_metadata_event(name: &str, tid: u32, value: &str) -> serde_json::Value {
-    serde_json::json!({
+fn trace_metadata_event(name: &str, tid: u32, value: &str) -> deser_value::Value {
+    deser_value::value!({
         "name": name,
         "ph": "M",
         "pid": 1,

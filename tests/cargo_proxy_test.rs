@@ -2,7 +2,7 @@
 
 #![cfg(unix)]
 
-use serde_json::Value;
+use deser_value::Value;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
@@ -248,7 +248,7 @@ fn canonical_cargo_home_alias_keeps_existing_cargo_unit_fresh() {
     let events: Vec<Value> = std::fs::read_to_string(cache.join("events.jsonl"))
         .unwrap()
         .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter_map(|line| deser_json::from_str(line).ok())
         .filter(|event: &Value| event["crate_name"] == "proxy_fixture")
         .collect();
     assert_eq!(
@@ -320,7 +320,7 @@ fn collapsed_rustflags_stay_out_of_the_environment_cargo_passes_on() {
     let events: Vec<Value> = std::fs::read_to_string(cache.join("events.jsonl"))
         .unwrap()
         .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter_map(|line| deser_json::from_str(line).ok())
         .filter(|event: &Value| event["crate_name"] == "proxy_key_fixture")
         .collect();
     assert_eq!(events.len(), 2, "events: {events:#?}");
@@ -737,7 +737,7 @@ fn cargo_proxy_isolates_fingerprints_while_sharing_final_target_and_kache() {
     let events: Vec<Value> = std::fs::read_to_string(cache.join("events.jsonl"))
         .unwrap()
         .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter_map(|line| deser_json::from_str(line).ok())
         .filter(|event: &Value| event["crate_name"] == "proxy_shared_target")
         .collect();
     assert_eq!(events.len(), 3, "events: {events:#?}");
@@ -793,13 +793,13 @@ fn receipt_cleanup_removes_old_feature_units_and_keeps_next_check_fresh() {
     // Cargo may materialize its own metadata during the first observation.
     run(&["cargo", "--", "check", "--offline"], true);
     let inspect = run(&["clean", "--units", "--json"], true);
-    let json: Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    let json: Value = deser_json::from_slice(&inspect.stdout).unwrap();
     assert_eq!(json["preview"], true);
-    assert_eq!(json["targets"].as_array().unwrap().len(), 1, "{json}");
-    assert_eq!(json["targets"][0]["plan"]["status"], "ready", "{json}");
+    assert_eq!(json["targets"].as_seq().unwrap().len(), 1, "{json:?}");
+    assert_eq!(json["targets"][0]["plan"]["status"], "ready", "{json:?}");
     assert!(
         json["targets"][0]["plan"]["units"].as_u64().unwrap() > 0,
-        "{json}"
+        "{json:?}"
     );
     assert!(json["targets"][0]["plan"]["bytes"].as_u64().unwrap() > 0);
     assert!(json["targets"][0]["plan"]["protected"].as_u64().unwrap() > 0);
@@ -809,12 +809,12 @@ fn receipt_cleanup_removes_old_feature_units_and_keeps_next_check_fresh() {
         filetime::set_file_atime(&file, filetime::FileTime::from_unix_time(1, 0)).unwrap();
     }
     let clean = run(&["clean", "--artifacts", "--json", "--yes"], true);
-    let json: Value = serde_json::from_slice(&clean.stdout).unwrap();
+    let json: Value = deser_json::from_slice(&clean.stdout).unwrap();
     assert_eq!(json["preview"], false);
     assert_eq!(json["targets"][0]["removed"]["bytes"], planned_bytes);
     assert!(
         json["targets"][0]["removed"]["units"].as_u64().unwrap() > 0,
-        "{json}"
+        "{json:?}"
     );
     let warm = run(
         &["cargo", "--", "check", "--offline", "--message-format=json"],
@@ -823,7 +823,7 @@ fn receipt_cleanup_removes_old_feature_units_and_keeps_next_check_fresh() {
     let records: Vec<Value> = String::from_utf8(warm.stdout)
         .unwrap()
         .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
+        .map(|l| deser_json::from_str(l).unwrap())
         .collect();
     let artifacts: Vec<_> = records
         .iter()
@@ -834,7 +834,7 @@ fn receipt_cleanup_removes_old_feature_units_and_keeps_next_check_fresh() {
     let events: Vec<Value> = std::fs::read_to_string(cache.join("events.jsonl"))
         .unwrap()
         .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
+        .map(|l| deser_json::from_str(l).unwrap())
         .collect();
     let cleanup: Vec<_> = events
         .iter()
@@ -849,7 +849,7 @@ fn receipt_cleanup_removes_old_feature_units_and_keeps_next_check_fresh() {
     // A source edit invalidates evidence rather than authorizing a rebuild.
     std::fs::write(project.join("src/lib.rs"), "pub fn answer() -> u8 { 43 }\n").unwrap();
     let changed = run(&["clean", "--units", "--json", "--yes"], true);
-    let changed: Value = serde_json::from_slice(&changed.stdout).unwrap();
+    let changed: Value = deser_json::from_slice(&changed.stdout).unwrap();
     assert_eq!(changed["targets"][0]["plan"]["units"], 0);
     assert_ne!(changed["targets"][0]["plan"]["status"], "ready");
 }
@@ -959,14 +959,14 @@ impl ReceiptAcceptance {
             self.run(&["cargo", "--", "check", "--offline"], true, "alpha");
         }
         let preview = self.clean(&["--json"], "alpha");
-        assert_eq!(preview["targets"].as_array().unwrap().len(), 1, "{preview}");
+        assert_eq!(preview["targets"].as_seq().unwrap().len(), 1, "{preview:?}");
         assert_eq!(
             preview["targets"][0]["plan"]["status"], "ready",
-            "{preview}"
+            "{preview:?}"
         );
         assert!(
             preview["targets"][0]["plan"]["units"].as_u64().unwrap() > 0,
-            "fixture must contain proven obsolete dependency units: {preview}"
+            "fixture must contain proven obsolete dependency units: {preview:?}"
         );
     }
 
@@ -984,7 +984,7 @@ impl ReceiptAcceptance {
             .into_iter()
             .chain(flags.iter().copied())
             .collect();
-        serde_json::from_slice(&self.run(&args, true, environment).stdout).unwrap()
+        deser_json::from_slice(&self.run(&args, true, environment).stdout).unwrap()
     }
 }
 
@@ -1010,7 +1010,7 @@ fn receipt_cleanup_preserves_live_build_script_and_external_dependency_units() {
     let cleaned = fixture.clean(&["--json", "--yes"], "alpha");
     assert!(
         cleaned["targets"][0]["removed"]["units"].as_u64().unwrap() > 0,
-        "{cleaned}"
+        "{cleaned:?}"
     );
     let warm = fixture.run(
         &["cargo", "--", "check", "--offline", "--message-format=json"],
@@ -1020,7 +1020,7 @@ fn receipt_cleanup_preserves_live_build_script_and_external_dependency_units() {
     let records: Vec<Value> = String::from_utf8(warm.stdout)
         .unwrap()
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| deser_json::from_str(line).unwrap())
         .collect();
     let artifacts: Vec<_> = records
         .iter()
@@ -1033,7 +1033,7 @@ fn receipt_cleanup_preserves_live_build_script_and_external_dependency_units() {
     );
     assert!(artifacts.iter().any(|record| {
         record["target"]["kind"]
-            .as_array()
+            .as_seq()
             .unwrap()
             .iter()
             .any(|kind| kind == "custom-build")
@@ -1064,7 +1064,7 @@ fn receipt_cleanup_keeps_outputs_after_external_inputs_or_environment_change() {
     let environment = fixture.clean(&["--json", "--yes"], "beta");
     assert_ne!(
         environment["targets"][0]["plan"]["status"], "ready",
-        "{environment}"
+        "{environment:?}"
     );
     assert_eq!(environment["targets"][0]["removed"]["units"], 0);
     assert_eq!(receipt_target_files(&fixture.target), unchanged);
@@ -1077,7 +1077,7 @@ fn receipt_cleanup_keeps_outputs_after_external_inputs_or_environment_change() {
     let dependency = fixture.clean(&["--json", "--yes"], "alpha");
     assert_ne!(
         dependency["targets"][0]["plan"]["status"], "ready",
-        "{dependency}"
+        "{dependency:?}"
     );
     assert_eq!(dependency["targets"][0]["removed"]["units"], 0);
     assert_eq!(receipt_target_files(&fixture.target), unchanged);
@@ -1086,7 +1086,7 @@ fn receipt_cleanup_keeps_outputs_after_external_inputs_or_environment_change() {
     let before_script_change = receipt_target_files(&fixture.target);
     std::fs::write(&fixture.script_input, "bravo").unwrap();
     let script = fixture.clean(&["--json", "--yes"], "alpha");
-    assert_ne!(script["targets"][0]["plan"]["status"], "ready", "{script}");
+    assert_ne!(script["targets"][0]["plan"]["status"], "ready", "{script:?}");
     assert_eq!(script["targets"][0]["removed"]["units"], 0);
     assert_eq!(receipt_target_files(&fixture.target), before_script_change);
 }
@@ -1102,9 +1102,9 @@ fn receipt_cleanup_skips_busy_profiles_and_corrupted_receipts() {
         .unwrap();
     lock.lock().unwrap();
     let busy = fixture.clean(&["--json", "--yes"], "alpha");
-    assert_eq!(busy["targets"][0]["plan"]["status"], "busy", "{busy}");
+    assert_eq!(busy["targets"][0]["plan"]["status"], "busy", "{busy:?}");
     let receipt: Value =
-        serde_json::from_slice(&std::fs::read(fixture.receipt_path()).unwrap()).unwrap();
+        deser_json::from_slice(&std::fs::read(fixture.receipt_path()).unwrap()).unwrap();
     assert_eq!(
         busy["targets"][0]["plan"]["command"], receipt["command"],
         "a busy plan must preserve the recorded command"
@@ -1123,7 +1123,7 @@ fn receipt_cleanup_skips_busy_profiles_and_corrupted_receipts() {
     let invalid = fixture.clean(&["--json", "--yes"], "alpha");
     assert_ne!(
         invalid["targets"][0]["plan"]["status"], "ready",
-        "{invalid}"
+        "{invalid:?}"
     );
     assert_eq!(invalid["targets"][0]["removed"]["units"], 0);
     assert_eq!(receipt_target_files(&fixture.target), before);
@@ -1138,11 +1138,11 @@ fn receipt_cleanup_json_preview_and_dry_run_preserve_target_inventory() {
         assert_eq!(preview["preview"], true);
         assert_eq!(
             preview["targets"][0]["plan"]["status"], "ready",
-            "{preview}"
+            "{preview:?}"
         );
         assert!(
             preview["targets"][0]["plan"]["units"].as_u64().unwrap() > 0,
-            "{preview}"
+            "{preview:?}"
         );
         assert_eq!(preview["targets"][0]["removed"]["units"], 0);
         assert_eq!(receipt_target_files(&fixture.target), before);
@@ -1168,7 +1168,7 @@ fn receipt_cleanup_rejects_workspace_configuration_and_unreported_source_changes
         let result = fixture.clean(&["--json", "--yes"], "alpha");
         assert_ne!(
             result["targets"][0]["plan"]["status"], "ready",
-            "{relative}: {result}"
+            "{relative}: {result:?}"
         );
         assert_eq!(result["targets"][0]["removed"]["units"], 0);
         assert_eq!(receipt_target_files(&fixture.target), before, "{relative}");
@@ -1186,7 +1186,7 @@ fn receipt_cleanup_rejects_new_external_build_script_inputs() {
     )
     .unwrap();
     let result = fixture.clean(&["--json", "--yes"], "alpha");
-    assert_ne!(result["targets"][0]["plan"]["status"], "ready", "{result}");
+    assert_ne!(result["targets"][0]["plan"]["status"], "ready", "{result:?}");
     assert_eq!(result["targets"][0]["removed"]["units"], 0);
     assert_eq!(receipt_target_files(&fixture.target), before);
 }
@@ -1195,9 +1195,9 @@ fn receipt_cleanup_rejects_new_external_build_script_inputs() {
 fn receipt_cleanup_keeps_outputs_when_a_live_fingerprint_changes() {
     let fixture = ReceiptAcceptance::new();
     let receipt: Value =
-        serde_json::from_slice(&std::fs::read(fixture.receipt_path()).unwrap()).unwrap();
+        deser_json::from_slice(&std::fs::read(fixture.receipt_path()).unwrap()).unwrap();
     let unit = receipt["units"]
-        .as_array()
+        .as_seq()
         .unwrap()
         .iter()
         .find(|unit| {
@@ -1223,7 +1223,7 @@ fn receipt_cleanup_keeps_outputs_when_a_live_fingerprint_changes() {
     std::fs::write(&file, "changed freshness evidence").unwrap();
     let before = receipt_target_files(&fixture.target);
     let result = fixture.clean(&["--json", "--yes"], "alpha");
-    assert_ne!(result["targets"][0]["plan"]["status"], "ready", "{result}");
+    assert_ne!(result["targets"][0]["plan"]["status"], "ready", "{result:?}");
     assert_eq!(result["targets"][0]["removed"]["units"], 0);
     assert_eq!(receipt_target_files(&fixture.target), before);
 }
@@ -1236,18 +1236,18 @@ fn receipt_cleanup_rejects_parent_directory_paths_in_a_receipt() {
     fixture.capture();
     let receipt_path = fixture.receipt_path();
     let mut receipt: Value =
-        serde_json::from_slice(&std::fs::read(&receipt_path).unwrap()).unwrap();
+        deser_json::from_slice(&std::fs::read(&receipt_path).unwrap()).unwrap();
     let unit = receipt["units"]
-        .as_array_mut()
+        .as_seq_mut()
         .unwrap()
         .iter_mut()
         .find(|unit| unit["live"] == false && unit["known"] == true)
         .unwrap();
-    unit["parts"] = serde_json::json!([fixture.target.join("../valuable.txt")]);
-    std::fs::write(receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+    unit["parts"] = deser_value::value!([fixture.target.join("../valuable.txt").display().to_string()]);
+    std::fs::write(receipt_path, deser_json::to_string(&receipt).map(String::into_bytes).unwrap()).unwrap();
     let before = receipt_target_files(&fixture.target);
     let result = fixture.clean(&["--json", "--yes"], "alpha");
-    assert_ne!(result["targets"][0]["plan"]["status"], "ready", "{result}");
+    assert_ne!(result["targets"][0]["plan"]["status"], "ready", "{result:?}");
     assert_eq!(result["targets"][0]["removed"]["units"], 0);
     assert_eq!(
         std::fs::read_to_string(outside).unwrap(),
@@ -1284,13 +1284,13 @@ fn receipt_cleanup_rejects_a_changed_custom_cargo_executable() {
         run(&["cargo", "--", "check", "--offline"]);
     }
     let before = run(&["clean", "--units", "--json"]);
-    let before: Value = serde_json::from_slice(&before.stdout).unwrap();
-    assert_eq!(before["targets"][0]["plan"]["status"], "ready", "{before}");
+    let before: Value = deser_json::from_slice(&before.stdout).unwrap();
+    assert_eq!(before["targets"][0]["plan"]["status"], "ready", "{before:?}");
     assert!(before["targets"][0]["plan"]["units"].as_u64().unwrap() > 0);
     let files = receipt_target_files(&fixture.target);
     std::fs::write(&cargo, format!("{script}# updated executable\n")).unwrap();
     let changed = run(&["clean", "--units", "--json", "--yes"]);
-    let changed: Value = serde_json::from_slice(&changed.stdout).unwrap();
+    let changed: Value = deser_json::from_slice(&changed.stdout).unwrap();
     assert_ne!(changed["targets"][0]["plan"]["status"], "ready");
     assert_eq!(changed["targets"][0]["plan"]["units"], 0);
     assert_eq!(receipt_target_files(&fixture.target), files);
@@ -1311,7 +1311,7 @@ fn receipt_cleanup_tracks_default_build_script_inputs_outside_the_workspace() {
     let preview = fixture.clean(&["--json"], "alpha");
     assert_eq!(
         preview["targets"][0]["plan"]["status"], "ready",
-        "{preview}"
+        "{preview:?}"
     );
     let warm = fixture.run(
         &["cargo", "--", "check", "--offline", "--message-format=json"],
@@ -1321,7 +1321,7 @@ fn receipt_cleanup_tracks_default_build_script_inputs_outside_the_workspace() {
     let artifacts: Vec<Value> = String::from_utf8(warm.stdout)
         .unwrap()
         .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|line| deser_json::from_str::<Value>(line).ok())
         .filter(|record| record["reason"] == "compiler-artifact")
         .collect();
     assert!(!artifacts.is_empty());
@@ -1331,7 +1331,7 @@ fn receipt_cleanup_tracks_default_build_script_inputs_outside_the_workspace() {
     let changed = fixture.clean(&["--json", "--yes"], "alpha");
     assert_ne!(
         changed["targets"][0]["plan"]["status"], "ready",
-        "{changed}"
+        "{changed:?}"
     );
     assert_eq!(changed["targets"][0]["removed"]["units"], 0);
     assert_eq!(receipt_target_files(&fixture.target), files);

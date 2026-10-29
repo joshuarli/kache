@@ -1,6 +1,6 @@
 use crate::invocation::InvocationEnv;
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -478,7 +478,7 @@ pub struct FileConfig {
     /// but the config editor must preserve them semantically across a
     /// load/save round trip even though it does not expose form fields for
     /// them.
-    pub workspace: Option<toml::Value>,
+    pub workspace: Option<deser_value::Value>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -1622,7 +1622,7 @@ impl Config {
                 return Err(error).with_context(|| format!("reading {}", config_path.display()));
             }
         };
-        let config = toml::from_str(&content).map_err(|error| {
+        let config = deser_toml::from_str(&content).map_err(|error| {
             anyhow::anyhow!(
                 "{} is not a valid kache config: {}",
                 config_path.display(),
@@ -1637,14 +1637,16 @@ impl Config {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).context("creating config directory")?;
         }
-        let content = toml::to_string_pretty(config).context("serializing config")?;
+        let content = deser_toml::to_string(config).context("serializing config")?;
         std::fs::write(path, content).context("writing config file")?;
         Ok(())
     }
 
-    /// Write the keys that differ between `before` and `after` into the file
-    /// at `path`. Comments, formatting and keys kache does not know stay as
-    /// they are. A missing file is written in full.
+    /// Replace the file at `path` with `after`. A missing file is created.
+    /// An existing file that is not valid TOML is left untouched and returned
+    /// as an error. Comments and keys the schema does not know are dropped.
+    /// When `before` and `after` serialize to the same value, the file bytes
+    /// stay as they are.
     #[cfg(feature = "file-write")]
     pub fn update_file_config_at(
         path: &std::path::Path,
@@ -1652,20 +1654,22 @@ impl Config {
         after: &FileConfig,
     ) -> Result<()> {
         let existing = match std::fs::read_to_string(path) {
-            Ok(existing) => existing,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Self::save_file_config_to(after, path);
+            Ok(existing) => Some(existing),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(error).with_context(|| format!("reading {}", path.display()));
             }
-            Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
         };
-        let mut document: toml_edit::DocumentMut = existing
-            .parse()
-            .with_context(|| format!("{} is not valid TOML", path.display()))?;
-        let before = toml::Table::try_from(before).context("serializing config")?;
-        let after = toml::Table::try_from(after).context("serializing config")?;
-        apply_table_changes(document.as_table_mut(), &before, &after)?;
-        std::fs::write(path, document.to_string()).context("writing config file")?;
-        Ok(())
+        if let Some(existing) = &existing {
+            deser_toml::from_str::<deser_value::Value>(existing)
+                .with_context(|| format!("{} is not valid TOML", path.display()))?;
+        }
+        let before = deser_value::to_value(&before).context("serializing config")?;
+        let after_value = deser_value::to_value(&after).context("serializing config")?;
+        if existing.is_some() && before == after_value {
+            return Ok(());
+        }
+        Self::save_file_config_to(after, path)
     }
 
     /// Load the chosen file laid over the host layer (see [`HOST_CONFIG_PATH`]).
@@ -1708,7 +1712,9 @@ impl Config {
                 // With no chosen file, the host layer is the whole file config.
                 // It already passed the schema check in `parse_host_config`.
                 let host_only = host_layer
-                    .and_then(|table| toml::Value::Table(table).try_into().ok())
+                    .and_then(|table| {
+                        deser_value::from_value(&deser_value::Value::from(table)).ok()
+                    })
                     .unwrap_or_default();
                 (Ok(host_only), provenance)
             }
@@ -2789,12 +2795,12 @@ fn read_host_config_snapshot_for(invocation: &InvocationEnv) -> Option<HostConfi
 /// Parse the host file into a table ready to merge. It is checked against
 /// the config schema on its own, so a typo is reported against the host file
 /// instead of surfacing later as an error in the chosen one.
-fn parse_host_config(host: &HostConfigSnapshot) -> Result<toml::Table> {
+fn parse_host_config(host: &HostConfigSnapshot) -> Result<deser_value::Map> {
     if matches!(host.state, ConfigFileState::Unreadable) {
         anyhow::bail!("cannot read {}", host.path.display());
     }
     let content = std::str::from_utf8(&host.bytes).context("reading host config as UTF-8")?;
-    let mut table: toml::Table = toml::from_str(content).context("parsing host config")?;
+    let mut table: deser_value::Map = deser_toml::from_str(content).context("parsing host config")?;
     for (key, reason) in HOST_EXCLUDED_KEYS {
         if remove_config_key(&mut table, key) {
             log::warn!(
@@ -2804,21 +2810,20 @@ fn parse_host_config(host: &HostConfigSnapshot) -> Result<toml::Table> {
             );
         }
     }
-    toml::Value::Table(table.clone())
-        .try_into::<FileConfig>()
+    deser_value::from_value::<FileConfig>(&deser_value::Value::from(table.clone()))
         .context("host config does not match the kache config schema")?;
     Ok(table)
 }
 
 /// Remove the key at `path`, a table or a value. `true` when it was there.
-fn remove_config_key(table: &mut toml::Table, path: &[&str]) -> bool {
+fn remove_config_key(table: &mut deser_value::Map, path: &[&str]) -> bool {
     match path {
         [] => false,
         [key] => table.remove(*key).is_some(),
-        [first, rest @ ..] => match table.get_mut(*first) {
-            Some(toml::Value::Table(inner)) => remove_config_key(inner, rest),
-            _ => false,
-        },
+        [first, rest @ ..] => table
+            .get_mut(*first)
+            .and_then(|value| value.as_map_mut())
+            .is_some_and(|inner| remove_config_key(inner, rest)),
     }
 }
 
@@ -2826,7 +2831,7 @@ fn remove_config_key(table: &mut toml::Table, path: &[&str]) -> bool {
 /// The host layer to merge under the chosen file, or `None`. A host file that
 /// cannot be read or parsed is warned about and skipped: one bad machine-wide
 /// file must not change how every build on the host resolves its settings.
-fn host_config_layer(host: Option<&HostConfigSnapshot>) -> Option<toml::Table> {
+fn host_config_layer(host: Option<&HostConfigSnapshot>) -> Option<deser_value::Map> {
     let host = host?;
     match parse_host_config(host) {
         Ok(table) => Some(table),
@@ -2847,20 +2852,27 @@ fn is_host_atomic_table(path: &[String]) -> bool {
 /// `base`, and keys it does not set keep `base`'s value. Nested tables merge
 /// recursively, except those in [`HOST_ATOMIC_TABLES`], which `over` replaces
 /// whole. Arrays and scalars are always replaced, never concatenated.
-fn merge_config_tables(base: &mut toml::Table, over: toml::Table) {
+fn merge_config_tables(base: &mut deser_value::Map, over: deser_value::Map) {
     merge_config_tables_at(base, over, &mut Vec::new());
 }
 
-fn merge_config_tables_at(base: &mut toml::Table, over: toml::Table, path: &mut Vec<String>) {
+fn merge_config_tables_at(
+    base: &mut deser_value::Map,
+    over: deser_value::Map,
+    path: &mut Vec<String>,
+) {
     for (key, value) in over {
-        path.push(key.clone());
+        let name = key.as_str().unwrap_or("").to_string();
+        path.push(name);
         let recurse = !is_host_atomic_table(path)
-            && matches!(value, toml::Value::Table(_))
-            && matches!(base.get(&key), Some(toml::Value::Table(_)));
+            && value.is_map()
+            && base.get(&key).is_some_and(|value| value.is_map());
         if recurse {
-            if let (Some(toml::Value::Table(existing)), toml::Value::Table(incoming)) =
-                (base.get_mut(&key), value)
-            {
+            let deser_value::Kind::Map(incoming) = value.into_kind() else {
+                path.pop();
+                continue;
+            };
+            if let Some(existing) = base.get_mut(&key).and_then(|value| value.as_map_mut()) {
                 merge_config_tables_at(existing, incoming, path);
             }
         } else {
@@ -2870,93 +2882,13 @@ fn merge_config_tables_at(base: &mut toml::Table, over: toml::Table, path: &mut 
     }
 }
 
-/// Spellings serde accepts for the same key. An edit updates the spelling the
-/// file already uses, so the file never ends up with both.
-#[cfg(feature = "file-write")]
-const FILE_CONFIG_KEY_ALIASES: [(&str, &str); 1] = [("user_agent", "user-agent")];
-
-#[cfg(feature = "file-write")]
-fn existing_key_spelling<'a>(table: &dyn toml_edit::TableLike, key: &'a str) -> &'a str {
-    FILE_CONFIG_KEY_ALIASES
-        .iter()
-        .find_map(|&(canonical, alias)| {
-            (key == canonical && !table.contains_key(canonical) && table.contains_key(alias))
-                .then_some(alias)
-        })
-        .unwrap_or(key)
-}
-
-/// Apply the difference between two serialized configs to a parsed document.
-#[cfg(feature = "file-write")]
-fn apply_table_changes(
-    table: &mut dyn toml_edit::TableLike,
-    before: &toml::Table,
-    after: &toml::Table,
-) -> Result<()> {
-    for key in before.keys().filter(|key| !after.contains_key(*key)) {
-        let key = existing_key_spelling(table, key);
-        table.remove(key);
-    }
-    for (key, new) in after {
-        let old = before.get(key);
-        if old == Some(new) {
-            continue;
-        }
-        let key = existing_key_spelling(table, key);
-        if let toml::Value::Table(new_table) = new {
-            let empty = toml::Table::new();
-            let old_table = old.and_then(toml::Value::as_table).unwrap_or(&empty);
-            if let Some(existing) = table
-                .get_mut(key)
-                .and_then(toml_edit::Item::as_table_like_mut)
-            {
-                apply_table_changes(existing, old_table, new_table)?;
-            } else {
-                let mut created = toml_edit::Table::new();
-                created.set_implicit(true);
-                apply_table_changes(&mut created, &empty, new_table)?;
-                if !created.is_empty() {
-                    table.insert(key, toml_edit::Item::Table(created));
-                }
-            }
-            continue;
-        }
-        let mut value: toml_edit::Value = new
-            .to_string()
-            .parse()
-            .with_context(|| format!("encoding config value for {key}"))?;
-        // Replace in place: inserting would drop the comments kept on the key.
-        match table.get_mut(key) {
-            Some(item) => {
-                if let Some(previous) = item.as_value() {
-                    *value.decor_mut() = previous.decor().clone();
-                }
-                *item = toml_edit::Item::Value(value);
-            }
-            None => {
-                table.insert(key, toml_edit::Item::Value(value));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// One line for a TOML error: its position and message, without the source
-/// snippet of the multi-line form.
-pub fn describe_toml_error(error: &toml::de::Error) -> String {
-    let full = error.to_string();
-    let position = full.lines().next().unwrap_or_default().trim();
-    let message = error
-        .message()
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("; ");
-    if position.is_empty() || position == message {
-        message
-    } else {
-        format!("{position}: {message}")
+/// One line for a TOML error: its position and message, without a source snippet.
+pub fn describe_toml_error(error: &deser::Error) -> String {
+    let message = error.message().trim();
+    match (error.line(), error.column()) {
+        (Some(line), Some(column)) => format!("line {line}, column {column}: {message}"),
+        (Some(line), None) => format!("line {line}: {message}"),
+        _ => message.to_string(),
     }
 }
 
@@ -2969,7 +2901,7 @@ pub fn unusable_config_file() -> Option<(PathBuf, String)> {
         .err()?;
     let reason = error
         .chain()
-        .find_map(|cause| cause.downcast_ref::<toml::de::Error>())
+        .find_map(|cause| cause.downcast_ref::<deser::Error>())
         .map(describe_toml_error)
         .unwrap_or_else(|| format!("{error:#}"));
     Some((path, reason))
@@ -2977,15 +2909,13 @@ pub fn unusable_config_file() -> Option<(PathBuf, String)> {
 
 /// Parse the chosen file's content, laid over the host layer when there is
 /// one. With no host layer this is exactly the single-file parse.
-fn parse_layered_file_config_for(content: &str, host: Option<toml::Table>) -> Result<FileConfig> {
+fn parse_layered_file_config_for(content: &str, host: Option<deser_value::Map>) -> Result<FileConfig> {
     let Some(mut merged) = host else {
-        return toml::from_str(content).context("parsing kache config file");
+        return deser_toml::from_str(content).context("parsing kache config file");
     };
-    let chosen: toml::Table = toml::from_str(content).context("parsing kache config file")?;
+    let chosen: deser_value::Map = deser_toml::from_str(content).context("parsing kache config file")?;
     merge_config_tables(&mut merged, chosen);
-    toml::Value::Table(merged)
-        .try_into()
-        .context("parsing kache config file")
+    deser_value::from_value(&deser_value::Value::from(merged)).context("parsing kache config file")
 }
 
 /// What the host layer contributes, as `kache doctor` reports it.
@@ -3042,9 +2972,9 @@ pub fn host_config_status() -> HostConfigStatus {
         }
     };
     let chosen_path = normalize_config_path(resolve_config_path());
-    let chosen: toml::Table = std::fs::read_to_string(&chosen_path)
+    let chosen: deser_value::Map = std::fs::read_to_string(&chosen_path)
         .ok()
-        .and_then(|content| toml::from_str(&content).ok())
+        .and_then(|content| deser_toml::from_str(&content).ok())
         .unwrap_or_default();
     let ignore_env = Config::ignore_env_enabled(&Config::load_file_config());
     let mut keys = Vec::new();
@@ -3063,37 +2993,34 @@ pub fn host_config_status() -> HostConfigStatus {
 }
 
 fn collect_host_keys(
-    host: &toml::Table,
-    chosen: Option<&toml::Table>,
+    host: &deser_value::Map,
+    chosen: Option<&deser_value::Map>,
     path: &mut Vec<String>,
     chosen_path: &std::path::Path,
     ignore_env: bool,
     out: &mut Vec<HostConfigKey>,
 ) {
     for (key, value) in host {
-        path.push(key.clone());
-        let chosen_value = chosen.and_then(|table| table.get(key));
-        match value {
-            toml::Value::Table(inner) if !is_host_atomic_table(path) => {
-                let chosen_inner = match chosen_value {
-                    Some(toml::Value::Table(table)) => Some(table),
-                    _ => None,
-                };
-                collect_host_keys(inner, chosen_inner, path, chosen_path, ignore_env, out);
-            }
-            _ => {
-                let source = if let Some(var) = env_override_for(path, ignore_env) {
-                    HostKeySource::Env(var)
-                } else if chosen_value.is_some() {
-                    HostKeySource::ChosenFile(chosen_path.to_path_buf())
-                } else {
-                    HostKeySource::Host
-                };
-                out.push(HostConfigKey {
-                    key: path.join("."),
-                    source,
-                });
-            }
+        let name = key.as_str().unwrap_or("").to_string();
+        path.push(name.clone());
+        let chosen_value = chosen.and_then(|table| table.get(&name));
+        if !is_host_atomic_table(path)
+            && let Some(inner) = value.as_map()
+        {
+            let chosen_inner = chosen_value.and_then(|value| value.as_map());
+            collect_host_keys(inner, chosen_inner, path, chosen_path, ignore_env, out);
+        } else {
+            let source = if let Some(var) = env_override_for(path, ignore_env) {
+                HostKeySource::Env(var)
+            } else if chosen_value.is_some() {
+                HostKeySource::ChosenFile(chosen_path.to_path_buf())
+            } else {
+                HostKeySource::Host
+            };
+            out.push(HostConfigKey {
+                key: path.join("."),
+                source,
+            });
         }
         path.pop();
     }

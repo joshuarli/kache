@@ -52,12 +52,12 @@ const PROBE: &str = ".kache-atime-probe";
 const ARMED_DIR: &str = "unit-prune";
 
 /// What [`prune`] removed from one target directory.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, deser::Serialize)]
 pub(crate) struct Pruned {
     pub(crate) units: usize,
     pub(crate) bytes: u64,
     /// Units kept because a build read or wrote them since the last arming.
-    #[serde(skip)]
+    #[deser(skip)]
     pub(crate) used: usize,
 }
 

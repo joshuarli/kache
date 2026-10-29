@@ -1,5 +1,5 @@
 use crate::*;
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -13,7 +13,7 @@ pub struct StoreSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 pub enum Request {
     /// Compilation uses its own prepare/commit/completion exchange. Older
     /// daemons reject this command before a client sends Commit.
@@ -42,7 +42,7 @@ pub enum Request {
     /// A wrapper hands the daemon a finished cc compile to store.
     /// Older handlers lack the atomic receipt; reject their protocol instead
     /// of allowing an ambiguous timeout to publish and log twice.
-    #[serde(rename = "publish_cc_v2")]
+    #[deser(rename = "publish_cc_v2")]
     PublishCc(Box<PublishCcRequest>),
     /// A build of a target directory started: copy its recorded large
     /// executables beside their destinations (see `prestage`).
@@ -62,17 +62,17 @@ pub struct GcRequest {
     /// Legacy wire field retained so old clients and daemons can still
     /// exchange an explicit `--max-age` request during rolling upgrades.
     pub max_age_hours: Option<u64>,
-    #[serde(default)]
+    #[deser(default)]
     pub mode: GcRequestMode,
     /// Effective automatic age policy loaded by the requesting CLI. Old
     /// daemons ignore this unknown field; new daemons no longer substitute
     /// their startup config for a manual request.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub effective_max_age_hours: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 pub enum GcRequestMode {
     /// A pre-mode client. Resolve `Some` as explicit age and `None` using the
     /// daemon's configured automatic policy.
@@ -84,7 +84,7 @@ pub enum GcRequestMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StatsResponse {
-    #[serde(default)]
+    #[deser(default)]
     pub stores: Vec<StoreSummary>,
     pub total_size: u64,
     pub max_size: u64,
@@ -94,32 +94,32 @@ pub struct StatsResponse {
     /// Content-dedup figures for the daemon's store. Defaulted for an old
     /// daemon so a new client can suppress the section instead of mixing in
     /// figures from its own differently configured store.
-    #[serde(default)]
+    #[deser(default)]
     pub blob_stats: Option<BlobStats>,
     /// Bounded recent session summaries from the daemon's event directory.
-    #[serde(default)]
+    #[deser(default)]
     pub recent_summaries: Vec<BuildSummaryEvent>,
-    #[serde(default)]
+    #[deser(default)]
     pub version: String,
     /// Daemon executable mtime. Clients from 1.0.x and earlier replace a daemon
     /// whose executable is older than theirs; later clients only display it.
-    #[serde(default)]
+    #[deser(default)]
     pub build_epoch: u64,
     /// GC request semantics supported by this daemon. Version 2 means the
     /// daemon applies age before duplicate/size pressure and reports a policy
     /// breakdown. Missing means an older daemon, so clients must not send a
     /// mutating GC request.
-    #[serde(default)]
+    #[deser(default)]
     pub gc_policy_version: u32,
     /// In-flight miss compiles registered by wrapper heartbeat monitors
     /// (kunobi-ninja/kache#131). Defaulted for old-daemon/new-client mixes.
-    #[serde(default)]
+    #[deser(default)]
     pub in_flight: Vec<InFlightEntry>,
     /// The configuration this daemon actually loaded (kunobi-ninja/kache#689).
     /// Defaulted to `None` so a daemon that predates the field is
     /// distinguishable from one that reported it — the CLI then falls back to
     /// its own config and labels the affected lines as client-derived.
-    #[serde(default)]
+    #[deser(default)]
     pub effective_config: Option<EffectiveConfig>,
 }
 
@@ -134,21 +134,21 @@ pub struct GcBreakdown {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Response {
     pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     pub evicted: Option<usize>,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[deser(default, skip_serializing_if = is_false)]
     pub skipped: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub gc: Option<GcBreakdown>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     pub stats: Option<StatsResponse>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub health: Option<DaemonHealth>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub execution_status: Option<execution::ExecutionStatus>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     pub hash_results: Option<Vec<HashFileResult>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deser(skip_serializing_if = Option::is_none)]
     pub error: Option<String>,
 }
 

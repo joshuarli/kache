@@ -643,7 +643,7 @@ fn finish_handoff(receipt: &HandoffReceipt, reply: Result<String>) -> Handoff {
     match std::fs::remove_file(&receipt.pending) {
         Ok(()) => {
             let reason = match reply {
-                Ok(line) => match serde_json::from_str::<Response>(&line) {
+                Ok(line) => match deser_json::from_str::<Response>(&line) {
                     Ok(response) => response.error.unwrap_or_else(|| {
                         "daemon replied without accepting the receipt".to_string()
                     }),
@@ -684,9 +684,9 @@ fn send_handoff(socket: &Path, request: &PublishCcRequest, budget: Duration) -> 
             .filter(|duration| !duration.is_zero())
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "cc handoff deadline"))
     };
-    let mut line = serde_json::to_vec(&crate::daemon::Request::PublishCc(Box::new(
+    let mut line = deser_json::to_string(&crate::daemon::Request::PublishCc(Box::new(
         request.clone(),
-    )))?;
+    ))).map(String::into_bytes)?;
     line.push(b'\n');
     let _ = remaining()?;
     let mut stream = UnixStream::connect(socket)?;
@@ -1124,7 +1124,7 @@ mod tests {
         "the daemon removes the snapshot after the put"
     );
     let events = std::fs::read_to_string(config.event_log_path()).unwrap();
-    let event: BuildEvent = serde_json::from_str(events.lines().last().unwrap()).unwrap();
+    let event: BuildEvent = deser_json::from_str(events.lines().last().unwrap()).unwrap();
     assert!(event.store_handed_off);
     assert_eq!(event.schema, 26);
     assert_eq!(event.rebuilt_package, request.event.rebuilt_package);
@@ -1678,11 +1678,12 @@ mod tests {
         let config = crate::test_support::test_config(dir.path().join("cache"));
         let request = handoff_request(&config, &key("protocol"), dir.path());
         let value =
-            serde_json::to_value(crate::daemon::Request::PublishCc(Box::new(request))).unwrap();
+            deser_value::to_value(&crate::daemon::Request::PublishCc(Box::new(request))).unwrap();
         assert!(value.get("publish_cc_v2").is_some());
-        assert!(serde_json::from_value::<crate::daemon::Request>(value.clone()).is_ok());
-        let legacy = serde_json::json!({"publish_cc": value["publish_cc_v2"]});
-        assert!(serde_json::from_value::<crate::daemon::Request>(legacy).is_err());
+        assert!(deser_value::from_value::<crate::daemon::Request>(&value.clone()).is_ok());
+        let publish_cc = value["publish_cc_v2"].clone();
+        let legacy = deser_value::value!({"publish_cc": publish_cc});
+        assert!(deser_value::from_value::<crate::daemon::Request>(&legacy).is_err());
     }
 
     #[cfg(unix)]

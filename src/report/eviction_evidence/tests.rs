@@ -55,7 +55,7 @@ fn missing_index_is_reported_without_creation_or_path_leaks() {
         evidence.stores[1].error.as_deref(),
         Some("index unavailable")
     );
-    let json = serde_json::to_string(&evidence).unwrap();
+    let json = deser_json::to_string(&evidence).unwrap();
     assert!(!json.contains("private-missing"));
     assert!(json.contains("index unavailable"));
     // No store observed an eviction, so the text block stays out.
@@ -77,9 +77,9 @@ fn json_and_full_formats_include_limits_and_old_reports_deserialize() {
     let config = crate::test_support::test_config(dir.path().to_path_buf());
     let report =
         super::super::generate_report(&config, crate::since::SinceWindow::DEFAULT, 10).unwrap();
-    let json = serde_json::to_value(&report).unwrap();
+    let json = deser_value::to_value(&report).unwrap();
     assert_eq!(json["eviction_evidence"]["horizon_secs"], 604800);
-    let limits = json["eviction_evidence"]["limitations"].as_array().unwrap();
+    let limits = json["eviction_evidence"]["limitations"].as_seq().unwrap();
     assert!(
         limits
             .iter()
@@ -94,8 +94,8 @@ fn json_and_full_formats_include_limits_and_old_reports_deserialize() {
     assert!(!super::super::format_text(&report).contains("Eviction observations"));
     assert!(!super::super::format_markdown(&report).contains("Immature and invalid"));
     let mut old = json;
-    old.as_object_mut().unwrap().remove("eviction_evidence");
-    let old: super::super::BuildReport = serde_json::from_value(old).unwrap();
+    old.as_map_mut().unwrap().remove("eviction_evidence");
+    let old: super::super::BuildReport = deser_value::from_value(&old).unwrap();
     assert!(old.eviction_evidence.is_none());
 }
 

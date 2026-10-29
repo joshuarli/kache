@@ -1,7 +1,7 @@
 //! Real Cargo regression for #723: `extra_inputs` must participate in Cargo's
 //! warm-target freshness, not only in Kache's key after the wrapper is invoked.
 
-use serde_json::Value;
+use deser_value::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
@@ -192,7 +192,7 @@ fn fixture_event_count(cache_dir: &Path) -> usize {
     std::fs::read_to_string(cache_dir.join("events.jsonl"))
         .unwrap_or_default()
         .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|line| deser_json::from_str::<Value>(line).ok())
         .filter(|event| event["crate_name"] == CRATE_NAME)
         .count()
 }
@@ -201,7 +201,7 @@ fn last_fixture_event_result(cache_dir: &Path) -> Option<String> {
     std::fs::read_to_string(cache_dir.join("events.jsonl"))
         .ok()?
         .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|line| deser_json::from_str::<Value>(line).ok())
         .filter(|event| event["crate_name"] == CRATE_NAME)
         .filter_map(|event| event["result"].as_str().map(str::to_owned))
         .next_back()
@@ -211,7 +211,7 @@ fn last_fixture_passthrough_reason(cache_dir: &Path) -> Option<String> {
     std::fs::read_to_string(cache_dir.join("events.jsonl"))
         .ok()?
         .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|line| deser_json::from_str::<Value>(line).ok())
         .filter(|event| event["crate_name"] == CRATE_NAME)
         .filter_map(|event| event["passthrough_reason"].as_str().map(str::to_owned))
         .next_back()

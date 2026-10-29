@@ -744,7 +744,7 @@ fn stored_prediction(store: &Store, identity: &str) -> Result<Option<Prediction>
     if schema != PREDICTION_SCHEMA {
         return Ok(None);
     }
-    let prediction: Prediction = serde_json::from_str(&json)?;
+    let prediction: Prediction = deser_json::from_str(&json)?;
     Ok((prediction.version == PREDICTION_SCHEMA).then_some(prediction))
 }
 
@@ -792,7 +792,7 @@ fn replay(stdout: &[u8], stderr: &[u8]) {
 
 /// What a previous run declared it depends on, so this run can decide from
 /// the tree alone whether the recorded result still applies.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 struct Prediction {
     version: u32,
     /// Declared `rerun-if-changed` paths, spelled with the roots mapped.
@@ -808,11 +808,11 @@ struct Prediction {
     /// not be rewritten. The result is restored only where each has the value
     /// it had. `None` in a prediction written before this field: such a
     /// result is keyed on its `OUT_DIR` unless `portable_out_dir`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     embedded_roots: Option<Vec<String>>,
     /// Some recorded text files were stored with their roots as placeholders
     /// and are written back with this run's roots.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[deser(default, skip_serializing_if = std::ops::Not::not)]
     rewrites_text: bool,
 }
 
@@ -1463,7 +1463,7 @@ impl Run {
     }
 
     fn record_prediction(&self, prediction: &Prediction) -> Result<()> {
-        let json = serde_json::to_string(prediction)?;
+        let json = deser_json::to_string(prediction)?;
         self.store.file_hash_cache().put_input_prediction(
             &self.identity(),
             PREDICTION_SCHEMA,
@@ -1626,7 +1626,7 @@ impl Run {
             .find(|file| file.name == MANIFEST_NAME)
             .context("recorded run has no manifest")?;
         let manifest: Manifest =
-            serde_json::from_slice(&std::fs::read(blobs.blob_path(&manifest.hash))?)?;
+            deser_json::from_slice(&std::fs::read(blobs.blob_path(&manifest.hash))?)?;
         anyhow::ensure!(
             matches!(manifest.version, 1..=rooted_links::MANIFEST_VERSION),
             "unsupported build-script manifest"
@@ -1887,7 +1887,7 @@ impl Run {
             outside_symlinks: outside_outputs.symlinks,
         };
         let manifest_path = staging.path().join(MANIFEST_NAME);
-        std::fs::write(&manifest_path, serde_json::to_vec(&manifest)?)?;
+        std::fs::write(&manifest_path, deser_json::to_string(&manifest).map(String::into_bytes)?)?;
         let mut output_files = files;
         output_files.push((manifest_path, MANIFEST_NAME.to_string()));
         let size: u64 = output_files
@@ -1983,7 +1983,7 @@ fn unrecorded_reason(why: &str) -> String {
     format!("refused|build-script run not recorded: {why}")
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, deser::Serialize, deser::Deserialize)]
 struct Manifest {
     version: u32,
     /// Every directory under `OUT_DIR`, so empty ones come back too.
@@ -1992,32 +1992,32 @@ struct Manifest {
     stdout: String,
     stderr: String,
     /// Files stored with their roots as placeholders (version 2).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[deser(default, skip_serializing_if = Vec::is_empty)]
     rewritten: Vec<String>,
     /// Symlinks that stay inside `OUT_DIR` (version 3).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[deser(default, skip_serializing_if = Vec::is_empty)]
     symlinks: Vec<Symlink>,
     /// Links whose targets are checked suffixes of the run's allowed roots.
     /// Version 5 keeps older readers from silently omitting these links.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[deser(default, skip_serializing_if = Vec::is_empty)]
     rooted_symlinks: Vec<RootedSymlink>,
     /// Directories under the target directory, outside `OUT_DIR`, that the
     /// script named. Version 4. Absent on a manifest written before that.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[deser(default, skip_serializing_if = Vec::is_empty)]
     outside_directories: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[deser(default, skip_serializing_if = Vec::is_empty)]
     outside_empty_files: Vec<EmptyFile>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[deser(default, skip_serializing_if = Vec::is_empty)]
     outside_symlinks: Vec<Symlink>,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, deser::Serialize, deser::Deserialize)]
 struct EmptyFile {
     name: String,
     executable: bool,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, deser::Serialize, deser::Deserialize)]
 struct Symlink {
     name: String,
     target: String,
@@ -3929,7 +3929,7 @@ mod tests {
                 &run.identity(),
                 1,
                 Some(CRATE_NAME),
-                &serde_json::to_string(&legacy).unwrap(),
+                &deser_json::to_string(&legacy).unwrap(),
             )
             .unwrap();
         assert!(
@@ -4656,7 +4656,7 @@ mod tests {
             .iter()
             .find(|file| file.name == MANIFEST_NAME)
             .unwrap();
-        serde_json::from_slice(&std::fs::read(run.store.blob_path(&manifest.hash)).unwrap())
+        deser_json::from_slice(&std::fs::read(run.store.blob_path(&manifest.hash)).unwrap())
             .unwrap()
     }
 
@@ -4775,8 +4775,8 @@ mod tests {
                 a.environment.target = Some(target_name.into());
                 b.environment.target = Some(target_name.into());
                 let relative = format!("{target_name}/debug/build/{unit}/out/libdemo.a");
-                let json = serde_json::json!({"version":4, "directories":[], "empty_files":[], "stdout":format!("cargo:rustc-link-search=${{KACHE_TARGET_DIR}}/{relative}\n"), "stderr":""});
-                let meta = put_manifest(&a, "target-owned-search", &json.to_string());
+                let json = deser_value::value!({"version":4, "directories":[], "empty_files":[], "stdout":format!("cargo:rustc-link-search=${{KACHE_TARGET_DIR}}/{relative}\n"), "stderr":""});
+                let meta = put_manifest(&a, "target-owned-search", &deser_json::to_string(&json).unwrap());
                 std::fs::write(b.environment.out_dir.join("untouched"), "keep").unwrap();
                 let error = b.restore(&meta).unwrap_err().to_string();
                 assert!(error.contains("not provided by DEP_*"), "{error}");
@@ -4862,8 +4862,8 @@ mod tests {
             };
             let sibling = physical_profile.join("build/dep/0123456789abcdef/out/lib");
             std::fs::create_dir_all(&sibling).unwrap();
-            let json = serde_json::json!({"version":4, "directories":[], "empty_files":[], "stdout":format!("cargo:rustc-link-search={}\n", sibling.canonicalize().unwrap().display()), "stderr":""});
-            let meta = put_manifest(&run, "canonical-owned-search", &json.to_string());
+            let json = deser_value::value!({"version":4, "directories":[], "empty_files":[], "stdout":format!("cargo:rustc-link-search={}\n", sibling.canonicalize().unwrap().display()), "stderr":""});
+            let meta = put_manifest(&run, "canonical-owned-search", &deser_json::to_string(&json).unwrap());
             std::fs::write(out.join("untouched"), "keep").unwrap();
             let error = run.restore(&meta).unwrap_err().to_string();
             assert!(error.contains("not provided by DEP_*"), "{alias}: {error}");
@@ -4891,8 +4891,8 @@ mod tests {
                 .contains("not provided by DEP_*")
         );
         for version in 1..=5 {
-            let json = serde_json::json!({"version":version, "directories":[], "empty_files":[], "stdout":"cargo:rustc-link-search=${KACHE_TARGET_DIR}/debug/build/scratch-1/out/lib\n", "stderr":""});
-            let meta = put_manifest(&a, &format!("unsafe-v{version}"), &json.to_string());
+            let json = deser_value::value!({"version":version, "directories":[], "empty_files":[], "stdout":"cargo:rustc-link-search=${KACHE_TARGET_DIR}/debug/build/scratch-1/out/lib\n", "stderr":""});
+            let meta = put_manifest(&a, &format!("unsafe-v{version}"), &deser_json::to_string(&json).unwrap());
             std::fs::write(b.environment.out_dir.join("untouched"), "keep").unwrap();
             let error = b.restore(&meta).unwrap_err().to_string();
             assert!(error.contains("not provided by DEP_*"), "{error}");
@@ -5027,12 +5027,12 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let json = serde_json::json!({
+            let json = deser_value::value!({
                 "version":5, "directories":[], "empty_files":[], "stdout":"", "stderr":"",
                 "symlinks":[{"name":"through", "target":format!("crate/{suffix}")}],
                 "rooted_symlinks":[{"name":"crate", "root":"package", "suffix":""}]
             });
-            let meta = put_manifest(&run, &format!("mixed-{index}"), &json.to_string());
+            let meta = put_manifest(&run, &format!("mixed-{index}"), &deser_json::to_string(&json).unwrap());
             assert!(run.restore(&meta).is_err(), "{suffix}");
             assert!(
                 directory_is_empty(&out),
@@ -5552,7 +5552,7 @@ mod tests {
             outside_symlinks: Vec::new(),
         };
         let manifest_path = dir.as_path().join(MANIFEST_NAME);
-        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        std::fs::write(&manifest_path, deser_json::to_string(&manifest).map(String::into_bytes).unwrap()).unwrap();
         run.store
             .put_with_compile_time_independent(
                 "tampered",
@@ -6457,8 +6457,25 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn toml_basic(text: &str) -> String {
+        let mut out = String::with_capacity(text.len() + 2);
+        out.push('"');
+        for c in text.chars() {
+            match c {
+                '\\' | '"' => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+
+    #[cfg(unix)]
     fn quote_path(path: &Path) -> String {
-        toml::Value::String(path.display().to_string()).to_string()
+        toml_basic(&path.display().to_string())
     }
 
     /// `readonly` of `None` writes an empty value so a host config cannot
@@ -6549,7 +6566,7 @@ mod tests {
         std::fs::read_to_string(path)
             .unwrap()
             .lines()
-            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter_map(|line| deser_json::from_str::<deser_value::Value>(line).ok())
             .filter_map(|event| event["result"].as_str().map(str::to_string))
             .collect()
     }

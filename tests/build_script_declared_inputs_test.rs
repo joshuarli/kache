@@ -14,7 +14,7 @@
 
 #![cfg(unix)]
 
-use serde_json::Value;
+use deser_value::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -192,7 +192,7 @@ fn build_units(
     );
     let mut latest = BTreeMap::new();
     for line in std::fs::read_to_string(log).unwrap()[before..].lines() {
-        let event: Value = serde_json::from_str(line).unwrap();
+        let event: Value = deser_json::from_str(line).unwrap();
         if let Some(name) = event["crate_name"].as_str()
             && units.contains(&name)
         {
@@ -219,9 +219,9 @@ fn key(events: &BTreeMap<String, Value>, unit: &str) -> String {
         .get(unit)
         .unwrap_or_else(|| panic!("no event for {unit}: {events:?}"))["cache_key"]
         .as_str()
-        .unwrap_or_else(|| panic!("{unit} has no key: {}", events[unit]))
+        .unwrap_or_else(|| panic!("{unit} has no key: {:?}", events[unit]))
         .to_string();
-    assert!(!key.is_empty(), "{unit} was not cached: {}", events[unit]);
+    assert!(!key.is_empty(), "{unit} was not cached: {:?}", events[unit]);
     key
 }
 
@@ -372,10 +372,10 @@ pub fn rewrite(_input: TokenStream) -> TokenStream {
     // A fresh cache compiles before the key and keys from what the compile
     // wrote, with the inputs resolved before it.
     let first = build_units(&checkout, &target, &cache, &["live"], &[]);
-    assert_eq!(result(&first, "live"), "skipped", "{}", first["live"]);
+    assert_eq!(result(&first, "live"), "skipped", "{:?}", first["live"]);
     assert_eq!(
         first["live"]["skip_reason"], "build-script-inputs-changed",
-        "{}",
+        "{:?}",
         first["live"]
     );
     // The original content keys the same and finds nothing stored, whether
@@ -390,7 +390,7 @@ pub fn rewrite(_input: TokenStream) -> TokenStream {
             &[("KACHE_DEFERRED_DISCOVERY", deferred)],
         );
         assert_eq!(key(&again, "live"), key(&first, "live"), "{deferred}");
-        assert_eq!(result(&again, "live"), "skipped", "{}", again["live"]);
+        assert_eq!(result(&again, "live"), "skipped", "{:?}", again["live"]);
     }
 }
 
@@ -453,7 +453,7 @@ fn what_cargo_writes_in_a_home_inside_the_package_is_not_one_of_its_files() {
         let event = log
             .lines()
             .rev()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .map(|line| deser_json::from_str::<Value>(line).unwrap())
             .find(|event| event["crate_name"] == "app")
             .expect("an event for app");
         (

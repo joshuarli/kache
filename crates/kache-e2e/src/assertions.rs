@@ -6,7 +6,7 @@
 //! tripped and with what value — diff-friendly between runs, no need to
 //! re-run with verbose flags to find the failure.
 
-use serde::Serialize;
+use deser::Serialize;
 
 use crate::fixture::{MetricAssertions, NoopAssertions};
 use crate::report::{Event, ReportSummary};
@@ -412,9 +412,9 @@ mod tests {
 
     #[test]
     fn daemon_store_assertion_rejects_fallback_and_failed_publications() {
-        let spec: MetricAssertions = toml::from_str("min_daemon_stores = 1").unwrap();
+        let spec: MetricAssertions = deser_toml::from_str("min_daemon_stores = 1").unwrap();
         let event = |handed_off, error| {
-            serde_json::from_value::<Event>(serde_json::json!({
+            deser_value::from_value::<Event>(&deser_value::value!({
                 "crate_name": "foo.c", "result": "miss",
                 "store_handed_off": handed_off, "store_error": error
             }))

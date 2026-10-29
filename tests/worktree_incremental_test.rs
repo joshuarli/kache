@@ -296,10 +296,10 @@ fn default_policy_finds_a_donor_after_an_unchanged_cache_restore() {
         graph_contents(&donor.join("target/debug/incremental.kache-auto")),
         original
     );
-    let events: Vec<serde_json::Value> = fs::read_to_string(cache.join("events.jsonl"))
+    let events: Vec<deser_value::Value> = fs::read_to_string(cache.join("events.jsonl"))
         .unwrap()
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| deser_json::from_str(line).unwrap())
         .collect();
     assert!(
         events
@@ -353,10 +353,10 @@ fn automatic_bootstrap_retry_preserves_source_observations_and_discards_false_er
             String::from_utf8(binary.stdout).unwrap().trim(),
             format!("{suffix}:native")
         );
-        let events: Vec<serde_json::Value> = fs::read_to_string(cache.join("events.jsonl"))
+        let events: Vec<deser_value::Value> = fs::read_to_string(cache.join("events.jsonl"))
             .unwrap()
             .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
+            .map(|line| deser_json::from_str(line).unwrap())
             .collect();
         let event = events
             .iter()
@@ -365,12 +365,12 @@ fn automatic_bootstrap_retry_preserves_source_observations_and_discards_false_er
             .unwrap();
         assert_eq!(
             event["passthrough_reason"], "incremental force-list: worktree_probe",
-            "{event:#}"
+            "{event:#?}"
         );
         assert_eq!(
             event["compiler_runs"],
             if suffix == "first" { 2 } else { 1 },
-            "{event:#}"
+            "{event:#?}"
         );
     }
     assert!(
@@ -463,22 +463,22 @@ fn failed_bootstrap_dep_info_cleanup_keeps_the_native_compile_accounted() {
     edited_project(&root, 1);
     let output = automatic_build(&root, &cache, true, true, false);
     assert!(!output.status.success());
-    let events: Vec<serde_json::Value> = fs::read_to_string(cache.join("events.jsonl"))
+    let events: Vec<deser_value::Value> = fs::read_to_string(cache.join("events.jsonl"))
         .unwrap()
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| deser_json::from_str(line).unwrap())
         .collect();
     let event = events
         .iter()
         .rev()
         .find(|event| event["crate_name"] == "worktree_probe")
         .unwrap();
-    assert_eq!(event["exit_code"], 1, "{event:#}");
+    assert_eq!(event["exit_code"], 1, "{event:#?}");
     assert_eq!(
         event["passthrough_reason"], "incremental force-list: worktree_probe",
-        "{event:#}"
+        "{event:#?}"
     );
-    assert_eq!(event["compiler_runs"], 1, "{event:#}");
+    assert_eq!(event["compiler_runs"], 1, "{event:#?}");
 }
 
 #[test]
@@ -532,20 +532,20 @@ fn deferred_compiler_error_does_not_retry_a_stale_bootstrap_observation() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("inputs=compile-while-keying"), "{stderr}");
-    let events: Vec<serde_json::Value> = fs::read_to_string(cache.join("events.jsonl"))
+    let events: Vec<deser_value::Value> = fs::read_to_string(cache.join("events.jsonl"))
         .unwrap()
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| deser_json::from_str(line).unwrap())
         .collect();
     let event = events
         .iter()
         .rev()
         .find(|event| event["crate_name"] == "worktree_probe")
         .unwrap();
-    assert_eq!(event["passthrough_reason"], "adaptive seed", "{event:#}");
+    assert_eq!(event["passthrough_reason"], "adaptive seed", "{event:#?}");
     assert_eq!(
         event["compiler_runs"], 1,
-        "a stale observation must not cause another compile: {event:#}"
+        "a stale observation must not cause another compile: {event:#?}"
     );
     assert!(
         !graph_contents(&root.join("target/debug/incremental.kache-auto"))
@@ -594,24 +594,24 @@ fn deferred_library_seed_retries_bootstrap_before_any_artifact_lookup() {
         last_stderr.contains("inputs=compile-while-keying"),
         "{last_stderr}"
     );
-    let events: Vec<serde_json::Value> = fs::read_to_string(cache.join("events.jsonl"))
+    let events: Vec<deser_value::Value> = fs::read_to_string(cache.join("events.jsonl"))
         .unwrap()
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| deser_json::from_str(line).unwrap())
         .collect();
     let seed = events
         .iter()
         .rev()
         .find(|event| event["crate_name"] == "worktree_probe")
         .unwrap();
-    assert_eq!(seed["passthrough_reason"], "adaptive seed", "{seed:#}");
+    assert_eq!(seed["passthrough_reason"], "adaptive seed", "{seed:#?}");
     assert_eq!(
         seed["dep_info_runs"], 1,
-        "only the discarded bootstrap discovery counts as dep-info work: {seed:#}"
+        "only the discarded bootstrap discovery counts as dep-info work: {seed:#?}"
     );
     assert_eq!(
         seed["compiler_runs"], 1,
-        "exactly one native compile follows the discarded discovery: {seed:#}"
+        "exactly one native compile follows the discarded discovery: {seed:#?}"
     );
     assert!(
         graph_contents(&root.join("target/debug/incremental.kache-auto"))
@@ -730,21 +730,21 @@ os.execv(real, [real, *args])
         );
         assert!(!String::from_utf8_lossy(&output.stderr).contains("E0080"));
     }
-    let events: Vec<serde_json::Value> = fs::read_to_string(cache.join("events.jsonl"))
+    let events: Vec<deser_value::Value> = fs::read_to_string(cache.join("events.jsonl"))
         .unwrap()
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| deser_json::from_str(line).unwrap())
         .collect();
     let event = events
         .iter()
         .rev()
         .find(|event| event["crate_name"] == "worktree_probe")
         .unwrap();
-    assert_eq!(event["passthrough_reason"], "adaptive seed", "{event:#}");
-    assert_eq!(event["dep_info_runs"], 0, "{event:#}");
+    assert_eq!(event["passthrough_reason"], "adaptive seed", "{event:#?}");
+    assert_eq!(event["dep_info_runs"], 0, "{event:#?}");
     assert_eq!(
         event["compiler_runs"], 2,
-        "the reported dep-info still requires a native retry: {event:#}"
+        "the reported dep-info still requires a native retry: {event:#?}"
     );
 }
 

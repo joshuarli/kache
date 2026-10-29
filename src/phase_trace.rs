@@ -2,7 +2,7 @@
 //! One file per wrapper avoids a shared trace lock during concurrent builds.
 //! This records the calling thread; it does not infer worker-thread intervals.
 
-use serde_json::{Value, json};
+use deser_value::{Value, value};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,7 +36,7 @@ impl Recorder {
     }
 
     fn interval(&mut self, name: &str, start_us: u64, duration_us: u64) {
-        self.push(json!({
+        self.push(value!({
             "name": name, "cat": self.adapter, "ph": "X",
             "pid": std::process::id(), "tid": self.thread,
             "ts": self.epoch_us.saturating_add(start_us), "dur": duration_us,
@@ -104,7 +104,7 @@ pub(crate) fn decision(name: &'static str, outcome: &str) {
             let ts = recorder
                 .epoch_us
                 .saturating_add(micros(recorder.start.elapsed()));
-            recorder.push(json!({
+            recorder.push(value!({
                 "name": name, "cat": recorder.adapter, "ph": "i", "s": "t",
                 "pid": std::process::id(), "tid": recorder.thread, "ts": ts,
                 "args": {"outcome": outcome},
@@ -138,7 +138,7 @@ impl Drop for Invocation {
         let recorder = ACTIVE.with(|active| active.borrow_mut().take());
         if let Some(mut recorder) = recorder {
             let elapsed = micros(recorder.start.elapsed());
-            let root = json!({
+            let root = value!({
                 "name": recorder.unit, "cat": recorder.adapter, "ph": "X",
                 "pid": std::process::id(), "tid": recorder.thread, "ts": recorder.epoch_us,
                 "dur": elapsed, "args": {"dropped_events": recorder.dropped},
@@ -151,14 +151,15 @@ impl Drop for Invocation {
                     .prefix("wrapper-")
                     .suffix(".trace.json")
                     .tempfile_in(&recorder.directory)?;
-                serde_json::to_writer(
+                deser_json::to_writer(
                     &mut file,
-                    &json!({
+                    &value!({
                         "traceEvents": recorder.events,
                         "displayTimeUnit": "ms",
                         "kache_trace": {"version": 1, "clock": "monotonic", "scope": "wrapper-thread"},
                     }),
-                )?;
+                )
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
                 file.keep().map_err(|error| error.error)?;
                 Ok(())
             })();
@@ -185,8 +186,8 @@ mod tests {
         let mut lanes = std::collections::BTreeSet::new();
         for entry in std::fs::read_dir(directory.path()).unwrap() {
             let data: Value =
-                serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap();
-            for event in data["traceEvents"].as_array().unwrap() {
+                deser_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap();
+            for event in data["traceEvents"].as_seq().unwrap() {
                 assert_eq!(event["pid"], std::process::id());
                 let thread = event["tid"].as_u64().unwrap();
                 assert_ne!(thread, 0);
@@ -218,8 +219,8 @@ mod tests {
             .unwrap()
             .unwrap()
             .path();
-        let data: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        let events = data["traceEvents"].as_array().unwrap();
+        let data: Value = deser_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let events = data["traceEvents"].as_seq().unwrap();
         assert_eq!(events[0]["name"], "subject");
         let named = |name| events.iter().find(|e| e["name"] == name).unwrap();
         let start = |e: &Value| e["ts"].as_u64().unwrap();
@@ -258,8 +259,8 @@ mod tests {
             .unwrap()
             .unwrap()
             .path();
-        let data: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        assert_eq!(data["traceEvents"].as_array().unwrap().len(), 4097);
+        let data: Value = deser_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(data["traceEvents"].as_seq().unwrap().len(), 4097);
         assert_eq!(data["traceEvents"][0]["args"]["dropped_events"], 4);
         let file = tempfile::NamedTempFile::new().unwrap();
         drop(start_at(Some(file.path().into()), "rustc", &[]));

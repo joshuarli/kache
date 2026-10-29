@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 pub struct PortablePrediction {
     pub schema: u32,
     pub sources: Vec<Portable>,
@@ -6,7 +6,7 @@ pub struct PortablePrediction {
     pub tree: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 pub enum Portable {
     Literal(String),
     OutDir(String),
@@ -17,14 +17,14 @@ pub enum Portable {
     Registry(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
+#[deser(rename_all = "snake_case")]
 pub enum SharedPrediction {
     Portable(PortablePrediction),
     Plain(PlainRow),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 pub struct PlainRow {
     pub schema: u32,
     pub sources: Vec<Portable>,

@@ -83,7 +83,7 @@ fn main() {
     );
 }
 
-fn build(workspace: &Path, target: &Path, cache: &Path, mode: &str) -> Vec<serde_json::Value> {
+fn build(workspace: &Path, target: &Path, cache: &Path, mode: &str) -> Vec<deser_value::Value> {
     let mut command = hermetic_command("cargo", cache, Some(&isolated_config_path(cache)));
     command
         .args(["build", "--offline", "--quiet"])
@@ -112,7 +112,7 @@ fn build(workspace: &Path, target: &Path, cache: &Path, mode: &str) -> Vec<serde
     let events = std::fs::read_to_string(event_log).unwrap();
     events[before..]
         .lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .map(|line| deser_json::from_str::<deser_value::Value>(line).unwrap())
         .filter(|event| event["crate_name"] == "build_script_run")
         .collect()
 }

@@ -56,7 +56,7 @@ struct ConfigSource {
     logical_path: PathBuf,
     canonical_path: PathBuf,
     content_hash: blake3::Hash,
-    value: toml::Value,
+    value: deser_value::Value,
     cargo_home: bool,
 }
 
@@ -498,7 +498,7 @@ impl CargoOutput {
 }
 
 fn rendered_cargo_diagnostic(line: &[u8]) -> Option<String> {
-    let message = serde_json::from_slice::<serde_json::Value>(line).ok()?;
+    let message = deser_json::from_slice::<deser_value::Value>(line).ok()?;
     if message["reason"] != "compiler-message" {
         return None;
     }
@@ -679,7 +679,11 @@ fn cargo_invocation_args(args: &[OsString], overrides: &[String]) -> Vec<OsStrin
 }
 
 fn rustflags_config_override(flags: &[String]) -> String {
-    let flags = toml::Value::Array(flags.iter().cloned().map(toml::Value::String).collect());
+    let items: Vec<deser_value::Value> = flags.iter().cloned().map(deser_value::Value::from).collect();
+    let mut map = deser_value::Map::new();
+    map.insert("v", items);
+    let rendered = deser_toml::to_string(&map).unwrap_or_default();
+    let flags = rendered.trim().strip_prefix("v = ").unwrap_or("[]");
     format!("{ALL_TARGETS_RUSTFLAGS_KEY}={flags}")
 }
 
@@ -857,7 +861,7 @@ fn configured_build_dir_in_sources(sources: &[ConfigSource]) -> std::result::Res
     for source in sources {
         let table = source
             .value
-            .as_table()
+            .as_map()
             .ok_or_else(|| format!("{} is not a TOML table", source.logical_path.display()))?;
         if table.contains_key("include") {
             return Err(format!(
@@ -867,7 +871,7 @@ fn configured_build_dir_in_sources(sources: &[ConfigSource]) -> std::result::Res
         }
         if let Some(build) = table.get("build") {
             let build = build
-                .as_table()
+                .as_map()
                 .ok_or_else(|| format!("{}.build is not a table", source.logical_path.display()))?;
             if build.contains_key("build-dir") {
                 return Ok(true);
@@ -875,7 +879,7 @@ fn configured_build_dir_in_sources(sources: &[ConfigSource]) -> std::result::Res
         }
         if let Some(env) = table.get("env") {
             let env = env
-                .as_table()
+                .as_map()
                 .ok_or_else(|| format!("{}.env is not a table", source.logical_path.display()))?;
             if env.contains_key("CARGO_BUILD_BUILD_DIR") {
                 return Ok(true);
@@ -918,7 +922,7 @@ fn read_source(path: PathBuf, cargo_home: bool) -> std::result::Result<ConfigSou
         std::fs::read(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     let text = std::str::from_utf8(&bytes)
         .map_err(|error| format!("{} is not UTF-8: {error}", path.display()))?;
-    let value = toml::from_str(text)
+    let value = deser_toml::from_str(text)
         .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
     Ok(ConfigSource {
         logical_path: path,
@@ -930,11 +934,11 @@ fn read_source(path: PathBuf, cargo_home: bool) -> std::result::Result<ConfigSou
 }
 
 fn source_rustflags(
-    value: &toml::Value,
+    value: &deser_value::Value,
     path: &Path,
 ) -> std::result::Result<Option<Vec<String>>, String> {
     let table = value
-        .as_table()
+        .as_map()
         .ok_or_else(|| format!("{} is not a TOML table", path.display()))?;
     if table.contains_key("include") {
         return Err(format!("{} uses Cargo config include", path.display()));
@@ -956,12 +960,12 @@ fn source_rustflags(
         return Ok(None);
     };
     let build = build
-        .as_table()
+        .as_map()
         .ok_or_else(|| format!("{}.build is not a table", path.display()))?;
     let Some(rustflags) = build.get("rustflags") else {
         return Ok(None);
     };
-    let array = rustflags.as_array().ok_or_else(|| {
+    let array = rustflags.as_seq().ok_or_else(|| {
         format!(
             "{}.build.rustflags uses string form instead of an argument array",
             path.display()
@@ -986,24 +990,27 @@ fn source_rustflags(
     Ok(Some(flags))
 }
 
-fn target_rustflags_present(table: &toml::map::Map<String, toml::Value>) -> bool {
+fn target_rustflags_present(table: &deser_value::Map) -> bool {
     table
         .get("target")
-        .and_then(toml::Value::as_table)
+        .and_then(|value| value.as_map())
         .is_some_and(|targets| {
             targets.values().any(|target| {
                 target
-                    .as_table()
+                    .as_map()
                     .is_some_and(|target| target.contains_key("rustflags"))
             })
         })
 }
 
-fn config_env_rustflags_present(table: &toml::map::Map<String, toml::Value>) -> bool {
+fn config_env_rustflags_present(table: &deser_value::Map) -> bool {
     table
         .get("env")
-        .and_then(toml::Value::as_table)
-        .is_some_and(|env| env.keys().any(|key| rustflags_env_name(key)))
+        .and_then(|value| value.as_map())
+        .is_some_and(|env| {
+            env.keys()
+                .any(|key| key.as_str().is_some_and(rustflags_env_name))
+        })
 }
 
 fn plan_is_current(plan: &NormalizationPlan) -> bool {
@@ -1048,7 +1055,7 @@ mod tests {
     use super::*;
 
     fn known_protocol(line: &[u8]) -> bool {
-        serde_json::from_slice::<serde_json::Value>(line)
+        deser_json::from_slice::<deser_value::Value>(line)
             .ok()
             .is_some_and(|value| {
                 matches!(
@@ -1390,17 +1397,17 @@ mod tests {
             "a=\"b c\"".to_string(),
             "-Clink-arg=C:\\lib".to_string(),
         ];
-        let parsed: toml::Table = toml::from_str(&rustflags_config_override(&flags)).unwrap();
+        let parsed: deser_value::Map = deser_toml::from_str(&rustflags_config_override(&flags)).unwrap();
         assert_eq!(parsed.len(), 1, "one dotted key: {parsed:?}");
-        let expected: Vec<toml::Value> = flags.iter().cloned().map(toml::Value::String).collect();
+        let expected: Vec<deser_value::Value> = flags.iter().cloned().map(deser_value::Value::from).collect();
         assert_eq!(
-            parsed["target"]["cfg(all())"]["rustflags"],
-            toml::Value::Array(expected)
+            parsed.get("target").unwrap()["cfg(all())"]["rustflags"],
+            deser_value::Value::from(expected)
         );
 
-        let parsed: toml::Table = toml::from_str(WORKTREE_BUILD_DIR_CONFIG).unwrap();
+        let parsed: deser_value::Map = deser_toml::from_str(WORKTREE_BUILD_DIR_CONFIG).unwrap();
         assert_eq!(
-            parsed["build"]["build-dir"].as_str(),
+            parsed.get("build").unwrap()["build-dir"].as_str(),
             Some("{workspace-root}/target")
         );
     }
@@ -1682,8 +1689,8 @@ mod tests {
 
     #[test]
     fn source_flags_preserve_repeated_additive_arguments() {
-        let value: toml::Value =
-            toml::from_str("[build]\nrustflags = [\"-Clink-arg=-lfoo\", \"-Clink-arg=-lfoo\"]\n")
+        let value: deser_value::Value =
+            deser_toml::from_str("[build]\nrustflags = [\"-Clink-arg=-lfoo\", \"-Clink-arg=-lfoo\"]\n")
                 .unwrap();
         assert_eq!(
             source_rustflags(&value, Path::new("config.toml")).unwrap(),
@@ -1698,7 +1705,7 @@ mod tests {
             logical_path: PathBuf::from("/cargo-home/config.toml"),
             canonical_path: canonical.clone(),
             content_hash: blake3::hash(b""),
-            value: toml::Value::Table(Default::default()),
+            value: deser_value::Value::from(deser_value::Map::new()),
             cargo_home: true,
         };
         assert!(!is_cargo_home_alias(&source, &canonical));
@@ -1720,7 +1727,7 @@ mod tests {
             "[target.x86_64-unknown-linux-gnu]\nrustflags = [\"-Copt-level=2\"]\n",
             "[env]\nRUSTFLAGS = \"-Copt-level=2\"\n",
         ] {
-            let value: toml::Value = toml::from_str(source).unwrap();
+            let value: deser_value::Value = deser_toml::from_str(source).unwrap();
             assert!(source_rustflags(&value, Path::new("config.toml")).is_err());
         }
     }

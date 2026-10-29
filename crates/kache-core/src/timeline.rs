@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 
 /// Version of [`BuildTimeline`]. A server rejects a record whose schema it
 /// does not know.
@@ -22,29 +22,29 @@ pub struct BuildTimeline {
     /// a later, more complete submission replaces the earlier one.
     pub client_record_id: String,
     pub session_id: String,
-    #[serde(default)]
+    #[deser(default)]
     pub kache_version: String,
     /// Earliest unit start.
     pub started_at_ms: u64,
     /// Latest unit finish.
     pub finished_at_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub identity: TimelineIdentity,
     /// Hash of the build root, so sessions from one tree can be grouped without
     /// sending its path.
-    #[serde(default)]
+    #[deser(default)]
     pub root_hash: String,
-    #[serde(default)]
+    #[deser(default)]
     pub context: RunContext,
-    #[serde(default)]
+    #[deser(default)]
     pub log: LogLimits,
     /// Prefetch plan summary for the session, when the daemon had already
     /// closed it when the record was assembled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub summary: Option<TimelineSummary>,
-    #[serde(default)]
+    #[deser(default)]
     pub units: Vec<TimelineUnit>,
-    #[serde(default)]
+    #[deser(default)]
     pub transfers: Vec<TimelineTransfer>,
 }
 
@@ -52,25 +52,25 @@ pub struct BuildTimeline {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct TimelineIdentity {
     /// Truncated content hash of the root's `Cargo.lock`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub lock_digest: Option<String>,
     /// Prefetch identity key (`id/{lock}/{target}/{profile}`), only when the
     /// profile was known or the key was set explicitly.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub identity_key: Option<String>,
-    #[serde(default)]
+    #[deser(default)]
     pub source: IdentitySource,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 pub enum IdentitySource {
     /// Set explicitly by the build environment.
     Explicit,
     /// Derived from the lockfile and a profile named in the environment.
     LockEnv,
     #[default]
-    #[serde(other)]
+    #[deser(other)]
     Absent,
 }
 
@@ -78,29 +78,29 @@ pub enum IdentitySource {
 /// and explicit labels are sent.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RunContext {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub repository: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub workflow: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub job: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub run_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub run_attempt: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub event: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub git_ref: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub commit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub runner_os: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub runner_arch: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub runner_pool: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[deser(default, skip_serializing_if = BTreeMap::is_empty)]
     pub labels: BTreeMap<String, String>,
 }
 
@@ -109,9 +109,9 @@ pub struct RunContext {
 /// a record from a large build may be missing its first units.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct LogLimits {
-    #[serde(default)]
+    #[deser(default)]
     pub event_log_max_size: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub event_log_keep_lines: u64,
 }
 
@@ -119,58 +119,58 @@ pub struct LogLimits {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct TimelineSummary {
     /// Some prefetch outcomes were unavailable when the session closed.
-    #[serde(default)]
+    #[deser(default)]
     pub incomplete: bool,
-    #[serde(default)]
+    #[deser(default)]
     pub plan_id: String,
-    #[serde(default)]
+    #[deser(default)]
     pub plan_source: String,
-    #[serde(default)]
+    #[deser(default)]
     pub closure_reason: String,
-    #[serde(default)]
+    #[deser(default)]
     pub started_at_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub last_activity_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub candidate_keys: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub downloaded_keys: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub downloaded_bytes: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub used_keys: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub demanded_keys: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub demanded_candidate_keys: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub cancelled: bool,
     /// Speculative GET keys that a wrapper then consumed as a local or
     /// prefetch hit. Daemon `used_keys` can miss these.
-    #[serde(default)]
+    #[deser(default)]
     pub consumed_prefetch_keys: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub consumed_prefetch_bytes: u64,
     /// Consumed prefetch keys whose import finished at or before first demand.
-    #[serde(default)]
+    #[deser(default)]
     pub useful_prefetch_keys: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub useful_prefetch_bytes: u64,
     /// Sum of wrapper remote-check waits on this session's units.
-    #[serde(default)]
+    #[deser(default)]
     pub remote_wait_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub get_not_found: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub get_errors: u64,
     /// Consumed prefetch keys whose GET had started but not finished at first
     /// demand. The demand waited on the rest of that download, not a new GET.
-    #[serde(default)]
+    #[deser(default)]
     pub in_flight_prefetch_keys: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub in_flight_prefetch_bytes: u64,
     /// Speculative GETs or packed entries whose receipt says `cancelled`.
-    #[serde(default)]
+    #[deser(default)]
     pub get_cancelled: u64,
 }
 
@@ -181,7 +181,7 @@ pub struct KeyDemand {
     pub first_demand_at_ms: u64,
     /// Wall time blocked on remote-check IPC, including daemon admission and
     /// failed requests. It is not an estimate of time saved by prefetch.
-    #[serde(default)]
+    #[deser(default)]
     pub remote_wait_ms: u64,
 }
 
@@ -197,36 +197,36 @@ pub struct TimelineUnit {
     /// When the build started waiting for this unit.
     pub started_at_ms: u64,
     pub finished_at_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub compile_time_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub size: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub key_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub lookup_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub restore_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub store_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub startup_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub flight_wait_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub permit_wait_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub compiler_runs: u32,
     /// Schema of the wrapper event this unit came from.
-    #[serde(default)]
+    #[deser(default)]
     pub event_schema: u32,
     /// Empty for wrapper events before schema 20, or invocations with no lookup.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[deser(default, skip_serializing_if = Vec::is_empty)]
     pub demands: Vec<KeyDemand>,
     /// The session's earliest speculative delivery of this unit's key, joined
     /// from transfer receipts when the record is assembled. A `local_hit`
     /// with `before_demand` timing is a prefetched local hit.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub prefetch: Option<UnitPrefetch>,
 }
 
@@ -245,7 +245,7 @@ pub struct UnitPrefetch {
 
 /// Where a delivery fell relative to the key's first demand in the session.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 pub enum PrefetchTiming {
     /// Imported at or before first demand.
     #[default]
@@ -272,40 +272,40 @@ impl PrefetchTiming {
 /// One remote transfer attributed to the session.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct TimelineTransfer {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub accounting: Option<PrefetchAccounting>,
     pub cache_key: String,
-    #[serde(default)]
+    #[deser(default)]
     pub crate_name: String,
     pub direction: TransferDirection,
     pub ok: bool,
-    #[serde(default)]
+    #[deser(default)]
     pub compressed_bytes: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub original_bytes: u64,
     pub started_at_ms: u64,
     pub finished_at_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub network_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub semaphore_wait_ms: u64,
-    #[serde(default)]
+    #[deser(default)]
     pub request_count: u32,
-    #[serde(default)]
+    #[deser(default)]
     pub import_ms: u64,
     pub attribution: TransferAttribution,
     /// Immutable origin captured when this candidate was scheduled. Absent
     /// on demand downloads and logs older than transfer schema 4.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub prefetch: Option<PrefetchOrigin>,
     /// Operation/import outcome, including neutral `not_found`, `cancelled`,
     /// and `skipped`; empty for demand downloads, uploads, and old logs.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[deser(default, skip_serializing_if = String::is_empty)]
     pub outcome: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 pub enum TransferDirection {
     Upload,
     #[default]
@@ -322,14 +322,14 @@ pub struct PrefetchAccounting {
     pub bytes_complete: bool,
     /// Counts calls to the backend, not SDK retries or LIST pages.
     pub requests_complete: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     pub list_result_count: Option<u64>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[deser(default, skip_serializing_if = Vec::is_empty)]
     pub entries: Vec<PackedEntryTransfer>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 pub enum PrefetchOperation {
     #[default]
     Get,
@@ -351,14 +351,14 @@ pub struct PackedEntryTransfer {
 /// Which planner source produced a historical prefetch candidate.
 /// `Unknown` accepts a source name this record does not recognize.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 pub enum CandidateSource {
     Manifest,
     Shard,
     History,
     KeyCache,
     #[default]
-    #[serde(other)]
+    #[deser(other)]
     Unknown,
 }
 
@@ -366,27 +366,27 @@ pub enum CandidateSource {
 /// so a later build cannot claim a download that was already in flight.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct PrefetchOrigin {
-    #[serde(default)]
+    #[deser(default)]
     pub session_id: String,
-    #[serde(default)]
+    #[deser(default)]
     /// Planner-issued ID when available; empty for fallback and unscoped work.
     pub plan_id: String,
     /// `advisory`, `fallback`, or `unscoped` (startup or direct requests).
-    #[serde(default)]
+    #[deser(default)]
     pub source: String,
     /// Zero-based order in the request list, before local-hit, in-flight,
     /// and budget filtering. Planner requests validate their list first;
     /// direct IPC requests can include rejected keys. None for keys added
     /// by whole-remote warming.
-    #[serde(default)]
+    #[deser(default)]
     pub candidate_rank: Option<u64>,
-    #[serde(default)]
+    #[deser(default)]
     pub candidate_source: CandidateSource,
 }
 
 /// How the client tied a transfer to this session.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 pub enum TransferAttribution {
     /// The download task carries this session's immutable plan origin.
     Session,
@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn legacy_unit_has_no_demand_observation() {
-        let unit: TimelineUnit = serde_json::from_str(
+        let unit: TimelineUnit = deser_json::from_str(
             r#"{"cache_key":"k","crate_name":"crate","result":"local_hit","started_at_ms":100,"finished_at_ms":200}"#,
         ).unwrap();
         assert!(unit.demands.is_empty());
@@ -492,54 +492,54 @@ mod tests {
             }),
             ..TimelineUnit::default()
         };
-        let json = serde_json::to_value(&unit).unwrap();
+        let json = deser_value::to_value(&unit).unwrap();
         assert_eq!(json["prefetch"]["timing"], "in_flight");
-        let absent = serde_json::to_value(TimelineUnit::default()).unwrap();
+        let absent = deser_value::to_value(&TimelineUnit::default()).unwrap();
         assert!(absent.get("prefetch").is_none());
     }
 
     #[test]
     fn record_round_trips_through_json() {
         let record = sample();
-        let json = serde_json::to_string(&record).unwrap();
+        let json = deser_json::to_string(&record).unwrap();
         assert_eq!(
-            serde_json::from_str::<BuildTimeline>(&json).unwrap(),
+            deser_json::from_str::<BuildTimeline>(&json).unwrap(),
             record
         );
     }
 
     #[test]
     fn empty_optional_context_is_not_serialized() {
-        let json = serde_json::to_value(sample()).unwrap();
-        let context = json["context"].as_object().unwrap();
+        let json = deser_value::to_value(&sample()).unwrap();
+        let context = json["context"].as_map().unwrap();
         assert_eq!(
             context.keys().collect::<Vec<_>>(),
-            vec!["labels", "repository"]
+            vec!["repository", "labels"]
         );
         assert!(json.get("summary").is_none());
     }
 
     #[test]
     fn enums_use_snake_case_names() {
-        let json = serde_json::to_value(sample()).unwrap();
+        let json = deser_value::to_value(&sample()).unwrap();
         assert_eq!(json["identity"]["source"], "absent");
         assert_eq!(json["transfers"][0]["direction"], "download");
         assert_eq!(json["transfers"][0]["attribution"], "key");
         assert_eq!(
-            serde_json::to_value(IdentitySource::LockEnv).unwrap(),
+            deser_value::to_value(&IdentitySource::LockEnv).unwrap(),
             "lock_env"
         );
     }
 
     #[test]
     fn unknown_identity_source_reads_as_absent() {
-        let source: IdentitySource = serde_json::from_str("\"from_the_future\"").unwrap();
+        let source: IdentitySource = deser_json::from_str("\"from_the_future\"").unwrap();
         assert_eq!(source, IdentitySource::Absent);
     }
 
     #[test]
     fn minimal_record_uses_defaults() {
-        let record: BuildTimeline = serde_json::from_str(
+        let record: BuildTimeline = deser_json::from_str(
             r#"{"schema":1,"client_record_id":"r","session_id":"s","started_at_ms":1,"finished_at_ms":2}"#,
         )
         .unwrap();

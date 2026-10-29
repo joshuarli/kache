@@ -66,7 +66,7 @@ fn host_config_detail(mut command: Command) -> String {
         .expect("run kache doctor");
     // Doctor may report unrelated failing checks on a given machine; only its
     // JSON document matters here.
-    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+    let doc: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
             "kache --json doctor: {error}\nstdout: {}\nstderr: {}",
             String::from_utf8_lossy(&output.stdout),
@@ -75,12 +75,12 @@ fn host_config_detail(mut command: Command) -> String {
     });
     // The machine-readable envelope flattens the body next to `command`.
     let checks = doc["checks"]
-        .as_array()
-        .unwrap_or_else(|| panic!("doctor lists no checks: {doc}"));
+        .as_seq()
+        .unwrap_or_else(|| panic!("doctor lists no checks: {doc:?}"));
     checks
         .iter()
         .find(|check| check["label"] == "Host config")
-        .unwrap_or_else(|| panic!("doctor has no Host config check: {doc}"))["detail"]
+        .unwrap_or_else(|| panic!("doctor has no Host config check: {doc:?}"))["detail"]
         .as_str()
         .expect("the check has a detail line")
         .to_string()

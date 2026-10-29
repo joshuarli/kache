@@ -4,7 +4,7 @@
 use anyhow::{Context, Result, ensure};
 use kache_store::file_hash::{CcPreprocessMemoInput, FileHashCache};
 use rusqlite::{Connection, params};
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::{path::Path, time::Instant};
 
 #[derive(Deserialize)]
@@ -32,7 +32,7 @@ fn main() -> Result<()> {
         args.len() == 3,
         "usage: bench-cc-memos SAMPLE.json OUTPUT_DIR"
     );
-    let samples: Vec<Sample> = serde_json::from_slice(&std::fs::read(&args[1])?)?;
+    let samples: Vec<Sample> = deser_json::from_slice(&std::fs::read(&args[1])?)?;
     ensure!(!samples.is_empty(), "sample must contain memos");
     let output = Path::new(&args[2]);
     std::fs::create_dir(output).context("output directory must be new")?;
@@ -55,7 +55,7 @@ fn main() -> Result<()> {
             params![
                 sample.memo_key,
                 sample.preprocessed_hash,
-                serde_json::to_string(&sample.inputs)?
+                deser_json::to_string(&sample.inputs)?
             ],
         )?;
     }
@@ -94,7 +94,7 @@ fn main() -> Result<()> {
                         [&sample.memo_key], |row| Ok((row.get(0)?, row.get(1)?)))?;
                     (
                         hash,
-                        serde_json::from_str::<Vec<CcPreprocessMemoInput>>(&json)?,
+                        deser_json::from_str::<Vec<CcPreprocessMemoInput>>(&json)?,
                     )
                 };
                 ensure!(
@@ -118,13 +118,14 @@ fn main() -> Result<()> {
     let unique: i64 = shared
         .db()
         .query_row("SELECT count(*) FROM cc_memo_inputs", [], |r| r.get(0))?;
-    let report = serde_json::json!({
+    let measurements = deser_value::to_value(&measurements)?;
+    let report = deser_value::value!({
         "scope": "SQLite memo storage only; compiler and filesystem validation excluded",
         "memos": samples.len(), "input_references": samples.iter().map(|s| s.inputs.len()).sum::<usize>(),
         "unique_inputs": unique, "legacy_file_bytes": std::fs::metadata(legacy_path)?.len(),
         "shared_file_bytes": std::fs::metadata(shared_path)?.len(), "measurements": measurements,
     });
-    let report = serde_json::to_string_pretty(&report)?;
+    let report = deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&report)?;
     std::fs::write(output.join("report.json"), &report)?;
     println!("{report}");
     Ok(())

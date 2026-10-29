@@ -1,6 +1,6 @@
 //! Cache-entry metadata and validation shared by local and remote storage.
 
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Cache-key recipe version written into entry metadata.
@@ -20,28 +20,28 @@ pub struct EntryMeta {
     /// Entries written before this field existed deserialize as `0` (unknown),
     /// so an explicit stale-schema sweep can reclaim them without making old
     /// stores unreadable during an ordinary upgrade.
-    #[serde(default)]
+    #[deser(default)]
     pub key_schema: u32,
     pub crate_name: String,
     pub crate_types: Vec<String>,
     pub files: Vec<CachedFile>,
     pub stdout: String,
     pub stderr: String,
-    #[serde(default)]
+    #[deser(default)]
     pub features: Vec<String>,
-    #[serde(default)]
+    #[deser(default)]
     pub target: String,
-    #[serde(default)]
+    #[deser(default)]
     pub profile: String,
-    #[serde(default)]
+    #[deser(default)]
     pub compile_time_ms: u64,
     /// Canonical rustc `--emit` kinds this entry actually contains, derived
     /// from the stored output files at put time (kunobi-ninja/kache#325). Lookup
     /// uses it to reject an entry that doesn't cover what the invocation's
-    /// `--emit` requested. `#[serde(default)]` keeps pre-gate `meta.json` (no
+    /// `--emit` requested. `#[deser(default)]` keeps pre-gate `meta.json` (no
     /// field) deserializable — an empty set means "unknown", so the lookup gate
     /// skips the check rather than mass-invalidating old entries.
-    #[serde(default)]
+    #[deser(default)]
     pub emit_kinds: Vec<String>,
 }
 
@@ -92,8 +92,8 @@ pub struct CachedFile {
     /// Whether the source file had the executable bit set at store time.
     /// Folded into the local content-dedup hash so two entries differing only
     /// by which file is executable can't collide (kunobi-ninja/kache#324).
-    /// `#[serde(default)]` keeps old `meta.json` (no field) deserializable.
-    #[serde(default)]
+    /// `#[deser(default)]` keeps old `meta.json` (no field) deserializable.
+    #[deser(default)]
     pub executable: bool,
 }
 

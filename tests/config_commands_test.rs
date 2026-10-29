@@ -75,14 +75,14 @@ fn config_commands_edit_only_the_requested_file_without_starting_the_daemon() {
         "false\n"
     );
     let output = success(root, &["config", "list", "--json"]);
-    let json: serde_json::Value = serde_json::from_str(&output).unwrap();
+    let json: deser_value::Value = deser_json::from_str(&output).unwrap();
     assert_eq!(json["success"], true);
     assert_eq!(json["command"], "config");
     assert_eq!(json["values"]["cache"]["explain_miss"], true);
     success(root, &["config", "unset", "cache.explain_miss"]);
     let out = run(root, &["config", "get", "cache.explain_miss", "--json"]);
     assert!(!out.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let json: deser_value::Value = deser_json::from_slice(&out.stdout).unwrap();
     assert_eq!(json["success"], false);
     assert!(!root.join("runtime").exists());
 }
@@ -137,7 +137,7 @@ fn every_config_subcommand_emits_one_json_document() {
         vec!["config", "unset", "cache.explain_miss", "--json"],
     ] {
         let text = success(root.path(), &args);
-        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let json: deser_value::Value = deser_json::from_str(&text).unwrap();
         assert_eq!(json["schema_version"], 1);
         assert_eq!(json["success"], true);
         assert_eq!(
@@ -147,7 +147,7 @@ fn every_config_subcommand_emits_one_json_document() {
         match args[1] {
             "get" => assert_eq!(json["value"], true),
             "set" | "unset" => assert_eq!(json["action"], args[1]),
-            "list" => assert!(json["values"].is_object()),
+            "list" => assert!(json["values"].is_map()),
             _ => {}
         }
     }
@@ -159,7 +159,7 @@ fn config_list_reports_a_file_read_error_instead_of_empty_values() {
     std::fs::create_dir(root.path().join("selected.toml")).unwrap();
     let out = run(root.path(), &["config", "list", "--json"]);
     assert!(!out.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let json: deser_value::Value = deser_json::from_slice(&out.stdout).unwrap();
     assert_eq!(json["success"], false);
     assert!(
         json["error"]["message"]
@@ -190,7 +190,7 @@ fn malformed_keys_report_a_key_error_and_legacy_keys_remain_accessible() {
     ] {
         let out = run(root.path(), &["config", "get", key, "--json"]);
         assert!(!out.status.success());
-        let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let json: deser_value::Value = deser_json::from_slice(&out.stdout).unwrap();
         assert!(
             json["error"]["message"]
                 .as_str()

@@ -30,7 +30,7 @@ fn probe() -> Result<()> {
     let config = root.join("config.toml");
     fs::write(
         &config,
-        toml::to_string(&serde_json::json!({"cache": {
+        deser_toml::to_string(&deser_value::value!({"cache": {
             "ignore_env": true,
             "local_store": cache.to_str().context("temporary cache path is not UTF-8")?,
             "runtime_dir": cache.to_str().context("temporary runtime path is not UTF-8")?,

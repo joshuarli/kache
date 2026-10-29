@@ -169,7 +169,7 @@ fn test_rust_restored_outputs_allow_build_without_wrapper() {
     run_cargo_build_with_kache(project.path(), cache.path(), &target);
     let report = kache_report(cache.path());
     let event = report["all_events"]
-        .as_array()
+        .as_seq()
         .unwrap()
         .iter()
         .rev()
@@ -277,7 +277,7 @@ fn rustc_corrupt_entry_recompiles_with_the_normal_path_remap() {
     let artifact = output_dir.join("liblookup_error.rlib");
     let cold_bytes = std::fs::read(&artifact).unwrap();
     let report = kache_report(cache.path());
-    let cold = report["all_events"].as_array().unwrap().last().unwrap();
+    let cold = report["all_events"].as_seq().unwrap().last().unwrap();
     assert_eq!(cold["result"], "miss", "cold compile must publish an entry");
     let key = cold["cache_key"].as_str().unwrap().to_owned();
     let meta = cache.path().join("store").join(&key).join("meta.json");
@@ -292,7 +292,7 @@ fn rustc_corrupt_entry_recompiles_with_the_normal_path_remap() {
     );
     // The report omits skipped compiles; inspect the raw event instead.
     let events = std::fs::read_to_string(cache.path().join("events.jsonl")).unwrap();
-    let last: serde_json::Value = serde_json::from_str(events.lines().last().unwrap()).unwrap();
+    let last: deser_value::Value = deser_json::from_str(events.lines().last().unwrap()).unwrap();
     assert_eq!(last["cache_key"], key);
     assert_eq!(last["result"], "skipped");
     assert!(
@@ -307,7 +307,7 @@ fn rustc_corrupt_entry_recompiles_with_the_normal_path_remap() {
     );
 }
 
-fn kache_report(cache_dir: &Path) -> serde_json::Value {
+fn kache_report(cache_dir: &Path) -> deser_value::Value {
     let output = hermetic_command(
         kache_binary(),
         cache_dir,
@@ -323,10 +323,10 @@ fn kache_report(cache_dir: &Path) -> serde_json::Value {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    serde_json::from_slice(&output.stdout).expect("report should be valid json")
+    deser_json::from_slice(&output.stdout).expect("report should be valid json")
 }
 
-fn kache_perfetto_report(cache_dir: &Path, root: &Path) -> serde_json::Value {
+fn kache_perfetto_report(cache_dir: &Path, root: &Path) -> deser_value::Value {
     let output = hermetic_command(
         kache_binary(),
         cache_dir,
@@ -344,18 +344,18 @@ fn kache_perfetto_report(cache_dir: &Path, root: &Path) -> serde_json::Value {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    serde_json::from_slice(&output.stdout).expect("perfetto report should be valid json")
+    deser_json::from_slice(&output.stdout).expect("perfetto report should be valid json")
 }
 
-fn assert_cc_report_counts(report: &serde_json::Value, expected_misses: u64, expected_hits: u64) {
+fn assert_cc_report_counts(report: &deser_value::Value, expected_misses: u64, expected_hits: u64) {
     let summary = &report["summary"];
     assert_eq!(summary["misses"].as_u64(), Some(expected_misses));
     assert_eq!(summary["local_hits"].as_u64(), Some(expected_hits));
 }
 
-fn assert_last_cc_event(report: &serde_json::Value, result: &str, compiler_runs: u64) {
+fn assert_last_cc_event(report: &deser_value::Value, result: &str, compiler_runs: u64) {
     let events = report["all_events"]
-        .as_array()
+        .as_seq()
         .expect("report should include all_events");
     let last = events
         .last()
@@ -365,9 +365,9 @@ fn assert_last_cc_event(report: &serde_json::Value, result: &str, compiler_runs:
     assert_eq!(last["compiler_runs"].as_u64(), Some(compiler_runs));
 }
 
-fn assert_last_cc_preprocessor_runs(report: &serde_json::Value, preprocessor_runs: u64) {
+fn assert_last_cc_preprocessor_runs(report: &deser_value::Value, preprocessor_runs: u64) {
     let last = report["all_events"]
-        .as_array()
+        .as_seq()
         .and_then(|events| events.last())
         .expect("report should include at least one event");
     assert_eq!(last["preprocessor_runs"].as_u64(), Some(preprocessor_runs));
@@ -639,11 +639,11 @@ fn test_wrapper_hello_world() {
     assert!(status.success(), "second build (cache hit) should succeed");
 
     let trace = kache_perfetto_report(cache_dir.path(), &test_project);
-    let trace_obj = trace.as_object().expect("trace report should be an object");
+    let trace_obj = trace.as_map().expect("trace report should be an object");
     assert_eq!(trace_obj.len(), 2);
     assert_eq!(trace["displayTimeUnit"].as_str(), Some("ms"));
     let trace_events = trace["traceEvents"]
-        .as_array()
+        .as_seq()
         .expect("trace report should include traceEvents");
     assert!(!trace_events.is_empty());
     // The trace leads with metadata events (ph "M": process_name / thread_name)
@@ -765,14 +765,14 @@ fn test_manifest_dir_env_dep_does_not_restore_stale_rlib_across_worktrees() {
 
     run_cargo_test_with_kache(&workspace_a, cache_dir.path(), target_a.path(), "consumer");
     let events_after_a = kache_report(cache_dir.path())["all_events"]
-        .as_array()
+        .as_seq()
         .expect("report should include all_events")
         .len();
 
     run_cargo_test_with_kache(&workspace_b, cache_dir.path(), target_b.path(), "consumer");
     let report = kache_report(cache_dir.path());
     let all_events = report["all_events"]
-        .as_array()
+        .as_seq()
         .expect("report should include all_events");
     let checkout_b_events = &all_events[events_after_a..];
 
@@ -834,14 +834,14 @@ fn test_rust_extern_cascade_converges_across_clones() {
 
     run_cargo_build_with_kache(&clone_a, cache_dir.path(), target_a.path());
     let events_after_a = kache_report(cache_dir.path())["all_events"]
-        .as_array()
+        .as_seq()
         .expect("report should include all_events")
         .len();
 
     run_cargo_build_with_kache(&clone_b, cache_dir.path(), target_b.path());
     let report = kache_report(cache_dir.path());
     let all_events = report["all_events"]
-        .as_array()
+        .as_seq()
         .expect("report should include all_events");
     let clone_b_events = &all_events[events_after_a..];
 
@@ -897,14 +897,14 @@ fn test_rust_out_dir_include_converges_across_clones() {
 
     run_cargo_build_with_kache(&clone_a, cache_dir.path(), target_a.path());
     let events_after_a = kache_report(cache_dir.path())["all_events"]
-        .as_array()
+        .as_seq()
         .expect("report should include all_events")
         .len();
 
     run_cargo_build_with_kache(&clone_b, cache_dir.path(), target_b.path());
     let report = kache_report(cache_dir.path());
     let all_events = report["all_events"]
-        .as_array()
+        .as_seq()
         .expect("report should include all_events");
     let clone_b_events = &all_events[events_after_a..];
 
@@ -994,7 +994,7 @@ pub fn value() -> u8 {
     let report = kache_report(cache_dir.path());
     assert!(
         report["summary"]["local_hits"].as_u64().unwrap_or(0) >= 1,
-        "second build should restore at least one artifact from the local cache: {report}"
+        "second build should restore at least one artifact from the local cache: {report:?}"
     );
 }
 
@@ -1223,7 +1223,7 @@ fn probe_keyed_flags_cache_and_key_on_value_live() {
     assert_eq!(
         report["summary"]["local_hits"].as_u64(),
         Some(1),
-        "-fwrapv must not hit the -fstack-protector-strong entry: {report}"
+        "-fwrapv must not hit the -fstack-protector-strong entry: {report:?}"
     );
     std::fs::remove_file(work.path().join("tu.o")).unwrap();
     run_kache_cc(work.path(), cache_dir.path(), &no_wrapv);
@@ -1231,7 +1231,7 @@ fn probe_keyed_flags_cache_and_key_on_value_live() {
     assert_eq!(
         report["summary"]["local_hits"].as_u64(),
         Some(1),
-        "-fno-wrapv must not hit the -fwrapv (or any earlier) entry: {report}"
+        "-fno-wrapv must not hit the -fwrapv (or any earlier) entry: {report:?}"
     );
 
     // The distinct key stored something reusable: repeating the value hits.
@@ -1241,27 +1241,27 @@ fn probe_keyed_flags_cache_and_key_on_value_live() {
     assert_eq!(
         report["summary"]["local_hits"].as_u64(),
         Some(2),
-        "repeated -fno-wrapv compile should hit its own entry: {report}"
+        "repeated -fno-wrapv compile should hit its own entry: {report:?}"
     );
 
     // Key-level proof, straight from the events: five compiles, three flag
     // sets, exactly three distinct cache keys.
     let events = report["all_events"]
-        .as_array()
+        .as_seq()
         .expect("report should include all_events");
-    assert_eq!(events.len(), 5, "expected one event per compile: {report}");
+    assert_eq!(events.len(), 5, "expected one event per compile: {report:?}");
     let keys: std::collections::BTreeSet<&str> = events
         .iter()
         .map(|e| {
             let key = e["cache_key"].as_str().unwrap_or_default();
-            assert!(!key.is_empty(), "every event should carry a cache key: {e}");
+            assert!(!key.is_empty(), "every event should carry a cache key: {e:?}");
             key
         })
         .collect();
     assert_eq!(
         keys.len(),
         3,
-        "each probe-keyed flag value must map to its own cache key: {report}"
+        "each probe-keyed flag value must map to its own cache key: {report:?}"
     );
 }
 
@@ -1759,7 +1759,7 @@ fn test_cc_dev_null_output_is_passthrough_and_preserved() {
     assert_eq!(report["summary"]["passthroughs"].as_u64(), Some(1));
     assert_cc_report_counts(&report, 0, 0);
     let refusal_reasons = report["bypass"]["reasons"]
-        .as_array()
+        .as_seq()
         .expect("report should include passthrough reasons");
     assert!(
         refusal_reasons.iter().any(|entry| {
@@ -1767,7 +1767,7 @@ fn test_cc_dev_null_output_is_passthrough_and_preserved() {
                 .as_str()
                 .is_some_and(|reason| reason.contains("requires compiler write semantics"))
         }),
-        "report must attribute /dev/null passthrough to output-path safety: {report}"
+        "report must attribute /dev/null passthrough to output-path safety: {report:?}"
     );
 }
 
@@ -2130,12 +2130,12 @@ fn test_cc_forced_include_and_param_converge_across_clones_issue_580() {
     assert_eq!(
         summary["local_hits"].as_u64(),
         Some(1),
-        "-fno-wrapv must not reuse the -fwrapv entry: {report}"
+        "-fno-wrapv must not reuse the -fwrapv entry: {report:?}"
     );
     assert_eq!(
         summary["misses"].as_u64().unwrap_or(0) + summary["dups"].as_u64().unwrap_or(0),
         2,
-        "-fno-wrapv should have compiled under its own key: {report}"
+        "-fno-wrapv should have compiled under its own key: {report:?}"
     );
 }
 
@@ -2236,27 +2236,27 @@ fn test_cc_no_omit_leaf_frame_pointer_keys_on_probe_issue_839() {
         report["summary"]["local_hits"].as_u64(),
         Some(1),
         "default -mframe-pointer=non-leaf must not hit the \
-         -mno-omit-leaf-frame-pointer entry: {report}"
+         -mno-omit-leaf-frame-pointer entry: {report:?}"
     );
 
     // Key-level proof from the events: three compiles, two flag modes,
     // exactly two distinct cache keys.
     let events = report["all_events"]
-        .as_array()
+        .as_seq()
         .expect("report should include all_events");
-    assert_eq!(events.len(), 3, "expected one event per compile: {report}");
+    assert_eq!(events.len(), 3, "expected one event per compile: {report:?}");
     let keys: std::collections::BTreeSet<&str> = events
         .iter()
         .map(|e| {
             let key = e["cache_key"].as_str().unwrap_or_default();
-            assert!(!key.is_empty(), "every event should carry a cache key: {e}");
+            assert!(!key.is_empty(), "every event should carry a cache key: {e:?}");
             key
         })
         .collect();
     assert_eq!(
         keys.len(),
         2,
-        "the two frame-pointer modes must map to distinct cache keys: {report}"
+        "the two frame-pointer modes must map to distinct cache keys: {report:?}"
     );
 }
 
@@ -2355,12 +2355,12 @@ fn test_cc_ubsan_strip_path_components_caches_issue_840() {
     assert_eq!(
         summary["local_hits"].as_u64(),
         Some(1),
-        "the flag-less compile must not reuse the flagged entry: {report}"
+        "the flag-less compile must not reuse the flagged entry: {report:?}"
     );
     assert_eq!(
         summary["misses"].as_u64().unwrap_or(0) + summary["dups"].as_u64().unwrap_or(0),
         2,
-        "the flag-less compile should have compiled under its own key: {report}"
+        "the flag-less compile should have compiled under its own key: {report:?}"
     );
 }
 
@@ -2456,12 +2456,12 @@ fn test_cc_gdwarf2_caches_and_keys_dwarf_version_issue_838() {
     assert_eq!(
         summary["local_hits"].as_u64(),
         Some(1),
-        "-gdwarf-4 / no-flag must not reuse the -gdwarf-2 entry: {report}"
+        "-gdwarf-4 / no-flag must not reuse the -gdwarf-2 entry: {report:?}"
     );
     assert_eq!(
         summary["misses"].as_u64().unwrap_or(0) + summary["dups"].as_u64().unwrap_or(0),
         3,
-        "-gdwarf-4 and no-flag should have compiled under their own keys: {report}"
+        "-gdwarf-4 and no-flag should have compiled under their own keys: {report:?}"
     );
 
     // Four compiles represent exactly three semantic modes: the repeated
@@ -2469,16 +2469,16 @@ fn test_cc_gdwarf2_caches_and_keys_dwarf_version_issue_838() {
     // baseline each have their own. This proves separation directly rather
     // than inferring it only from aggregate hit/miss counters.
     let events = report["all_events"]
-        .as_array()
+        .as_seq()
         .expect("report should include all_events");
-    assert_eq!(events.len(), 4, "expected one event per compile: {report}");
+    assert_eq!(events.len(), 4, "expected one event per compile: {report:?}");
     let keys: std::collections::BTreeSet<&str> = events
         .iter()
         .map(|event| {
             let key = event["cache_key"].as_str().unwrap_or_default();
             assert!(
                 !key.is_empty(),
-                "every DWARF test event should carry a cache key: {event}"
+                "every DWARF test event should carry a cache key: {event:?}"
             );
             key
         })
@@ -2486,7 +2486,7 @@ fn test_cc_gdwarf2_caches_and_keys_dwarf_version_issue_838() {
     assert_eq!(
         keys.len(),
         3,
-        "DWARF 2, DWARF 4, and no-flag must map to three cache keys: {report}"
+        "DWARF 2, DWARF 4, and no-flag must map to three cache keys: {report:?}"
     );
 }
 
@@ -2567,12 +2567,12 @@ fn test_cc_gfull_caches_and_keys_apart_from_no_debug_issue_857() {
     assert_eq!(
         summary["local_hits"].as_u64(),
         Some(1),
-        "no-debug must not reuse the -gfull entry: {report}"
+        "no-debug must not reuse the -gfull entry: {report:?}"
     );
     assert_eq!(
         summary["misses"].as_u64().unwrap_or(0) + summary["dups"].as_u64().unwrap_or(0),
         2,
-        "no-debug should have compiled under its own key: {report}"
+        "no-debug should have compiled under its own key: {report:?}"
     );
 }
 
@@ -2640,7 +2640,7 @@ fn test_cc_trivial_auto_var_init_pattern_caches_issue_849() {
     assert_eq!(
         report["summary"]["misses"].as_u64(),
         Some(1),
-        "cold compile with the #849 flag must be cached, not passed through: {report}"
+        "cold compile with the #849 flag must be cached, not passed through: {report:?}"
     );
 
     std::fs::remove_file(work.path().join("tu.o")).unwrap();
@@ -2655,7 +2655,7 @@ fn test_cc_trivial_auto_var_init_pattern_caches_issue_849() {
     assert_eq!(
         report["summary"]["local_hits"].as_u64(),
         Some(1),
-        "the flag-less compile must not reuse the pattern-initialized entry: {report}"
+        "the flag-less compile must not reuse the pattern-initialized entry: {report:?}"
     );
 }
 
@@ -2738,7 +2738,7 @@ fn test_cc_merge_all_constants_keys_on_probe_issue_856() {
         report["summary"]["local_hits"].as_u64(),
         Some(1),
         "default merge-constants mode must not hit the \
-         -fmerge-all-constants entry: {report}"
+         -fmerge-all-constants entry: {report:?}"
     );
 
     // Disabled polarity must classify (not passthrough) and must not reuse
@@ -2760,35 +2760,35 @@ fn test_cc_merge_all_constants_keys_on_probe_issue_856() {
     assert_eq!(
         report["summary"]["passthroughs"].as_u64().unwrap_or(0),
         0,
-        "-fno-merge-all-constants must cache, not pass through: {report}"
+        "-fno-merge-all-constants must cache, not pass through: {report:?}"
     );
 
     let events = report["all_events"]
-        .as_array()
+        .as_seq()
         .expect("report should include all_events");
-    assert_eq!(events.len(), 4, "expected one event per compile: {report}");
+    assert_eq!(events.len(), 4, "expected one event per compile: {report:?}");
     let keys: Vec<&str> = events
         .iter()
         .map(|event| {
             let key = event["cache_key"].as_str().unwrap_or_default();
             assert!(
                 !key.is_empty(),
-                "every event should carry a cache key: {event}"
+                "every event should carry a cache key: {event:?}"
             );
             key
         })
         .collect();
     assert_eq!(
         keys[0], keys[1],
-        "the repeated enabled compile must reuse its own key: {report}"
+        "the repeated enabled compile must reuse its own key: {report:?}"
     );
     assert_ne!(
         keys[0], keys[2],
-        "enabled mode must not reuse the default key: {report}"
+        "enabled mode must not reuse the default key: {report:?}"
     );
     assert_ne!(
         keys[0], keys[3],
-        "enabled mode must not reuse the disabled key: {report}"
+        "enabled mode must not reuse the disabled key: {report:?}"
     );
 }
 
@@ -3079,15 +3079,15 @@ fn test_cc_legacy_compound_depinfo_entry_self_heals_and_why_miss_explains_it() {
     // survived. Its blob contents remain valid; the old name must nevertheless
     // be rejected once because old versions skipped dep-info normalization.
     let meta_path = cache_dir.path().join("store").join(key).join("meta.json");
-    let mut meta: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&meta_path).unwrap()).unwrap();
-    let files = meta["files"].as_array_mut().unwrap();
+    let mut meta: deser_value::Value =
+        deser_json::from_slice(&std::fs::read(&meta_path).unwrap()).unwrap();
+    let files = meta["files"].as_seq_mut().unwrap();
     let depinfo = files
         .iter_mut()
         .find(|file| file["name"] == "__kache_cc_depinfo.d")
         .expect("fixed cold entry should use the semantic dep-info name");
-    depinfo["name"] = serde_json::Value::String("foo.d.tmp".to_string());
-    std::fs::write(&meta_path, serde_json::to_vec_pretty(&meta).unwrap()).unwrap();
+    depinfo["name"] = deser_value::Value::from("foo.d.tmp".to_string());
+    std::fs::write(&meta_path, deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).map(String::into_bytes).unwrap()).unwrap();
 
     std::fs::remove_dir_all(project.path().join("build")).unwrap();
     std::fs::create_dir_all(project.path().join("build")).unwrap();
@@ -3565,16 +3565,16 @@ fn test_cc_direct_key_refuses_an_assembler_read_file() {
 
     // Skipped compiles are kept out of the report's hit/miss summary, so
     // read the event log itself.
-    let last_event = |cache: &Path| -> serde_json::Value {
+    let last_event = |cache: &Path| -> deser_value::Value {
         let text = std::fs::read_to_string(cache.join("events.jsonl")).unwrap();
         let line = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap();
-        serde_json::from_str(line).unwrap()
+        deser_json::from_str(line).unwrap()
     };
     run_kache_cc(project.path(), cache_dir.path(), &args);
     assert!(project.path().join("foo.o").exists());
     let event = last_event(cache_dir.path());
     assert_eq!(event["crate_name"].as_str(), Some("foo.c"));
-    assert_eq!(event["result"].as_str(), Some("skipped"), "{event}");
+    assert_eq!(event["result"].as_str(), Some("skipped"), "{event:?}");
     assert_eq!(event["compiler_runs"].as_u64(), Some(1));
     assert_eq!(event["preprocessor_runs"].as_u64(), Some(0));
 
@@ -3582,7 +3582,7 @@ fn test_cc_direct_key_refuses_an_assembler_read_file() {
     run_kache_cc(project.path(), cache_dir.path(), &args);
     assert!(project.path().join("foo.o").exists());
     let event = last_event(cache_dir.path());
-    assert_eq!(event["result"].as_str(), Some("skipped"), "{event}");
+    assert_eq!(event["result"].as_str(), Some("skipped"), "{event:?}");
     assert_eq!(event["compiler_runs"].as_u64(), Some(1));
     let report = kache_report(cache_dir.path());
     assert_cc_report_counts(&report, 0, 0);
@@ -3619,7 +3619,7 @@ fn test_cc_direct_key_binds_a_root_spelling_object_to_its_checkout() {
     assert_eq!(
         report["summary"]["misses"].as_u64(),
         Some(1),
-        "the bound entry is stored: {report}"
+        "the bound entry is stored: {report:?}"
     );
 
     std::fs::remove_file(project.path().join("foo.o")).unwrap();
@@ -3638,14 +3638,14 @@ fn test_cc_direct_key_binds_a_root_spelling_object_to_its_checkout() {
     // the same text), so the store already holds every blob: a compile
     // reported as a duplicate, never a hit.
     let last = report["all_events"]
-        .as_array()
+        .as_seq()
         .unwrap()
         .last()
         .unwrap()
         .clone();
     assert!(
         matches!(last["result"].as_str(), Some("miss") | Some("dup")),
-        "{last}"
+        "{last:?}"
     );
     assert_eq!(last["compiler_runs"].as_u64(), Some(1));
     std::fs::remove_file(elsewhere.path().join("foo.o")).unwrap();

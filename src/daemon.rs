@@ -19,7 +19,7 @@ pub(crate) use lifecycle_client::Ensured;
 mod execution;
 #[path = "daemon_control.rs"]
 mod lifecycle_control;
-use serde::{Deserialize, Serialize};
+use deser::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -76,7 +76,7 @@ pub fn build_epoch() -> u64 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[deser(rename_all = "snake_case")]
 enum DaemonPhase {
     Starting,
     Ready,
@@ -88,7 +88,7 @@ struct DaemonCoordState {
     build_epoch: u64,
     phase: DaemonPhase,
     updated_at_ms: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[deser(default, skip_serializing_if = Option::is_none)]
     control_version: Option<u32>,
 }
 
@@ -147,7 +147,7 @@ impl DaemonCoordGuard {
 impl Drop for DaemonCoordGuard {
     fn drop(&mut self) {
         if let Ok(bytes) = std::fs::read(&self.path)
-            && serde_json::from_slice::<DaemonCoordState>(&bytes).is_ok_and(|state| {
+            && deser_json::from_slice::<DaemonCoordState>(&bytes).is_ok_and(|state| {
                 state.pid == std::process::id() && state.build_epoch == build_epoch()
             })
         {
@@ -164,14 +164,14 @@ fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    kunobi_daemon::RecordSlot::new(path).replace(&serde_json::to_vec(value)?)?;
+    kunobi_daemon::RecordSlot::new(path).replace(&deser_json::to_string(value).map(String::into_bytes)?)?;
     Ok(())
 }
 
 fn read_daemon_state(socket_path: &Path) -> Option<DaemonCoordState> {
     let path = daemon_state_path(socket_path);
     let bytes = std::fs::read(path).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    deser_json::from_slice(&bytes).ok()
 }
 
 /// Build epoch of a daemon that holds the run lock but has not bound its socket
@@ -2118,7 +2118,7 @@ fn handle_connection_started_at(
             break;
         };
         let start = Instant::now();
-        let parsed = serde_json::from_str::<Request>(&line);
+        let parsed = deser_json::from_str::<Request>(&line);
 
         let client_version = parsed
             .as_ref()
@@ -2186,7 +2186,7 @@ fn handle_connection_started_at(
             }
         }
 
-        let mut resp_line = serde_json::to_string(&resp)?;
+        let mut resp_line = deser_json::to_string(&resp)?;
         resp_line.push('\n');
         if let Err(e) = std::io::Write::write_all(&mut stream, resp_line.as_bytes()) {
             // Client closed without reading (fire-and-forget mode) — not an error.
@@ -2301,7 +2301,7 @@ pub fn send_gc_hint(config: &Config) -> bool {
 fn gc_hint_accepted(reply: Result<String>) -> bool {
     reply
         .ok()
-        .and_then(|line| serde_json::from_str::<Response>(&line).ok())
+        .and_then(|line| deser_json::from_str::<Response>(&line).ok())
         .is_some_and(|resp| resp.ok)
 }
 
@@ -2348,7 +2348,7 @@ fn send_gc_request_with_timeout(
 
     let try_send = |path: &Path| -> Result<Response> {
         let resp_str = send_request_with_timeout(path, &req, read_timeout)?;
-        let resp: Response = serde_json::from_str(&resp_str)?;
+        let resp: Response = deser_json::from_str(&resp_str)?;
         Ok(resp)
     };
 
@@ -2387,7 +2387,7 @@ pub fn send_hash_files_request(
 }
 
 fn hash_files_results_from_response_line(resp_str: &str) -> Result<Vec<HashFileResult>> {
-    let resp: Response = serde_json::from_str(resp_str)?;
+    let resp: Response = deser_json::from_str(resp_str)?;
     if !resp.ok {
         anyhow::bail!(
             "daemon hash_files error: {}",
@@ -2553,7 +2553,7 @@ fn fetch_daemon_health(config: &Config) -> Result<DaemonHealth> {
 }
 
 fn parse_daemon_health(response: &str) -> Result<DaemonHealth> {
-    let response: Response = serde_json::from_str(response)?;
+    let response: Response = deser_json::from_str(response)?;
     anyhow::ensure!(response.ok, "daemon rejected readiness check");
     response.health.context("daemon omitted readiness response")
 }
@@ -2671,7 +2671,7 @@ fn fetch_stats(
     });
 
     let resp_str = send_request_with_timeout(&config.socket_path(), &req, read_timeout)?;
-    let resp: Response = serde_json::from_str(&resp_str)?;
+    let resp: Response = deser_json::from_str(&resp_str)?;
 
     if resp.ok {
         resp.stats
@@ -2708,7 +2708,7 @@ fn request_shutdown(config: &Config) -> Result<()> {
     {
         let response =
             lifecycle_control::legacy_request(&config.socket_path(), &Request::Shutdown, deadline)?;
-        let response: Response = serde_json::from_str(&response)?;
+        let response: Response = deser_json::from_str(&response)?;
         anyhow::ensure!(response.ok, "daemon rejected shutdown");
     }
     Ok(())
@@ -2776,7 +2776,7 @@ pub(crate) fn compiler_execution_status(
     };
     let response =
         send_request_with_timeout(&config.socket_path(), &request, Duration::from_secs(3))?;
-    let response: Response = serde_json::from_str(&response)?;
+    let response: Response = deser_json::from_str(&response)?;
     response
         .execution_status
         .filter(kache_protocol::execution::ExecutionStatus::compatible)
@@ -2797,7 +2797,7 @@ fn send_request_with_socket_timeout(
     let _ = stream.set_read_timeout(Some(read_timeout));
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
 
-    let mut line = serde_json::to_string(req)?;
+    let mut line = deser_json::to_string(req)?;
     line.push('\n');
     stream
         .write_all(line.as_bytes())
@@ -2827,7 +2827,7 @@ fn send_request_with_socket_timeout(
 /// This avoids the read-timeout failures that occur when the daemon's runtime
 /// is saturated (e.g. during S3 key-cache population at startup).
 fn send_request_fire_and_forget(socket_path: &Path, req: &Request) -> Result<()> {
-    let mut line = serde_json::to_string(req)?;
+    let mut line = deser_json::to_string(req)?;
     line.push('\n');
     send_line_fire_and_forget(socket_path, line, FIRE_AND_FORGET_SEND_WAIT)
 }

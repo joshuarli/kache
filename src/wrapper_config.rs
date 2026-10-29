@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use deser::Deserialize;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -17,11 +17,11 @@ struct CargoConfigFile {
 
 #[derive(Debug, Deserialize)]
 struct CargoBuildConfig {
-    #[serde(rename = "rustc-wrapper")]
+    #[deser(rename = "rustc-wrapper")]
     rustc_wrapper: Option<String>,
     /// Missing on every config written before `cargo doc` caching. Without
     /// the default, a file that only sets `rustc-wrapper` would fail to parse.
-    #[serde(default)]
+    #[deser(default)]
     rustdoc: Option<String>,
 }
 
@@ -136,7 +136,7 @@ fn read_rustdoc_from_config(path: &Path) -> Option<String> {
 
 fn read_build_config(path: &Path) -> Option<CargoBuildConfig> {
     let content = std::fs::read_to_string(path).ok()?;
-    let parsed: CargoConfigFile = toml::from_str(&content).ok()?;
+    let parsed: CargoConfigFile = deser_toml::from_str(&content).ok()?;
     parsed.build
 }
 

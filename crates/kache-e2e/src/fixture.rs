@@ -15,14 +15,14 @@
 
 use anyhow::{Context, Result, anyhow};
 use indexmap::IndexMap;
-use serde::Deserialize;
+use deser::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::scenario::{ScenarioChecks, Selectors, SourceKind, discover_metadata};
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 pub struct FixtureSourceConfig {
     pub kind: SourceKind,
     pub path: PathBuf,
@@ -30,7 +30,7 @@ pub struct FixtureSourceConfig {
 
 /// A single example project the harness will drive.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 pub struct Fixture {
     /// Human-readable identifier; used in result JSON and CLI output.
     /// Must match the scenario directory name (the harness checks this).
@@ -38,13 +38,13 @@ pub struct Fixture {
 
     /// Source materialization. For e2e scenarios this points at the checked-in
     /// source tree, normally `source`.
-    #[serde(default)]
+    #[deser(default)]
     pub source: Option<FixtureSourceConfig>,
 
     /// Environment variables exported when running [`Self::commands`].
     /// Values may contain `$KACHE` (replaced with the kache binary path)
     /// — see module docs.
-    #[serde(default)]
+    #[deser(default)]
     pub env: HashMap<String, String>,
 
     /// Named shell commands. The runner looks up `"build"` and `"clean"`
@@ -58,18 +58,18 @@ pub struct Fixture {
 
     /// Per-phase assertions. A missing entry means "measure but don't
     /// pass/fail" for that phase.
-    #[serde(default)]
+    #[deser(default)]
     pub assertions: PhaseAssertions,
 
     /// Declarative selection tags, e.g. `lang:rust`, `os:windows`,
     /// `tier:slow`. The source kind (`source:fixture`) is implicit, and
     /// `tier:gate` is added unless the fixture declares another tier.
-    #[serde(default)]
+    #[deser(default)]
     pub tags: Vec<String>,
 
     /// Shared scenario checks. Fixture `[assertions]` remain the blocking
     /// correctness contract; `[checks.measure.<phase>]` is warn-only.
-    #[serde(default)]
+    #[deser(default)]
     pub checks: ScenarioChecks,
 
     /// Optional differential test — artifact files whose bytes must be
@@ -90,13 +90,13 @@ pub struct Fixture {
     /// refuse-and-passthrough it already exercises, so it legitimately
     /// still passes. Mark those `true` so negative-control expects a
     /// pass, not a flip.
-    #[serde(default)]
+    #[deser(default)]
     pub negative_control_exempt: bool,
 
     /// Run every phase with a kache daemon bound to the fixture's cache
     /// directory, so the paths that hand work to it (`daemon_publish`) are
     /// the ones exercised. Without this the wrapper does everything itself.
-    #[serde(default)]
+    #[deser(default)]
     pub daemon: bool,
 
     /// Assert that restored dep-info (`.d`) files are path-expanded.
@@ -109,7 +109,7 @@ pub struct Fixture {
     /// `.d` content rather than relying on the `should_not_recompile`
     /// proxy, which can pass even when the `.d` is broken. Opt-in — set
     /// `true` for Rust fixtures whose dependencies get `.d`s cached.
-    #[serde(default)]
+    #[deser(default)]
     pub check_depinfo: bool,
 
     /// External executables that must be on `PATH` for this fixture to
@@ -119,13 +119,13 @@ pub struct Fixture {
     /// on PATH to test the `KACHE_FALLBACK` delegation. A skipped
     /// fixture is also passed over by `--negative-control`: it was
     /// never evaluated, so there is nothing to falsify.
-    #[serde(default)]
+    #[deser(default)]
     pub requires: Vec<String>,
 
     /// When true, the harness runs `kache install-shims` into the fixture
     /// cache dir, prepends that directory to `PATH`, and drops `CC`/`CXX`.
     /// Make then finds `cc` as kache (ccache's masquerade method). Unix only.
-    #[serde(default)]
+    #[deser(default)]
     pub compiler_shims: bool,
 
     /// Operating systems this fixture supports, by `std::env::consts::OS`
@@ -135,12 +135,12 @@ pub struct Fixture {
     /// fixtures that only make sense on some platforms, e.g. the cc out-of-tree
     /// convergence scenario which exercises the gnu/clang prefix-map path and
     /// not MSVC `cl` (kunobi-ninja/kache#394).
-    #[serde(default)]
+    #[deser(default)]
     pub os: Vec<String>,
 
     /// Absolute path to the fixture directory (set at load time, not
     /// in the toml).
-    #[serde(skip)]
+    #[deser(skip)]
     pub dir: PathBuf,
 }
 
@@ -153,7 +153,7 @@ pub struct Fixture {
 /// one the real compiler produced on the cold build. Catches
 /// store/restore corruption and wrong-key miscaches.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 pub struct DiffSpec {
     /// Artifact paths relative to the project root (e.g.
     /// `build/foo.o`). Compared after cold (the baseline) and after
@@ -169,7 +169,7 @@ pub struct DiffSpec {
 /// across a relocation. Guards the stale-restore bug class (a content
 /// change wrongly served from cache).
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 pub struct ModifySpec {
     /// Source file to edit, relative to the project root.
     pub file: String,
@@ -183,7 +183,7 @@ pub struct ModifySpec {
     /// fixture's `[verify]` command with these strings in place of its own,
     /// so a stale binary restored from the cache fails the phase even when
     /// the miss counts look right. Empty = the phase skips verify.
-    #[serde(default)]
+    #[deser(default)]
     pub expected_stdout_contains: Vec<String>,
 }
 
@@ -212,15 +212,15 @@ pub struct Commands {
 /// embeds machine-local paths in DWARF / panic strings / track_caller)
 /// surfaces structurally.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 pub struct Verify {
     /// Shell command (relative paths resolve against fixture dir).
     pub run: String,
-    #[serde(default)]
+    #[deser(default)]
     pub expected_exit_code: i32,
-    #[serde(default)]
+    #[deser(default)]
     pub expected_stdout_contains: Vec<String>,
-    #[serde(default = "default_verify_timeout")]
+    #[deser(default = default_verify_timeout())]
     pub timeout_s: u64,
     /// Optional binary-content inspection. The harness reads the
     /// artifact at [`Verify::run`] (the executable path) via
@@ -228,19 +228,19 @@ pub struct Verify {
     /// Use to assert "no machine-local paths leaked into this
     /// binary's debug info" (e.g. `["/Users/", "/home/", "/private/tmp/"]`).
     /// Empty / unset = skip the check entirely.
-    #[serde(default)]
+    #[deser(default)]
     pub forbidden_substrings: Vec<String>,
     /// Optional positive counterpart: substrings that MUST appear in the
     /// artifact (via the same `strings` scan). Use to assert that a resolvable
     /// remap target actually landed in the debug info, e.g. `["/kache/.cargo"]`
     /// (kunobi-ninja/kache#485). Empty / unset = skip. Like the forbidden scan
     /// this is a Unix-only lens (skipped where `strings` is unavailable).
-    #[serde(default)]
+    #[deser(default)]
     pub required_substrings: Vec<String>,
     /// As [`Verify::required_substrings`] but only asserted on Linux. For
     /// targets that differ by OS — notably `/proc/self/cwd`, the Linux-only
     /// workspace remap target (other platforms bake `/kache/workspace`).
-    #[serde(default)]
+    #[deser(default)]
     pub required_substrings_linux: Vec<String>,
 }
 
@@ -251,7 +251,7 @@ fn default_verify_timeout() -> u64 {
 /// Per-phase assertion bundle. Absent phases skip assertion checks
 /// entirely (the phase still runs and is measured).
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 pub struct PhaseAssertions {
     pub cold: Option<MetricAssertions>,
     pub warm: Option<MetricAssertions>,
@@ -270,7 +270,7 @@ pub struct PhaseAssertions {
     /// miss (`min_misses = 1`), proving the cache key reacts to
     /// content changes and does not serve a stale artifact.
     /// Deserialized from `[assertions.relocate-modified]`.
-    #[serde(rename = "relocate-modified")]
+    #[deser(rename = "relocate-modified")]
     pub relocate_modified: Option<MetricAssertions>,
     /// Relocate-noop phase: a SECOND build in the relocated tree,
     /// without cleaning, right after `relocate`. Reuses
@@ -284,7 +284,7 @@ pub struct PhaseAssertions {
     /// the `.d` paths are trivially valid, so only this phase exposes
     /// the bug. Per-fixture opt-in; declaring it is what makes the
     /// phase run at all. Deserialized from `[assertions.relocate-noop]`.
-    #[serde(rename = "relocate-noop")]
+    #[deser(rename = "relocate-noop")]
     pub relocate_noop: Option<NoopAssertions>,
 }
 
@@ -294,7 +294,7 @@ pub struct PhaseAssertions {
 /// opt-in (`Option<...>`) — declaring only the constraints that matter
 /// for this fixture keeps the toml signal-to-noise high.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 pub struct MetricAssertions {
     /// Lower bound on `summary.total_crates` (events seen this phase).
     /// Useful as a coarse "did anything land in the cache" check.
@@ -324,7 +324,7 @@ pub struct MetricAssertions {
     /// the build graph (build.rs binary, etc.) did. Without this
     /// tighter assertion, an unrelated miss in the same phase
     /// could mask a false hit on the OUT_DIR-using crate.
-    #[serde(default)]
+    #[deser(default)]
     pub min_misses_per_crate: std::collections::HashMap<String, u64>,
     /// Upper bound on the compiler spawns summed across this phase's
     /// events. `0` is the headline cache assertion — a phase that
@@ -360,7 +360,7 @@ pub struct MetricAssertions {
 /// by grepping the build's stdout for [`NoopAssertions::recompile_marker`]
 /// (e.g. cargo's `"Compiling"`).
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[deser(deny_unknown_fields)]
 pub struct NoopAssertions {
     /// If `true` and the marker appears in stdout, the assertion fails.
     /// If `false`, the assertion passes regardless (used by skeleton
@@ -410,7 +410,7 @@ impl Fixture {
         let raw = std::fs::read_to_string(&toml_path)
             .with_context(|| format!("reading {}", toml_path.display()))?;
         let mut fixture: Self =
-            toml::from_str(&raw).with_context(|| format!("parsing {}", toml_path.display()))?;
+            deser_toml::from_str(&raw).with_context(|| format!("parsing {}", toml_path.display()))?;
 
         // Sanity: `name` must match scenario directory. Catches copy-paste bugs
         // where a fixture is duplicated and the new name slot wasn't
@@ -524,7 +524,7 @@ clean = "rm -rf target"
 min_hitz = 1
 "#,
         ] {
-            let err = toml::from_str::<Fixture>(raw).unwrap_err();
+            let err = deser_toml::from_str::<Fixture>(raw).unwrap_err();
             assert!(err.to_string().contains("unknown field"), "{err}");
         }
     }

@@ -12,7 +12,8 @@ keywords = ["build-cache", "cache", "metadata", "compiler-cache"]
 categories = ["development-tools::build-utils", "caching"]
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
+deser = { version = "0.10.2", features = ["derive"] }
 
 [dev-dependencies]
-serde_json = "1"
+deser-json = "0.10.2"
+deser-value = "0.10.2"

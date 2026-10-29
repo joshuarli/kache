@@ -11,7 +11,7 @@ use crate::FileSizing;
 
 /// Filesystem-unique file identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "deser", derive(deser::Serialize, deser::Deserialize))]
 pub struct InodeId {
     pub dev: u64,
     pub ino: u64,
@@ -84,13 +84,13 @@ impl InodeLedger {
 
 /// Multiply-linked data counted in a total but retained by names elsewhere.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "deser", derive(deser::Serialize, deser::Deserialize))]
 pub struct PinnedOutside {
     pub inodes: u64,
     /// Allocated bytes retained by another hard-link name.
     pub bytes: u64,
     /// Bytes that would otherwise have been counted as physically reclaimable.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "deser", deser(default))]
     pub unique_bytes: u64,
 }
 

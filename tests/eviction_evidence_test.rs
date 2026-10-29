@@ -1,7 +1,7 @@
 //! The report must read recorded evidence after the last WAL owner closes.
 mod common;
 
-fn report(cache: &std::path::Path) -> serde_json::Value {
+fn report(cache: &std::path::Path) -> deser_value::Value {
     let output = common::hermetic_command(
         common::kache_binary(),
         cache,
@@ -15,7 +15,7 @@ fn report(cache: &std::path::Path) -> serde_json::Value {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    serde_json::from_slice(&output.stdout).unwrap()
+    deser_json::from_slice(&output.stdout).unwrap()
 }
 
 #[test]
@@ -36,7 +36,7 @@ fn daemon_free_report_reads_mature_evidence_after_last_wal_owner_closes() {
     assert_eq!(evidence["horizon_secs"], 604800);
     assert_eq!(json["meta"]["since_secs"], 3600);
     let store = &evidence["stores"][0];
-    assert!(store["error"].is_null(), "{store}");
+    assert!(store["error"].is_null(), "{store:?}");
     let cohort = &store["evidence"]["live_shadow_agreed"];
     assert_eq!(cohort["mature"], 1);
     assert_eq!(cohort["demand_within_horizon_lower"], 1);

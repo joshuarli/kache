@@ -5,7 +5,7 @@ fn legacy(store: &Store, key: &str, cost: u64) -> EntryMeta {
     entry.meta.compile_time_ms = cost;
     fs::write(
         store.entry_dir(key).join("meta.json"),
-        serde_json::to_vec(&entry.meta).unwrap(),
+        deser_json::to_string(&entry.meta).map(String::into_bytes).unwrap(),
     )
     .unwrap();
     store
@@ -73,7 +73,7 @@ fn broken_prefix_defers_without_displacing_a_recoverable_entry() {
     assert_eq!(state(&store, "z-valid"), (7777, 1, 0, 0));
     fs::write(
         store.entry_dir("a-broken").join("meta.json"),
-        serde_json::to_vec(&meta).unwrap(),
+        deser_json::to_string(&meta).map(String::into_bytes).unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -103,7 +103,7 @@ fn invalid_metadata_is_deferred_and_an_absent_cost_is_processed_as_unknown() {
         "absent-cost",
     ] {
         let meta = legacy(&store, key, 100);
-        let mut value = serde_json::to_value(meta).unwrap();
+        let mut value = deser_value::to_value(&meta).unwrap();
         match key {
             "bad-json" => {
                 fs::write(store.entry_dir(key).join("meta.json"), b"{").unwrap();
@@ -113,13 +113,13 @@ fn invalid_metadata_is_deferred_and_an_absent_cost_is_processed_as_unknown() {
             "overflow" => value["compile_time_ms"] = u64::MAX.into(),
             "negative" => value["compile_time_ms"] = (-1).into(),
             "absent-cost" => {
-                value.as_object_mut().unwrap().remove("compile_time_ms");
+                value.as_map_mut().unwrap().remove("compile_time_ms");
             }
             _ => unreachable!(),
         }
         fs::write(
             store.entry_dir(key).join("meta.json"),
-            serde_json::to_vec(&value).unwrap(),
+            deser_json::to_string(&value).map(String::into_bytes).unwrap(),
         )
         .unwrap();
     }
@@ -490,7 +490,7 @@ fn every_current_writer_indexes_zero_cost_metadata_during_publication() {
         entry.meta.compile_time_ms = 0;
         fs::write(
             store.entry_dir(&key).join("meta.json"),
-            serde_json::to_vec(&entry.meta).unwrap(),
+            deser_json::to_string(&entry.meta).map(String::into_bytes).unwrap(),
         )
         .unwrap();
         match *route {

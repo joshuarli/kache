@@ -302,7 +302,7 @@ pub fn run(config: &Config, root: Option<&Path>, json: bool) -> Result<()> {
     );
     let Some(builds) = latest_builds(&sessions, root.as_deref()) else {
         if json {
-            #[derive(serde::Serialize)]
+            #[derive(deser::Serialize)]
             struct Body {
                 message: &'static str,
             }
@@ -353,7 +353,7 @@ pub fn run_all(config: &Config, root: Option<&Path>, json: bool) -> Result<()> {
     Ok(())
 }
 
-#[derive(serde::Serialize)]
+#[derive(deser::Serialize)]
 struct SkipsBody {
     scope: &'static str,
     root: Option<String>,
@@ -441,7 +441,7 @@ fn render_skips(body: &SkipsBody) -> Vec<String> {
 }
 
 /// One cause in `kache --json explain`.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, deser::Serialize)]
 pub(crate) struct CauseBody {
     pub why: String,
     pub fix: String,
@@ -455,7 +455,7 @@ pub(crate) struct CauseBody {
 }
 
 /// One reason a compilation was not cached.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, deser::Serialize)]
 pub(crate) struct NotCached {
     pub kind: String,
     pub reason: String,
@@ -464,7 +464,7 @@ pub(crate) struct NotCached {
 }
 
 /// A crate that keeps missing across builds of the tree.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, deser::Serialize)]
 pub(crate) struct KeepsMissing {
     pub crate_name: String,
     pub missed: usize,
@@ -472,7 +472,7 @@ pub(crate) struct KeepsMissing {
 }
 
 /// The body of `kache --json explain` with no crate.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, deser::Serialize)]
 pub(crate) struct Body {
     pub root: String,
     pub recorded_at: String,

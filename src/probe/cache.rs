@@ -187,7 +187,7 @@ fn is_volatile_env_name(name: &str) -> bool {
 /// A schema mismatch is deliberately a miss, never a wrong hit.
 pub fn load(cache_dir: &Path, key: &str) -> Option<ResolvedConfig> {
     let bytes = std::fs::read(record_path(cache_dir, key)).ok()?;
-    let config: ResolvedConfig = serde_json::from_slice(&bytes).ok()?;
+    let config: ResolvedConfig = deser_json::from_slice(&bytes).ok()?;
     (config.schema_version == PROBE_SCHEMA_VERSION).then_some(config)
 }
 
@@ -198,7 +198,7 @@ pub fn store(cache_dir: &Path, key: &str, config: &ResolvedConfig) {
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let Ok(json) = serde_json::to_vec_pretty(config) else {
+    let Ok(json) = deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(config).map(String::into_bytes) else {
         return;
     };
     // Atomic publish: write a temp file in the destination dir, then
@@ -609,7 +609,7 @@ mod tests {
         // A record written under a future schema must read as a miss.
         let mut cfg = sample("clang 17");
         cfg.schema_version = PROBE_SCHEMA_VERSION + 1;
-        std::fs::write(dir.join("future.json"), serde_json::to_vec(&cfg).unwrap()).unwrap();
+        std::fs::write(dir.join("future.json"), deser_json::to_string(&cfg).map(String::into_bytes).unwrap()).unwrap();
         assert_eq!(load(cache.path(), "future"), None);
     }
 }

@@ -81,13 +81,13 @@ mod tests {
             path: dir.path().join("config.toml"),
             fingerprint: "snapshot-a".into(),
         };
-        let mut daemon: EffectiveConfig = serde_json::from_value(serde_json::json!({
+        let mut daemon: EffectiveConfig = deser_value::from_value(&deser_value::value!({
             "max_size": config.max_size,
-            "cache_dir": config.cache_dir,
-            "runtime_dir": config.runtime_dir,
-            "config_path": provenance.path,
-            "config_fingerprint": provenance.fingerprint,
-            "socket_path": config.socket_path(),
+            "cache_dir": config.cache_dir.display().to_string(),
+            "runtime_dir": config.runtime_dir.display().to_string(),
+            "config_path": provenance.path.display().to_string(),
+            "config_fingerprint": &provenance.fingerprint,
+            "socket_path": config.socket_path().display().to_string(),
         }))
         .unwrap();
         assert!(

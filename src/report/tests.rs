@@ -20,7 +20,7 @@ fn load_gc_summary_includes_a_run_exactly_at_the_cutoff() {
     // The fixture writes an RFC 3339 string, so compare against the value
     // that string parses back to rather than the original instant.
     let persisted: GcStatsPersisted =
-        serde_json::from_str(&std::fs::read_to_string(dir.path().join("gc_stats.json")).unwrap())
+        deser_json::from_str(&std::fs::read_to_string(dir.path().join("gc_stats.json")).unwrap())
             .unwrap();
     let written = UtcTime::parse_rfc3339(&persisted.last_run).unwrap();
 
@@ -91,10 +91,10 @@ fn load_gc_summary_all_sums_unique_stores_and_selects_latest_instant() {
         std::fs::create_dir_all(path).unwrap();
         std::fs::write(
             path.join("gc_stats.json"),
-            serde_json::to_vec(&serde_json::json!({
+            deser_json::to_string(&deser_value::value!({
                 "last_run": time, "entries_evicted": n, "bytes_freed": n * 100,
                 "disk_bytes_reclaimed": n * 40, "blobs_removed": n * 2, "duration_ms": 1
-            }))
+            })).map(String::into_bytes)
             .unwrap(),
         )
         .unwrap();
@@ -172,7 +172,7 @@ fn gc_runs_history_is_appended_only_with_record_sessions() {
     let log = std::fs::read_to_string(gc_runs_log_path(&config.cache_dir)).unwrap();
     let records: Vec<GcRunRecord> = log
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| deser_json::from_str(line).unwrap())
         .collect();
     assert_eq!(records.len(), 2, "{log}");
     assert!(UtcTime::parse_rfc3339(&records[0].ts).is_some());
@@ -235,7 +235,7 @@ fn gc_runs_history_rotates_like_the_other_logs() {
     let evicted: Vec<usize> = log
         .lines()
         .map(|line| {
-            serde_json::from_str::<GcRunRecord>(line)
+            deser_json::from_str::<GcRunRecord>(line)
                 .unwrap()
                 .entries_evicted
         })
@@ -313,10 +313,10 @@ fn record_gc_run_keeps_only_the_last_run() {
         ),
         (Some(20), Some(30), Some(40), Some(50))
     );
-    let raw: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.path().join(GC_STATS_FILE)).unwrap())
+    let raw: deser_value::Value =
+        deser_json::from_str(&std::fs::read_to_string(dir.path().join(GC_STATS_FILE)).unwrap())
             .unwrap();
-    assert!(raw.get("totals").is_none(), "{raw}");
+    assert!(raw.get("totals").is_none(), "{raw:?}");
     for key in [
         "last_run",
         "entries_evicted",
@@ -324,7 +324,7 @@ fn record_gc_run_keeps_only_the_last_run() {
         "blobs_removed",
         "duration_ms",
     ] {
-        assert!(raw.get(key).is_some(), "older readers require {key}: {raw}");
+        assert!(raw.get(key).is_some(), "older readers require {key}: {raw:?}");
     }
 }
 
@@ -498,7 +498,7 @@ fn test_transfer(
 }
 fn write_transfer_line(path: &std::path::Path, event: &TransferEvent) {
     use std::io::Write;
-    let mut line = serde_json::to_string(event).unwrap();
+    let mut line = deser_json::to_string(event).unwrap();
     line.push('\n');
     std::fs::OpenOptions::new()
         .create(true)
@@ -520,7 +520,7 @@ fn report_preserves_daemon_publication_without_counting_it_as_wrapper_time() {
     assert!(detail.store_handed_off);
     assert_eq!(detail.daemon_store_ms, 50);
     assert_eq!(detail.overhead_ms, 10);
-    let value = serde_json::to_value(detail).unwrap();
+    let value = deser_value::to_value(&detail).unwrap();
     assert_eq!(value["store_handed_off"], true);
     assert_eq!(value["daemon_store_ms"], 50);
     assert_eq!(event.store_ms, 2);
@@ -895,7 +895,7 @@ fn probe_events_split_out_of_passthroughs() {
 
 const REPORT_SCHEMA_JSON: &str = include_str!("../../docs/commands/report.schema.json");
 
-fn check_numeric_bounds(val: &serde_json::Value, schema: &serde_json::Value, path: &str) {
+fn check_numeric_bounds(val: &deser_value::Value, schema: &deser_value::Value, path: &str) {
     if let Some(num) = val.as_f64() {
         if let Some(min) = schema.get("minimum").and_then(|m| m.as_f64()) {
             assert!(num >= min, "expected >= {min} at {path}, got {num}");
@@ -913,9 +913,9 @@ fn check_numeric_bounds(val: &serde_json::Value, schema: &serde_json::Value, pat
 }
 
 fn validate_json_value(
-    val: &serde_json::Value,
-    schema: &serde_json::Value,
-    root_schema: &serde_json::Value,
+    val: &deser_value::Value,
+    schema: &deser_value::Value,
+    root_schema: &deser_value::Value,
     path: &str,
 ) {
     if let Some(ref_path) = schema.get("$ref").and_then(|r| r.as_str())
@@ -933,9 +933,9 @@ fn validate_json_value(
         if let Some(type_str) = expected_type.as_str() {
             match type_str {
                 "object" => {
-                    assert!(val.is_object(), "expected object at {path}, got {val:?}");
-                    let obj = val.as_object().unwrap();
-                    if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
+                    assert!(val.is_map(), "expected object at {path}, got {val:?}");
+                    let obj = val.as_map().unwrap();
+                    if let Some(required) = schema.get("required").and_then(|r| r.as_seq()) {
                         for req_key in required {
                             let key_str = req_key.as_str().unwrap();
                             assert!(
@@ -944,23 +944,26 @@ fn validate_json_value(
                             );
                         }
                     }
-                    if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+                    if let Some(props) = schema.get("properties").and_then(|p| p.as_map()) {
                         for (prop_name, prop_val) in obj {
                             if let Some(prop_schema) = props.get(prop_name) {
                                 validate_json_value(
                                     prop_val,
                                     prop_schema,
                                     root_schema,
-                                    &format!("{path}.{prop_name}"),
+                                    &format!(
+                                        "{path}.{}",
+                                        prop_name.as_str().unwrap_or("")
+                                    ),
                                 );
                             }
                         }
                     }
                 }
                 "array" => {
-                    assert!(val.is_array(), "expected array at {path}, got {val:?}");
+                    assert!(val.is_seq(), "expected array at {path}, got {val:?}");
                     if let Some(item_schema) = schema.get("items") {
-                        for (i, elem) in val.as_array().unwrap().iter().enumerate() {
+                        for (i, elem) in val.as_seq().unwrap().iter().enumerate() {
                             validate_json_value(
                                 elem,
                                 item_schema,
@@ -971,36 +974,36 @@ fn validate_json_value(
                     }
                 }
                 "string" => {
-                    assert!(val.is_string(), "expected string at {path}, got {val:?}");
+                    assert!(val.is_str(), "expected string at {path}, got {val:?}");
                 }
                 "integer" => {
                     assert!(
-                        val.is_i64() || val.is_u64(),
+                        val.as_i64().is_some() || val.as_u64().is_some(),
                         "expected integer at {path}, got {val:?}"
                     );
                     check_numeric_bounds(val, schema, path);
                 }
                 "number" => {
-                    assert!(val.is_number(), "expected number at {path}, got {val:?}");
+                    assert!(val.as_f64().is_some(), "expected number at {path}, got {val:?}");
                     check_numeric_bounds(val, schema, path);
                 }
                 "boolean" => {
-                    assert!(val.is_boolean(), "expected boolean at {path}, got {val:?}");
+                    assert!(val.as_bool().is_some(), "expected boolean at {path}, got {val:?}");
                 }
                 "null" => {
                     assert!(val.is_null(), "expected null at {path}, got {val:?}");
                 }
                 other => panic!("unhandled schema type '{other}' at {path}"),
             }
-        } else if let Some(type_arr) = expected_type.as_array() {
+        } else if let Some(type_arr) = expected_type.as_seq() {
             let allowed_types: Vec<&str> = type_arr.iter().filter_map(|t| t.as_str()).collect();
             let matches_any = allowed_types.iter().any(|&t| match t {
-                "object" => val.is_object(),
-                "array" => val.is_array(),
-                "string" => val.is_string(),
-                "integer" => val.is_i64() || val.is_u64(),
-                "number" => val.is_number(),
-                "boolean" => val.is_boolean(),
+                "object" => val.is_map(),
+                "array" => val.is_seq(),
+                "string" => val.is_str(),
+                "integer" => val.as_i64().is_some() || val.as_u64().is_some(),
+                "number" => val.as_f64().is_some(),
+                "boolean" => val.as_bool().is_some(),
                 "null" => val.is_null(),
                 _ => false,
             });
@@ -1008,12 +1011,12 @@ fn validate_json_value(
                 matches_any,
                 "value at {path} ({val:?}) does not match any allowed type in {allowed_types:?}"
             );
-            if val.is_number() {
+            if val.as_f64().is_some() {
                 check_numeric_bounds(val, schema, path);
             }
-            if val.is_object() && allowed_types.contains(&"object") {
-                if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
-                    let obj = val.as_object().unwrap();
+            if val.is_map() && allowed_types.contains(&"object") {
+                if let Some(required) = schema.get("required").and_then(|r| r.as_seq()) {
+                    let obj = val.as_map().unwrap();
                     for req_key in required {
                         let key_str = req_key.as_str().unwrap();
                         assert!(
@@ -1022,15 +1025,15 @@ fn validate_json_value(
                         );
                     }
                 }
-                if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
-                    let obj = val.as_object().unwrap();
+                if let Some(props) = schema.get("properties").and_then(|p| p.as_map()) {
+                    let obj = val.as_map().unwrap();
                     for (prop_name, prop_val) in obj {
                         if let Some(prop_schema) = props.get(prop_name) {
                             validate_json_value(
                                 prop_val,
                                 prop_schema,
                                 root_schema,
-                                &format!("{path}.{prop_name}"),
+                                &format!("{path}.{}", prop_name.as_str().unwrap_or("")),
                             );
                         }
                     }
@@ -1039,7 +1042,7 @@ fn validate_json_value(
         }
     }
 
-    if let Some(enums) = schema.get("enum").and_then(|e| e.as_array()) {
+    if let Some(enums) = schema.get("enum").and_then(|e| e.as_seq()) {
         let is_allowed = enums.contains(val);
         assert!(
             is_allowed,
@@ -1055,8 +1058,8 @@ fn test_format_json_conforms_to_schema_contract() {
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
 
     let json = format_json(&report).unwrap();
-    let val: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let schema: serde_json::Value = serde_json::from_str(REPORT_SCHEMA_JSON).unwrap();
+    let val: deser_value::Value = deser_json::from_str(&json).unwrap();
+    let schema: deser_value::Value = deser_json::from_str(REPORT_SCHEMA_JSON).unwrap();
 
     validate_json_value(&val, &schema, &schema, "report");
 }
@@ -1069,9 +1072,9 @@ fn test_validator_rejects_out_of_bounds_number_maximum() {
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
 
     let json = format_json(&report).unwrap();
-    let mut val: serde_json::Value = serde_json::from_str(&json).unwrap();
-    val["summary"]["hit_rate_pct"] = serde_json::json!(500.0);
-    let schema: serde_json::Value = serde_json::from_str(REPORT_SCHEMA_JSON).unwrap();
+    let mut val: deser_value::Value = deser_json::from_str(&json).unwrap();
+    val["summary"]["hit_rate_pct"] = deser_value::value!(500.0);
+    let schema: deser_value::Value = deser_json::from_str(REPORT_SCHEMA_JSON).unwrap();
 
     validate_json_value(&val, &schema, &schema, "report");
 }
@@ -1084,9 +1087,9 @@ fn test_validator_rejects_out_of_bounds_integer_minimum() {
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
 
     let json = format_json(&report).unwrap();
-    let mut val: serde_json::Value = serde_json::from_str(&json).unwrap();
-    val["summary"]["time_saved_ms"] = serde_json::json!(-10);
-    let schema: serde_json::Value = serde_json::from_str(REPORT_SCHEMA_JSON).unwrap();
+    let mut val: deser_value::Value = deser_json::from_str(&json).unwrap();
+    val["summary"]["time_saved_ms"] = deser_value::value!(-10);
+    let schema: deser_value::Value = deser_json::from_str(REPORT_SCHEMA_JSON).unwrap();
 
     validate_json_value(&val, &schema, &schema, "report");
 }
@@ -1099,9 +1102,9 @@ fn test_validator_rejects_invalid_schema_version() {
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
 
     let json = format_json(&report).unwrap();
-    let mut val: serde_json::Value = serde_json::from_str(&json).unwrap();
-    val["schema_version"] = serde_json::json!(2);
-    let schema: serde_json::Value = serde_json::from_str(REPORT_SCHEMA_JSON).unwrap();
+    let mut val: deser_value::Value = deser_json::from_str(&json).unwrap();
+    val["schema_version"] = deser_value::value!(2);
+    let schema: deser_value::Value = deser_json::from_str(REPORT_SCHEMA_JSON).unwrap();
 
     validate_json_value(&val, &schema, &schema, "report");
 }
@@ -1114,9 +1117,9 @@ fn test_validator_rejects_missing_required_key() {
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
 
     let json = format_json(&report).unwrap();
-    let mut val: serde_json::Value = serde_json::from_str(&json).unwrap();
-    val.as_object_mut().unwrap().remove("schema_version");
-    let schema: serde_json::Value = serde_json::from_str(REPORT_SCHEMA_JSON).unwrap();
+    let mut val: deser_value::Value = deser_json::from_str(&json).unwrap();
+    val.as_map_mut().unwrap().remove("schema_version");
+    let schema: deser_value::Value = deser_json::from_str(REPORT_SCHEMA_JSON).unwrap();
 
     validate_json_value(&val, &schema, &schema, "report");
 }
@@ -1128,13 +1131,13 @@ fn test_json_roundtrip() {
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
 
     let json = format_json(&report).unwrap();
-    let raw: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let raw: deser_value::Value = deser_json::from_str(&json).unwrap();
     assert_eq!(raw["schema_version"], 1);
     assert!(raw.get("traceEvents").is_some());
     assert!(raw.get("trace_events").is_none());
     assert_eq!(raw["displayTimeUnit"], "ms");
 
-    let parsed: BuildReport = serde_json::from_str(&json).unwrap();
+    let parsed: BuildReport = deser_json::from_str(&json).unwrap();
     assert_eq!(parsed.schema_version, REPORT_SCHEMA_VERSION);
 
     assert_eq!(parsed.summary.total_crates, report.summary.total_crates);
@@ -1185,7 +1188,7 @@ fn report_window_narrows_events_and_labels_itself() {
     assert!(format_markdown(&narrow).contains("| Window | last 15m |"));
     assert!(format_github(&narrow).contains("| **Window** | last 15m |"));
     assert!(format_github(&narrow).contains("· last 15m*"));
-    let json: serde_json::Value = serde_json::from_str(&format_json(&narrow).unwrap()).unwrap();
+    let json: deser_value::Value = deser_json::from_str(&format_json(&narrow).unwrap()).unwrap();
     assert_eq!(json["meta"]["since"], "15m");
     assert_eq!(json["meta"]["since_secs"], 900);
 }
@@ -1193,7 +1196,7 @@ fn report_window_narrows_events_and_labels_itself() {
 /// A report written before `meta.since` existed still gets a heading.
 #[test]
 fn window_label_falls_back_to_whole_hours() {
-    let meta: ReportMeta = serde_json::from_str(
+    let meta: ReportMeta = deser_json::from_str(
         r#"{"kache_version":"0.1.0","generated_at":"2026-01-01T00:00:00Z","since_hours":6}"#,
     )
     .unwrap();
@@ -1302,7 +1305,7 @@ fn last_build_report_uses_retained_history_and_omits_unscoped_data() {
     let old = session_event(root_str, "old", -1, 0);
     let other = session_event("/other", "selected", 9, 0);
     let lines =
-        [&hit, &miss, &bypass, &old, &other].map(|event| serde_json::to_string(event).unwrap());
+        [&hit, &miss, &bypass, &old, &other].map(|event| deser_json::to_string(event).unwrap());
     std::fs::write(config.event_log_path(), lines.join("\n") + "\n").unwrap();
     write_gc_stats(dir.path(), UtcTime::now());
 
@@ -1338,10 +1341,10 @@ fn last_build_report_uses_retained_history_and_omits_unscoped_data() {
         assert!(text.contains("May include multiple Cargo commands"));
         assert!(text.contains("fixture bypass"));
     }
-    let json: serde_json::Value = serde_json::from_str(&format_json(&report).unwrap()).unwrap();
+    let json: deser_value::Value = deser_json::from_str(&format_json(&report).unwrap()).unwrap();
     assert_eq!(json["meta"]["session"]["inferred"], false);
-    let trace: serde_json::Value =
-        serde_json::from_str(&format_trace_json(&report).unwrap()).unwrap();
+    let trace: deser_value::Value =
+        deser_json::from_str(&format_trace_json(&report).unwrap()).unwrap();
     assert_eq!(trace["session"]["session_id"], "selected");
 
     let absent = generate_report_with_filter(
@@ -1407,14 +1410,14 @@ fn test_trace_json_format_is_minimal_chrome_trace_container() {
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
 
     let json = format_trace_json(&report).unwrap();
-    let raw: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let raw: deser_value::Value = deser_json::from_str(&json).unwrap();
 
-    assert_eq!(raw.as_object().unwrap().len(), 2);
+    assert_eq!(raw.as_map().unwrap().len(), 2);
     assert_eq!(raw["displayTimeUnit"], "ms");
     assert!(raw.get("summary").is_none());
     assert!(raw.get("all_events").is_none());
 
-    let arr = raw["traceEvents"].as_array().unwrap();
+    let arr = raw["traceEvents"].as_seq().unwrap();
     // Metadata events (process_name + one thread_name per lane) are prepended
     // ahead of the rich `X` slices.
     let metadata: Vec<_> = arr.iter().filter(|e| e["ph"] == "M").collect();
@@ -1731,14 +1734,14 @@ fn report_totals_the_wrapper_phases() {
     assert_eq!(t.total_restore_ms, 5);
     assert_eq!(t.total_store_ms, 30);
 
-    let json: serde_json::Value = serde_json::from_str(&format_json(&report).unwrap()).unwrap();
+    let json: deser_value::Value = deser_json::from_str(&format_json(&report).unwrap()).unwrap();
     assert_eq!(json["timing"]["total_dep_info_ms"], 15);
     assert_eq!(json["timing"]["dep_info_runs"], 2);
     assert_eq!(json["timing"]["total_wait_ms"], 18);
     assert_eq!(json["timing"]["total_startup_ms"], 7);
     assert_eq!(json["timing"]["total_unattributed_ms"], 47);
     let miss_slice = json["traceEvents"]
-        .as_array()
+        .as_seq()
         .unwrap()
         .iter()
         .find(|e| e["name"] == "miss: m")
@@ -1746,7 +1749,7 @@ fn report_totals_the_wrapper_phases() {
     assert_eq!(miss_slice["args"]["dep_info_ms"], 9);
     assert_eq!(miss_slice["args"]["wait_ms"], 18);
     assert_eq!(miss_slice["args"]["unattributed_ms"], 27);
-    let schema: serde_json::Value = serde_json::from_str(REPORT_SCHEMA_JSON).unwrap();
+    let schema: deser_value::Value = deser_json::from_str(REPORT_SCHEMA_JSON).unwrap();
     validate_json_value(&json, &schema, &schema, "report");
 }
 
@@ -1820,8 +1823,8 @@ fn trace_json_emits_each_crate_slice_followed_by_its_phases() {
     let config = write_phase_events(dir.path());
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
     let json = format_trace_json(&report).unwrap();
-    let raw: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let arr = raw["traceEvents"].as_array().unwrap();
+    let raw: deser_value::Value = deser_json::from_str(&json).unwrap();
+    let arr = raw["traceEvents"].as_seq().unwrap();
 
     let expected_phases: usize = report
         .trace_events
@@ -2914,7 +2917,7 @@ fn fallback_recovery_survives_report_conversion_and_formatting() {
         bypass_detail_reason(&detail),
         "unsupported|assembly; fallback `sccache`: exit status: 42"
     );
-    let json = serde_json::to_value(&detail).unwrap();
+    let json = deser_value::to_value(&detail).unwrap();
     assert_eq!(json["fallback_attempt"]["exit_code"], 42);
     let mut lines = Vec::new();
     push_bypass_tables(
@@ -3177,7 +3180,7 @@ fn network_analysis_disk_fallback_subtracts_only_v3_import_timing() {
 
 #[test]
 fn transfer_event_v2_deserializes_without_v3_timing_fields() {
-    let event: TransferEvent = serde_json::from_value(serde_json::json!({
+    let event: TransferEvent = deser_value::from_value(&deser_value::value!({
         "schema": 2,
         "crate_name": "legacy",
         "direction": "download",
@@ -3544,12 +3547,12 @@ fn storage_render_preserves_zero_boundaries_and_summary_choice() {
     assert_eq!(state(0, 1, false), StorageAccountingState::Inconsistent);
 
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
-    let mut old_json = serde_json::to_value(&report.storage).unwrap();
+    let mut old_json = deser_value::to_value(&report.storage).unwrap();
     old_json
-        .as_object_mut()
+        .as_map_mut()
         .unwrap()
         .remove("accounting_consistent");
-    let decoded: StorageBreakdown = serde_json::from_value(old_json).unwrap();
+    let decoded: StorageBreakdown = deser_value::from_value(&old_json).unwrap();
     assert!(
         decoded.accounting_consistent,
         "old JSON must stay consistent"
@@ -3804,10 +3807,10 @@ fn timed_transfers_are_async_spans_and_a_zero_timestamp_is_skipped() {
     assert_eq!(report.timed_transfers[0].direction, "download");
     assert_eq!(report.timed_transfers[1].direction, "upload");
 
-    let raw: serde_json::Value =
-        serde_json::from_str(&format_trace_json(&report).unwrap()).unwrap();
+    let raw: deser_value::Value =
+        deser_json::from_str(&format_trace_json(&report).unwrap()).unwrap();
     let spans: Vec<_> = raw["traceEvents"]
-        .as_array()
+        .as_seq()
         .unwrap()
         .iter()
         .filter(|event| event["cat"] == "kache.transfer")
@@ -3901,7 +3904,7 @@ fn redacted_json_names_no_root_store_or_cache_path() {
     let root = dir.path().join("work/app");
     std::fs::create_dir_all(&root).unwrap();
     let root = root.to_string_lossy().into_owned();
-    let mut slow: BypassDetail = serde_json::from_value(serde_json::json!({
+    let mut slow: BypassDetail = deser_value::from_value(&deser_value::value!({
         "crate_name": "probe",
         "result": "passthrough",
         "route": "direct",
@@ -3929,9 +3932,9 @@ fn redacted_json_names_no_root_store_or_cache_path() {
 
     let terms = redaction_terms(&report, &[&config.cache_dir]);
     redact_report(&mut report);
-    let mut json = serde_json::to_value(&report).unwrap();
+    let mut json = deser_value::to_value(&report).unwrap();
     scrub_json(&mut json, &terms);
-    let text = json.to_string();
+    let text = deser_json::to_string(&json).unwrap();
     let canonical = std::fs::canonicalize(dir.path()).unwrap();
     for leaked in [dir.path().to_string_lossy(), canonical.to_string_lossy()] {
         assert!(!text.contains(leaked.as_ref()), "{leaked} in {text}");
@@ -4007,7 +4010,7 @@ fn blank_report() -> BuildReport {
 }
 
 fn zero_network() -> NetworkAnalysis {
-    serde_json::from_value(serde_json::json!({
+    deser_value::from_value(&deser_value::value!({
         "bytes_up": 0,
         "bytes_down": 0,
         "uploads_ok": 0,
@@ -4031,7 +4034,7 @@ fn zero_network() -> NetworkAnalysis {
 }
 
 fn miss_detail(name: &str) -> CrateDetail {
-    serde_json::from_value(serde_json::json!({
+    deser_value::from_value(&deser_value::value!({
         "crate_name": name,
         "result": "miss",
         "elapsed_ms": 1,
@@ -4266,14 +4269,17 @@ fn suggestions_name_three_distinct_misses_only_above_the_share() {
 fn report_shortens_rustc_json_without_changing_stored_reason() {
     let mut event = test_event("c", EventResult::Passthrough, 1, 0, 0, "k");
     let prefix = "uncacheable|dep-info pre-pass failed (exit 1): ";
-    let diagnostic = serde_json::json!({
+    let diagnostic = deser_value::value!({
         "message": "cannot find type `JmapError`\n in this scope",
         "$message_type": "diagnostic",
         "code": { "code": "E0433" },
         "rendered": "long compiler output",
         "spans": [{ "file_name": "src/lib.rs", "line_start": 99 }]
     });
-    let original = format!("{prefix}{diagnostic}");
+    let original = format!(
+        "{prefix}{}",
+        deser_json::to_string(&diagnostic).unwrap()
+    );
     event.passthrough_reason = original.clone();
     let expected = format!("{prefix}cannot find type `JmapError` in this scope");
     assert_eq!(bypass_reason(&event), expected);

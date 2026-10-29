@@ -173,18 +173,18 @@ fn built(target_dir: &Path) -> bool {
 /// The registry and git packages in a lockfile: those with a `source`, less
 /// any name a path package also uses.
 pub(crate) fn registry_packages(lockfile: &str) -> BTreeSet<String> {
-    let Ok(lock) = lockfile.parse::<toml::Table>() else {
+    let Ok(lock) = deser_toml::from_str::<deser_value::Map>(lockfile) else {
         return BTreeSet::new();
     };
     let packages = lock
         .get("package")
-        .and_then(toml::Value::as_array)
-        .map(Vec::as_slice)
+        .and_then(|value| value.as_seq())
+        .map(|packages| packages.as_slice())
         .unwrap_or_default();
     let mut registry = BTreeSet::new();
     let mut path = BTreeSet::new();
     for package in packages {
-        let Some(name) = package.get("name").and_then(toml::Value::as_str) else {
+        let Some(name) = package.get("name").and_then(|value| value.as_str()) else {
             continue;
         };
         if package.get("source").is_some() {
@@ -948,14 +948,14 @@ fn built_by(target_dir: &Path, version: &str) -> bool {
     let Ok(text) = std::fs::read_to_string(target_dir.join(".rustc_info.json")) else {
         return false;
     };
-    let Ok(info) = serde_json::from_str::<serde_json::Value>(&text) else {
+    let Ok(info) = deser_json::from_str::<deser_value::Value>(&text) else {
         return false;
     };
     info.get("outputs")
-        .and_then(serde_json::Value::as_object)
+        .and_then(|value| value.as_map())
         .is_some_and(|outputs| {
             outputs.values().any(|output| {
-                output.get("stdout").and_then(serde_json::Value::as_str) == Some(version)
+                output.get("stdout").and_then(|value| value.as_str()) == Some(version)
             })
         })
 }
@@ -1143,8 +1143,11 @@ source = "git+https://example.com/gitdep#abc"
         );
         write(&workspace_root.join("Cargo.lock"), LOCK);
         let target_dir = workspace_root.join("target");
-        let info = serde_json::json!({"outputs": {"1": {"stdout": VERSION}}});
-        write(&target_dir.join(".rustc_info.json"), &info.to_string());
+        let info = deser_value::value!({"outputs": {"1": {"stdout": VERSION}}});
+        write(
+            &target_dir.join(".rustc_info.json"),
+            &deser_json::to_string(&info).unwrap(),
+        );
         let profile = target_dir.join(PROFILE);
         for (package, hash) in [("dep", HASH), ("app", OTHER)] {
             match layout {
@@ -1890,10 +1893,10 @@ source = "git+https://example.com/gitdep#abc"
         );
         // A blank version is not a compiler, even where a donor recorded one.
         let blank = donor(dir.path(), "blank", Layout::Shared);
-        let info = serde_json::json!({"outputs": {"1": {"stdout": "  "}}});
+        let info = deser_value::value!({"outputs": {"1": {"stdout": "  "}}});
         write(
             &blank.target_dir.join(".rustc_info.json"),
-            &info.to_string(),
+            &deser_json::to_string(&info).unwrap(),
         );
         assert_eq!(
             seed(
@@ -3282,8 +3285,11 @@ source = "git+https://example.com/gitdep#abc"
         write(&target.join(".rustc_info.json"), "{\"outputs\": 3}");
         assert!(!built_by(target, VERSION));
         let info =
-            serde_json::json!({"outputs": {"a": {"stdout": "other"}, "b": {"stdout": VERSION}}});
-        write(&target.join(".rustc_info.json"), &info.to_string());
+            deser_value::value!({"outputs": {"a": {"stdout": "other"}, "b": {"stdout": VERSION}}});
+        write(
+            &target.join(".rustc_info.json"),
+            &deser_json::to_string(&info).unwrap(),
+        );
         assert!(built_by(target, VERSION));
         assert!(!built_by(target, "rustc 2"));
     }
