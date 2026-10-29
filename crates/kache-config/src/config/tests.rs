@@ -3865,6 +3865,7 @@ fn raw_config_load_rejects_a_file_that_does_not_parse() {
     assert!(!error.contains('\n'), "one line: {error}");
 }
 
+#[cfg(feature = "file-write")]
 #[test]
 fn update_file_config_keeps_comments_and_unknown_keys() {
     let dir = tempfile::tempdir().unwrap();
@@ -3911,11 +3912,15 @@ fn config_file_read_errors_other_than_missing_are_reported() {
     let error = Config::load_raw_file_config_from(dir.path()).unwrap_err();
     assert!(error.to_string().starts_with("reading "), "{error:#}");
 
-    let config = FileConfig::default();
-    let error = Config::update_file_config_at(dir.path(), &config, &config).unwrap_err();
-    assert!(error.to_string().starts_with("reading "), "{error:#}");
+    #[cfg(feature = "file-write")]
+    {
+        let config = FileConfig::default();
+        let error = Config::update_file_config_at(dir.path(), &config, &config).unwrap_err();
+        assert!(error.to_string().starts_with("reading "), "{error:#}");
+    }
 }
 
+#[cfg(feature = "file-write")]
 #[test]
 fn update_file_config_adds_a_table_the_file_lacks() {
     let dir = tempfile::tempdir().unwrap();
@@ -3954,6 +3959,7 @@ fn describe_toml_error_is_one_line_with_position_and_message() {
     assert_eq!(describe_toml_error(&schema), schema.message().trim());
 }
 
+#[cfg(feature = "file-write")]
 #[test]
 fn update_file_config_leaves_an_unchanged_file_byte_for_byte() {
     let dir = tempfile::tempdir().unwrap();

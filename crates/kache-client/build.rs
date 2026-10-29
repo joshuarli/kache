@@ -1,7 +1,7 @@
 use heck::ToKebabCase;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use syn::{Expr, Item, Lit, Meta};
+use syn::{Expr, Lit, Meta};
 
 fn string(expr: &Expr) -> String {
     let Expr::Lit(literal) = expr else {
@@ -16,15 +16,10 @@ fn string(expr: &Expr) -> String {
 fn main() {
     println!("cargo:rerun-if-changed=src/commands.rs");
     let schema = std::fs::read_to_string("src/commands.rs").expect("read engine command schema");
-    let parsed = syn::parse_file(&schema).expect("parse engine command schema");
-    let commands = parsed
-        .items
-        .into_iter()
-        .find_map(|item| match item {
-            Item::Enum(item) if item.ident == "Commands" => Some(item),
-            _ => None,
-        })
-        .expect("Commands enum in engine schema");
+    let parsed: syn::DeriveInput = syn::parse_str(&schema).expect("parse engine command schema");
+    let syn::Data::Enum(commands) = parsed.data else {
+        panic!("Commands must be an enum");
+    };
     let mut names = BTreeSet::from(["help".to_owned()]);
     for variant in commands.variants {
         let mut name = variant.ident.to_string().to_kebab_case();
@@ -47,15 +42,6 @@ fn main() {
                         if value.path.is_ident("alias") || value.path.is_ident("visible_alias") =>
                     {
                         names.insert(string(&value.value));
-                    }
-                    Meta::NameValue(value)
-                        if value.path.is_ident("aliases")
-                            || value.path.is_ident("visible_aliases") =>
-                    {
-                        let Expr::Array(array) = value.value else {
-                            panic!("command aliases must be a literal array")
-                        };
-                        names.extend(array.elems.iter().map(string));
                     }
                     Meta::Path(path)
                         if path.is_ident("flatten") || path.is_ident("external_subcommand") =>

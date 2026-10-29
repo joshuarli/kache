@@ -1646,6 +1646,7 @@ impl Config {
     /// Write the keys that differ between `before` and `after` into the file
     /// at `path`. Comments, formatting and keys kache does not know stay as
     /// they are. A missing file is written in full.
+    #[cfg(feature = "file-write")]
     pub fn update_file_config_at(
         path: &std::path::Path,
         before: &FileConfig,
@@ -2872,8 +2873,10 @@ fn merge_config_tables_at(base: &mut toml::Table, over: toml::Table, path: &mut 
 
 /// Spellings serde accepts for the same key. An edit updates the spelling the
 /// file already uses, so the file never ends up with both.
+#[cfg(feature = "file-write")]
 const FILE_CONFIG_KEY_ALIASES: [(&str, &str); 1] = [("user_agent", "user-agent")];
 
+#[cfg(feature = "file-write")]
 fn existing_key_spelling<'a>(table: &dyn toml_edit::TableLike, key: &'a str) -> &'a str {
     FILE_CONFIG_KEY_ALIASES
         .iter()
@@ -2885,6 +2888,7 @@ fn existing_key_spelling<'a>(table: &dyn toml_edit::TableLike, key: &'a str) -> 
 }
 
 /// Apply the difference between two serialized configs to a parsed document.
+#[cfg(feature = "file-write")]
 fn apply_table_changes(
     table: &mut dyn toml_edit::TableLike,
     before: &toml::Table,

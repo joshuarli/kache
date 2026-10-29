@@ -13,7 +13,7 @@ kache-config = { version = "2.0.0-rc.2", path = "../kache-config" }
 kache-ipc = { version = "2.0.0-rc.2", path = "../kache-ipc" }
 kache-protocol = { version = "2.0.0-rc.2", path = "../kache-protocol" }
 anyhow = "1"
-tracing = "0.1"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 libc = "0.2"
 
 kache-shims = { version = "2.0.0-rc.2", path = "../kache-shims" }
@@ -23,5 +23,5 @@ tempfile = "3"
 serde_json = "1"
 
 [build-dependencies]
-syn = { version = "3", features = ["full"] }
+syn = { version = "3", default-features = false, features = ["derive", "parsing"] }
 heck = "0.5"
