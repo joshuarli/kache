@@ -11,12 +11,13 @@ use kache_protocol::execution::{
 };
 use std::ffi::OsString;
 use std::fs::File;
+use std::io::{BufRead, Read};
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::net::UnixDatagram;
-use futures_lite::io::AsyncReadExt;
+use std::os::unix::net::{UnixDatagram, UnixStream};
 
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(5);
+const PREPARE_POLL: Duration = Duration::from_millis(50);
 
 #[cfg(any(test, target_os = "linux"))]
 #[path = "daemon_execution_linux.rs"]
@@ -26,7 +27,7 @@ mod linux;
 #[path = "daemon_execution_macos.rs"]
 mod macos;
 
-fn peer_may_delegate(stream: &AsyncStream, reported_pid: u32, trusted_pipeline: bool) -> bool {
+fn peer_may_delegate(stream: &UnixStream, reported_pid: u32, trusted_pipeline: bool) -> bool {
     #[cfg(target_os = "macos")]
     {
         macos::peer_may_delegate(stream, reported_pid, trusted_pipeline)
@@ -53,7 +54,7 @@ fn trusts_pipeline(client: bool, daemon: bool) -> bool {
 
 #[cfg(unix)]
 pub(super) fn probe(
-    stream: &AsyncStream,
+    stream: &UnixStream,
     client_pid: u32,
     version: &str,
     client_trust: bool,
@@ -268,7 +269,7 @@ impl Prepared {
 }
 
 struct DescriptorChannel {
-    socket: async_io::Async<UnixDatagram>,
+    socket: UnixDatagram,
     ticket: DescriptorTicket,
     _directory: tempfile::TempDir,
 }
@@ -286,7 +287,7 @@ impl DescriptorChannel {
         let mut key = [0; 16];
         getrandom::fill(&mut key).context("creating descriptor ticket")?;
         Ok(Self {
-            socket: async_io::Async::new(socket)?,
+            socket,
             ticket: DescriptorTicket {
                 endpoint: NativeString::capture(path.as_os_str()),
                 key,
@@ -295,63 +296,22 @@ impl DescriptorChannel {
         })
     }
 
-    async fn receive(&self, expected: usize) -> Result<Vec<OwnedFd>> {
-        use futures::FutureExt as _;
-        let deadline = Instant::now() + PREPARE_TIMEOUT;
-        loop {
-            match kache_ipc::descriptors::receive(
-                self.socket.get_ref().as_fd(),
-                &self.ticket.key,
-                expected,
-            ) {
-                Ok(fds) => return Ok(fds),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(error) => return Err(error.into()),
+    fn try_receive(&self, expected: usize) -> Result<Option<Vec<OwnedFd>>> {
+        match kache_ipc::descriptors::receive(self.socket.as_fd(), &self.ticket.key, expected) {
+            Ok(fds) => Ok(Some(fds)),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                Ok(None)
             }
-            if Instant::now() >= deadline {
-                anyhow::bail!("descriptor receive timed out");
-            }
-            let mut readable = Box::pin(self.socket.readable().fuse());
-            let mut timer = Box::pin(async_io::Timer::at(deadline).fuse());
-            futures::select! {
-                _ = readable => {},
-                _ = timer => anyhow::bail!("descriptor receive timed out"),
-            }
+            Err(error) => Err(error.into()),
         }
     }
 }
 
-async fn smol_timeout<T>(
-    duration: Duration,
-    future: impl std::future::Future<Output = Result<T>>,
-) -> Result<T> {
-    use futures::FutureExt as _;
-    let mut future = Box::pin(future.fuse());
-    let mut timer = Box::pin(async_io::Timer::after(duration).fuse());
-    futures::select! {
-        result = future => result,
-        _ = timer => Err(anyhow::anyhow!("timed out after {duration:?}")),
-    }
-}
-
-async fn io_timeout<T>(
-    duration: Duration,
-    future: impl std::future::Future<Output = std::io::Result<T>>,
-) -> std::io::Result<T> {
-    use futures::FutureExt as _;
-    let mut future = Box::pin(future.fuse());
-    let mut timer = Box::pin(async_io::Timer::after(duration).fuse());
-    futures::select! {
-        result = future => result,
-        _ = timer => Err(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "timed out",
-        )),
-    }
-}
-
-/// Cancels even when a forced drain aborts the async connection task. The
-/// blocking worker retains the token until it has reaped its compiler children.
 struct CancelOnDrop(Cancellation);
 
 impl Drop for CancelOnDrop {
@@ -360,25 +320,24 @@ impl Drop for CancelOnDrop {
     }
 }
 
-async fn write_reply(stream: &AsyncStream, reply: &ExecutionReply) -> Result<()> {
-    use futures_lite::io::AsyncWriteExt as _;
+fn write_reply(stream: &UnixStream, reply: &ExecutionReply) -> Result<()> {
+    use std::io::Write;
     let mut frame = serde_json::to_vec(reply)?;
     frame.push(b'\n');
-    let mut writer = stream.clone();
-    smol_timeout(PREPARE_TIMEOUT, async move {
-        writer.write_all(&frame).await.map_err(anyhow::Error::from)
-    })
-    .await?;
+    let mut writer = stream.try_clone()?;
+    writer.set_write_timeout(Some(PREPARE_TIMEOUT))?;
+    writer.write_all(&frame)?;
     Ok(())
 }
 
-pub(super) async fn handle(
-    stream: &AsyncStream,
-    reader: &mut BufReader<AsyncStream>,
+pub(super) fn handle(
+    stream: &UnixStream,
+    reader: &mut std::io::BufReader<UnixStream>,
     request: ExecutionRequest,
     daemon: &Arc<Daemon>,
     lifecycle: &Arc<Lifecycle>,
 ) -> Result<()> {
+    stream.set_read_timeout(Some(PREPARE_POLL))?;
     let client_pid = request.client_pid;
     let client_trust = matches!(
         request.channels,
@@ -394,8 +353,7 @@ pub(super) async fn handle(
             &ExecutionReply::Declined {
                 reason: "compiler process isolation requires local execution".into(),
             },
-        )
-        .await;
+        );
     }
     let prepared = match Prepared::decode(request, &daemon.version) {
         Ok(prepared) => prepared,
@@ -405,11 +363,10 @@ pub(super) async fn handle(
                 &ExecutionReply::Declined {
                     reason: error.to_string(),
                 },
-            )
-            .await;
+            );
         }
     };
-    let permit = match daemon.execution_workers.clone().try_acquire_arc() {
+    let permit = match daemon.execution_workers.try_acquire() {
         Some(permit) => permit,
         None => {
             return write_reply(
@@ -417,8 +374,7 @@ pub(super) async fn handle(
                 &ExecutionReply::Declined {
                     reason: "compiler workers are busy".into(),
                 },
-            )
-            .await;
+            );
         }
     };
     let channel = match DescriptorChannel::new() {
@@ -429,8 +385,7 @@ pub(super) async fn handle(
                 &ExecutionReply::Declined {
                     reason: error.to_string(),
                 },
-            )
-            .await;
+            );
         }
     };
     write_reply(
@@ -439,29 +394,32 @@ pub(super) async fn handle(
             version: EXECUTION_VERSION,
             descriptors: Some(channel.ticket.clone()),
         },
-    )
-    .await?;
-    let descriptors = {
-        use futures::FutureExt as _;
-        use futures_lite::io::AsyncBufReadExt as _;
-        let mut draining = Box::pin(lifecycle.draining().fuse());
-        let mut disconnected = Box::pin(reader.fill_buf().fuse());
-        let mut receive = Box::pin(
-            smol_timeout(
-                PREPARE_TIMEOUT,
-                channel.receive(
-                    3 + usize::from(prepared.terminal) + 2 + prepared.originals.len(),
-                ),
-            )
-            .fuse(),
-        );
-        futures::select! {
-            _ = draining => return Ok(()),
-            incoming = disconnected => {
-                let _ = incoming?;
+    )?;
+    let expected = 3 + usize::from(prepared.terminal) + 2 + prepared.originals.len();
+    let deadline = Instant::now() + PREPARE_TIMEOUT;
+    let descriptors = loop {
+        if !lifecycle.accepting_calls() {
+            return Ok(());
+        }
+        if let Some(descriptors) = channel.try_receive(expected)? {
+            break descriptors;
+        }
+        match reader.fill_buf() {
+            Ok(buffer) if !buffer.is_empty() => {
                 anyhow::bail!("compiler client disconnected or wrote before preparation");
             }
-            result = receive => result?,
+            Ok(_) => {
+                anyhow::bail!("compiler client disconnected or wrote before preparation");
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => return Err(error.into()),
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("descriptor receive timed out after {PREPARE_TIMEOUT:?}");
         }
     };
     drop(channel);
@@ -469,73 +427,90 @@ pub(super) async fn handle(
     let _cancel = CancelOnDrop(cancellation.clone());
     let (entry, executable, args, context) =
         prepared.receive(descriptors, cancellation.clone(), Arc::clone(daemon))?;
-    write_reply(stream, &ExecutionReply::Prepared).await?;
+    write_reply(stream, &ExecutionReply::Prepared)?;
     let mut frame = Vec::new();
-    let commit = {
-        use futures::FutureExt as _;
-        let mut draining = Box::pin(lifecycle.draining().fuse());
-        let mut commit = Box::pin(
-            io_timeout(
-                PREPARE_TIMEOUT,
-                read_bounded_line(reader, &mut frame),
-            )
-            .fuse(),
-        );
-        futures::select! {
-            _ = draining => return Ok(()),
-            result = commit => result?,
+    let commit = loop {
+        if !lifecycle.accepting_calls() {
+            return Ok(());
         }
-    }
-    .context("compiler client disconnected before Commit")?;
+        match read_bounded_line(reader, &mut frame) {
+            Ok(Some(line)) => break line,
+            Ok(None) => anyhow::bail!("compiler client disconnected before Commit"),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                if Instant::now() >= deadline {
+                    anyhow::bail!("compiler client disconnected before Commit");
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
     let _: ExecutionCommand = serde_json::from_str(&commit)?;
     anyhow::ensure!(
         peer_may_delegate(stream, client_pid, trusted_pipeline),
         "compiler process isolation changed before execution"
     );
-    write_reply(stream, &ExecutionReply::Accepted).await?;
+    write_reply(stream, &ExecutionReply::Accepted)?;
     let activity = daemon.request_clock.begin_activity();
 
-    let worker_task = smol::unblock(move || {
-        let _activity = activity;
-        let _permit = permit;
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match entry {
-            ExecutionEntry::Compiler => crate::run_compiler_invocation(&args, context),
-            ExecutionEntry::Original => {
-                crate::run_original_compiler_invocation(&args, context, &executable)
-            }
-        }))
-    });
+    let worker = std::thread::Builder::new()
+        .name("kache-execution".to_string())
+        .spawn(move || {
+            let _activity = activity;
+            let _permit = permit;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match entry {
+                ExecutionEntry::Compiler => crate::run_compiler_invocation(&args, context),
+                ExecutionEntry::Original => {
+                    crate::run_original_compiler_invocation(&args, context, &executable)
+                }
+            }))
+        });
+    let worker = worker.context("spawning compiler worker")?;
     let mut unexpected = [0; 1];
-    let result = {
-        use futures::FutureExt as _;
-        let mut worker = Box::pin(worker_task.fuse());
-        let mut disconnected = Box::pin(reader.read(&mut unexpected).fuse());
-        futures::select! {
-            result = worker => result,
-            disconnected = disconnected => {
-                let _ = disconnected;
+    loop {
+        if worker.is_finished() {
+            break;
+        }
+        match reader.read(&mut unexpected) {
+            Ok(_) => {
                 cancellation.cancel();
-                let _ = worker.await;
+                let _ = worker.join();
+                return Ok(());
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => {
+                cancellation.cancel();
+                let _ = worker.join();
                 return Ok(());
             }
         }
-    };
+    }
+    let result = worker.join();
     let reply = match result {
-        Ok(Ok(exit_code)) => ExecutionReply::Complete { exit_code },
-        Ok(Err(error)) => ExecutionReply::Failed {
+        Ok(Ok(Ok(exit_code))) => ExecutionReply::Complete { exit_code },
+        Ok(Ok(Err(error))) => ExecutionReply::Failed {
             message: format!("{error:#}"),
         },
-        Err(_) => ExecutionReply::Failed {
+        Ok(Err(_)) | Err(_) => ExecutionReply::Failed {
             message: "compiler worker failed".to_string(),
         },
     };
-    write_reply(stream, &reply).await
+    write_reply(stream, &reply)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
 
     #[test]
     fn descriptor_channel_waits_for_readiness_and_validates_the_ticket() {
@@ -545,45 +520,53 @@ mod tests {
     #[test]
     #[ignore = "bounded subprocess fixture"]
     fn fixture_descriptor_channel_waits_for_readiness_and_validates_the_ticket() {
-        smol::block_on(async {
-        for valid_ticket in [true, false] {
-            let channel = DescriptorChannel::new().unwrap();
-            let mut receiving = std::pin::pin!(channel.receive(1));
-            assert!(futures::poll!(&mut receiving).is_pending());
+    for valid_ticket in [true, false] {
+        let channel = DescriptorChannel::new().unwrap();
+        assert!(channel.try_receive(1).unwrap().is_none());
 
-            let input = tempfile::NamedTempFile::new().unwrap();
-            std::fs::write(input.path(), b"descriptor input\n").unwrap();
-            let file = File::open(input.path()).unwrap();
-            let sender = UnixDatagram::unbound().unwrap();
-            sender
-                .connect(PathBuf::from(channel.ticket.endpoint.decode().unwrap()))
-                .unwrap();
-            let mut ticket = channel.ticket.key;
-            if !valid_ticket {
-                ticket[0] ^= 1;
-            }
-            kache_ipc::descriptors::send(sender.as_fd(), &ticket, &[file.as_fd()]).unwrap();
-
-            let result = smol_timeout(PREPARE_TIMEOUT, receiving).await;
-            if valid_ticket {
-                let mut descriptors = result.unwrap();
-                assert_eq!(descriptors.len(), 1);
-                let mut received = File::from(descriptors.pop().unwrap());
-                let mut contents = String::new();
-                std::io::Read::read_to_string(&mut received, &mut contents).unwrap();
-                assert_eq!(contents, "descriptor input\n");
-            } else {
-                assert_eq!(
-                    result
-                        .unwrap_err()
-                        .downcast_ref::<std::io::Error>()
-                        .unwrap()
-                        .kind(),
-                    std::io::ErrorKind::InvalidData
-                );
-            }
+        let input = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input.path(), b"descriptor input\n").unwrap();
+        let file = File::open(input.path()).unwrap();
+        let sender = UnixDatagram::unbound().unwrap();
+        sender
+            .connect(PathBuf::from(channel.ticket.endpoint.decode().unwrap()))
+            .unwrap();
+        let mut ticket = channel.ticket.key;
+        if !valid_ticket {
+            ticket[0] ^= 1;
         }
-        });
+        kache_ipc::descriptors::send(sender.as_fd(), &ticket, &[file.as_fd()]).unwrap();
+
+        let deadline = Instant::now() + PREPARE_TIMEOUT;
+        let result = loop {
+            match channel.try_receive(1) {
+                Ok(Some(descriptors)) => break Ok(descriptors),
+                Ok(None) => {}
+                Err(error) => break Err(error),
+            }
+            if Instant::now() >= deadline {
+                break Err(anyhow::anyhow!("timed out after {PREPARE_TIMEOUT:?}"));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        if valid_ticket {
+            let mut descriptors = result.unwrap();
+            assert_eq!(descriptors.len(), 1);
+            let mut received = File::from(descriptors.pop().unwrap());
+            let mut contents = String::new();
+            std::io::Read::read_to_string(&mut received, &mut contents).unwrap();
+            assert_eq!(contents, "descriptor input\n");
+        } else {
+            assert_eq!(
+                result
+                    .unwrap_err()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .kind(),
+                std::io::ErrorKind::InvalidData
+            );
+        }
+    }
     }
 
     fn isolated_test(name: &str) {
@@ -709,7 +692,7 @@ mod tests {
         )
     }
 
-    async fn ready(path: &Path) {
+    fn ready(path: &Path) {
         let start = Instant::now();
         while !path.exists() {
             assert!(
@@ -717,84 +700,107 @@ mod tests {
                 "compiler did not become ready: {}",
                 path.display()
             );
-            async_io::Timer::after(Duration::from_millis(5)).await;
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
 
-    async fn smol_opt_timeout<T>(
-        duration: Duration,
-        future: impl std::future::Future<Output = T>,
-    ) -> Option<T> {
-        use futures::FutureExt as _;
-        let mut future = Box::pin(future.fuse());
-        let mut timer = Box::pin(async_io::Timer::after(duration).fuse());
-        futures::select! {
-            value = future => Some(value),
-            _ = timer => None,
+    struct TestServer {
+        thread: Option<std::thread::JoinHandle<Vec<Result<()>>>>,
+    }
+
+    impl TestServer {
+        fn join(mut self) -> Vec<Result<()>> {
+            self.thread.take().unwrap().join().unwrap()
+        }
+
+        fn join_timeout(mut self, timeout: Duration) -> Option<Vec<Result<()>>> {
+            let thread = self.thread.take().unwrap();
+            let deadline = Instant::now() + timeout;
+            while !thread.is_finished() {
+                if Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Some(thread.join().unwrap())
         }
     }
 
-    async fn server(
+    fn accept_timeout(
+        listener: &UnixListener,
+        timeout: Duration,
+    ) -> std::io::Result<(UnixStream, std::os::unix::net::SocketAddr)> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match listener.accept() {
+                Ok(accepted) => return Ok(accepted),
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn server(
         root: &Path,
         connections: usize,
         workers: usize,
-    ) -> (
-        PathBuf,
-        Arc<Daemon>,
-        Arc<Lifecycle>,
-        smol::Task<Vec<Result<()>>>,
-    ) {
-        server_with_trust(root, connections, workers, false).await
+    ) -> (PathBuf, Arc<Daemon>, Arc<Lifecycle>, TestServer) {
+        server_with_trust(root, connections, workers, false)
     }
 
-    async fn server_with_trust(
+    fn server_with_trust(
         root: &Path,
         connections: usize,
         workers: usize,
         trust: bool,
-    ) -> (
-        PathBuf,
-        Arc<Daemon>,
-        Arc<Lifecycle>,
-        smol::Task<Vec<Result<()>>>,
-    ) {
+    ) -> (PathBuf, Arc<Daemon>, Arc<Lifecycle>, TestServer) {
         let mut config = super::super::tests::test_config(root);
         config.trust_daemon_execution = trust;
         let socket = config.socket_path();
         let listener = crate::transport::bind_daemon_listener(&socket)
-            .await
             .unwrap()
             .unwrap();
+        listener.set_nonblocking(true).unwrap();
         let mut daemon = Daemon::new(config);
-        daemon.execution_workers = Arc::new(async_lock::Semaphore::new(workers));
+        daemon.execution_workers = Arc::new(crate::lifecycle::Semaphore::new(workers));
         daemon.request_clock = Arc::new(crate::maintenance::RequestClock::idle());
         let daemon = Arc::new(daemon);
         let lifecycle = Arc::new(Lifecycle::default());
         let d = daemon.clone();
         let l = lifecycle.clone();
-        let task = smol::spawn(async move {
+        let thread = std::thread::spawn(move || {
             let mut handlers = Vec::new();
             for _ in 0..connections {
-                let (stream, _) = io_timeout(Duration::from_secs(5), listener.accept())
-                    .await
+                let (stream, _) = accept_timeout(&listener, Duration::from_secs(5))
                     .expect("execution client did not connect");
+                stream.set_nonblocking(false).unwrap();
                 let d = d.clone();
                 let l = l.clone();
-                handlers.push(smol::spawn(async move {
-                    smol_timeout(
-                        Duration::from_secs(30),
-                        super::super::handle_connection(stream, &d, &l),
-                    )
-                    .await
+                handlers.push(std::thread::spawn(move || {
+                    super::super::handle_connection(stream, &d, &l)
                 }));
             }
-            let mut results = Vec::new();
-            for handler in handlers {
-                results.push(handler.await);
-            }
-            results
+            handlers
+                .into_iter()
+                .map(|handler| match handler.join() {
+                    Ok(result) => result,
+                    Err(_) => Err(anyhow::anyhow!("handler panicked")),
+                })
+                .collect()
         });
-        (socket, daemon, lifecycle, task)
+        (
+            socket,
+            daemon,
+            lifecycle,
+            TestServer {
+                thread: Some(thread),
+            },
+        )
     }
 
     #[cfg(target_os = "linux")]
@@ -807,69 +813,69 @@ mod tests {
     #[test]
     #[ignore = "bounded subprocess fixture"]
     fn fixture_trusted_linux_clients_stream_concurrently_and_release_worker_permits() {
-        smol::block_on(async {
-        let root = tempfile::tempdir().unwrap();
-        let (socket, daemon, _, server) = server_with_trust(root.path(), 3, 2, true).await;
-        let available = trusted_execution_available();
-        let mut clients = Vec::new();
-        let mut paths = Vec::new();
-        for name in ["broker-left", "broker-right"] {
-            let (args, context) = fixture(root.path(), name);
-            paths.push(context.env.cwd().unwrap().to_owned());
-            let socket = socket.clone();
-            clients.push(smol::unblock(move || {
-                crate::invocation::execution::try_execute_with_trust(&socket, &args, &context, true)
-            }));
+    let root = tempfile::tempdir().unwrap();
+    let (socket, daemon, _, server) = server_with_trust(root.path(), 3, 2, true);
+    let available = trusted_execution_available();
+    let mut clients = Vec::new();
+    let mut paths = Vec::new();
+    for name in ["broker-left", "broker-right"] {
+        let (args, context) = fixture(root.path(), name);
+        paths.push(context.env.cwd().unwrap().to_owned());
+        let socket = socket.clone();
+        clients.push(std::thread::spawn(move || {
+            crate::invocation::execution::try_execute_with_trust(&socket, &args, &context, true)
+                .unwrap()
+        }));
+    }
+    if available {
+        for (name, path) in ["broker-left", "broker-right"].into_iter().zip(&paths) {
+            ready(&path.join("ready"));
+            assert_eq!(
+                std::fs::read_to_string(path.join("stdout")).unwrap(),
+                format!("metadata-{name}\n")
+            );
+            assert_eq!(
+                std::fs::read_to_string(path.join("stderr")).unwrap(),
+                format!("diagnostic-{name}\n")
+            );
         }
-        if available {
-            for (name, path) in ["broker-left", "broker-right"].into_iter().zip(&paths) {
-                ready(&path.join("ready")).await;
-                assert_eq!(
-                    std::fs::read_to_string(path.join("stdout")).unwrap(),
-                    format!("metadata-{name}\n")
-                );
-                assert_eq!(
-                    std::fs::read_to_string(path.join("stderr")).unwrap(),
-                    format!("diagnostic-{name}\n")
-                );
-            }
-            assert!(clients.iter().all(|client| !client.is_finished()));
-            assert!(daemon.execution_workers.clone().try_acquire_arc().is_none());
+        assert!(clients.iter().all(|client| !client.is_finished()));
+        assert!(daemon.execution_workers.clone().try_acquire().is_none());
+    }
+    let (args, context) = fixture(root.path(), "untrusted-client");
+    let third = socket.clone();
+    assert_eq!(
+        std::thread::spawn(move || {
+            crate::invocation::execution::try_execute_with_trust(&third, &args, &context, true)
+                .unwrap()
+        })
+        .join()
+        .unwrap(),
+        None
+    );
+    for path in &paths {
+        std::fs::write(path.join("release"), b"go").unwrap();
+    }
+    for client in clients {
+        assert_eq!(client.join().unwrap(), available.then_some(7));
+    }
+    assert!(
+        server
+            .join()
+            .into_iter()
+            .all(|result| result.is_ok())
+    );
+    assert!({
+        let a = daemon.execution_workers.clone().try_acquire();
+        let b = daemon.execution_workers.clone().try_acquire();
+        a.is_some() && b.is_some()
+    });
+    if !available {
+        for path in paths {
+            assert!(!path.join("record").exists());
+            assert!(!path.join("ready").exists());
         }
-        let (args, context) = fixture(root.path(), "untrusted-client");
-        let third = socket.clone();
-        assert_eq!(
-            smol::unblock(move || {
-                crate::invocation::execution::try_execute_with_trust(&third, &args, &context, true)
-            })
-            .await
-            .unwrap(),
-            None
-        );
-        for path in &paths {
-            std::fs::write(path.join("release"), b"go").unwrap();
-        }
-        for client in clients {
-            assert_eq!(client.await.unwrap(), available.then_some(7));
-        }
-        assert!(
-            server
-                .await
-                .into_iter()
-                .all(|result| result.is_ok())
-        );
-        assert!({
-            let a = daemon.execution_workers.clone().try_acquire_arc();
-            let b = daemon.execution_workers.clone().try_acquire_arc();
-            a.is_some() && b.is_some()
-        });
-        if !available {
-            for path in paths {
-                assert!(!path.join("record").exists());
-                assert!(!path.join("ready").exists());
-            }
-        }
-        });
+    }
     }
 
     #[cfg(target_os = "linux")]
@@ -882,39 +888,38 @@ mod tests {
     #[test]
     #[ignore = "bounded subprocess fixture"]
     fn fixture_filtered_execution_requires_both_peers_to_trust_the_pipeline() {
-        smol::block_on(async {
-        let filtered =
-            !linux::permits_delegation(Path::new("/proc"), std::process::id()).unwrap_or(false);
-        let trusted_available = trusted_execution_available();
-        for (client_trust, daemon_trust) in
-            [(false, false), (true, false), (false, true), (true, true)]
-        {
-            let root = tempfile::tempdir().unwrap();
-            let (socket, _, _, server) = server_with_trust(root.path(), 1, 1, daemon_trust).await;
-            let (args, context) = fixture(root.path(), "policy-client");
-            let path = context.env.cwd().unwrap().to_owned();
-            std::fs::write(path.join("release"), b"go").unwrap();
-            let outcome = smol::unblock(move || {
-                crate::invocation::execution::try_execute_with_trust(
-                    &socket,
-                    &args,
-                    &context,
-                    client_trust,
-                )
-            })
-            .await
-            .unwrap();
-            let accepted = !filtered || (client_trust && daemon_trust && trusted_available);
-            assert_eq!(outcome, accepted.then_some(7));
-            assert_eq!(path.join("record").exists(), accepted);
-            assert!(
-                server
-                    .await
-                    .into_iter()
-                    .all(|result| result.is_ok())
-            );
-        }
-        });
+    let filtered =
+        !linux::permits_delegation(Path::new("/proc"), std::process::id()).unwrap_or(false);
+    let trusted_available = trusted_execution_available();
+    for (client_trust, daemon_trust) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let root = tempfile::tempdir().unwrap();
+        let (socket, _, _, server) = server_with_trust(root.path(), 1, 1, daemon_trust);
+        let (args, context) = fixture(root.path(), "policy-client");
+        let path = context.env.cwd().unwrap().to_owned();
+        std::fs::write(path.join("release"), b"go").unwrap();
+        let outcome = std::thread::spawn(move || {
+            crate::invocation::execution::try_execute_with_trust(
+                &socket,
+                &args,
+                &context,
+                client_trust,
+            )
+            .unwrap()
+        })
+        .join()
+        .unwrap();
+        let accepted = !filtered || (client_trust && daemon_trust && trusted_available);
+        assert_eq!(outcome, accepted.then_some(7));
+        assert_eq!(path.join("record").exists(), accepted);
+        assert!(
+            server
+                .join()
+                .into_iter()
+                .all(|result| result.is_ok())
+        );
+    }
     }
 
     #[cfg(target_os = "linux")]
@@ -927,51 +932,48 @@ mod tests {
     #[test]
     #[ignore = "bounded subprocess fixture"]
     fn fixture_execution_probe_authenticates_the_peer_and_reserves_no_worker() {
-        smol::block_on(async {
-        let root = tempfile::tempdir().unwrap();
-        let (socket, daemon, _, server) = server_with_trust(root.path(), 3, 2, true).await;
-        for (pid, version, accepted) in [
-            (
-                std::process::id(),
-                crate::VERSION,
-                trusted_execution_available(),
-            ),
-            (std::process::id() + 1, crate::VERSION, false),
-            (std::process::id(), "different-release", false),
-        ] {
-            let socket = socket.clone();
-            let response = smol::unblock(move || {
-                let request = Request::ExecutionStatus {
-                    client_pid: pid,
-                    client_version: version.into(),
-                    trusted_pipeline: true,
-                };
-                let response = super::super::send_request_with_timeout(
-                    &socket,
-                    &request,
-                    Duration::from_secs(3),
-                )
-                .unwrap();
-                serde_json::from_str::<Response>(&response).unwrap()
-            })
-            .await;
-            let status = response.execution_status.unwrap();
-            assert_eq!(status.eligible, accepted);
-            assert!(status.client_trust_enabled);
-            assert!(status.daemon_trust_enabled);
-            assert!({
-                let a = daemon.execution_workers.clone().try_acquire_arc();
-                let b = daemon.execution_workers.clone().try_acquire_arc();
-                a.is_some() && b.is_some()
-            });
-        }
-        assert!(
-            server
-                .await
-                .into_iter()
-                .all(|result| result.is_ok())
-        );
+    let root = tempfile::tempdir().unwrap();
+    let (socket, daemon, _, server) = server_with_trust(root.path(), 3, 2, true);
+    for (pid, version, accepted) in [
+        (
+            std::process::id(),
+            crate::VERSION,
+            trusted_execution_available(),
+        ),
+        (std::process::id() + 1, crate::VERSION, false),
+        (std::process::id(), "different-release", false),
+    ] {
+        let socket = socket.clone();
+        let response = std::thread::spawn(move || {
+            let request = Request::ExecutionStatus {
+                client_pid: pid,
+                client_version: version.into(),
+                trusted_pipeline: true,
+            };
+            let response = super::super::send_request_with_timeout(
+                &socket,
+                &request,
+                Duration::from_secs(3),
+            )
+            .unwrap();
+            serde_json::from_str::<Response>(&response).unwrap()
+        }).join().unwrap();
+        let status = response.execution_status.unwrap();
+        assert_eq!(status.eligible, accepted);
+        assert!(status.client_trust_enabled);
+        assert!(status.daemon_trust_enabled);
+        assert!({
+            let a = daemon.execution_workers.clone().try_acquire();
+            let b = daemon.execution_workers.clone().try_acquire();
+            a.is_some() && b.is_some()
         });
+    }
+    assert!(
+        server
+            .join()
+            .into_iter()
+            .all(|result| result.is_ok())
+    );
     }
 
     #[test]
@@ -985,74 +987,73 @@ mod tests {
     #[ignore = "bounded subprocess fixture"]
     fn fixture_execution_handoff_streams_two_compilers_without_serializing_or_mixing_clients()
     {
-        smol::block_on(async {
-        if !native_execution_available() {
-            return;
-        }
-        let root = tempfile::tempdir().unwrap();
-        let (socket, daemon, _, server) = server(root.path(), 2, 2).await;
-        let mut clients = Vec::new();
-        let mut paths = Vec::new();
-        for name in ["left", "right"] {
-            let (args, context) = fixture(root.path(), name);
-            paths.push(context.env.cwd().unwrap().to_owned());
-            let socket = socket.clone();
-            clients.push(smol::unblock(move || {
-                if name == "left" {
-                    let (files, terminal) = context.io.transfer_files()?;
-                    let args = std::iter::once(std::ffi::OsString::from("kache"))
-                        .chain(args.iter().map(std::ffi::OsString::from))
-                        .collect::<Vec<_>>();
-                    kache_client::Execution {
-                        entry: ExecutionEntry::Original,
-                        args: &args,
-                        env: &context.env,
-                        started_at: context.started_at,
-                        executable: &std::env::current_exe()?,
-                        files: &files,
-                        terminal,
-                        client_version: crate::VERSION,
-                    }
-                    .try_execute(&socket)
-                } else {
-                    crate::invocation::execution::try_execute(&socket, &args, &context)
+    if !native_execution_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let (socket, daemon, _, server) = server(root.path(), 2, 2);
+    let mut clients = Vec::new();
+    let mut paths = Vec::new();
+    for name in ["left", "right"] {
+        let (args, context) = fixture(root.path(), name);
+        paths.push(context.env.cwd().unwrap().to_owned());
+        let socket = socket.clone();
+        clients.push(std::thread::spawn(move || {
+            if name == "left" {
+                let (files, terminal) = context.io.transfer_files().unwrap();
+                let args = std::iter::once(std::ffi::OsString::from("kache"))
+                    .chain(args.iter().map(std::ffi::OsString::from))
+                    .collect::<Vec<_>>();
+                kache_client::Execution {
+                    entry: ExecutionEntry::Original,
+                    args: &args,
+                    env: &context.env,
+                    started_at: context.started_at,
+                    executable: &std::env::current_exe().unwrap(),
+                    files: &files,
+                    terminal,
+                    client_version: crate::VERSION,
                 }
-            }));
-        }
-        for (name, path) in ["left", "right"].into_iter().zip(&paths) {
-            ready(&path.join("ready")).await;
-            assert_eq!(
-                std::fs::read_to_string(path.join("stdout")).unwrap(),
-                format!("metadata-{name}\n")
-            );
-            assert_eq!(
-                std::fs::read_to_string(path.join("stderr")).unwrap(),
-                format!("diagnostic-{name}\n")
-            );
-        }
-        assert!(
-            clients.iter().all(|client| !client.is_finished()),
-            "metadata must stream before either compiler exits"
+                .try_execute(&socket)
+                .unwrap()
+            } else {
+                crate::invocation::execution::try_execute(&socket, &args, &context).unwrap()
+            }
+        }));
+    }
+    for (name, path) in ["left", "right"].into_iter().zip(&paths) {
+        ready(&path.join("ready"));
+        assert_eq!(
+            std::fs::read_to_string(path.join("stdout")).unwrap(),
+            format!("metadata-{name}\n")
         );
-        for path in &paths {
-            std::fs::write(path.join("release"), b"go").unwrap();
-        }
-        for client in clients {
-            assert_eq!(client.await.unwrap(), Some(7));
-        }
-        for (name, path) in ["left", "right"].into_iter().zip(&paths) {
-            assert_eq!(
-                std::fs::read_to_string(path.join("record")).unwrap(),
-                format!("{name}|{}\n", path.display())
-            );
-        }
-        assert!(server.await.iter().all(Result::is_ok));
-        assert!({
-            let a = daemon.execution_workers.clone().try_acquire_arc();
-            let b = daemon.execution_workers.clone().try_acquire_arc();
-            a.is_some() && b.is_some()
-        });
-        });
+        assert_eq!(
+            std::fs::read_to_string(path.join("stderr")).unwrap(),
+            format!("diagnostic-{name}\n")
+        );
+    }
+    assert!(
+        clients.iter().all(|client| !client.is_finished()),
+        "metadata must stream before either compiler exits"
+    );
+    for path in &paths {
+        std::fs::write(path.join("release"), b"go").unwrap();
+    }
+    for client in clients {
+        assert_eq!(client.join().unwrap(), Some(7));
+    }
+    for (name, path) in ["left", "right"].into_iter().zip(&paths) {
+        assert_eq!(
+            std::fs::read_to_string(path.join("record")).unwrap(),
+            format!("{name}|{}\n", path.display())
+        );
+    }
+    assert!(server.join().iter().all(Result::is_ok));
+    assert!({
+        let a = daemon.execution_workers.clone().try_acquire();
+        let b = daemon.execution_workers.clone().try_acquire();
+        a.is_some() && b.is_some()
+    });
     }
 
     #[test]
@@ -1063,58 +1064,60 @@ mod tests {
     #[test]
     #[ignore = "bounded subprocess fixture"]
     fn fixture_execution_keeps_a_silent_compiler_alive_past_the_daemon_idle_timeout() {
-        smol::block_on(async {
-        if !native_execution_available() {
-            return;
-        }
-        let root = tempfile::tempdir().unwrap();
-        let config = super::super::tests::test_config(root.path());
-        let socket = config.socket_path();
-        let listener = crate::transport::bind_daemon_listener(&socket)
-            .await
-            .unwrap()
-            .unwrap();
-        let mut daemon_inner = Daemon::new(config);
-        daemon_inner.execution_workers = Arc::new(async_lock::Semaphore::new(1));
-        let daemon = Arc::new(daemon_inner);
-        let lifecycle = Arc::new(Lifecycle::default());
-        let server_daemon = daemon.clone();
-        let server = smol::spawn(async move {
-            super::super::accept_loop(
-                &listener,
-                &server_daemon,
-                &lifecycle,
-                Some(Duration::from_millis(300)),
-                Duration::from_millis(100),
-                std::future::pending::<()>(),
-            )
-            .await
-        });
-        let (args, context) = fixture(root.path(), "silent");
-        let path = context.env.cwd().unwrap().to_owned();
-        let client = smol::unblock(move || {
-            crate::invocation::execution::try_execute(&socket, &args, &context)
-        });
-        ready(&path.join("ready")).await;
-        async_io::Timer::after(Duration::from_millis(900)).await;
+    if !native_execution_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let config = super::super::tests::test_config(root.path());
+    let socket = config.socket_path();
+    let listener = crate::transport::bind_daemon_listener(&socket)
+        .unwrap()
+        .unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut daemon_inner = Daemon::new(config);
+    daemon_inner.execution_workers = Arc::new(crate::lifecycle::Semaphore::new(1));
+    let daemon = Arc::new(daemon_inner);
+    let lifecycle = Arc::new(Lifecycle::default());
+    let server_daemon = daemon.clone();
+    let server = std::thread::spawn(move || {
+        super::super::accept_loop(
+            &listener,
+            &server_daemon,
+            &lifecycle,
+            Some(Duration::from_millis(300)),
+            Duration::from_millis(100),
+        )
+    });
+    let (args, context) = fixture(root.path(), "silent");
+    let path = context.env.cwd().unwrap().to_owned();
+    let client = std::thread::spawn(move || {
+        crate::invocation::execution::try_execute(&socket, &args, &context).unwrap()
+    });
+    ready(&path.join("ready"));
+    std::thread::sleep(Duration::from_millis(900));
+    assert!(
+        !client.is_finished(),
+        "idle expiry interrupted an active compiler"
+    );
+    assert!(
+        !server.is_finished(),
+        "daemon exited while compiler was active"
+    );
+    std::fs::write(path.join("release"), b"go").unwrap();
+    assert_eq!(client.join().unwrap(), Some(7));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !server.is_finished() {
         assert!(
-            !client.is_finished(),
-            "idle expiry interrupted an active compiler"
+            Instant::now() < deadline,
+            "server finished"
         );
-        assert!(
-            !server.is_finished(),
-            "daemon exited while compiler was active"
-        );
-        std::fs::write(path.join("release"), b"go").unwrap();
-        assert_eq!(client.await.unwrap(), Some(7));
-        smol_opt_timeout(Duration::from_secs(2), server)
-            .await
-            .expect("server finished");
-        assert!(
-            daemon.execution_workers.clone().try_acquire_arc().is_some(),
-            "the worker permit must be released"
-        );
-        });
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    server.join().unwrap();
+    assert!(
+        daemon.execution_workers.clone().try_acquire().is_some(),
+        "the worker permit must be released"
+    );
     }
 
     fn request(args: &[String], context: &InvocationContext) -> ExecutionRequest {
@@ -1301,36 +1304,39 @@ mod tests {
     #[test]
     #[ignore = "bounded subprocess fixture"]
     fn fixture_aborting_the_connection_task_cancels_only_its_compiler_request() {
-        smol::block_on(async {
-        use crate::invocation::process::{CancellationScope, CommandExt};
+    use crate::invocation::process::{CancellationScope, CommandExt};
 
-        let cancellation = Cancellation::default();
-        let worker_token = cancellation.clone();
-        let (ready, waiting) = futures::channel::oneshot::channel();
-        let task = smol::spawn(async move {
-            let _guard = CancelOnDrop(worker_token);
-            ready.send(()).unwrap();
-            std::future::pending::<()>().await;
-        });
-        smol_opt_timeout(Duration::from_secs(3), waiting)
-            .await
-            .expect("worker signals readiness")
-            .unwrap();
-        assert!(task.cancel().await.is_none());
-        {
-            let _scope = CancellationScope::borrow(Some(cancellation));
-            assert_eq!(
-                std::process::Command::new("missing-cancelled-compiler")
-                    .invocation_spawn()
-                    .err()
-                    .unwrap()
-                    .kind(),
-                std::io::ErrorKind::Interrupted
-            );
-        }
-        let _other = CancellationScope::borrow(Some(Cancellation::default()));
+    let cancellation = Cancellation::default();
+    let worker_token = cancellation.clone();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _guard = CancelOnDrop(worker_token);
+        ready_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    ready_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("worker signals readiness");
+    {
+        let _scope = CancellationScope::borrow(Some(cancellation.clone()));
         crate::invocation::process::check().unwrap();
-        });
+    }
+    release_tx.send(()).unwrap();
+    worker.join().unwrap();
+    {
+        let _scope = CancellationScope::borrow(Some(cancellation));
+        assert_eq!(
+            std::process::Command::new("missing-cancelled-compiler")
+                .invocation_spawn()
+                .err()
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::Interrupted
+        );
+    }
+    let _other = CancellationScope::borrow(Some(Cancellation::default()));
+    crate::invocation::process::check().unwrap();
     }
 
     #[test]
@@ -1341,45 +1347,44 @@ mod tests {
     #[test]
     #[ignore = "bounded subprocess fixture"]
     fn fixture_only_accepted_execution_marks_build_activity() {
-        smol::block_on(async {
-        if !native_execution_available() {
-            return;
+    if !native_execution_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let (socket, daemon, _, server) = server(root.path(), 2, 1);
+    let (_, context) = fixture(root.path(), "activity");
+    let rejected_socket = socket.clone();
+    let idle = std::thread::spawn(move || {
+        let (files, terminal) = context.io.transfer_files().unwrap();
+        kache_client::Execution {
+            entry: ExecutionEntry::Original,
+            args: &["kache".into(), "stats".into()],
+            env: &context.env,
+            started_at: context.started_at,
+            executable: &std::env::current_exe().unwrap(),
+            files: &files,
+            terminal,
+            client_version: crate::VERSION,
         }
-        let root = tempfile::tempdir().unwrap();
-        let (socket, daemon, _, server) = server(root.path(), 2, 1).await;
-        let (_, context) = fixture(root.path(), "activity");
-        let rejected_socket = socket.clone();
-        let idle = smol::unblock(move || {
-            let (files, terminal) = context.io.transfer_files()?;
-            kache_client::Execution {
-                entry: ExecutionEntry::Original,
-                args: &["kache".into(), "stats".into()],
-                env: &context.env,
-                started_at: context.started_at,
-                executable: &std::env::current_exe()?,
-                files: &files,
-                terminal,
-                client_version: crate::VERSION,
-            }
-            .try_execute(&rejected_socket)
-        })
-        .await
-        .unwrap();
-        assert_eq!(idle, None);
-        assert!(daemon.request_clock.idle_for() >= crate::maintenance::QUIET_AFTER);
-        let (args2, context2) = fixture(root.path(), "accepted-activity");
-        std::fs::write(context2.env.cwd().unwrap().join("release"), "go").unwrap();
-        let exit = smol::unblock(move || {
-            crate::invocation::execution::try_execute(&socket, &args2, &context2)
-        })
-        .await
-        .unwrap();
-        assert_eq!(exit, Some(7));
-        assert!(daemon.request_clock.idle_for() < crate::maintenance::QUIET_AFTER);
-        for result in server.await {
-            result.unwrap();
-        }
-        });
+        .try_execute(&rejected_socket)
+        .unwrap()
+    })
+    .join()
+    .unwrap();
+    assert_eq!(idle, None);
+    assert!(daemon.request_clock.idle_for() >= crate::maintenance::QUIET_AFTER);
+    let (args2, context2) = fixture(root.path(), "accepted-activity");
+    std::fs::write(context2.env.cwd().unwrap().join("release"), "go").unwrap();
+    let exit = std::thread::spawn(move || {
+        crate::invocation::execution::try_execute(&socket, &args2, &context2).unwrap()
+    })
+    .join()
+    .unwrap();
+    assert_eq!(exit, Some(7));
+    assert!(daemon.request_clock.idle_for() < crate::maintenance::QUIET_AFTER);
+    for result in server.join() {
+        result.unwrap();
+    }
     }
 
     #[test]
@@ -1433,55 +1438,54 @@ mod tests {
     #[test]
     #[ignore = "bounded subprocess fixture"]
     fn fixture_original_compiler_shim_uses_the_clients_relative_path() {
-        smol::block_on(async {
-        if !native_execution_available() {
-            return;
+    if !native_execution_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let (socket, _, _, server) = server(root.path(), 1, 1);
+    let (args, mut context) = fixture(root.path(), "shim");
+    let cwd = context.env.cwd().unwrap().to_owned();
+    for dir in ["shims", "tools"] {
+        std::fs::create_dir(cwd.join(dir)).unwrap();
+    }
+    std::fs::write(cwd.join("shims/.kache-shims"), "").unwrap();
+    std::os::unix::fs::symlink(std::env::current_exe().unwrap(), cwd.join("shims/cc")).unwrap();
+    std::fs::copy(&args[0], cwd.join("tools/cc")).unwrap();
+    context.env.set("PATH", "shims:tools:/usr/bin:/bin");
+    std::fs::write(cwd.join("release"), "go").unwrap();
+    let exit = std::thread::spawn(move || {
+        let (files, terminal) = context.io.transfer_files().unwrap();
+        kache_client::Execution {
+            entry: ExecutionEntry::Original,
+            args: &["cc".into(), "--version".into()],
+            env: &context.env,
+            started_at: context.started_at,
+            executable: &std::env::current_exe().unwrap(),
+            files: &files,
+            terminal,
+            client_version: crate::VERSION,
         }
-        let root = tempfile::tempdir().unwrap();
-        let (socket, _, _, server) = server(root.path(), 1, 1).await;
-        let (args, mut context) = fixture(root.path(), "shim");
-        let cwd = context.env.cwd().unwrap().to_owned();
-        for dir in ["shims", "tools"] {
-            std::fs::create_dir(cwd.join(dir)).unwrap();
-        }
-        std::fs::write(cwd.join("shims/.kache-shims"), "").unwrap();
-        std::os::unix::fs::symlink(std::env::current_exe().unwrap(), cwd.join("shims/cc")).unwrap();
-        std::fs::copy(&args[0], cwd.join("tools/cc")).unwrap();
-        context.env.set("PATH", "shims:tools:/usr/bin:/bin");
-        std::fs::write(cwd.join("release"), "go").unwrap();
-        let exit = smol::unblock(move || {
-            let (files, terminal) = context.io.transfer_files()?;
-            kache_client::Execution {
-                entry: ExecutionEntry::Original,
-                args: &["cc".into(), "--version".into()],
-                env: &context.env,
-                started_at: context.started_at,
-                executable: &std::env::current_exe()?,
-                files: &files,
-                terminal,
-                client_version: crate::VERSION,
-            }
-            .try_execute(&socket)
-        })
-        .await
-        .unwrap();
-        assert_eq!(exit, Some(7));
-        for result in server.await {
-            result.unwrap();
-        }
-        assert_eq!(
-            std::fs::read_to_string(cwd.join("record")).unwrap(),
-            format!("shim|{}\n", cwd.display())
-        );
-        assert_eq!(
-            std::fs::read_to_string(cwd.join("stdout")).unwrap(),
-            "metadata-shim\n"
-        );
-        assert_eq!(
-            std::fs::read_to_string(cwd.join("stderr")).unwrap(),
-            "diagnostic-shim\n"
-        );
-        });
+        .try_execute(&socket)
+        .unwrap()
+    })
+    .join()
+    .unwrap();
+    assert_eq!(exit, Some(7));
+    for result in server.join() {
+        result.unwrap();
+    }
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("record")).unwrap(),
+        format!("shim|{}\n", cwd.display())
+    );
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("stdout")).unwrap(),
+        "metadata-shim\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("stderr")).unwrap(),
+        "diagnostic-shim\n"
+    );
     }
 
     #[test]
@@ -1559,19 +1563,20 @@ mod tests {
         assert!(Prepared::decode(native_value, crate::VERSION).is_ok());
     }
 
-    async fn prepare_client(
+    fn prepare_client(
         socket: &Path,
         request: ExecutionRequest,
         context: &InvocationContext,
-    ) -> (AsyncStream, DescriptorTicket) {
-        use futures_lite::io::AsyncWriteExt as _;
-        let mut stream = AsyncStream::connect(socket).await.unwrap();
+    ) -> (UnixStream, DescriptorTicket) {
+        use std::io::Write;
+        let mut stream = UnixStream::connect(socket).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        stream.set_write_timeout(Some(Duration::from_secs(10))).unwrap();
         let mut frame = serde_json::to_vec(&Request::ExecuteV1(Box::new(request))).unwrap();
         frame.push(b'\n');
-        stream.write_all(&frame).await.unwrap();
-        let mut reader = BufReader::new(stream.clone());
+        stream.write_all(&frame).unwrap();
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
         let line = read_bounded_line(&mut reader, &mut Vec::new())
-            .await
             .unwrap()
             .unwrap();
         let ExecutionReply::Ready {
@@ -1599,7 +1604,6 @@ mod tests {
         )
         .unwrap();
         let line = read_bounded_line(&mut reader, &mut Vec::new())
-            .await
             .unwrap()
             .unwrap();
         assert!(matches!(
@@ -1618,26 +1622,24 @@ mod tests {
     #[test]
     #[ignore = "bounded subprocess fixture"]
     fn fixture_prepared_compiler_never_runs_without_commit_and_releases_its_resources() {
-        smol::block_on(async {
-        if !native_execution_available() {
-            return;
-        }
-        let root = tempfile::tempdir().unwrap();
-        let (socket, daemon, _, server) = server(root.path(), 1, 1).await;
-        let (args, context) = fixture(root.path(), "uncommitted");
-        let path = context.env.cwd().unwrap().to_owned();
-        let (stream, ticket) = prepare_client(&socket, request(&args, &context), &context).await;
-        assert!(!path.join("record").exists());
-        assert!(daemon.execution_workers.clone().try_acquire_arc().is_none());
-        assert!(
-            !PathBuf::from(ticket.endpoint.decode().unwrap()).exists(),
-            "one-use endpoint must already be removed"
-        );
-        drop(stream);
-        assert!(server.await[0].is_err());
-        assert!(!path.join("record").exists());
-        assert!(daemon.execution_workers.clone().try_acquire_arc().is_some());
-        });
+    if !native_execution_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let (socket, daemon, _, server) = server(root.path(), 1, 1);
+    let (args, context) = fixture(root.path(), "uncommitted");
+    let path = context.env.cwd().unwrap().to_owned();
+    let (stream, ticket) = prepare_client(&socket, request(&args, &context), &context);
+    assert!(!path.join("record").exists());
+    assert!(daemon.execution_workers.clone().try_acquire().is_none());
+    assert!(
+        !PathBuf::from(ticket.endpoint.decode().unwrap()).exists(),
+        "one-use endpoint must already be removed"
+    );
+    drop(stream);
+    assert!(server.join()[0].is_err());
+    assert!(!path.join("record").exists());
+    assert!(daemon.execution_workers.clone().try_acquire().is_some());
     }
 
     #[test]
@@ -1648,21 +1650,19 @@ mod tests {
     #[test]
     #[ignore = "bounded subprocess fixture"]
     fn fixture_draining_before_commit_releases_worker_without_starting_a_compiler() {
-        smol::block_on(async {
-        if !native_execution_available() {
-            return;
-        }
-        let root = tempfile::tempdir().unwrap();
-        let (socket, daemon, lifecycle, server) = server(root.path(), 1, 1).await;
-        let (args, context) = fixture(root.path(), "draining");
-        let path = context.env.cwd().unwrap().to_owned();
-        let (stream, _) = prepare_client(&socket, request(&args, &context), &context).await;
-        lifecycle.start_drain();
-        assert!(server.await[0].is_ok());
-        drop(stream);
-        assert!(!path.join("record").exists());
-        assert!(daemon.execution_workers.clone().try_acquire_arc().is_some());
-        });
+    if !native_execution_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let (socket, daemon, lifecycle, server) = server(root.path(), 1, 1);
+    let (args, context) = fixture(root.path(), "draining");
+    let path = context.env.cwd().unwrap().to_owned();
+    let (stream, _) = prepare_client(&socket, request(&args, &context), &context);
+    lifecycle.start_drain();
+    assert!(server.join()[0].is_ok());
+    drop(stream);
+    assert!(!path.join("record").exists());
+    assert!(daemon.execution_workers.clone().try_acquire().is_some());
     }
 
     #[test]
@@ -1673,66 +1673,64 @@ mod tests {
     #[test]
     #[ignore = "bounded subprocess fixture"]
     fn fixture_disconnected_accepted_compiler_is_cancelled_and_reaped() {
-        smol::block_on(async {
-        if !native_execution_available() {
-            return;
-        }
-        let root = tempfile::tempdir().unwrap();
-        let (socket, daemon, _, server) = server(root.path(), 1, 1).await;
-        let path = root.path().join("disconnected");
-        let mut client = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "daemon::execution::tests::execution_cancellable_client_fixture",
-                "--ignored",
-                "--nocapture",
-            ])
-            .env("KACHE_TEST_EXECUTION_ROOT", root.path())
-            .env("KACHE_TEST_EXECUTION_SOCKET", &socket)
-            .spawn()
-            .unwrap();
-        ready(&path.join("ready")).await;
-        let start = Instant::now();
-        client.kill().unwrap();
-        client.wait().unwrap();
-        let results = smol_opt_timeout(Duration::from_secs(2), server)
-            .await
-            .expect("server finishes");
-        // The final reply can race the disconnect reader after the client dies.
-        // Either path must reap the compiler and release its worker below.
-        if let Err(error) = &results[0] {
-            assert!(
-                error.downcast_ref::<std::io::Error>().is_some_and(|error| {
-                    matches!(
-                        error.kind(),
-                        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
-                    )
-                }),
-                "{error:#}"
-            );
-        }
-        assert!(start.elapsed() < Duration::from_secs(2));
-        assert_eq!(
-            std::fs::read_to_string(path.join("record"))
-                .unwrap()
-                .lines()
-                .count(),
-            1
+    if !native_execution_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let (socket, daemon, _, server) = server(root.path(), 1, 1);
+    let path = root.path().join("disconnected");
+    let mut client = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "daemon::execution::tests::execution_cancellable_client_fixture",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("KACHE_TEST_EXECUTION_ROOT", root.path())
+        .env("KACHE_TEST_EXECUTION_SOCKET", &socket)
+        .spawn()
+        .unwrap();
+    ready(&path.join("ready"));
+    let start = Instant::now();
+    client.kill().unwrap();
+    client.wait().unwrap();
+    let results = server
+        .join_timeout(Duration::from_secs(2))
+        .expect("server finishes");
+    // The final reply can race the disconnect reader after the client dies.
+    // Either path must reap the compiler and release its worker below.
+    if let Err(error) = &results[0] {
+        assert!(
+            error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                )
+            }),
+            "{error:#}"
         );
-        assert!(daemon.execution_workers.clone().try_acquire_arc().is_some());
-        let pid: libc::pid_t = std::fs::read_to_string(path.join("pid"))
+    }
+    assert!(start.elapsed() < Duration::from_secs(2));
+    assert_eq!(
+        std::fs::read_to_string(path.join("record"))
             .unwrap()
-            .parse()
-            .unwrap();
-        assert_eq!(
-            unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) },
-            -1
-        );
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::ECHILD)
-        );
-        });
+            .lines()
+            .count(),
+        1
+    );
+    assert!(daemon.execution_workers.clone().try_acquire().is_some());
+    let pid: libc::pid_t = std::fs::read_to_string(path.join("pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) },
+        -1
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ECHILD)
+    );
     }
 
     #[test]
@@ -1777,58 +1775,56 @@ mod tests {
     #[test]
     #[ignore = "bounded subprocess fixture"]
     fn fixture_execution_jobserver_descriptors_reach_only_the_compiler() {
-        smol::block_on(async {
-        if !native_execution_available() {
-            return;
-        }
-        use std::io::{Read, Write};
-        use std::os::fd::AsRawFd;
-        use std::os::unix::net::UnixStream;
-        let root = tempfile::tempdir().unwrap();
-        let (socket, _, _, server) = server(root.path(), 1, 1).await;
-        let (mut args, mut context) = fixture(root.path(), "jobserver");
-        let program = PathBuf::from(&args[0]);
-        std::fs::remove_file(&program).unwrap();
-        std::os::unix::fs::symlink(std::env::current_exe().unwrap(), &program).unwrap();
-        args.extend(
-            [
-                "--exact",
-                "daemon::execution::tests::execution_jobserver_child_fixture",
-                "--ignored",
-                "--nocapture",
-            ]
-            .map(str::to_owned),
-        );
-        let (mut read, mut write) = UnixStream::pair().unwrap();
-        context.env.set(
-            "CARGO_MAKEFLAGS",
-            format!(
-                "-j --jobserver-auth={},{}",
-                read.as_raw_fd(),
-                write.as_raw_fd()
-            ),
-        );
-        write.write_all(b"t").unwrap();
-        let result = smol::unblock(move || {
-            crate::invocation::execution::try_execute(&socket, &args, &context)
-        })
-        .await
-        .unwrap();
-        assert_eq!(result, Some(0));
-        assert!(server.await[0].is_ok());
-        read.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
-        let mut byte = [0; 1];
-        read.read_exact(&mut byte).unwrap();
-        assert_eq!(&byte, b"r");
-        assert_ne!(
-            unsafe { libc::fcntl(read.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
-            0
-        );
-        assert_ne!(
-            unsafe { libc::fcntl(write.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
-            0
-        );
-        });
+    if !native_execution_available() {
+        return;
+    }
+    use std::io::{Read, Write};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+    let root = tempfile::tempdir().unwrap();
+    let (socket, _, _, server) = server(root.path(), 1, 1);
+    let (mut args, mut context) = fixture(root.path(), "jobserver");
+    let program = PathBuf::from(&args[0]);
+    std::fs::remove_file(&program).unwrap();
+    std::os::unix::fs::symlink(std::env::current_exe().unwrap(), &program).unwrap();
+    args.extend(
+        [
+            "--exact",
+            "daemon::execution::tests::execution_jobserver_child_fixture",
+            "--ignored",
+            "--nocapture",
+        ]
+        .map(str::to_owned),
+    );
+    let (mut read, mut write) = UnixStream::pair().unwrap();
+    context.env.set(
+        "CARGO_MAKEFLAGS",
+        format!(
+            "-j --jobserver-auth={},{}",
+            read.as_raw_fd(),
+            write.as_raw_fd()
+        ),
+    );
+    write.write_all(b"t").unwrap();
+    let result = std::thread::spawn(move || {
+        crate::invocation::execution::try_execute(&socket, &args, &context).unwrap()
+    })
+    .join()
+    .unwrap();
+    assert_eq!(result, Some(0));
+    assert!(server.join()[0].is_ok());
+    read.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    let mut byte = [0; 1];
+    read.read_exact(&mut byte).unwrap();
+    assert_eq!(&byte, b"r");
+    assert_ne!(
+        unsafe { libc::fcntl(read.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+        0
+    );
+    assert_ne!(
+        unsafe { libc::fcntl(write.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+        0
+    );
     }
 
     #[test]
@@ -1839,30 +1835,29 @@ mod tests {
     #[test]
     #[ignore = "bounded subprocess fixture"]
     fn fixture_execution_declines_a_forged_peer_pid_before_preparing_a_worker() {
-        smol::block_on(async {
-        use futures_lite::io::AsyncWriteExt as _;
-        let root = tempfile::tempdir().unwrap();
-        let (socket, daemon, _, server) = server(root.path(), 1, 1).await;
-        let (args, context) = fixture(root.path(), "forged");
-        let path = context.env.cwd().unwrap().to_owned();
-        let mut request = request(&args, &context);
-        request.client_pid = 0;
-        let mut stream = AsyncStream::connect(&socket).await.unwrap();
-        let mut frame = serde_json::to_vec(&Request::ExecuteV1(Box::new(request))).unwrap();
-        frame.push(b'\n');
-        stream.write_all(&frame).await.unwrap();
-        let line = read_bounded_line(&mut BufReader::new(stream.clone()), &mut Vec::new())
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(matches!(
-            serde_json::from_str(&line).unwrap(),
-            ExecutionReply::Declined { .. }
-        ));
-        assert!(server.await[0].is_ok());
-        assert!(!path.join("record").exists());
-        assert!(daemon.execution_workers.clone().try_acquire_arc().is_some());
-        });
+    let root = tempfile::tempdir().unwrap();
+    let (socket, daemon, _, server) = server(root.path(), 1, 1);
+    let (args, context) = fixture(root.path(), "forged");
+    let path = context.env.cwd().unwrap().to_owned();
+    let mut request = request(&args, &context);
+    request.client_pid = 0;
+    let mut stream = UnixStream::connect(&socket).unwrap();
+    let mut frame = serde_json::to_vec(&Request::ExecuteV1(Box::new(request))).unwrap();
+    frame.push(b'\n');
+    std::io::Write::write_all(&mut stream, &frame).unwrap();
+    let line = read_bounded_line(
+        &mut std::io::BufReader::new(stream.try_clone().unwrap()),
+        &mut Vec::new(),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(matches!(
+        serde_json::from_str(&line).unwrap(),
+        ExecutionReply::Declined { .. }
+    ));
+    assert!(server.join()[0].is_ok());
+    assert!(!path.join("record").exists());
+    assert!(daemon.execution_workers.clone().try_acquire().is_some());
     }
 
     #[cfg(target_os = "macos")]
@@ -1906,56 +1901,52 @@ mod tests {
     #[test]
     #[ignore = "bounded subprocess fixture"]
     fn fixture_execution_rejects_sandboxed_client_using_kernel_identity() {
-        smol::block_on(async {
-        for (client_trust, daemon_trust) in
-            [(false, false), (false, true), (true, false), (true, true)]
-        {
-            let root = tempfile::tempdir().unwrap();
-            let root_path = root.path().canonicalize().unwrap();
-            let (socket, daemon, _, server) =
-                server_with_trust(&root_path, 1, 1, daemon_trust).await;
-            let denied = root_path.join("denied");
-            std::fs::create_dir(&denied).unwrap();
-            let profile = format!(
-                "(version 1)(allow default)(deny file-write* (subpath \"{}\"))",
-                denied.display()
-            );
-            let output = crate::platform::host_output_async(
-                async_process::Command::new("/usr/bin/sandbox-exec")
-                    .arg("-p")
-                    .arg(profile)
-                    .arg(std::env::current_exe().unwrap())
-                    .args([
-                        "--exact",
-                        "daemon::execution::tests::execution_sandboxed_client_fixture",
-                        "--ignored",
-                        "--nocapture",
-                    ])
-                    .env_clear()
-                    .env("PATH", "/usr/bin:/bin")
-                    .env("KACHE_TEST_TRUST", if client_trust { "1" } else { "0" })
-                    .env(
-                        "KACHE_TEST_ALLOWED",
-                        if client_trust && daemon_trust {
-                            "1"
-                        } else {
-                            "0"
-                        },
-                    )
-                    .env("KACHE_TEST_EXECUTION_ROOT", &root_path)
-                    .env("KACHE_TEST_EXECUTION_SOCKET", socket)
-                    .kill_on_drop(true),
-            )
-            .await
-            .unwrap();
-            assert!(output.status.success(), "{output:?}");
-            assert!(server.await[0].is_ok());
-            assert_eq!(
-                root_path.join("restricted/record").exists(),
-                client_trust && daemon_trust
-            );
-            assert!(daemon.execution_workers.clone().try_acquire_arc().is_some());
-        }
-        });
+    for (client_trust, daemon_trust) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        let (socket, daemon, _, server) =
+            server_with_trust(&root_path, 1, 1, daemon_trust);
+        let denied = root_path.join("denied");
+        std::fs::create_dir(&denied).unwrap();
+        let profile = format!(
+            "(version 1)(allow default)(deny file-write* (subpath \"{}\"))",
+            denied.display()
+        );
+        let output = crate::platform::host_output(
+            std::process::Command::new("/usr/bin/sandbox-exec")
+                .arg("-p")
+                .arg(profile)
+                .arg(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "daemon::execution::tests::execution_sandboxed_client_fixture",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("KACHE_TEST_TRUST", if client_trust { "1" } else { "0" })
+                .env(
+                    "KACHE_TEST_ALLOWED",
+                    if client_trust && daemon_trust {
+                        "1"
+                    } else {
+                        "0"
+                    },
+                )
+                .env("KACHE_TEST_EXECUTION_ROOT", &root_path)
+                .env("KACHE_TEST_EXECUTION_SOCKET", socket),
+        )
+        .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(server.join()[0].is_ok());
+        assert_eq!(
+            root_path.join("restricted/record").exists(),
+            client_trust && daemon_trust
+        );
+        assert!(daemon.execution_workers.clone().try_acquire().is_some());
+    }
     }
 }

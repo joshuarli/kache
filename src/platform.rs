@@ -77,21 +77,7 @@ pub(crate) fn host_output(
     child.wait_with_output()
 }
 
-#[cfg(test)]
-pub(crate) async fn host_output_async(
-    command: &mut async_process::Command,
-) -> std::io::Result<std::process::Output> {
-    use std::process::Stdio;
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let child = {
-        let _admission = kache_ipc::descriptors::spawn_guard();
-        command.spawn()?
-    };
-    child.output().await
-}
+
 
 /// Is `pid` safe to hand to `kill(2)` as a single-process target?
 ///
@@ -281,13 +267,107 @@ fn macos_max_files_per_proc() -> libc::rlim_t {
     }
 }
 
-/// Resolve when the OS asks the daemon to stop: SIGTERM/SIGINT.
-pub async fn wait_for_shutdown() {
-    use async_signal::{Signal, Signals};
-    use futures::StreamExt as _;
-    let mut signals =
-        Signals::new([Signal::Term, Signal::Int]).expect("SIGTERM/SIGINT handler");
-    signals.next().await;
+/// Block until the OS asks the daemon to stop: SIGTERM/SIGINT.
+///
+/// A self-pipe carries the signal out of the handler: the handler writes one
+/// byte (async-signal-safe) and this thread blocks reading it. Handlers
+/// reset on `exec`, so spawned compilers keep their default dispositions,
+/// and no thread's signal mask is changed.
+pub fn wait_for_shutdown() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static ARMED: AtomicBool = AtomicBool::new(false);
+    static READ_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+    static WRITE_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+    unsafe extern "C" fn on_shutdown(_: libc::c_int) {
+        #[cfg(target_os = "linux")]
+        let saved = unsafe { *libc::__errno_location() };
+        #[cfg(target_os = "macos")]
+        let saved = unsafe { *libc::__error() };
+        let fd = WRITE_FD.load(Ordering::Relaxed);
+        if fd >= 0 {
+            let byte = [1u8];
+            unsafe {
+                let _ = libc::write(fd, byte.as_ptr().cast(), 1);
+            }
+        }
+        #[cfg(target_os = "linux")]
+        unsafe {
+            *libc::__errno_location() = saved;
+        }
+        #[cfg(target_os = "macos")]
+        unsafe {
+            *libc::__error() = saved;
+        }
+    }
+
+    fn installed() -> bool {
+        READ_FD.load(Ordering::Acquire) >= 0 && WRITE_FD.load(Ordering::Acquire) >= 0
+    }
+
+    if ARMED.swap(true, Ordering::AcqRel) {
+        while !installed() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    } else {
+        let mut fds = [0; 2];
+        // SAFETY: `fds` is a valid two-slot pipe output.
+        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+            ARMED.store(false, Ordering::Release);
+            return;
+        }
+        for fd in fds {
+            // SAFETY: `fd` is an owned pipe end.
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            if flags >= 0 {
+                unsafe {
+                    libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+                }
+            }
+        }
+        READ_FD.store(fds[0], Ordering::Release);
+        WRITE_FD.store(fds[1], Ordering::Release);
+        // SAFETY: plain function pointer with no state; BSD semantics on the
+        // supported targets keep it installed after it fires.
+        for signal in [libc::SIGTERM, libc::SIGINT] {
+            let previous =
+                unsafe { libc::signal(signal, on_shutdown as *const () as libc::sighandler_t) };
+            assert!(
+                previous != libc::SIG_ERR,
+                "could not install SIGTERM/SIGINT shutdown handler"
+            );
+        }
+    }
+
+    let mut byte = [0u8];
+    // SAFETY: the read end stays open for the life of the process.
+    loop {
+        let read = unsafe {
+            libc::read(
+                READ_FD.load(Ordering::Acquire),
+                byte.as_mut_ptr().cast(),
+                1,
+            )
+        };
+        if read == 1 {
+            break;
+        }
+        // SAFETY: `__errno_location`/`__error` is valid to read here.
+        let interrupted = unsafe {
+            #[cfg(target_os = "linux")]
+            {
+                *libc::__errno_location() == libc::EINTR
+            }
+            #[cfg(target_os = "macos")]
+            {
+                *libc::__error() == libc::EINTR
+            }
+        };
+        if !interrupted {
+            break;
+        }
+    }
 }
 
 /// Configure a process to be fully detached (in its own process group) so that
@@ -336,7 +416,6 @@ pub fn is_self_spawn(argv: &[String], self_spawn: Option<&std::ffi::OsStr>) -> b
 mod tests {
     #[test]
     fn host_utilities_capture_bytes_without_request_cancellation() {
-        smol::block_on(async {
         let script = "read ignored; printf '\\377host-out'; printf '\\376host-err' >&2; exit 7";
         let check = |output: std::process::Output| {
             assert_eq!(output.status.code(), Some(7));
@@ -353,11 +432,8 @@ mod tests {
             );
         }
         check(
-            super::host_output_async(async_process::Command::new("/bin/sh").args(["-c", script]))
-                .await
-                .unwrap(),
+            super::host_output(std::process::Command::new("/bin/sh").args(["-c", script])).unwrap(),
         );
-        });
     }
 
     #[test]

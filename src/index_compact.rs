@@ -778,10 +778,10 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn shutdown_attempt_runs_off_the_async_workers_and_compacts() {
+    fn shutdown_attempt_runs_on_the_calling_thread_and_compacts() {
         let dir = tempfile::tempdir().unwrap();
         let config = sparse_store(dir.path());
-        smol::block_on(crate::maintenance::run_at_shutdown(config.clone()));
+        crate::maintenance::run_at_shutdown(config.clone());
         assert!(index_len(&config) < 8 << 20);
     }
 

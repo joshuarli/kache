@@ -16,18 +16,18 @@ fn compiler_request_capacity_handles_bursts_and_recovers_after_drop() {
         requests.push(
             workers
                 .clone()
-                .try_acquire_arc()
+                .try_acquire()
                 .expect("pipeline request rejected before the burst limit"),
         );
     }
-    assert!(workers.clone().try_acquire_arc().is_none());
+    assert!(workers.clone().try_acquire().is_none());
 
     drop(requests.pop());
     let replacement = workers
         .clone()
-        .try_acquire_arc()
+        .try_acquire()
         .expect("a finished request must release its slot");
-    assert!(workers.clone().try_acquire_arc().is_none());
+    assert!(workers.clone().try_acquire().is_none());
 
     drop(replacement);
     drop(requests);
@@ -36,11 +36,11 @@ fn compiler_request_capacity_handles_bursts_and_recovers_after_drop() {
         next_burst.push(
             workers
                 .clone()
-                .try_acquire_arc()
+                .try_acquire()
                 .expect("all slots must be reusable after the burst finishes"),
         );
     }
-    assert!(workers.try_acquire_arc().is_none());
+    assert!(workers.try_acquire().is_none());
     drop(next_burst);
 }
 
@@ -211,20 +211,39 @@ fn reaped_child_is_not_alive() {
 
 // Tests use the same transport as production, which resolves to UDS.
 #[cfg(test)]
-use crate::transport::AsyncListener;
-use crate::transport::AsyncStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 
 #[cfg(test)]
-async fn smol_opt_timeout<T>(
-    duration: Duration,
-    future: impl std::future::Future<Output = T>,
+fn join_timeout<T>(
+    thread: std::thread::JoinHandle<T>,
+    timeout: Duration,
+    what: &str,
 ) -> Option<T> {
-    use futures::FutureExt as _;
-    let mut future = Box::pin(future.fuse());
-    let mut timer = Box::pin(async_io::Timer::after(duration).fuse());
-    futures::select! {
-        value = future => Some(value),
-        _ = timer => None,
+    let deadline = Instant::now() + timeout;
+    while !thread.is_finished() {
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Some(thread.join().unwrap_or_else(|_| panic!("{what}")))
+}
+
+#[cfg(test)]
+fn accept_one(listener: &UnixListener, what: &str) -> UnixStream {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                return stream;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(Instant::now() < deadline, "{what}");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("{what}: {error}"),
+        }
     }
 }
 
@@ -248,39 +267,42 @@ fn fresh_endpoint(socket_path: &Path) -> std::path::PathBuf {
 /// roundtrip.
 #[test]
 fn each_bind_gets_an_endpoint_name_of_its_own() {
-    smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let socket_path = dir.path().join("daemon.sock");
-        let first = fresh_endpoint(&socket_path);
-        let second = fresh_endpoint(&socket_path);
-        assert_ne!(first, second, "a reused name is the collision itself");
-        assert_eq!(
-            (first.parent(), second.parent()),
-            (socket_path.parent(), socket_path.parent()),
-            "endpoints stay beside the socket path the caller gave"
-        );
-        let _first = bind_listener(&first).await;
-        let _second = bind_listener(&second).await;
-    });
+    let dir = tempfile::tempdir().unwrap();
+    let socket_path = dir.path().join("daemon.sock");
+    let first = fresh_endpoint(&socket_path);
+    let second = fresh_endpoint(&socket_path);
+    assert_ne!(first, second, "a reused name is the collision itself");
+    assert_eq!(
+        (first.parent(), second.parent()),
+        (socket_path.parent(), socket_path.parent()),
+        "endpoints stay beside the socket path the caller gave"
+    );
+    let _first = bind_listener(&first);
+    let _second = bind_listener(&second);
 }
 
 /// Bind a daemon-style listener at `path`, taking the cross-platform
 /// transport. Used by every roundtrip test to remove boilerplate.
-async fn bind_listener(path: &Path) -> AsyncListener {
-    crate::transport::bind_daemon_listener(path)
-        .await
+fn bind_listener(path: &Path) -> UnixListener {
+    let listener = crate::transport::bind_daemon_listener(path)
         .expect("bind listener")
-        .expect("listener won the endpoint")
+        .expect("listener won the endpoint");
+    listener.set_nonblocking(true).unwrap();
+    listener
 }
 
 /// Client-side connect mirror of bind_listener.
-async fn connect_stream(path: &Path) -> AsyncStream {
-    AsyncStream::connect(path).await.expect("connect")
+fn connect_stream(path: &Path) -> UnixStream {
+    let stream = UnixStream::connect(path).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
 }
 
-/// Bind a *synchronous* listener at `path` so `transport::is_reachable`
-/// reports the endpoint as live. It needs no async runtime — so it can be
-/// created inside a plain `std::thread`.
 fn bind_sync_listener(path: &Path) -> interprocess::local_socket::Listener {
     use interprocess::local_socket::{GenericFilePath, ListenerOptions, ToFsName as _};
     let name = path.to_fs_name::<GenericFilePath>().expect("socket name");
@@ -292,23 +314,18 @@ fn bind_sync_listener(path: &Path) -> interprocess::local_socket::Listener {
 
 /// Send one request, read one response, and deliberately keep the socket
 /// open so shutdown tests can prove the server does not require client EOF.
-async fn client_request_keep_open(socket_path: &Path, req: &Request) -> (Response, AsyncStream) {
-    let mut stream = connect_stream(socket_path).await;
+fn client_request_keep_open(socket_path: &Path, req: &Request) -> (Response, UnixStream) {
+    use std::io::{BufRead, Write};
+    let mut stream = connect_stream(socket_path);
 
     let mut line = serde_json::to_string(req).expect("serialize request");
     line.push('\n');
-    stream
-        .write_all(line.as_bytes())
-        .await
-        .expect("write request");
+    stream.write_all(line.as_bytes()).expect("write request");
 
     let mut resp_line = String::new();
     {
-        let mut reader = BufReader::new(stream.clone());
-        reader
-            .read_line(&mut resp_line)
-            .await
-            .expect("read response");
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+        reader.read_line(&mut resp_line).expect("read response");
     }
 
     (
@@ -329,8 +346,8 @@ async fn client_request_keep_open(socket_path: &Path, req: &Request) -> (Respons
 /// half and the test hangs forever waiting on the server task. Dropping the
 /// whole stream closes both halves and behaves identically on every
 /// platform — which is also exactly what the real client does.
-async fn client_roundtrip(socket_path: &Path, req: &Request) -> Response {
-    let (response, stream) = client_request_keep_open(socket_path, req).await;
+fn client_roundtrip(socket_path: &Path, req: &Request) -> Response {
+    let (response, stream) = client_request_keep_open(socket_path, req);
     drop(stream);
     response
 }
@@ -342,24 +359,23 @@ async fn client_roundtrip(socket_path: &Path, req: &Request) -> Response {
 /// Every socket integration test funnels through this so the
 /// connect/serve/teardown ordering lives in one place and the macOS EOF
 /// hang (see `client_roundtrip`) cannot be reintroduced piecemeal.
-async fn one_shot_request(daemon: &Arc<Daemon>, socket_path: &Path, req: &Request) -> Response {
+fn one_shot_request(daemon: &Arc<Daemon>, socket_path: &Path, req: &Request) -> Response {
     // One endpoint per call: a test that asks for two roundtrips would
     // otherwise bind the same name twice (#1107). Both the listener and
     // the client below use the derived path, so callers keep passing the
     // socket path their config reports.
     let socket_path = &fresh_endpoint(socket_path);
-    let listener = bind_listener(socket_path).await;
+    let listener = bind_listener(socket_path);
 
     let server_daemon = daemon.clone();
-    let server = smol::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("accept");
+    let server = std::thread::spawn(move || {
+        let stream = accept_one(&listener, "accept");
         handle_connection(stream, &server_daemon, &Arc::new(Lifecycle::default()))
-            .await
             .expect("handle_connection");
     });
 
-    let resp = client_roundtrip(socket_path, req).await;
-    server.await;
+    let resp = client_roundtrip(socket_path, req);
+    server.join().unwrap();
     resp
 }
 
@@ -526,166 +542,158 @@ fn compile_started_wire_tags_and_stats_default() {
 
 #[test]
 fn test_shutdown_request_sets_flag_and_stores_notify_permit() {
-    smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let config = test_config(dir.path());
-        let socket_path = config.socket_path();
-        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let socket_path = config.socket_path();
+    std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
 
-        let listener = bind_listener(&socket_path).await;
-        let daemon = Arc::new(Daemon::new(config));
-        let lifecycle = Arc::new(Lifecycle::default());
+    let listener = bind_listener(&socket_path);
+    let daemon = Arc::new(Daemon::new(config));
+    let lifecycle = Arc::new(Lifecycle::default());
 
-        let server_daemon = daemon.clone();
-        let server_flag = lifecycle.clone();
+    let server_daemon = daemon.clone();
+    let server_flag = lifecycle.clone();
 
-        let server = smol::spawn(async move {
-            let (stream, _) = listener.accept().await.expect("accept");
-            handle_connection(stream, &server_daemon, &server_flag)
-                .await
-                .expect("handle_connection");
-        });
-
-        let resp = client_roundtrip(&socket_path, &Request::Shutdown).await;
-        server.await;
-
-        assert!(resp.ok, "stop request should return ok");
-        assert!(
-            !lifecycle.accepting_calls(),
-            "stop request must close admission"
-        );
-        // A later observer must also see the shared drain transition.
-        smol_opt_timeout(Duration::from_secs(1), lifecycle.draining())
-            .await
-            .expect("stop request must wake a later drain observer");
+    let server = std::thread::spawn(move || {
+        let stream = accept_one(&listener, "accept");
+        handle_connection(stream, &server_daemon, &server_flag).expect("handle_connection");
     });
+
+    let resp = client_roundtrip(&socket_path, &Request::Shutdown);
+    server.join().unwrap();
+
+    assert!(resp.ok, "stop request should return ok");
+    assert!(
+        !lifecycle.accepting_calls(),
+        "stop request must close admission"
+    );
+    // A later observer must also see the shared drain transition.
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !lifecycle.snapshot().draining {
+        assert!(
+            Instant::now() < deadline,
+            "stop request must wake a later drain observer"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 #[test]
-fn connection_handler_drain_aborts_silent_handler_at_deadline() {
-    smol::block_on(async {
-        let mut handlers = Vec::new();
-        handlers.push(smol::spawn(std::future::pending::<()>()));
+fn connection_handler_drain_leaves_silent_handler_running_past_deadline() {
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let mut handlers = Vec::new();
+    handlers.push(std::thread::spawn(move || {
+        let _ = release_rx.recv();
+    }));
 
-        assert!(
-            drain_connection_handlers(&mut handlers, Duration::from_millis(20)).await,
-            "a silent handler must be aborted at the drain deadline"
-        );
-        assert!(handlers.is_empty(), "aborted handlers must still be joined");
-    });
+    assert!(
+        drain_connection_handlers(&mut handlers, Duration::from_millis(20)),
+        "a silent handler must outlive the drain deadline"
+    );
+    assert_eq!(handlers.len(), 1, "unfinished handlers stay owned");
+    drop(release_tx);
+    assert!(
+        !drain_connection_handlers(&mut handlers, Duration::from_secs(1)),
+        "a released handler joins on the next drain"
+    );
+    assert!(handlers.is_empty(), "drained handlers must still be joined");
 }
 
 #[test]
 fn connection_handler_drain_completes_finished_handlers_without_abort() {
-    smol::block_on(async {
-        let mut handlers = Vec::new();
-        handlers.push(smol::spawn(async {}));
+    let mut handlers = Vec::new();
+    handlers.push(std::thread::spawn(|| {}));
 
-        assert!(
-            !drain_connection_handlers(&mut handlers, Duration::from_secs(1)).await,
-            "finished handlers drain without cancellation"
-        );
-        assert!(handlers.is_empty(), "drained handlers must still be joined");
-    });
+    assert!(
+        !drain_connection_handlers(&mut handlers, Duration::from_secs(1)),
+        "finished handlers drain without cancellation"
+    );
+    assert!(handlers.is_empty(), "drained handlers must still be joined");
 }
 
 /// Regression for #288 (loop side): a quiet `stop` must wake the accept loop
-/// immediately rather than leaving it parked until the periodic idle tick.
-/// We drive the real `accept_loop` with the idle timeout disabled and an
-/// OS shutdown signal that never fires, so the *only* thing that can break
-/// the loop within the assertion window is the stop-request wakeup. Before
-/// the fix the loop would stay parked for `ACCEPT_LOOP_IDLE_TICK` (~60s) and
-/// this 5s timeout would elapse.
+/// immediately rather than leaving it parked. We drive the real `accept_loop`
+/// with the idle timeout disabled, so the *only* thing that can break the
+/// loop within the assertion window is the stop-request wakeup.
 #[test]
 fn test_accept_loop_breaks_promptly_on_stop_request() {
-    smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let config = test_config(dir.path());
-        let socket_path = config.socket_path();
-        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let socket_path = config.socket_path();
+    std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
 
-        let listener = bind_listener(&socket_path).await;
-        let daemon = Arc::new(Daemon::new(config));
-        let lifecycle = Arc::new(Lifecycle::default());
+    let listener = bind_listener(&socket_path);
+    let daemon = Arc::new(Daemon::new(config));
+    let lifecycle = Arc::new(Lifecycle::default());
 
-        // Client sends a one-shot `stop` once the loop is up.
-        let client_socket = socket_path.clone();
-        let client =
-            smol::spawn(async move { client_roundtrip(&client_socket, &Request::Shutdown).await });
-
-        // `accept_loop` borrows the listener, so run it in this task (not a
-        // spawned 'static one) under a timeout. `future::pending` stands in for
-        // an OS shutdown signal that never arrives.
-        let outcome = smol_opt_timeout(
-            Duration::from_secs(5),
+    // Client sends a one-shot `stop` once the loop is up.
+    let client_socket = socket_path.clone();
+    let resp = std::thread::scope(|scope| {
+        let server = scope.spawn(|| {
             accept_loop(
                 &listener,
                 &daemon,
                 &lifecycle,
                 None,
                 Duration::from_secs(1),
-                std::future::pending::<()>(),
-            ),
-        )
-        .await;
-
-        assert!(
-            outcome.is_some(),
-            "accept_loop did not break within 5s of a stop request (issue #288 regression)"
-        );
-        assert!(
-            !lifecycle.accepting_calls(),
-            "shutdown flag should be set after the stop request"
-        );
-        let resp = smol_opt_timeout(Duration::from_secs(5), client)
-            .await
-            .expect("accept loop never acknowledged shutdown");
-        assert!(resp.ok, "stop request should return ok");
+            )
+        });
+        let client =
+            scope.spawn(|| client_roundtrip(&client_socket, &Request::Shutdown));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !server.is_finished() {
+            assert!(
+                Instant::now() < deadline,
+                "accept_loop did not break within 5s of a stop request (issue #288 regression)"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        server.join().unwrap();
+        client.join().unwrap()
     });
+
+    assert!(
+        !lifecycle.accepting_calls(),
+        "shutdown flag should be set after the stop request"
+    );
+    assert!(resp.ok, "stop request should return ok");
 }
 
 #[test]
 fn test_send_request_with_timeout_bounds_unresponsive_daemon() {
-    smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let socket_path = dir.path().join("daemon.sock");
-        let listener = bind_listener(&socket_path).await;
+    let dir = tempfile::tempdir().unwrap();
+    let socket_path = dir.path().join("daemon.sock");
+    let listener = bind_listener(&socket_path);
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
 
-        let server = smol::spawn(async move {
-            let (stream, _) = listener.accept().await.expect("accept");
-            let mut request_line = String::new();
-            {
-                let mut reader = BufReader::new(stream.clone());
-                reader
-                    .read_line(&mut request_line)
-                    .await
-                    .expect("read request");
-            }
-            assert!(request_line.contains("\"stats\""));
-            async_io::Timer::after(Duration::from_secs(1)).await;
-            drop(stream);
-        });
-
-        let req = Request::Stats(StatsRequest {
-            include_entries: false,
-            include_summaries: false,
-            sort_by: None,
-            event_hours: None,
-            event_secs: None,
-            client_epoch: 0,
-            client_version: None,
-        });
-        let client_socket_path = socket_path.clone();
-        let started = Instant::now();
-        let result = smol::unblock(move || {
-            send_request_with_timeout(&client_socket_path, &req, Duration::from_millis(75))
-        })
-        .await;
-
-        assert!(result.is_err());
-        assert!(started.elapsed() < Duration::from_millis(750));
-        let _ = server.cancel().await;
+    let server = std::thread::spawn(move || {
+        let stream = accept_one(&listener, "accept");
+        let mut request_line = String::new();
+        {
+            let mut reader = std::io::BufReader::new(&stream);
+            std::io::BufRead::read_line(&mut reader, &mut request_line).expect("read request");
+        }
+        assert!(request_line.contains("\"stats\""));
+        let _ = release_rx.recv_timeout(Duration::from_secs(1));
+        drop(stream);
     });
+
+    let req = Request::Stats(StatsRequest {
+        include_entries: false,
+        include_summaries: false,
+        sort_by: None,
+        event_hours: None,
+        event_secs: None,
+        client_epoch: 0,
+        client_version: None,
+    });
+    let started = Instant::now();
+    let result = send_request_with_timeout(&socket_path, &req, Duration::from_millis(75));
+
+    assert!(result.is_err());
+    assert!(started.elapsed() < Duration::from_millis(750));
+    drop(release_tx);
+    server.join().unwrap();
 }
 
 pub(super) fn test_config(dir: &Path) -> Config {
@@ -766,48 +774,45 @@ pub(super) fn test_config(dir: &Path) -> Config {
 
 #[test]
 fn request_release_controls_drain_and_legacy_timestamps_do_not() {
-    smol::block_on(async {
-        for (version, should_drain) in [
-            (None, false),
-            (Some(VERSION.to_owned()), false),
-            (Some(format!("{VERSION}+rebuilt")), false),
-            (Some("0.0.1".into()), false),
-            (Some("legacy".into()), false),
-            (Some("999.0.0".into()), true),
-        ] {
-            let dir = tempfile::tempdir().unwrap();
-            let config = test_config(dir.path());
-            let daemon = Arc::new(Daemon::new(config.clone()));
-            let lifecycle = Arc::new(Lifecycle::default());
-            let listener = bind_listener(&config.socket_path()).await;
-            let (serving, control) = (daemon.clone(), lifecycle.clone());
-            let server = smol::spawn(async move {
-                let (stream, _) = listener.accept().await.unwrap();
-                handle_connection(stream, &serving, &control).await.unwrap();
-            });
-            let response = client_roundtrip(
-                &config.socket_path(),
-                &Request::CompileStarted(CompileStartedRequest {
-                    crate_name: "release-test".into(),
-                    root: String::new(),
-                    pid: 1234,
-                    started_at_ms: 1,
-                    typical_ms: None,
-                    client_epoch: u64::MAX,
-                    client_version: version.clone(),
-                }),
-            )
-            .await;
-            server.await;
-            assert!(response.ok, "{response:?}");
-            assert_eq!(!lifecycle.accepting_calls(), should_drain, "{version:?}");
-            assert_eq!(
-                daemon.in_flight_compiles.lock().unwrap().len(),
-                1,
-                "accepted work must survive"
-            );
-        }
-    });
+    for (version, should_drain) in [
+        (None, false),
+        (Some(VERSION.to_owned()), false),
+        (Some(format!("{VERSION}+rebuilt")), false),
+        (Some("0.0.1".into()), false),
+        (Some("legacy".into()), false),
+        (Some("999.0.0".into()), true),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path());
+        let daemon = Arc::new(Daemon::new(config.clone()));
+        let lifecycle = Arc::new(Lifecycle::default());
+        let listener = bind_listener(&config.socket_path());
+        let (serving, control) = (daemon.clone(), lifecycle.clone());
+        let server = std::thread::spawn(move || {
+            let stream = accept_one(&listener, "accept");
+            handle_connection(stream, &serving, &control).unwrap();
+        });
+        let response = client_roundtrip(
+            &config.socket_path(),
+            &Request::CompileStarted(CompileStartedRequest {
+                crate_name: "release-test".into(),
+                root: String::new(),
+                pid: 1234,
+                started_at_ms: 1,
+                typical_ms: None,
+                client_epoch: u64::MAX,
+                client_version: version.clone(),
+            }),
+        );
+        server.join().unwrap();
+        assert!(response.ok, "{response:?}");
+        assert_eq!(!lifecycle.accepting_calls(), should_drain, "{version:?}");
+        assert_eq!(
+            daemon.in_flight_compiles.lock().unwrap().len(),
+            1,
+            "accepted work must survive"
+        );
+    }
 }
 
 fn stats_at_version(version: &str) -> StatsResponse {
@@ -822,31 +827,26 @@ fn stats_at_version(version: &str) -> StatsResponse {
 
 #[test]
 fn diagnostic_stats_send_no_upgrade_metadata_to_legacy_daemons() {
-    smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let config = test_config(dir.path());
-        let listener = bind_listener(&config.socket_path()).await;
-        let server = smol::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut line = String::new();
-            BufReader::new(stream.clone()).read_line(&mut line).await.unwrap();
-            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(value["stats"]["client_epoch"], 0);
-            assert!(value["stats"].get("client_version").is_none());
-            let response = Response {
-                stats: Some(stats_at_version("0.0.1")),
-                ..Response::ok()
-            };
-            let line = format!("{}\n", serde_json::to_string(&response).unwrap());
-            stream.write_all(line.as_bytes()).await.unwrap();
-        });
-        let stats =
-            smol::unblock(move || send_stats_request_without_restart(&config, false))
-                .await
-                .unwrap();
-        server.await;
-        assert_eq!(stats.version, "0.0.1");
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let listener = bind_listener(&config.socket_path());
+    let server = std::thread::spawn(move || {
+        let mut stream = accept_one(&listener, "accept");
+        let mut line = String::new();
+        std::io::BufRead::read_line(&mut std::io::BufReader::new(&stream), &mut line).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(value["stats"]["client_epoch"], 0);
+        assert!(value["stats"].get("client_version").is_none());
+        let response = Response {
+            stats: Some(stats_at_version("0.0.1")),
+            ..Response::ok()
+        };
+        let line = format!("{}\n", serde_json::to_string(&response).unwrap());
+        std::io::Write::write_all(&mut stream, line.as_bytes()).unwrap();
     });
+    let stats = send_stats_request_without_restart(&config, false).unwrap();
+    server.join().unwrap();
+    assert_eq!(stats.version, "0.0.1");
 }
 
 /// 1.0.x orders daemons by this value, so it must be the running
@@ -904,58 +904,52 @@ fn foreground_startup_rejects_a_file_in_place_of_the_runtime_directory() {
 
 #[test]
 fn server_main_binds_socket_and_handles_shutdown() {
-    smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = test_config(dir.path());
-        config.daemon_idle_timeout_secs = 0;
-        let socket_path = config.socket_path();
-        let coord = DaemonCoordFile::for_socket(&socket_path);
-        let server_config = config.clone();
-        let provenance = crate::config::config_file_provenance_at(dir.path().join("config.toml"));
-        let server = smol::spawn(async move {
-            server_main(
-                &server_config,
-                &provenance,
-                coord,
-                None,
-                DaemonCapacity::discover(server_config.daemon_execution_concurrency),
-            )
-            .await
-        });
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path());
+    config.daemon_idle_timeout_secs = 0;
+    let socket_path = config.socket_path();
+    let coord = DaemonCoordFile::for_socket(&socket_path);
+    let server_config = config.clone();
+    let provenance = crate::config::config_file_provenance_at(dir.path().join("config.toml"));
+    let server = std::thread::spawn(move || {
+        server_main(
+            &server_config,
+            &provenance,
+            coord,
+            None,
+            DaemonCapacity::discover(server_config.daemon_execution_concurrency),
+        )
+    });
 
-        let ready_socket = socket_path.clone();
-        let ready = smol::unblock(move || {
-            kunobi_daemon::readiness::wait_until(Instant::now() + Duration::from_secs(5), |deadline| {
-                lifecycle_client::current_socket(&ready_socket, deadline)
-            })
-            .map(|proof| proof.is_some())
-        })
-        .await
-        .unwrap();
-        assert!(ready, "server_main must bind its configured socket");
+    let ready = kunobi_daemon::readiness::wait_until(
+        Instant::now() + Duration::from_secs(5),
+        |deadline| lifecycle_client::current_socket(&socket_path, deadline),
+    )
+    .map(|proof| proof.is_some())
+    .unwrap();
+    assert!(ready, "server_main must bind its configured socket");
 
-        assert_eq!(
-            read_daemon_state(&socket_path).unwrap().control_version,
-            Some(kunobi_daemon::wire::VERSION),
-            "stop must use the advertised binary DRAIN endpoint"
-        );
-        let shutdown_config = config.clone();
-        smol::unblock(move || send_shutdown_request(&shutdown_config))
-            .await
-            .unwrap();
+    assert_eq!(
+        read_daemon_state(&socket_path).unwrap().control_version,
+        Some(kunobi_daemon::wire::VERSION),
+        "stop must use the advertised binary DRAIN endpoint"
+    );
+    send_shutdown_request(&config).unwrap();
 
-        let result = smol_opt_timeout(Duration::from_secs(10), server)
-            .await
-            .expect("server_main should stop after a shutdown request");
+    let result = join_timeout(
+        server,
+        Duration::from_secs(10),
+        "server_main should stop after a shutdown request",
+    )
+    .expect("server_main should stop after a shutdown request");
     assert!(
         result.is_ok(),
         "server_main should exit cleanly: {result:?}"
     );
-        assert!(
-            !socket_path.exists(),
-            "server_main should remove its socket during shutdown"
-        );
-    });
+    assert!(
+        !socket_path.exists(),
+        "server_main should remove its socket during shutdown"
+    );
 }
 
 // ── Protocol serde round-trips ───────────────────────────────
@@ -977,75 +971,74 @@ fn readiness_rejects_an_accepting_socket_that_does_not_answer() {
 
 #[test]
 fn readiness_requires_a_successful_compatible_health_response() {
-    smol::block_on(async {
-    for (response, accepted) in [
-        (
-            Response {
-                health: Some(DaemonHealth {
-                    version: VERSION.into(),
-                    build_epoch: build_epoch(),
-                }),
-                ..Response::ok()
-            },
-            true,
-        ),
-        (
-            Response {
-                health: Some(DaemonHealth {
-                    version: "0.0.1".into(),
-                    build_epoch: 1,
-                }),
-                ..Response::ok()
-            },
-            false,
-        ),
-        (
-            Response {
-                health: Some(DaemonHealth {
-                    version: String::new(),
-                    build_epoch: 1,
-                }),
-                ..Response::ok()
-            },
-            true,
-        ),
-        (
-            Response {
-                health: Some(DaemonHealth {
-                    version: "999.0.0".into(),
-                    build_epoch: 1,
-                }),
-                ..Response::ok()
-            },
-            true,
-        ),
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let socket = dir.path().join("daemon.sock");
-        let listener = bind_listener(&socket).await;
-        let server = smol::spawn(async move {
-            let (mut peer, _) = listener.accept().await.unwrap();
-            let mut request = String::new();
-            BufReader::new(peer.clone()).read_line(&mut request).await.unwrap();
-            assert!(matches!(
-                serde_json::from_str::<Request>(&request).unwrap(),
-                Request::Health
-            ));
-            let mut response = serde_json::to_vec(&response).unwrap();
-            response.push(b'\n');
-            peer.write_all(&response).await.unwrap();
-        });
-        let proof = smol::unblock(move || {
-            lifecycle_client::current_socket(&socket, Instant::now() + Duration::from_secs(5))
-        })
-        .await
-        .unwrap();
-        smol_opt_timeout(Duration::from_secs(5), server)
-            .await
-            .expect("readiness probe never completed the health exchange");
-        assert_eq!(proof.is_some(), accepted);
-    }
+for (response, accepted) in [
+    (
+        Response {
+            health: Some(DaemonHealth {
+                version: VERSION.into(),
+                build_epoch: build_epoch(),
+            }),
+            ..Response::ok()
+        },
+        true,
+    ),
+    (
+        Response {
+            health: Some(DaemonHealth {
+                version: "0.0.1".into(),
+                build_epoch: 1,
+            }),
+            ..Response::ok()
+        },
+        false,
+    ),
+    (
+        Response {
+            health: Some(DaemonHealth {
+                version: String::new(),
+                build_epoch: 1,
+            }),
+            ..Response::ok()
+        },
+        true,
+    ),
+    (
+        Response {
+            health: Some(DaemonHealth {
+                version: "999.0.0".into(),
+                build_epoch: 1,
+            }),
+            ..Response::ok()
+        },
+        true,
+    ),
+] {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("daemon.sock");
+    let listener = bind_listener(&socket);
+    let server = std::thread::spawn(move || {
+        let mut peer = accept_one(&listener, "accept");
+        let mut request = String::new();
+        std::io::BufRead::read_line(&mut std::io::BufReader::new(&peer), &mut request).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Request>(&request).unwrap(),
+            Request::Health
+        ));
+        let mut response = serde_json::to_vec(&response).unwrap();
+        response.push(b'\n');
+        std::io::Write::write_all(&mut peer, &response).unwrap();
     });
+    let proof =
+        lifecycle_client::current_socket(&socket, Instant::now() + Duration::from_secs(5))
+            .unwrap();
+    join_timeout(
+        server,
+        Duration::from_secs(5),
+        "readiness probe never completed the health exchange",
+    )
+    .expect("readiness probe never completed the health exchange");
+    assert_eq!(proof.is_some(), accepted);
+}
 }
 
 #[test]
@@ -2531,39 +2524,36 @@ fn send_gc_hint_reports_no_daemon_without_starting_one() {
 /// connection.
 #[test]
 fn send_gc_hint_is_acknowledged_and_the_daemon_sweeps() {
-    smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = test_config(dir.path());
-        config.max_size = 1000;
-        let socket_path = config.socket_path();
-        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
-        let store = Store::open(&config).unwrap();
-        put_upload_evict_entry(&store, dir.path(), "evictable", 1200, false);
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path());
+    config.max_size = 1000;
+    let socket_path = config.socket_path();
+    std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
+    let store = Store::open(&config).unwrap();
+    put_upload_evict_entry(&store, dir.path(), "evictable", 1200, false);
 
-        let listener = bind_listener(&socket_path).await;
-        let daemon = Arc::new(Daemon::new(config.clone()));
-        let server = smol::spawn(async move {
-            let (stream, _) = listener.accept().await.expect("accept");
-            handle_connection(stream, &daemon, &Arc::new(Lifecycle::default()))
-                .await
-                .expect("handle_connection");
-        });
-
-        let cfg = config.clone();
-        let accepted = smol::unblock(move || send_gc_hint(&cfg)).await;
-        assert!(accepted);
-        // Bounded: if no hint ever reached the socket, `accept` would wait
-        // forever and the test would hang instead of failing.
-        smol_opt_timeout(Duration::from_secs(10), server)
-            .await
-            .expect("the daemon never received the hint");
-
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while store.contains("evictable") {
-            assert!(Instant::now() < deadline, "the hinted sweep never ran");
-            async_io::Timer::after(Duration::from_millis(20)).await;
-        }
+    let listener = bind_listener(&socket_path);
+    let daemon = Arc::new(Daemon::new(config.clone()));
+    let server = std::thread::spawn(move || {
+        let stream = accept_one(&listener, "accept");
+        handle_connection(stream, &daemon, &Arc::new(Lifecycle::default()))
+            .expect("handle_connection");
     });
+
+    let accepted = send_gc_hint(&config);
+    assert!(accepted);
+    join_timeout(
+        server,
+        Duration::from_secs(10),
+        "the daemon never received the hint",
+    )
+    .expect("the daemon never received the hint");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while store.contains("evictable") {
+        assert!(Instant::now() < deadline, "the hinted sweep never ran");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// Entries for the periodic-sweep tests: a store over budget on retained
@@ -2681,41 +2671,6 @@ fn test_handle_request_sync_dispatches_gc() {
     assert_eq!(resp.evicted, Some(0));
 }
 
-/// #281: the blocking handlers are dispatched through `offload`, which must
-/// return the handler's own response unchanged.
-#[test]
-fn offload_returns_the_handler_response() {
-    smol::block_on(async {
-        let resp = offload(Response::ok).await;
-        assert!(resp.ok);
-    });
-}
-
-/// #281: a panic inside an offloaded handler must surface as an error
-/// response, not unwind and tear down the connection task.
-#[test]
-fn offload_maps_a_handler_panic_to_an_error_response() {
-    smol::block_on(async {
-        let resp = offload(|| panic!("handler boom")).await;
-        assert!(!resp.ok, "a panicking handler must yield an error response");
-        assert!(
-            resp.error
-                .as_deref()
-                .unwrap_or_default()
-                .contains("task failed"),
-            "error should explain the handler task failed, got {:?}",
-            resp.error
-        );
-    });
-}
-
-
-
-
-
-
-
-
 /// Stats carry whether the daemon skips uploads, so `kache stats` can warn
 /// a writable process. A daemon from before the field reads as unknown.
 #[test]
@@ -2830,23 +2785,20 @@ fn clean_tool_version_caches_removes_only_old_tool_version_txt() {
 
 #[test]
 fn test_socket_gc_roundtrip() {
-    smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let config = test_config(dir.path());
-        let socket_path = config.socket_path();
-        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let socket_path = config.socket_path();
+    std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
 
-        let daemon = Arc::new(Daemon::new(config));
-        let resp = one_shot_request(
-            &daemon,
-            &socket_path,
-            &Request::Gc(GcRequest::automatic(daemon.config.gc_max_age_hours)),
-        )
-        .await;
+    let daemon = Arc::new(Daemon::new(config));
+    let resp = one_shot_request(
+        &daemon,
+        &socket_path,
+        &Request::Gc(GcRequest::automatic(daemon.config.gc_max_age_hours)),
+    );
 
-        assert!(resp.ok);
-        assert_eq!(resp.evicted, Some(0));
-    });
+    assert!(resp.ok);
+    assert_eq!(resp.evicted, Some(0));
 }
 
 

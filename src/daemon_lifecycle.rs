@@ -698,48 +698,39 @@ mod tests {
 
     #[test]
     fn replacement_requests_drain_before_waiting_for_cache_ownership() {
-        smol::block_on(async {
-            let root = tempfile::tempdir().unwrap();
-            let config = super::super::tests::test_config(root.path());
-            let lock = ProcessLock::try_acquire(daemon_run_lock_path(&config.socket_path()))
-                .unwrap()
-                .unwrap();
-            let lifecycle = Arc::new(Lifecycle::default());
-            let mut server = lifecycle_control::serve(&config, Arc::clone(&lifecycle))
-                .await
-                .unwrap();
-            server.service.mark_ready();
-            let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
-            coord.control_version = Some(kunobi_daemon::wire::VERSION);
-            coord.write_phase(DaemonPhase::Ready).unwrap();
-            let pending = lifecycle.begin().unwrap();
-            let progress = smol::unblock({
-                let config = config.clone();
-                move || {
-                    let mut driver = KacheReplacement {
-                        config: &config,
-                        force: true,
-                        child: None,
-                        executable: None,
-                        stopping: false,
-                        retiring_pid: None,
-                        log_start: None,
-                    };
-                    driver.perform(Step::Drain, Some(Instant::now() + Duration::from_secs(2)))
-                }
-            })
-            .await
+        let root = tempfile::tempdir().unwrap();
+        let config = super::super::tests::test_config(root.path());
+        let lock = ProcessLock::try_acquire(daemon_run_lock_path(&config.socket_path()))
+            .unwrap()
             .unwrap();
-            assert_eq!(progress, Progress::Pending);
-            assert!(
-                !lifecycle.accepting_calls(),
-                "replacement must request drain before waiting"
-            );
-            assert_eq!(lifecycle.snapshot().active, 1);
-            drop(pending);
-            drop(lock);
-            server.finish().await;
-        });
+        let lifecycle = Arc::new(Lifecycle::default());
+        let mut server =
+            lifecycle_control::serve(&config, Arc::clone(&lifecycle)).unwrap();
+        server.service.mark_ready();
+        let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
+        coord.control_version = Some(kunobi_daemon::wire::VERSION);
+        coord.write_phase(DaemonPhase::Ready).unwrap();
+        let pending = lifecycle.begin().unwrap();
+        let mut driver = KacheReplacement {
+            config: &config,
+            force: true,
+            child: None,
+            executable: None,
+            stopping: false,
+            retiring_pid: None,
+            log_start: None,
+        };
+        let progress =
+            driver.perform(Step::Drain, Some(Instant::now() + Duration::from_secs(2)));
+        assert_eq!(progress.unwrap(), Progress::Pending);
+        assert!(
+            !lifecycle.accepting_calls(),
+            "replacement must request drain before waiting"
+        );
+        assert_eq!(lifecycle.snapshot().active, 1);
+        drop(pending);
+        drop(lock);
+        server.finish();
     }
 
     #[cfg(unix)]
@@ -836,22 +827,16 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn candidate_verification_returns_done_only_with_fresh_health_proof() {
-        smol::block_on(async {
-            let root = tempfile::tempdir().unwrap();
-            let config = super::super::tests::test_config(root.path());
-            let lifecycle = Arc::new(Lifecycle::default());
-            let mut server = lifecycle_control::serve(&config, lifecycle).await.unwrap();
-            server.service.mark_ready();
-            let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
-            coord.control_version = Some(kunobi_daemon::wire::VERSION);
-            coord.write_phase(DaemonPhase::Ready).unwrap();
-            let result = smol::unblock({
-                let config = config.clone();
-                move || verify_signaled_candidate(&config, "ready")
-            })
-            .await;
-            server.finish().await;
-            assert_eq!(result.unwrap(), Progress::Done);
-        });
+        let root = tempfile::tempdir().unwrap();
+        let config = super::super::tests::test_config(root.path());
+        let lifecycle = Arc::new(Lifecycle::default());
+        let mut server = lifecycle_control::serve(&config, lifecycle).unwrap();
+        server.service.mark_ready();
+        let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
+        coord.control_version = Some(kunobi_daemon::wire::VERSION);
+        coord.write_phase(DaemonPhase::Ready).unwrap();
+        let result = verify_signaled_candidate(&config, "ready");
+        server.finish();
+        assert_eq!(result.unwrap(), Progress::Done);
     }
 }

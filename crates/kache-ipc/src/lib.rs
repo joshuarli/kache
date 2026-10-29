@@ -1,8 +1,8 @@
 //! Local IPC transport for the daemon.
 //!
 //! The daemon's local socket and the wrapper / CLI clients use Unix domain
-//! sockets. Sync clients use `interprocess` over a filesystem path; async
-//! daemon endpoints use `async-net` so the runtime stays smol-based.
+//! sockets over a filesystem path: `interprocess` for message clients and
+//! the standard library for the daemon endpoints.
 //!
 //! # Naming
 //!
@@ -16,16 +16,12 @@ mod deadline_io;
 pub use deadline_io::finish_by;
 
 pub use interprocess::local_socket::ListenerOptions;
-#[cfg(feature = "async")]
-pub use async_net::unix::{UnixListener as AsyncListener, UnixStream as AsyncStream};
 pub use interprocess::local_socket::{Name, Stream as SyncStream};
 
 /// Trait imports needed to call methods on the listener / stream types.
 /// Most users want `use crate::prelude::*;`.
 pub mod prelude {
     pub use interprocess::local_socket::traits::{Listener as _, Stream as _};
-    #[cfg(feature = "async")]
-    pub use futures_lite::io::{AsyncReadExt as _, AsyncWriteExt as _};
 }
 
 /// Why the daemon cannot bind a local socket at `path`, or `None` when it can.
@@ -41,24 +37,6 @@ pub fn socket_path_problem(path: &Path) -> Option<String> {
         ));
     }
     None
-}
-
-/// Bind through shared ownership. The returned listener does not unlink the
-/// socket on drop; `kunobi_daemon::local::unix_socket::SocketGuard` owns
-/// cleanup so a successor never unlinks a live endpoint.
-#[cfg(feature = "async")]
-pub async fn bind_daemon_listener(path: &Path) -> Result<Option<AsyncListener>> {
-    if let Some(problem) = socket_path_problem(path) {
-        anyhow::bail!(problem);
-    }
-    use kunobi_daemon::local::unix_socket::{self, Bound};
-    let bound = unix_socket::acquire(path)
-        .map_err(|error| anyhow::anyhow!("acquiring daemon socket: {error:?}"))?;
-    let Bound::Won(listener) = bound else {
-        return Ok(None);
-    };
-    let listener = AsyncListener::try_from(listener)?;
-    Ok(Some(listener))
 }
 
 /// The kunobi-daemon endpoint for a daemon socket path.
@@ -112,41 +90,9 @@ pub fn require_self_peer(peer_euid: Option<u32>) -> std::io::Result<()> {
 }
 
 /// The peer's effective UID, where the platform exposes it: `SO_PEERCRED` on
-/// Linux, `getpeereid` on macOS and the BSDs. `None` means we could not
-/// authenticate the peer, which [`require_self_peer`] treats as a refusal.
-#[cfg(feature = "async")]
-pub fn peer_euid(stream: &AsyncStream) -> Option<u32> {
-    use std::os::fd::AsRawFd;
-    let fd = stream.as_raw_fd();
-    #[cfg(target_os = "linux")]
-    {
-        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
-        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-        let ret = unsafe {
-            libc::getsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_PEERCRED,
-                (&mut cred as *mut libc::ucred).cast(),
-                &mut len,
-            )
-        };
-        if ret != 0 {
-            return None;
-        }
-        Some(cred.uid)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let mut uid: libc::uid_t = 0;
-        let mut gid: libc::gid_t = 0;
-        let ret = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
-        if ret != 0 { None } else { Some(uid) }
-    }
-}
-
-#[cfg(feature = "async")]
-pub fn peer_pid(stream: &AsyncStream) -> Option<u32> {
+/// The peer's process ID where the platform exposes it (`SO_PEERCRED` on
+/// Linux). `None` elsewhere or when credentials cannot be determined.
+pub fn peer_pid(stream: &std::os::unix::net::UnixStream) -> Option<u32> {
     use std::os::fd::AsRawFd;
     let fd = stream.as_raw_fd();
     #[cfg(target_os = "linux")]
@@ -192,8 +138,8 @@ impl PeerAuditToken {
     }
 }
 
-#[cfg(all(target_os = "macos", feature = "async"))]
-pub fn peer_audit_token(stream: &AsyncStream) -> std::io::Result<PeerAuditToken> {
+#[cfg(target_os = "macos")]
+pub fn peer_audit_token(stream: &std::os::unix::net::UnixStream) -> std::io::Result<PeerAuditToken> {
     use std::os::fd::AsRawFd;
     let fd = stream.as_raw_fd();
     let mut token = PeerAuditToken([0; 8]);
@@ -237,19 +183,11 @@ pub fn connect_sync(socket: &Path, busy_wait: std::time::Duration) -> std::io::R
     SyncStream::connect(socket_name(socket).map_err(std::io::Error::other)?)
 }
 
-/// Connect an async client to the daemon socket at `socket`.
-#[cfg(feature = "async")]
-pub async fn connect_async(
-    socket: &Path,
-    busy_wait: std::time::Duration,
-) -> std::io::Result<AsyncStream> {
-    let _ = busy_wait;
-    AsyncStream::connect(socket).await
-}
-
 /// Bind a blocking listener through shared ownership. Returns `None` when
-/// another daemon owns the endpoint.
-pub fn bind_sync_listener(
+/// another daemon owns the endpoint. The returned listener does not unlink
+/// the socket on drop; `kunobi_daemon::local::unix_socket::SocketGuard` owns
+/// cleanup so a successor never unlinks a live endpoint.
+pub fn bind_daemon_listener(
     path: &Path,
 ) -> Result<Option<std::os::unix::net::UnixListener>> {
     if let Some(problem) = socket_path_problem(path) {
@@ -320,14 +258,13 @@ mod tests {
         assert!(problem.contains("runtime_dir"), "{problem}");
     }
 
-    #[cfg(feature = "async")]
     #[test]
     fn binding_an_overlong_path_names_the_limit() {
         let path = format!(
             "/{}",
             "a".repeat(kunobi_daemon::local::unix_socket::MAX_PATH_BYTES)
         );
-        let result = smol::block_on(bind_daemon_listener(Path::new(&path)));
+        let result = bind_daemon_listener(Path::new(&path));
         let Err(error) = result else {
             panic!("an overlong path cannot bind");
         };
@@ -411,31 +348,37 @@ mod tests {
         assert!(!peer_uid_is_self(mine.wrapping_add(0xdead_beef)));
     }
 
-    #[cfg(feature = "async")]
     #[test]
     fn same_user_peer_check_accepts_own_connections() {
-        smol::block_on(async {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("creds.sock");
-            let listener = bind_daemon_listener(&path).await.expect("bind listener");
-            let listener = listener.expect("listener won the bind");
-            let connect_path = path.clone();
-            let client_task = smol::spawn(async move {
-                AsyncStream::connect(&connect_path).await.expect("connect")
-            });
-            let (stream, _addr) = listener.accept().await.expect("accept");
-            let client = client_task.await;
-
-            // The test client runs under the same effective UID as the "daemon",
-            // so the credential gate must accept it. Rejection of foreign UIDs is
-            // not unit-testable without privilege switching.
-            require_self_peer(peer_euid(&stream)).expect("same-user peer accepted");
-            require_self_peer(peer_euid(&client)).expect("same-user server accepted");
-            #[cfg(target_os = "linux")]
-            for connection in [&stream, &client] {
-                assert_eq!(peer_pid(connection), Some(std::process::id()));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("creds.sock");
+        let listener = bind_daemon_listener(&path)
+            .expect("bind listener")
+            .expect("listener won the bind");
+        listener.set_nonblocking(true).unwrap();
+        let connect_path = path.clone();
+        let client_task =
+            std::thread::spawn(move || std::os::unix::net::UnixStream::connect(connect_path).expect("connect"));
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(error) => panic!("accept: {error}"),
             }
-        });
+        };
+        let client = client_task.join().unwrap();
+
+        // The test client runs under the same effective UID as the "daemon",
+        // so the credential gate must accept it. Rejection of foreign UIDs is
+        // not unit-testable without privilege switching.
+        require_self_peer(peer_euid_std(&stream)).expect("same-user peer accepted");
+        require_self_peer(peer_euid_std(&client)).expect("same-user server accepted");
+        #[cfg(target_os = "linux")]
+        for connection in [&stream, &client] {
+            assert_eq!(peer_pid(connection), Some(std::process::id()));
+        }
     }
 }
 

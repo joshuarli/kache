@@ -137,7 +137,7 @@ pub(super) struct Server {
     _socket: SocketCleanupGuard,
 }
 impl Server {
-    pub(super) async fn finish(&mut self) {
+    pub(super) fn finish(&mut self) {
         self.stop
             .store(true, std::sync::atomic::Ordering::Release);
         // Wake the blocking accept by connecting once; the loop exits on the
@@ -146,7 +146,7 @@ impl Server {
             let _ = stream;
         }
         if let Some(thread) = self.thread.take() {
-            let _ = smol::unblock(move || thread.join()).await;
+            let _ = thread.join();
         }
     }
 }
@@ -157,9 +157,9 @@ impl Drop for Server {
     }
 }
 
-pub(super) async fn serve(config: &Config, lifecycle: Arc<Lifecycle>) -> Result<Server> {
+pub(super) fn serve(config: &Config, lifecycle: Arc<Lifecycle>) -> Result<Server> {
     let path = endpoint(config);
-    let listener = crate::transport::bind_sync_listener(&path)?
+    let listener = crate::transport::bind_daemon_listener(&path)?
         .context("control endpoint already owned")?;
     listener
         .set_nonblocking(true)
@@ -353,19 +353,6 @@ fn legacy_exchange(path: &Path, request: &Request, deadline: Instant) -> Result<
 mod tests {
     use super::*;
 
-    async fn smol_timeout<T>(
-        duration: Duration,
-        future: impl std::future::Future<Output = T>,
-    ) -> Option<T> {
-        use futures::FutureExt as _;
-        let mut future = Box::pin(future.fuse());
-        let mut timer = Box::pin(async_io::Timer::after(duration).fuse());
-        futures::select! {
-            value = future => Some(value),
-            _ = timer => None,
-        }
-    }
-
     #[test]
     fn lifecycle_messages_preserve_health_and_drain_through_the_binary_codec() {
         let root = tempfile::tempdir().unwrap();
@@ -454,138 +441,118 @@ mod tests {
 
     #[test]
     fn live_control_proves_startup_readiness_and_drain_without_waiting_for_admitted_work() {
-        smol::block_on(async {
-            let root = tempfile::tempdir().unwrap();
-            let config = super::super::tests::test_config(root.path());
-            let lifecycle = Arc::new(Lifecycle::default());
-            let server = serve(&config, Arc::clone(&lifecycle)).await.unwrap();
-            let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
-            coord.control_version = Some(wire::VERSION);
-            coord.write_phase(DaemonPhase::Starting).unwrap();
-            let initial = smol::unblock({
-                let config = config.clone();
-                move || query(&config, operation::HEALTH)
-            })
-            .await
-            .unwrap()
-            .unwrap();
-            assert!(!initial.ready);
-            assert!(!initial.draining);
-            assert_eq!(initial.process_id, std::process::id());
-            let starter_config = config.clone();
-            let starter = std::thread::spawn(move || {
-                lifecycle_client::ensure(&starter_config, false)
-            });
-            smol::Timer::after(Duration::from_millis(100)).await;
-            assert!(!starter.is_finished(), "an initializing owner is not ready");
-            assert!(
-                lifecycle.accepting_calls(),
-                "a compatible initializer must not be drained"
-            );
-            server.service.mark_ready();
-            assert!(smol::unblock(move || starter.join().unwrap()).await.unwrap());
-            let health_config = config.clone();
-            let health =
-                smol::unblock(move || send_health_request(&health_config))
-                    .await
-                    .unwrap();
-            assert_eq!(health.version, VERSION);
-            assert_ne!(build_epoch(), 0, "the test binary has a readable mtime");
-            assert_eq!(health.build_epoch, build_epoch());
-            let pending = lifecycle.begin().unwrap();
-            assert!(
-                query(&config, operation::HEALTH)
-                    .unwrap()
-                    .unwrap()
-                    .ready
-            );
-            let drain = query(&config, operation::DRAIN).unwrap().unwrap();
-            assert!(drain.draining);
-            assert!(!drain.ready);
-            assert_eq!(drain.active, 1);
-            assert!(lifecycle.begin().is_none());
-            drop(pending);
-            assert_eq!(
-                query(&config, operation::HEALTH)
-                    .unwrap()
-                    .unwrap()
-                    .active,
-                0
-            );
-        });
+        let root = tempfile::tempdir().unwrap();
+        let config = super::super::tests::test_config(root.path());
+        let lifecycle = Arc::new(Lifecycle::default());
+        let server = serve(&config, Arc::clone(&lifecycle)).unwrap();
+        let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
+        coord.control_version = Some(wire::VERSION);
+        coord.write_phase(DaemonPhase::Starting).unwrap();
+        let initial = query(&config, operation::HEALTH).unwrap().unwrap();
+        assert!(!initial.ready);
+        assert!(!initial.draining);
+        assert_eq!(initial.process_id, std::process::id());
+        let starter_config = config.clone();
+        let starter =
+            std::thread::spawn(move || lifecycle_client::ensure(&starter_config, false));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!starter.is_finished(), "an initializing owner is not ready");
+        assert!(
+            lifecycle.accepting_calls(),
+            "a compatible initializer must not be drained"
+        );
+        server.service.mark_ready();
+        assert!(starter.join().unwrap().unwrap());
+        let health = send_health_request(&config).unwrap();
+        assert_eq!(health.version, VERSION);
+        assert_ne!(build_epoch(), 0, "the test binary has a readable mtime");
+        assert_eq!(health.build_epoch, build_epoch());
+        let pending = lifecycle.begin().unwrap();
+        assert!(
+            query(&config, operation::HEALTH)
+                .unwrap()
+                .unwrap()
+                .ready
+        );
+        let drain = query(&config, operation::DRAIN).unwrap().unwrap();
+        assert!(drain.draining);
+        assert!(!drain.ready);
+        assert_eq!(drain.active, 1);
+        assert!(lifecycle.begin().is_none());
+        drop(pending);
+        assert_eq!(
+            query(&config, operation::HEALTH)
+                .unwrap()
+                .unwrap()
+                .active,
+            0
+        );
     }
 
     #[test]
     fn dropping_control_server_releases_the_listener_and_handler() {
-        smol::block_on(async {
-            let root = tempfile::tempdir().unwrap();
-            let config = super::super::tests::test_config(root.path());
-            let server = serve(&config, Arc::new(Lifecycle::default()))
-                .await
-                .unwrap();
-            let handler = Arc::downgrade(&server.service);
-            smol::Timer::after(Duration::from_millis(5)).await;
-            drop(server);
-            smol_timeout(Duration::from_secs(2), async {
-                while handler.upgrade().is_some() {
-                    smol::Timer::after(Duration::from_millis(5)).await;
-                }
-            })
-            .await
-            .expect("dropped control server leaked its listener thread");
-            let mut replacement = serve(&config, Arc::new(Lifecycle::default()))
-                .await
-                .unwrap();
-            replacement.finish().await;
-        });
+        let root = tempfile::tempdir().unwrap();
+        let config = super::super::tests::test_config(root.path());
+        let server = serve(&config, Arc::new(Lifecycle::default())).unwrap();
+        let handler = Arc::downgrade(&server.service);
+        std::thread::sleep(Duration::from_millis(5));
+        drop(server);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while handler.upgrade().is_some() {
+            assert!(
+                Instant::now() < deadline,
+                "dropped control server leaked its listener thread"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut replacement = serve(&config, Arc::new(Lifecycle::default())).unwrap();
+        replacement.finish();
     }
 
     #[test]
     fn server_exit_preserves_the_drain_acknowledgement() {
-        smol::block_on(async {
-            let root = tempfile::tempdir().unwrap();
-            let config = super::super::tests::test_config(root.path());
-            let lifecycle = Arc::new(Lifecycle::default());
-            let mut server = serve(&config, Arc::clone(&lifecycle)).await.unwrap();
-            let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
-            coord.control_version = Some(wire::VERSION);
-            coord.write_phase(DaemonPhase::Ready).unwrap();
-            server.service.mark_ready();
-            let probe_config = config.clone();
-            let drain_config = config.clone();
-            let client = std::thread::spawn(move || query(&drain_config, operation::DRAIN));
-            smol_timeout(Duration::from_secs(3), lifecycle.draining())
-                .await
-                .expect("drain was never requested");
-            server.finish().await;
+        let root = tempfile::tempdir().unwrap();
+        let config = super::super::tests::test_config(root.path());
+        let lifecycle = Arc::new(Lifecycle::default());
+        let mut server = serve(&config, Arc::clone(&lifecycle)).unwrap();
+        let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
+        coord.control_version = Some(wire::VERSION);
+        coord.write_phase(DaemonPhase::Ready).unwrap();
+        server.service.mark_ready();
+        let probe_config = config.clone();
+        let drain_config = config.clone();
+        let client = std::thread::spawn(move || query(&drain_config, operation::DRAIN));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !lifecycle.snapshot().draining {
             assert!(
-                query(&probe_config, operation::HEALTH).is_err(),
-                "finished server still accepts control requests"
+                Instant::now() < deadline,
+                "drain was never requested"
             );
-            drop(server);
-            let acknowledged = client.join().unwrap().unwrap().unwrap();
-            assert!(acknowledged.draining);
-            assert!(!acknowledged.ready);
-        });
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        server.finish();
+        assert!(
+            query(&probe_config, operation::HEALTH).is_err(),
+            "finished server still accepts control requests"
+        );
+        drop(server);
+        let acknowledged = client.join().unwrap().unwrap().unwrap();
+        assert!(acknowledged.draining);
+        assert!(!acknowledged.ready);
     }
 
     #[test]
     fn a_record_cannot_substitute_another_pid_or_cache_instance() {
-        smol::block_on(async {
-            let root = tempfile::tempdir().unwrap();
-            let config = super::super::tests::test_config(root.path());
-            let lifecycle = Arc::new(Lifecycle::default());
-            let _server = serve(&config, Arc::clone(&lifecycle)).await.unwrap();
-            let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
-            coord.control_version = Some(wire::VERSION);
-            coord.pid = std::process::id().saturating_add(1);
-            coord.write_phase(DaemonPhase::Starting).unwrap();
-            assert!(query(&config, operation::DRAIN).is_err());
-            let probe_config = config.clone();
-            let failure = smol::unblock(move || {
-                lifecycle_client::current(&probe_config, Instant::now() + Duration::from_secs(2))
-            })
-            .await
+        let root = tempfile::tempdir().unwrap();
+        let config = super::super::tests::test_config(root.path());
+        let lifecycle = Arc::new(Lifecycle::default());
+        let _server = serve(&config, Arc::clone(&lifecycle)).unwrap();
+        let mut coord = DaemonCoordFile::for_socket(&config.socket_path());
+        coord.control_version = Some(wire::VERSION);
+        coord.pid = std::process::id().saturating_add(1);
+        coord.write_phase(DaemonPhase::Starting).unwrap();
+        assert!(query(&config, operation::DRAIN).is_err());
+        let failure = lifecycle_client::current(&config, Instant::now() + Duration::from_secs(2))
             .expect_err("identity mismatch must not become a retryable startup observation");
         assert!(matches!(
             failure.downcast_ref::<kunobi_daemon::client::RequestError>(),
@@ -599,7 +566,6 @@ mod tests {
         let mut foreign = offer(&config).unwrap();
         foreign.service_id[0] ^= 1;
         assert!(wire::negotiate(&offer(&config).unwrap(), &foreign).is_err());
-        });
     }
 
     #[test]

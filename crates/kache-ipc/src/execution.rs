@@ -118,8 +118,6 @@ fn exchange(
                 .service()
                 .context("servicing client-owned native operations")?
             {
-                // The worker can release its broker before the async handler
-                // writes Complete. Completion still comes from that handler.
                 unix_client = None;
             }
             continue;

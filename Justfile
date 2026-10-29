@@ -32,12 +32,12 @@ pr BASE="origin/main": check
 [group('dev')]
 ci: lint client-crates-check test-resource-guard-check coverage
 
-# Workspace builds enable the daemon's async feature. Check the client-only
-# dependency graph separately so feature unification cannot hide a dependency.
+# Check the client-only dependency graph separately so feature unification
+# cannot hide a dependency.
 [group('dev')]
 client-crates-check:
-  cargo check --locked -p kache-client -p kache-config -p kache-protocol -p kache-ipc --no-default-features
-  cargo test --locked -p kache-ipc --no-default-features
+  cargo check --locked -p kache-client -p kache-config -p kache-protocol -p kache-ipc
+  cargo test --locked -p kache-ipc
 
 # Auto-fix clippy warnings.
 [group('dev')]

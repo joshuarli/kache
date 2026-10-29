@@ -124,9 +124,9 @@ pub(crate) fn unix_now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// One maintenance pass. Blocking: call from `smol::unblock`. The steps log
-/// their own failures; one failing does not stop the other. The dedup slice
-/// runs only when the earlier steps left the gap free.
+/// One maintenance pass. Blocking: runs on the maintenance thread. The steps
+/// log their own failures; one failing does not stop the other. The dedup
+/// slice runs only when the earlier steps left the gap free.
 pub(crate) fn run(config: &Config, trigger: Trigger<'_>) {
     let heal = crate::blob_heal::run(config, trigger);
     let compact = crate::index_compact::run(config, trigger);
@@ -172,34 +172,67 @@ fn compact_left_the_gap(outcome: &crate::index_compact::Outcome) -> bool {
 /// finds nothing to do costs two index opens, one aggregate query over the
 /// blob tables and three PRAGMAs. With `auto_share_target_files` on, a quiet
 /// check also runs one short clone slice over the tracked targets.
-pub(crate) fn spawn_periodic(config: Config, clock: Arc<RequestClock>) -> smol::Task<()> {
-    smol::spawn(async move {
-        async_io::Timer::after(FIRST_CHECK_AFTER).await;
-        loop {
-            let config = config.clone();
-            let clock = clock.clone();
-            let outcome = smol::unblock(move || {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run(&config, Trigger::Periodic(&clock))
-                }))
-            })
-            .await;
-            if outcome.is_err() {
-                tracing::warn!("store maintenance task panicked");
+pub(crate) fn spawn_periodic(config: Config, clock: Arc<RequestClock>) -> PeriodicHandle {
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stopping = Arc::clone(&stop);
+    let thread = std::thread::Builder::new()
+        .name("kache-maintenance".to_string())
+        .spawn(move || {
+            if sleep_while_running(&stopping, FIRST_CHECK_AFTER) {
+                return;
             }
-            async_io::Timer::after(CHECK_INTERVAL).await;
+            loop {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run(&config, Trigger::Periodic(&clock))
+                }));
+                if outcome.is_err() {
+                    tracing::warn!("store maintenance task panicked");
+                }
+                if sleep_while_running(&stopping, CHECK_INTERVAL) {
+                    return;
+                }
+            }
+        })
+        .expect("spawning maintenance thread");
+    PeriodicHandle {
+        stop,
+        thread: Some(thread),
+    }
+}
+
+pub(crate) struct PeriodicHandle {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl PeriodicHandle {
+    pub(crate) fn stop(mut self) {
+        self.stop
+            .store(true, std::sync::atomic::Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
         }
-    })
+    }
+}
+
+fn sleep_while_running(stop: &std::sync::atomic::AtomicBool, duration: Duration) -> bool {
+    let deadline = Instant::now() + duration;
+    loop {
+        if stop.load(std::sync::atomic::Ordering::Acquire) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())));
+    }
 }
 
 /// The shutdown pass: quiet rules only, so a contended index yields at once.
-pub(crate) async fn run_at_shutdown(config: Config) {
-    let outcome = smol::unblock(move || {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run(&config, Trigger::Shutdown)
-        }))
-    })
-    .await;
+pub(crate) fn run_at_shutdown(config: Config) {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run(&config, Trigger::Shutdown)
+    }));
     if outcome.is_err() {
         tracing::warn!("store maintenance task panicked");
     }

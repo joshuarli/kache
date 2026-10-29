@@ -1,8 +1,7 @@
 # kache-ipc
 
-Kache's local endpoint names, synchronous connections, and peer checks. The
-`async` feature adds Tokio streams and daemon listener binding. Synchronous
-clients can depend on this crate without enabling an async runtime.
+Kache's local endpoint names, synchronous connections, daemon listener binding,
+and peer checks.
 
 Unix uses filesystem sockets. Windows derives a named-pipe name from the socket
 path. Both sides use the same naming function. Listener ownership is delegated

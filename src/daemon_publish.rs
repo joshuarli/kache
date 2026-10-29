@@ -117,17 +117,17 @@ pub(crate) struct PublishJob {
     request: PublishCcRequest,
     owns_event: bool,
     _lock: KeyLock,
-    _slot: async_lock::SemaphoreGuardArc,
+    _slot: crate::lifecycle::SemaphoreGuard,
 }
 
 /// The daemon's publish queue: a bounded channel drained by one blocking
 /// worker with its own store connection.
 ///
-/// `slots` is the reservation async-channel does not provide. Its permit
-/// count matches the channel capacity set in [`PublishQueue::set_sender`].
+/// `slots` is the reservation the channel does not provide. Its permit
+/// count matches the channel capacity passed to [`PublishQueue::set_sender`].
 pub(crate) struct PublishQueue {
-    tx: std::sync::Mutex<Option<async_channel::Sender<PublishJob>>>,
-    slots: std::sync::Mutex<Arc<async_lock::Semaphore>>,
+    tx: std::sync::Mutex<Option<std::sync::mpsc::SyncSender<PublishJob>>>,
+    slots: std::sync::Mutex<Arc<crate::lifecycle::Semaphore>>,
     progress: Arc<PublishProgress>,
 }
 
@@ -169,7 +169,7 @@ impl PublishQueue {
     pub(crate) fn new() -> Self {
         Self {
             tx: std::sync::Mutex::new(None),
-            slots: std::sync::Mutex::new(Arc::new(async_lock::Semaphore::new(0))),
+            slots: std::sync::Mutex::new(Arc::new(crate::lifecycle::Semaphore::new(0))),
             progress: Arc::new(PublishProgress::default()),
         }
     }
@@ -178,26 +178,22 @@ impl PublishQueue {
         Arc::clone(&self.progress)
     }
 
-    pub(crate) fn set_sender(&self, tx: async_channel::Sender<PublishJob>) {
-        let capacity = tx.capacity().unwrap_or(PUBLISH_QUEUE_CAPACITY);
+    pub(crate) fn set_sender(&self, tx: std::sync::mpsc::SyncSender<PublishJob>, capacity: usize) {
         // Install the reservation before the sender. A hand-off that observes
         // the sender must observe the capacity that belongs to it.
         if let Ok(mut slots) = self.slots.lock() {
-            *slots = Arc::new(async_lock::Semaphore::new(capacity));
+            *slots = Arc::new(crate::lifecycle::Semaphore::new(capacity));
         }
         if let Ok(mut slot) = self.tx.lock() {
             *slot = Some(tx);
         }
     }
 
-    fn reserve_slot(&self) -> Option<async_lock::SemaphoreGuardArc> {
-        self.slots
-            .lock()
-            .ok()
-            .and_then(|slots| slots.try_acquire_arc())
+    fn reserve_slot(&self) -> Option<crate::lifecycle::SemaphoreGuard> {
+        self.slots.lock().ok().and_then(|slots| slots.try_acquire())
     }
 
-    fn sender(&self) -> Option<async_channel::Sender<PublishJob>> {
+    fn sender(&self) -> Option<std::sync::mpsc::SyncSender<PublishJob>> {
         self.tx.lock().ok().and_then(|slot| slot.clone())
     }
 
@@ -255,7 +251,7 @@ impl Daemon {
     /// Accept a wrapper's hand-off if the key can be claimed and the queue has
     /// room. Claiming happens before the answer: from the wrapper's return
     /// onwards a peer must see the key as contended, not absent.
-    pub(crate) async fn handle_publish_cc(self: &Arc<Self>, request: PublishCcRequest) -> Response {
+    pub(crate) fn handle_publish_cc(self: &Arc<Self>, request: PublishCcRequest) -> Response {
         if !crate::cache_key::is_valid_cache_key(&request.cache_key) {
             return refused("invalid cache key");
         }
@@ -273,22 +269,15 @@ impl Daemon {
         let Some(tx) = self.publish_queue().sender() else {
             return refused("queue closed");
         };
-        if tx.is_closed() {
-            return refused("queue closed");
-        }
         // Reserve before claiming ownership: once the receipt is accepted,
         // queue insertion must not fail because another handler took its slot.
         let Some(slot) = self.publish_queue().reserve_slot() else {
             return refused("queue full");
         };
         let key = request.cache_key.clone();
-        let daemon = Arc::clone(self);
-        let claim = smol::unblock(move || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                daemon.with_store(|store| store.claim_build(&key))
-            }))
-        })
-        .await;
+        let claim = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.with_store(|store| store.claim_build(&key))
+        }));
         let lock = match claim {
             Ok(Ok(BuildClaim::Acquired(lock))) => lock,
             Ok(Ok(BuildClaim::Committed(_))) => return refused("already committed"),
@@ -298,42 +287,39 @@ impl Daemon {
         };
         // Own separate links before acknowledging. A client may time out
         // after acceptance and remove every path it sent us.
-        let claimed = smol::unblock(move || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let files = request
-                    .files
-                    .iter()
-                    .map(|file| (PathBuf::from(&file.path), file.store_name.clone()))
-                    .collect::<Vec<_>>();
-                let owned = match snapshot_for_handoff(&config, &files) {
-                    Ok(owned) => owned,
-                    Err(error) if handoff_withdrawn(&request, &error) => return Ok(None),
-                    Err(error) => return Err(error),
-                };
-                // Rename and client cancellation race on the same pending file.
-                // Exactly one wins, even if the socket reply is lost. A missing
-                // receipt means the wrapper already gave up. It publishes only if
-                // it can take the key back, so keep these snapshots and the claim.
-                let owns_event = match accept_receipt(&request) {
-                    Ok(()) => true,
-                    Err(error) if receipt_cancelled(&error) => false,
-                    Err(error) => {
-                        remove_handoff_files(&owned);
-                        return Err(error);
-                    }
-                };
-                remove_handoff_files(&request.files);
-                let mut request = request;
-                request.files = owned;
-                Ok::<_, anyhow::Error>(Some(PublishJob {
-                    request,
-                    owns_event,
-                    _lock: lock,
-                    _slot: slot,
-                }))
+        let claimed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let files = request
+                .files
+                .iter()
+                .map(|file| (PathBuf::from(&file.path), file.store_name.clone()))
+                .collect::<Vec<_>>();
+            let owned = match snapshot_for_handoff(&config, &files) {
+                Ok(owned) => owned,
+                Err(error) if handoff_withdrawn(&request, &error) => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            // Rename and client cancellation race on the same pending file.
+            // Exactly one wins, even if the socket reply is lost. A missing
+            // receipt means the wrapper already gave up. It publishes only if
+            // it can take the key back, so keep these snapshots and the claim.
+            let owns_event = match accept_receipt(&request) {
+                Ok(()) => true,
+                Err(error) if receipt_cancelled(&error) => false,
+                Err(error) => {
+                    remove_handoff_files(&owned);
+                    return Err(error);
+                }
+            };
+            remove_handoff_files(&request.files);
+            let mut request = request;
+            request.files = owned;
+            Ok::<_, anyhow::Error>(Some(PublishJob {
+                request,
+                owns_event,
+                _lock: lock,
+                _slot: slot,
             }))
-        })
-        .await;
+        }));
         let job = match claimed {
             Ok(Ok(Some(job))) => job,
             Ok(Ok(None)) => return refused(WITHDRAWN),
@@ -343,10 +329,9 @@ impl Daemon {
         self.publish_queue().progress.accepted();
         if let Err(error) = tx.try_send(job) {
             self.publish_queue().progress.unaccept();
-            return refused(if error.is_full() {
-                "queue full"
-            } else {
-                "queue closed"
+            return refused(match error {
+                std::sync::mpsc::TrySendError::Full(_) => "queue full",
+                std::sync::mpsc::TrySendError::Disconnected(_) => "queue closed",
             });
         }
         Response::ok()
@@ -360,12 +345,11 @@ impl Daemon {
 /// entry the next build compiles again. The wait ends when the worker exits,
 /// or when it has finished nothing for `stall`, which means it is wedged.
 /// Returns how many accepted jobs were left unpublished.
-pub(crate) async fn drain_publications(
-    mut done: futures::channel::oneshot::Receiver<()>,
+pub(crate) fn drain_publications(
+    done: std::sync::mpsc::Receiver<()>,
     progress: &PublishProgress,
     stall: Duration,
 ) -> usize {
-    use futures::FutureExt as _;
     let tick = stall.min(Duration::from_secs(1));
     let mut last_done = progress.done();
     let mut last_change = std::time::Instant::now();
@@ -377,13 +361,11 @@ pub(crate) async fn drain_publications(
             last_change.elapsed() < stall * 10 + tick,
             "drain kept waiting past its stall window"
         );
-        let mut done_fused = Box::pin((&mut done).fuse());
-        let mut timer = Box::pin(async_io::Timer::after(tick).fuse());
-        let finished = futures::select! {
-            _ = done_fused => true,
-            _ = timer => false,
-        };
-        if finished {
+        if done.try_recv().is_ok() {
+            return progress.pending();
+        }
+        std::thread::sleep(tick);
+        if done.try_recv().is_ok() {
             return progress.pending();
         }
         let now_done = progress.done();
@@ -401,13 +383,12 @@ pub(crate) async fn drain_publications(
 
 /// Run [`run_publish_worker`] on a thread of its own. The receiver resolves
 /// once the worker has drained the queue and exited, and the caller bounds
-/// that wait. A plain thread rather than a blocking pool task: a worker wedged
-/// in a put must not hold up the runtime's teardown.
+/// that wait. A worker wedged in a put must not hold up teardown.
 pub(crate) fn spawn_publish_worker(
     daemon: Arc<Daemon>,
-    rx: async_channel::Receiver<PublishJob>,
-) -> std::io::Result<futures::channel::oneshot::Receiver<()>> {
-    let (done_tx, done) = futures::channel::oneshot::channel();
+    rx: std::sync::mpsc::Receiver<PublishJob>,
+) -> std::io::Result<std::sync::mpsc::Receiver<()>> {
+    let (done_tx, done) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("kache-publish".to_string())
         .spawn(move || {
@@ -420,7 +401,7 @@ pub(crate) fn spawn_publish_worker(
 /// Run the publish worker until the queue closes and drains. Blocking, with
 /// its own store connection so the daemon's shared store mutex never waits
 /// on a put.
-pub(crate) fn run_publish_worker(daemon: Arc<Daemon>, rx: async_channel::Receiver<PublishJob>) {
+pub(crate) fn run_publish_worker(daemon: Arc<Daemon>, rx: std::sync::mpsc::Receiver<PublishJob>) {
     let config = daemon.config().clone();
     let store = match Store::open(&config) {
         Ok(store) => store,
@@ -428,14 +409,14 @@ pub(crate) fn run_publish_worker(daemon: Arc<Daemon>, rx: async_channel::Receive
             tracing::warn!("publish worker could not open the store: {error:#}; hand-offs refused");
             daemon.publish_queue().close();
             // Drain so accepted jobs release their locks and files.
-            while let Ok(job) = rx.recv_blocking() {
+            while let Ok(job) = rx.recv() {
                 discard_handoff_files(&job.request);
                 daemon.publish_queue().progress.finished();
             }
             return;
         }
     };
-    while let Ok(job) = rx.recv_blocking() {
+    while let Ok(job) = rx.recv() {
         publish_one(&daemon, &config, &store, job);
     }
 }
@@ -872,17 +853,17 @@ pub(crate) fn remove_handoff_files(files: &[HandoffFile]) {
 mod tests {
     use super::*;
 
-    async fn smol_timeout<T>(
-        duration: Duration,
-        future: impl std::future::Future<Output = T>,
-    ) -> Option<T> {
-        use futures::FutureExt as _;
-        let mut future = Box::pin(future.fuse());
-        let mut timer = Box::pin(async_io::Timer::after(duration).fuse());
-        futures::select! {
-            value = future => Some(value),
-            _ = timer => None,
+    fn join_timeout<T>(
+        thread: std::thread::JoinHandle<T>,
+        timeout: Duration,
+        what: &str,
+    ) -> T {
+        let deadline = std::time::Instant::now() + timeout;
+        while !thread.is_finished() {
+            assert!(std::time::Instant::now() < deadline, "{what}");
+            std::thread::sleep(Duration::from_millis(5));
         }
+        thread.join().unwrap_or_else(|_| panic!("{what}"))
     }
 
     #[test]
@@ -1065,114 +1046,111 @@ mod tests {
     /// snapshots are gone.
     #[test]
     fn an_accepted_handoff_is_stored_logged_and_cleaned_up() {
-        smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let config = crate::test_support::test_config(dir.path().join("cache"));
-        let daemon = Arc::new(Daemon::new(config.clone()));
-        let (tx, rx) = async_channel::bounded(4);
-        daemon.publish_queue().set_sender(tx);
-        let worker = spawn_publish_worker(Arc::clone(&daemon), rx).unwrap();
-        let mut request = handoff_request(&config, &key("accepted"), dir.path());
-        let _request_receipt = HandoffReceipt::new(&request).unwrap();
-        let header = dir.path().join("a.h");
-        std::fs::write(&header, b"#define A 1\n").unwrap();
-        let fingerprint = crate::cache_key::FileFingerprint::from_path(&header).unwrap();
-        let settled = crate::cache_key::CcPreprocessMemoInput {
-            name: "a.h".to_string(),
-            observed_ns: fingerprint.mtime_ns.max(fingerprint.ctime_ns)
-                + crate::cache_key::HASH_SETTLE_NS,
-            fingerprint,
-            content: "c".repeat(64),
-            mapped: "d".repeat(64),
-        };
-        // From a wrapper that sends no observation time.
-        let unobserved = crate::cache_key::CcPreprocessMemoInput {
-            name: "b.h".to_string(),
-            observed_ns: 0,
-            ..settled.clone()
-        };
-        let memo = CcMemoHandoff {
-            memo_key: "m".repeat(64),
-            preprocessed_hash: "p".repeat(64),
-            inputs: vec![
-                memo_input_for_wire(&settled),
-                memo_input_for_wire(&unobserved),
-            ],
-        };
-        request.memo = Some(memo.clone());
-        request.event.schema = 26;
-        request.event.rebuilt_package = Some("native-package".into());
-        request.event.rebuilt_fingerprint = Some(request.cache_key.clone());
-        request.event.rebuilt_path = Some("/actual/compiler/a.o".into());
-        request.event.rebuilt_paths =
-            vec!["/actual/compiler/a.o".into(), "/actual/compiler/a.d".into()];
-        let snapshot = PathBuf::from(&request.files[0].path);
-        let response = daemon.handle_publish_cc(request.clone()).await;
-        assert!(response.ok, "{:?}", response.error);
-        daemon.publish_queue().close();
-        smol_timeout(Duration::from_secs(10), worker)
-            .await
-            .expect("closing the queue lets the worker drain and exit")
-            .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::test_config(dir.path().join("cache"));
+    let daemon = Arc::new(Daemon::new(config.clone()));
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    daemon.publish_queue().set_sender(tx, 4);
+    let worker = spawn_publish_worker(Arc::clone(&daemon), rx).unwrap();
+    let mut request = handoff_request(&config, &key("accepted"), dir.path());
+    let _request_receipt = HandoffReceipt::new(&request).unwrap();
+    let header = dir.path().join("a.h");
+    std::fs::write(&header, b"#define A 1\n").unwrap();
+    let fingerprint = crate::cache_key::FileFingerprint::from_path(&header).unwrap();
+    let settled = crate::cache_key::CcPreprocessMemoInput {
+        name: "a.h".to_string(),
+        observed_ns: fingerprint.mtime_ns.max(fingerprint.ctime_ns)
+            + crate::cache_key::HASH_SETTLE_NS,
+        fingerprint,
+        content: "c".repeat(64),
+        mapped: "d".repeat(64),
+    };
+    // From a wrapper that sends no observation time.
+    let unobserved = crate::cache_key::CcPreprocessMemoInput {
+        name: "b.h".to_string(),
+        observed_ns: 0,
+        ..settled.clone()
+    };
+    let memo = CcMemoHandoff {
+        memo_key: "m".repeat(64),
+        preprocessed_hash: "p".repeat(64),
+        inputs: vec![
+            memo_input_for_wire(&settled),
+            memo_input_for_wire(&unobserved),
+        ],
+    };
+    request.memo = Some(memo.clone());
+    request.event.schema = 26;
+    request.event.rebuilt_package = Some("native-package".into());
+    request.event.rebuilt_fingerprint = Some(request.cache_key.clone());
+    request.event.rebuilt_path = Some("/actual/compiler/a.o".into());
+    request.event.rebuilt_paths =
+        vec!["/actual/compiler/a.o".into(), "/actual/compiler/a.d".into()];
+    let snapshot = PathBuf::from(&request.files[0].path);
+    let response = daemon.handle_publish_cc(request.clone());
+    assert!(response.ok, "{:?}", response.error);
+    daemon.publish_queue().close();
+    worker
+        .recv_timeout(Duration::from_secs(10))
+        .expect("closing the queue lets the worker drain and exit");
 
-        let store = Store::open(&config).unwrap();
-        let meta = store
-            .get(&request.cache_key)
-            .unwrap()
-            .expect("entry committed");
-        assert_eq!(meta.files.len(), 1);
-        assert_eq!(meta.files[0].name, "a.o");
-        assert_eq!(meta.stderr, "warning: w\n");
-        let recorded = store
-            .file_hash_cache()
-            .get_cc_preprocess_memo(&memo.memo_key)
-            .unwrap()
-            .expect("the memo is recorded with the entry");
-        assert_eq!(recorded.preprocessed_hash, memo.preprocessed_hash);
-        assert_eq!(recorded.inputs.len(), 2);
-        assert_eq!(
-            recorded.inputs[0],
-            crate::cache_key::CcPreprocessMemoInput {
-                observed_ns: 0,
-                ..settled
-            }
-        );
-        assert_eq!(recorded.inputs[1].content, unobserved.content);
-        assert_ne!(
-            recorded.inputs[1].fingerprint, unobserved.fingerprint,
-            "a stamp with no observation time is not recorded"
-        );
-        assert!(
-            !snapshot.exists(),
-            "the daemon removes the snapshot after the put"
-        );
-        let events = std::fs::read_to_string(config.event_log_path()).unwrap();
-        let event: BuildEvent = serde_json::from_str(events.lines().last().unwrap()).unwrap();
-        assert!(event.store_handed_off);
-        assert_eq!(event.schema, 26);
-        assert_eq!(event.rebuilt_package, request.event.rebuilt_package);
-        assert_eq!(event.rebuilt_fingerprint, request.event.rebuilt_fingerprint);
-        assert_eq!(event.rebuilt_path, request.event.rebuilt_path);
-        assert_eq!(event.rebuilt_paths, request.event.rebuilt_paths);
-        assert_eq!(event.result, EventResult::Miss);
-        assert_eq!(event.store_new_blobs, 1);
-        assert!(event.store_error.is_empty());
-        // The put's bytes are charged to the event, however they landed.
-        assert!(
-            event.store_reflinked_bytes + event.store_hardlinked_bytes + event.store_copied_bytes
-                > 0,
-            "{event:?}"
-        );
-        });
+    let store = Store::open(&config).unwrap();
+    let meta = store
+        .get(&request.cache_key)
+        .unwrap()
+        .expect("entry committed");
+    assert_eq!(meta.files.len(), 1);
+    assert_eq!(meta.files[0].name, "a.o");
+    assert_eq!(meta.stderr, "warning: w\n");
+    let recorded = store
+        .file_hash_cache()
+        .get_cc_preprocess_memo(&memo.memo_key)
+        .unwrap()
+        .expect("the memo is recorded with the entry");
+    assert_eq!(recorded.preprocessed_hash, memo.preprocessed_hash);
+    assert_eq!(recorded.inputs.len(), 2);
+    assert_eq!(
+        recorded.inputs[0],
+        crate::cache_key::CcPreprocessMemoInput {
+            observed_ns: 0,
+            ..settled
+        }
+    );
+    assert_eq!(recorded.inputs[1].content, unobserved.content);
+    assert_ne!(
+        recorded.inputs[1].fingerprint, unobserved.fingerprint,
+        "a stamp with no observation time is not recorded"
+    );
+    assert!(
+        !snapshot.exists(),
+        "the daemon removes the snapshot after the put"
+    );
+    let events = std::fs::read_to_string(config.event_log_path()).unwrap();
+    let event: BuildEvent = serde_json::from_str(events.lines().last().unwrap()).unwrap();
+    assert!(event.store_handed_off);
+    assert_eq!(event.schema, 26);
+    assert_eq!(event.rebuilt_package, request.event.rebuilt_package);
+    assert_eq!(event.rebuilt_fingerprint, request.event.rebuilt_fingerprint);
+    assert_eq!(event.rebuilt_path, request.event.rebuilt_path);
+    assert_eq!(event.rebuilt_paths, request.event.rebuilt_paths);
+    assert_eq!(event.result, EventResult::Miss);
+    assert_eq!(event.store_new_blobs, 1);
+    assert!(event.store_error.is_empty());
+    // The put's bytes are charged to the event, however they landed.
+    assert!(
+        event.store_reflinked_bytes + event.store_hardlinked_bytes + event.store_copied_bytes
+            > 0,
+        "{event:?}"
+    );
     }
 
     /// Run blocking publication fixtures in a child that can be killed and
-    /// reaped if persistence outlives an async timeout or runtime teardown.
-    /// Return its root inside the child, or None after checking its result.
+    /// reaped if persistence outlives its timeout. Return its root inside
+    /// the child, or None after checking its result.
     fn publish_fixture_child_root(test_name: &str, root_env: &str) -> Option<PathBuf> {
         let Some(root) = std::env::var_os(root_env) else {
-            // A stuck publish_one owns a blocking task that runtime teardown
-            // cannot cancel. Keep the worker in a process we can kill and reap.
+            // A stuck publish_one owns a thread no timeout can cancel. Keep
+            // the worker in a process we can kill and reap.
             let dir = tempfile::tempdir().unwrap();
             let log_path = dir.path().join("publisher.log");
             let log = std::fs::File::create(&log_path).unwrap();
@@ -1236,127 +1214,127 @@ mod tests {
     /// even when a remote is configured.
     #[test]
     fn a_handoff_over_the_socket_reaches_the_publish_queue() {
-        smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let config = crate::test_support::test_config(dir.path().join("cache"));
-        let daemon = Arc::new(Daemon::new(config.clone()));
-        let (tx, rx) = async_channel::bounded(1);
-        daemon.publish_queue().set_sender(tx);
-        let socket = config.socket_path();
-        std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
-        let listener = crate::transport::bind_daemon_listener(&socket)
-            .await
-            .unwrap()
-            .unwrap();
-        let lifecycle = Arc::new(crate::lifecycle::Lifecycle::default());
-        let server = {
-            let (daemon, lifecycle) = (Arc::clone(&daemon), Arc::clone(&lifecycle));
-            smol::spawn(async move {
-                let (stream, _) = listener.accept().await.unwrap();
-                crate::daemon::handle_connection(stream, &daemon, &lifecycle).await
-            })
-        };
-        let mut request = handoff_request(&config, &key("socket"), dir.path());
-        request.client_epoch = 0;
-        request.client_version = Some("999.0.0".into());
-        let outcome = {
-            let (config, request) = (config.clone(), request.clone());
-            smol::unblock(move || {
-                hand_off_cc_publish_within(&config, &request, Duration::from_secs(10))
-            })
-            .await
-        };
-        assert_eq!(outcome, Handoff::Accepted);
-        let job = smol_timeout(Duration::from_secs(10), rx.recv())
-            .await
-            .expect("the accepted job is queued")
-            .unwrap();
-        assert_eq!(job.request.cache_key, request.cache_key);
-        drop(job);
-        smol_timeout(Duration::from_secs(10), server)
-            .await
-            .expect("the handler ends with the connection")
-            .unwrap();
-        assert!(
-            !lifecycle.accepting_calls(),
-            "a newer wrapper drains the daemon"
-        );
-        });
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::test_config(dir.path().join("cache"));
+    let daemon = Arc::new(Daemon::new(config.clone()));
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    daemon.publish_queue().set_sender(tx, 1);
+    let socket = config.socket_path();
+    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let listener = crate::transport::bind_daemon_listener(&socket)
+        .unwrap()
+        .unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let lifecycle = Arc::new(crate::lifecycle::Lifecycle::default());
+    let server = {
+        let (daemon, lifecycle) = (Arc::clone(&daemon), Arc::clone(&lifecycle));
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        return crate::daemon::handle_connection(stream, &daemon, &lifecycle);
+                    }
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        })
+    };
+    let mut request = handoff_request(&config, &key("socket"), dir.path());
+    request.client_epoch = 0;
+    request.client_version = Some("999.0.0".into());
+    let outcome = hand_off_cc_publish_within(&config, &request, Duration::from_secs(10));
+    assert_eq!(outcome, Handoff::Accepted);
+    let job = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the accepted job is queued");
+    assert_eq!(job.request.cache_key, request.cache_key);
+    drop(job);
+    join_timeout(server, Duration::from_secs(10), "the handler ends with the connection")
+        .expect("the handler ends with the connection");
+    assert!(
+        !lifecycle.accepting_calls(),
+        "a newer wrapper drains the daemon"
+    );
     }
 
     /// Refusals never take the key: a full queue, a foreign path, a key a
     /// peer holds, and an invalid key all leave the wrapper to publish.
     #[test]
     fn refusals_leave_the_key_free_and_the_snapshots_alone() {
-        smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let config = crate::test_support::test_config(dir.path().join("cache"));
-        let daemon = Arc::new(Daemon::new(config.clone()));
-        let store = Store::open(&config).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::test_config(dir.path().join("cache"));
+    let daemon = Arc::new(Daemon::new(config.clone()));
+    let store = Store::open(&config).unwrap();
 
-        // No sender yet: closed.
-        let request = handoff_request(&config, &key("closed"), dir.path());
-        let _request_receipt = HandoffReceipt::new(&request).unwrap();
-        let response = daemon.handle_publish_cc(request.clone()).await;
-        assert!(!response.ok);
-        assert!(response.error.unwrap().contains("queue closed"));
-        assert!(Path::new(&request.files[0].path).exists());
-        assert!(matches!(
-            store.claim_build(&request.cache_key).unwrap(),
-            BuildClaim::Acquired(_)
-        ));
+    // No sender yet: closed.
+    let request = handoff_request(&config, &key("closed"), dir.path());
+    let _request_receipt = HandoffReceipt::new(&request).unwrap();
+    let response = daemon.handle_publish_cc(request.clone());
+    assert!(!response.ok);
+    assert!(response.error.unwrap().contains("queue closed"));
+    assert!(Path::new(&request.files[0].path).exists());
+    assert!(matches!(
+        store.claim_build(&request.cache_key).unwrap(),
+        BuildClaim::Acquired(_)
+    ));
 
-        // A queue of one: the second hand-off finds it full.
-        let (tx, rx) = async_channel::bounded(1);
-        daemon.publish_queue().set_sender(tx);
-        let first = handoff_request(&config, &key("first"), dir.path());
-        let _first_receipt = HandoffReceipt::new(&first).unwrap();
-        assert!(daemon.handle_publish_cc(first.clone()).await.ok);
-        let second = handoff_request(&config, &key("second"), dir.path());
-        let _second_receipt = HandoffReceipt::new(&second).unwrap();
-        let response = daemon.handle_publish_cc(second.clone()).await;
-        assert!(!response.ok);
-        assert!(response.error.unwrap().contains("queue full"));
-        assert!(matches!(
-            store.claim_build(&second.cache_key).unwrap(),
-            BuildClaim::Acquired(_)
-        ));
-        // The accepted one holds its key until the worker is done with it.
-        assert!(matches!(
-            store.claim_build(&first.cache_key).unwrap(),
-            BuildClaim::Contended
-        ));
-        let job = rx.recv().await.unwrap();
-        drop(job);
-        assert!(matches!(
-            store.claim_build(&first.cache_key).unwrap(),
-            BuildClaim::Acquired(_)
-        ));
+    // A queue of one: the second hand-off finds it full.
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    daemon.publish_queue().set_sender(tx, 1);
+    let first = handoff_request(&config, &key("first"), dir.path());
+    let _first_receipt = HandoffReceipt::new(&first).unwrap();
+    assert!(daemon.handle_publish_cc(first.clone()).ok);
+    let second = handoff_request(&config, &key("second"), dir.path());
+    let _second_receipt = HandoffReceipt::new(&second).unwrap();
+    let response = daemon.handle_publish_cc(second.clone());
+    assert!(!response.ok);
+    assert!(response.error.unwrap().contains("queue full"));
+    assert!(matches!(
+        store.claim_build(&second.cache_key).unwrap(),
+        BuildClaim::Acquired(_)
+    ));
+    // The accepted one holds its key until the worker is done with it.
+    assert!(matches!(
+        store.claim_build(&first.cache_key).unwrap(),
+        BuildClaim::Contended
+    ));
+    let job = rx.recv().unwrap();
+    drop(job);
+    assert!(matches!(
+        store.claim_build(&first.cache_key).unwrap(),
+        BuildClaim::Acquired(_)
+    ));
 
-        // A key a peer holds.
-        let held = handoff_request(&config, &key("held"), dir.path());
-        let _held_receipt = HandoffReceipt::new(&held).unwrap();
-        let _peer = match store.claim_build(&held.cache_key).unwrap() {
-            BuildClaim::Acquired(lock) => lock,
-            _ => panic!("fresh key"),
-        };
-        let response = daemon.handle_publish_cc(held).await;
-        assert!(!response.ok);
-        assert!(response.error.unwrap().contains("contended"));
+    // A key a peer holds.
+    let held = handoff_request(&config, &key("held"), dir.path());
+    let _held_receipt = HandoffReceipt::new(&held).unwrap();
+    let _peer = match store.claim_build(&held.cache_key).unwrap() {
+        BuildClaim::Acquired(lock) => lock,
+        _ => panic!("fresh key"),
+    };
+    let response = daemon.handle_publish_cc(held);
+    assert!(!response.ok);
+    assert!(response.error.unwrap().contains("contended"));
 
-        // A file outside the handoff directory.
-        let mut foreign = handoff_request(&config, &key("foreign"), dir.path());
-        let _foreign_receipt = HandoffReceipt::new(&foreign).unwrap();
-        foreign.files[0].path = dir.path().join("a.o").to_string_lossy().into_owned();
-        let response = daemon.handle_publish_cc(foreign).await;
-        assert!(!response.ok);
-        assert!(response.error.unwrap().contains("outside"));
+    // A file outside the handoff directory.
+    let mut foreign = handoff_request(&config, &key("foreign"), dir.path());
+    let _foreign_receipt = HandoffReceipt::new(&foreign).unwrap();
+    foreign.files[0].path = dir.path().join("a.o").to_string_lossy().into_owned();
+    let response = daemon.handle_publish_cc(foreign);
+    assert!(!response.ok);
+    assert!(response.error.unwrap().contains("outside"));
 
-        let mut invalid = handoff_request(&config, &key("invalid"), dir.path());
-        let _invalid_receipt = HandoffReceipt::new(&invalid).unwrap();
-        invalid.cache_key = "nope".to_string();
-        assert!(!daemon.handle_publish_cc(invalid).await.ok);
-        });
+    let mut invalid = handoff_request(&config, &key("invalid"), dir.path());
+    let _invalid_receipt = HandoffReceipt::new(&invalid).unwrap();
+    invalid.cache_key = "nope".to_string();
+    assert!(!daemon.handle_publish_cc(invalid).ok);
     }
 
     /// The progress a queue hands out is the one its jobs update, so the
@@ -1375,142 +1353,130 @@ mod tests {
     /// drained, as long as the worker keeps finishing jobs.
     #[test]
     fn shutdown_waits_for_a_slow_but_moving_worker() {
-        smol::block_on(async {
-        let progress = Arc::new(PublishProgress::default());
+    let progress = Arc::new(PublishProgress::default());
+    for _ in 0..10 {
+        progress.accepted();
+    }
+    let (done_tx, done) = std::sync::mpsc::channel();
+    let worker = Arc::clone(&progress);
+    std::thread::spawn(move || {
+        // Ten jobs, each slower than half the stall window: the whole
+        // queue takes several stall windows, but no single gap does.
         for _ in 0..10 {
-            progress.accepted();
+            std::thread::sleep(Duration::from_millis(60));
+            worker.finished();
         }
-        let (done_tx, done) = futures::channel::oneshot::channel();
-        let worker = Arc::clone(&progress);
-        smol::spawn(async move {
-            // Ten jobs, each slower than half the stall window: the whole
-            // queue takes several stall windows, but no single gap does.
-            for _ in 0..10 {
-                async_io::Timer::after(Duration::from_millis(60)).await;
-                worker.finished();
-            }
-            let _ = done_tx.send(());
-        })
-        .detach();
-        let left = drain_publications(done, &progress, Duration::from_millis(150)).await;
-        assert_eq!(left, 0);
-        assert_eq!(progress.done(), 10);
-        });
+        let _ = done_tx.send(());
+    });
+    let left = drain_publications(done, &progress, Duration::from_millis(150));
+    assert_eq!(left, 0);
+    assert_eq!(progress.done(), 10);
     }
 
     /// A worker that finishes nothing for the stall window is given up on,
     /// and the jobs it never reached are counted.
     #[test]
     fn shutdown_gives_up_on_a_wedged_worker_and_counts_what_is_left() {
-        smol::block_on(async {
-        let progress = Arc::new(PublishProgress::default());
-        for _ in 0..3 {
-            progress.accepted();
-        }
-        progress.finished();
-        let (_done_tx, done) = futures::channel::oneshot::channel::<()>();
-        let started = std::time::Instant::now();
-        let left = drain_publications(done, &progress, Duration::from_millis(100)).await;
-        assert_eq!(left, 2);
-        assert!(started.elapsed() < Duration::from_secs(5));
-        });
+    let progress = Arc::new(PublishProgress::default());
+    for _ in 0..3 {
+        progress.accepted();
+    }
+    progress.finished();
+    let (_done_tx, done) = std::sync::mpsc::channel::<()>();
+    let started = std::time::Instant::now();
+    let left = drain_publications(done, &progress, Duration::from_millis(100));
+    assert_eq!(left, 2);
+    assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     /// A hand-off the shutdown drain stores is committed locally even
     /// though the publish worker starts only during the drain.
     #[test]
     fn the_shutdown_drain_stores_what_it_accepts() {
-        smol::block_on(async {
-        let Some(dir) = publish_fixture_child_root(
-            "daemon_publish::tests::the_shutdown_drain_stores_what_it_accepts",
-            "KACHE_TEST_SHUTDOWN_PUBLISH_ROOT",
-        ) else {
-            return;
-        };
-        let mut config = crate::test_support::test_config(dir.join("cache"));
-        config.auto_gc = false;
-        let daemon = Arc::new(Daemon::new(config.clone()));
-        let (tx, rx) = async_channel::bounded(4);
-        daemon.publish_queue().set_sender(tx);
-        let request = handoff_request(&config, &key("drained"), &dir);
-        let _receipt = HandoffReceipt::new(&request).unwrap();
-        assert!(daemon.handle_publish_cc(request.clone()).await.ok);
+    let Some(dir) = publish_fixture_child_root(
+        "daemon_publish::tests::the_shutdown_drain_stores_what_it_accepts",
+        "KACHE_TEST_SHUTDOWN_PUBLISH_ROOT",
+    ) else {
+        return;
+    };
+    let mut config = crate::test_support::test_config(dir.join("cache"));
+    config.auto_gc = false;
+    let daemon = Arc::new(Daemon::new(config.clone()));
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    daemon.publish_queue().set_sender(tx, 4);
+    let request = handoff_request(&config, &key("drained"), &dir);
+    let _receipt = HandoffReceipt::new(&request).unwrap();
+    assert!(daemon.handle_publish_cc(request.clone()).ok);
 
-        let (done_tx, done) = futures::channel::oneshot::channel();
-        let (start_tx, start_rx) = std::sync::mpsc::channel();
-        let worker_daemon = Arc::clone(&daemon);
-        let worker = std::thread::spawn(move || {
-            start_rx.recv().expect("shutdown releases the worker");
-            run_publish_worker(worker_daemon, rx);
-            let _ = done_tx.send(());
-        });
-        let drain = crate::daemon::drain_publish_queue(&daemon, done);
-        futures::pin_mut!(drain);
-        // Let shutdown close publication admission before the worker can
-        // publish. Poll once so the fixture needs no scheduling delay.
-        std::future::poll_fn(|cx| {
-            assert!(
-                std::future::Future::poll(drain.as_mut(), cx).is_pending(),
-                "the drain waits for the worker"
-            );
-            std::task::Poll::Ready(())
-        })
-        .await;
+    let (done_tx, done) = std::sync::mpsc::channel();
+    let (start_tx, start_rx) = std::sync::mpsc::channel();
+    let worker_daemon = Arc::clone(&daemon);
+    let worker = std::thread::spawn(move || {
+        start_rx.recv().expect("shutdown releases the worker");
+        run_publish_worker(worker_daemon, rx);
+        let _ = done_tx.send(());
+    });
+    // The drain blocks until the worker exits, so it runs on its own thread.
+    // Wait until shutdown has closed admission while the worker is still
+    // gated, so the fixture needs no scheduling delay.
+    let drain_daemon = Arc::clone(&daemon);
+    let drain = std::thread::spawn(move || {
+        crate::daemon::drain_publish_queue(&drain_daemon, done);
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while daemon.publish_queue().sender().is_some() {
         assert!(
-            daemon.publish_queue().sender().is_none(),
+            std::time::Instant::now() < deadline,
             "shutdown closes the publish queue"
         );
-        start_tx.send(()).unwrap();
-        smol_timeout(Duration::from_secs(30), drain)
-            .await
-            .expect("the drain ends once the worker exits");
-        worker.join().expect("publish worker panicked");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    start_tx.send(()).unwrap();
+    join_timeout(drain, Duration::from_secs(30), "the drain ends once the worker exits");
+    worker.join().expect("publish worker panicked");
 
-        let store = Store::open(&config).unwrap();
-        assert!(store.get(&request.cache_key).unwrap().is_some(), "stored");
-        std::fs::write(dir.join("publisher-complete"), b"ok").unwrap();
-        });
+    let store = Store::open(&config).unwrap();
+    assert!(store.get(&request.cache_key).unwrap().is_some(), "stored");
+    std::fs::write(dir.join("publisher-complete"), b"ok").unwrap();
     }
 
     #[test]
     fn client_cleanup_after_a_lost_reply_cannot_remove_queued_outputs() {
-        smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let config = crate::test_support::test_config(dir.path().join("cache"));
-        let daemon = Arc::new(Daemon::new(config.clone()));
-        let (tx, rx) = async_channel::bounded(2);
-        daemon.publish_queue().set_sender(tx);
-        let request = handoff_request(&config, &key("lost-reply"), dir.path());
-        let receipt = HandoffReceipt::new(&request).unwrap();
-        assert!(daemon.handle_publish_cc(request.clone()).await.ok);
-        assert_eq!(
-            finish_handoff(&receipt, Err(anyhow::anyhow!("lost socket reply"))),
-            Handoff::Accepted,
-        );
-        drop(receipt);
-        // The reply is lost. The client times out, removes its snapshots,
-        // and a subsequent invocation stages different bytes under its PID.
-        remove_handoff_files(&request.files);
-        let replacement = dir.path().join("replacement.o");
-        std::fs::write(&replacement, b"different object").unwrap();
-        let later = snapshot_for_handoff(&config, &[(replacement, "a.o".into())]).unwrap();
-        let job = rx.recv().await.unwrap();
-        assert_ne!(job.request.files, request.files);
-        assert_eq!(
-            std::fs::read(&job.request.files[0].path).unwrap(),
-            b"object bytes"
-        );
-        let store = Store::open(&config).unwrap();
-        publish_one(&daemon, &config, &store, job);
-        assert!(store.get(&request.cache_key).unwrap().is_some());
-        let events = crate::events::read_events(&config.event_log_path()).unwrap();
-        assert_eq!(events.len(), 1);
-        assert!(events[0].store_handed_off);
-        assert!(events[0].store_error.is_empty());
-        assert_eq!(std::fs::read(&later[0].path).unwrap(), b"different object");
-        remove_handoff_files(&later);
-        assert_eq!(std::fs::read_dir(handoff_dir(&config)).unwrap().count(), 0);
-        });
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::test_config(dir.path().join("cache"));
+    let daemon = Arc::new(Daemon::new(config.clone()));
+    let (tx, rx) = std::sync::mpsc::sync_channel(2);
+    daemon.publish_queue().set_sender(tx, 2);
+    let request = handoff_request(&config, &key("lost-reply"), dir.path());
+    let receipt = HandoffReceipt::new(&request).unwrap();
+    assert!(daemon.handle_publish_cc(request.clone()).ok);
+    assert_eq!(
+        finish_handoff(&receipt, Err(anyhow::anyhow!("lost socket reply"))),
+        Handoff::Accepted,
+    );
+    drop(receipt);
+    // The reply is lost. The client times out, removes its snapshots,
+    // and a subsequent invocation stages different bytes under its PID.
+    remove_handoff_files(&request.files);
+    let replacement = dir.path().join("replacement.o");
+    std::fs::write(&replacement, b"different object").unwrap();
+    let later = snapshot_for_handoff(&config, &[(replacement, "a.o".into())]).unwrap();
+    let job = rx.recv().unwrap();
+    assert_ne!(job.request.files, request.files);
+    assert_eq!(
+        std::fs::read(&job.request.files[0].path).unwrap(),
+        b"object bytes"
+    );
+    let store = Store::open(&config).unwrap();
+    publish_one(&daemon, &config, &store, job);
+    assert!(store.get(&request.cache_key).unwrap().is_some());
+    let events = crate::events::read_events(&config.event_log_path()).unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(events[0].store_handed_off);
+    assert!(events[0].store_error.is_empty());
+    assert_eq!(std::fs::read(&later[0].path).unwrap(), b"different object");
+    remove_handoff_files(&later);
+    assert_eq!(std::fs::read_dir(handoff_dir(&config)).unwrap().count(), 0);
     }
 
     /// The wrapper's 25 ms budget ran out and it removed the receipt. The
@@ -1519,125 +1485,118 @@ mod tests {
     /// put it sees a commit and does not store a second copy.
     #[test]
     fn cancelled_handoff_publishes_without_taking_the_wrappers_event() {
-        smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let config = crate::test_support::test_config(dir.path().join("cache"));
-        let daemon = Arc::new(Daemon::new(config.clone()));
-        let (tx, rx) = async_channel::bounded(1);
-        daemon.publish_queue().set_sender(tx);
-        let request = handoff_request(&config, &key("cancelled"), dir.path());
-        let receipt = HandoffReceipt::new(&request).unwrap();
-        assert_eq!(
-            finish_handoff(&receipt, Err(anyhow::anyhow!("timed out"))),
-            Handoff::Declined("timed out".to_string()),
-        );
-        let response = daemon.handle_publish_cc(request.clone()).await;
-        assert!(response.ok, "{response:?}");
-        let job = rx.try_recv().expect("the cancelled hand-off is queued");
-        assert_eq!(job.request.cache_key, request.cache_key);
-        assert_ne!(job.request.files, request.files);
-        assert_eq!(
-            std::fs::read(&job.request.files[0].path).unwrap(),
-            b"object bytes"
-        );
-        let store = Store::open(&config).unwrap();
-        assert!(matches!(
-            store.claim_build(&request.cache_key).unwrap(),
-            BuildClaim::Contended
-        ));
-        publish_one(&daemon, &config, &store, job);
-        assert!(store.get(&request.cache_key).unwrap().is_some());
-        assert!(matches!(
-            store.claim_build(&request.cache_key).unwrap(),
-            BuildClaim::Committed(_)
-        ));
-        let events = crate::events::read_events(&config.event_log_path()).unwrap();
-        assert!(
-            events.is_empty(),
-            "cancelling the receipt leaves event ownership with the wrapper"
-        );
-        crate::wrapper::write_event(&config, &request.event);
-        let events = crate::events::read_events(&config.event_log_path()).unwrap();
-        assert_eq!(events.len(), 1, "the compile is counted once");
-        assert!(!events[0].store_handed_off);
-        assert!(
-            events[0].store_error.is_empty(),
-            "{:?}",
-            events[0].store_error
-        );
-        drop(receipt);
-        assert_eq!(std::fs::read_dir(handoff_dir(&config)).unwrap().count(), 0);
-        });
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::test_config(dir.path().join("cache"));
+    let daemon = Arc::new(Daemon::new(config.clone()));
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    daemon.publish_queue().set_sender(tx, 1);
+    let request = handoff_request(&config, &key("cancelled"), dir.path());
+    let receipt = HandoffReceipt::new(&request).unwrap();
+    assert_eq!(
+        finish_handoff(&receipt, Err(anyhow::anyhow!("timed out"))),
+        Handoff::Declined("timed out".to_string()),
+    );
+    let response = daemon.handle_publish_cc(request.clone());
+    assert!(response.ok, "{response:?}");
+    let job = rx.try_recv().expect("the cancelled hand-off is queued");
+    assert_eq!(job.request.cache_key, request.cache_key);
+    assert_ne!(job.request.files, request.files);
+    assert_eq!(
+        std::fs::read(&job.request.files[0].path).unwrap(),
+        b"object bytes"
+    );
+    let store = Store::open(&config).unwrap();
+    assert!(matches!(
+        store.claim_build(&request.cache_key).unwrap(),
+        BuildClaim::Contended
+    ));
+    publish_one(&daemon, &config, &store, job);
+    assert!(store.get(&request.cache_key).unwrap().is_some());
+    assert!(matches!(
+        store.claim_build(&request.cache_key).unwrap(),
+        BuildClaim::Committed(_)
+    ));
+    let events = crate::events::read_events(&config.event_log_path()).unwrap();
+    assert!(
+        events.is_empty(),
+        "cancelling the receipt leaves event ownership with the wrapper"
+    );
+    crate::wrapper::write_event(&config, &request.event);
+    let events = crate::events::read_events(&config.event_log_path()).unwrap();
+    assert_eq!(events.len(), 1, "the compile is counted once");
+    assert!(!events[0].store_handed_off);
+    assert!(
+        events[0].store_error.is_empty(),
+        "{:?}",
+        events[0].store_error
+    );
+    drop(receipt);
+    assert_eq!(std::fs::read_dir(handoff_dir(&config)).unwrap().count(), 0);
     }
 
     #[cfg(unix)]
     #[test]
     fn a_receipt_rename_that_is_not_cancellation_still_frees_the_key() {
-        smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let config = crate::test_support::test_config(dir.path().join("cache"));
-        let daemon = Arc::new(Daemon::new(config.clone()));
-        let (tx, rx) = async_channel::bounded(1);
-        daemon.publish_queue().set_sender(tx);
-        let request = handoff_request(&config, &key("rename-denied"), dir.path());
-        let receipt = HandoffReceipt::new(&request).unwrap();
-        let parent = receipt.pending.parent().unwrap();
-        let original = std::fs::metadata(parent).unwrap().permissions();
-        let mut readonly = original.clone();
-        readonly.set_readonly(true);
-        std::fs::set_permissions(parent, readonly).unwrap();
-        let response = daemon.handle_publish_cc(request.clone()).await;
-        std::fs::set_permissions(parent, original).unwrap();
-        assert!(!response.ok, "{response:?}");
-        assert!(response.error.unwrap().contains("snapshot failed"));
-        assert!(matches!(
-            rx.try_recv(),
-            Err(async_channel::TryRecvError::Empty)
-        ));
-        let store = Store::open(&config).unwrap();
-        assert!(matches!(
-            store.claim_build(&request.cache_key).unwrap(),
-            BuildClaim::Acquired(_)
-        ));
-        drop(receipt);
-        remove_handoff_files(&request.files);
-        });
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::test_config(dir.path().join("cache"));
+    let daemon = Arc::new(Daemon::new(config.clone()));
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    daemon.publish_queue().set_sender(tx, 1);
+    let request = handoff_request(&config, &key("rename-denied"), dir.path());
+    let receipt = HandoffReceipt::new(&request).unwrap();
+    let parent = receipt.pending.parent().unwrap();
+    let original = std::fs::metadata(parent).unwrap().permissions();
+    let mut readonly = original.clone();
+    readonly.set_readonly(true);
+    std::fs::set_permissions(parent, readonly).unwrap();
+    let response = daemon.handle_publish_cc(request.clone());
+    std::fs::set_permissions(parent, original).unwrap();
+    assert!(!response.ok, "{response:?}");
+    assert!(response.error.unwrap().contains("snapshot failed"));
+    assert!(matches!(
+        rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    let store = Store::open(&config).unwrap();
+    assert!(matches!(
+        store.claim_build(&request.cache_key).unwrap(),
+        BuildClaim::Acquired(_)
+    ));
+    drop(receipt);
+    remove_handoff_files(&request.files);
     }
 
     /// A wrapper that withdrew removed its receipt, then its files. Only
     /// that pair is routine; files missing under a live receipt still warn.
     #[test]
     fn files_gone_after_the_receipt_is_a_routine_withdrawal() {
-        smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let config = crate::test_support::test_config(dir.path().join("cache"));
-        let daemon = Arc::new(Daemon::new(config.clone()));
-        let (tx, rx) = async_channel::bounded(2);
-        daemon.publish_queue().set_sender(tx);
-        for withdrawn in [true, false] {
-            let request = handoff_request(&config, &key(&format!("gone-{withdrawn}")), dir.path());
-            let receipt = HandoffReceipt::new(&request).unwrap();
-            if withdrawn {
-                std::fs::remove_file(&receipt.pending).unwrap();
-            }
-            remove_handoff_files(&request.files);
-            let error = daemon
-                .handle_publish_cc(request.clone())
-                .await
-                .error
-                .unwrap();
-            assert_eq!(refusal_is_routine(&error), withdrawn, "{error}");
-            assert_eq!(error.contains("snapshot failed"), !withdrawn, "{error}");
-            let store = Store::open(&config).unwrap();
-            assert!(matches!(
-                store.claim_build(&request.cache_key).unwrap(),
-                BuildClaim::Acquired(_)
-            ));
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::test_config(dir.path().join("cache"));
+    let daemon = Arc::new(Daemon::new(config.clone()));
+    let (tx, rx) = std::sync::mpsc::sync_channel(2);
+    daemon.publish_queue().set_sender(tx, 2);
+    for withdrawn in [true, false] {
+        let request = handoff_request(&config, &key(&format!("gone-{withdrawn}")), dir.path());
+        let receipt = HandoffReceipt::new(&request).unwrap();
+        if withdrawn {
+            std::fs::remove_file(&receipt.pending).unwrap();
         }
-        assert!(rx.try_recv().is_err());
-        assert!(!refusal_is_routine(WITHDRAWN));
-        assert!(!refusal_is_routine("publish refused: queue full"));
-        });
+        remove_handoff_files(&request.files);
+        let error = daemon
+            .handle_publish_cc(request.clone())
+            .error
+            .unwrap();
+        assert_eq!(refusal_is_routine(&error), withdrawn, "{error}");
+        assert_eq!(error.contains("snapshot failed"), !withdrawn, "{error}");
+        let store = Store::open(&config).unwrap();
+        assert!(matches!(
+            store.claim_build(&request.cache_key).unwrap(),
+            BuildClaim::Acquired(_)
+        ));
+    }
+    assert!(rx.try_recv().is_err());
+    assert!(!refusal_is_routine(WITHDRAWN));
+    assert!(!refusal_is_routine("publish refused: queue full"));
     }
 
     #[test]

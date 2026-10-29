@@ -17,10 +17,10 @@ opening the cache, loading application configuration, or starting a runtime.
 dependency. JSON compatibility defaults belong here and must continue to
 describe the messages older clients and daemons sent.
 
-`kache-ipc` supports synchronous clients by default. Its `async` feature enables
-the daemon listener and Tokio streams. It delegates socket ownership to
-`kunobi-daemon`. Process startup, readiness, and replacement also use
-`kunobi-daemon`, through the application's existing lifecycle adapters.
+`kache-ipc` provides synchronous clients, daemon listeners, and peer checks. It
+delegates socket ownership to `kunobi-daemon`. Process startup, readiness, and
+replacement also use `kunobi-daemon`, through the application's existing
+lifecycle adapters.
 
 Application policy stays outside these crates: configuration resolution,
 selection of cache directories, and formatting of CLI output. Adapters turn
@@ -45,9 +45,8 @@ Extracting crates alone does not make that code safe to run concurrently.
 
 ## Validation
 
-`just check` tests the full workspace and checks the synchronous client crates
-separately. The separate check prevents the daemon's enabled features from
-hiding compile failures in the client-only configuration.
+`just check` tests the full workspace and checks the client crates separately so
+feature unification cannot hide a dependency in the client-only configuration.
 
 Protocol tests cover older messages and prevent clients from supplying internal
 prefetch attribution. IPC tests cover endpoint limits, reachability, and peer

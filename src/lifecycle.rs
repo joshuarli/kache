@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Default)]
@@ -10,14 +10,14 @@ struct State {
 
 pub struct Lifecycle {
     state: Mutex<State>,
-    changed: event_listener::Event,
+    changed: Condvar,
 }
 
 impl Default for Lifecycle {
     fn default() -> Self {
         Self {
             state: Mutex::new(State::default()),
-            changed: event_listener::Event::new(),
+            changed: Condvar::new(),
         }
     }
 }
@@ -61,7 +61,7 @@ impl Lifecycle {
         }
         state.draining = true;
         state.drain_started = Some(Instant::now());
-        self.changed.notify(usize::MAX);
+        self.changed.notify_all();
         true
     }
 
@@ -73,50 +73,34 @@ impl Lifecycle {
             .draining
     }
 
-    pub async fn draining(&self) {
+    pub fn drain_until(&self, deadline: Instant) -> DrainOutcome {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         loop {
-            let listener = self.changed.listen();
-            if self
-                .state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .draining
-            {
-                return;
+            if state.active == 0 {
+                return DrainOutcome::Complete;
             }
-            listener.await;
-        }
-    }
-
-    pub async fn drain(&self) {
-        self.start_drain();
-        loop {
-            let listener = self.changed.listen();
-            let active = self.state.lock().unwrap_or_else(|e| e.into_inner()).active;
-            if active == 0 {
-                return;
+            let now = Instant::now();
+            if now >= deadline {
+                return DrainOutcome::TimedOut {
+                    active: state.active,
+                };
             }
-            listener.await;
-        }
-    }
-
-    pub async fn drain_until(&self, deadline: Instant) -> DrainOutcome {
-        use futures::FutureExt as _;
-        let mut drain = Box::pin(self.drain().fuse());
-        let mut timeout = Box::pin(async_io::Timer::at(deadline).fuse());
-        futures::select! {
-            _ = drain => DrainOutcome::Complete,
-            _ = timeout => {
-                let active = self.state.lock().unwrap_or_else(|e| e.into_inner()).active;
-                if active == 0 {
-                    DrainOutcome::Complete
-                } else {
-                    DrainOutcome::TimedOut { active }
-                }
+            let remaining = deadline - now;
+            let (guard, timed_out) = self
+                .changed
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(|e| e.into_inner());
+            state = guard;
+            if state.active == 0 {
+                return DrainOutcome::Complete;
+            }
+            if timed_out.timed_out() && Instant::now() >= deadline {
+                return DrainOutcome::TimedOut {
+                    active: state.active,
+                };
             }
         }
     }
-
 }
 
 #[must_use = "keep the guard alive until the operation and its reply finish"]
@@ -127,7 +111,44 @@ impl Drop for RequestGuard {
         let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
         state.active = state.active.saturating_sub(1);
         if state.draining && state.active == 0 {
-            self.0.changed.notify(usize::MAX);
+            self.0.changed.notify_all();
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Semaphore {
+    state: Mutex<usize>,
+}
+
+#[derive(Debug)]
+pub(crate) struct SemaphoreGuard {
+    sem: Arc<Semaphore>,
+}
+
+impl Semaphore {
+    pub(crate) fn new(permits: usize) -> Self {
+        Self {
+            state: Mutex::new(permits),
+        }
+    }
+
+    pub(crate) fn try_acquire(self: &Arc<Self>) -> Option<SemaphoreGuard> {
+        let mut permits = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if *permits == 0 {
+            return None;
+        }
+        *permits -= 1;
+        Some(SemaphoreGuard {
+            sem: Arc::clone(self),
+        })
+    }
+}
+
+impl Drop for SemaphoreGuard {
+    fn drop(&mut self) {
+        if let Ok(mut permits) = self.sem.state.lock() {
+            *permits += 1;
         }
     }
 }
