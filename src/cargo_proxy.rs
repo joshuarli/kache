@@ -886,8 +886,17 @@ fn configured_build_dir_in_sources(sources: &[ConfigSource]) -> std::result::Res
 }
 
 fn cargo_home(cwd: &Path) -> std::result::Result<PathBuf, String> {
-    home::cargo_home_with_cwd(cwd)
-        .map_err(|error| format!("cannot resolve Cargo's home directory: {error}"))
+    if let Some(val) = std::env::var_os("CARGO_HOME").filter(|v| !v.is_empty()) {
+        let path = PathBuf::from(val);
+        return Ok(if path.is_absolute() {
+            path
+        } else {
+            cwd.join(path)
+        });
+    }
+    dirs::home_dir()
+        .map(|home| home.join(".cargo"))
+        .ok_or_else(|| "cannot resolve Cargo's home directory: home directory not found".to_string())
 }
 
 /// Cargo retains the extensionless file for backwards compatibility when both
