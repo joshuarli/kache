@@ -1,6 +1,5 @@
 use crate::invocation::InvocationEnv;
 use anyhow::{Context, Result};
-use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -3562,7 +3561,7 @@ fn exclude_expanded_pattern_matches(expanded: &str, candidates: &[PathBuf]) -> b
 }
 
 pub fn parse_size(s: &str) -> Option<u64> {
-    s.parse::<ByteSize>().ok().map(|b| b.as_u64())
+    kache_core::size::parse_size(s)
 }
 
 /// Store budget derived from the volume that holds the cache directory.
@@ -3587,11 +3586,11 @@ pub fn disk_share_budget(filesystem_bytes: Option<u64>) -> u64 {
 pub fn describe_max_size(max_size: u64, filesystem_bytes: Option<u64>) -> String {
     let derived = disk_share_budget(filesystem_bytes);
     if max_size != derived {
-        return ByteSize(max_size).to_string();
+        return kache_core::size::format_bytes(max_size);
     }
     match filesystem_bytes.filter(|&n| n > 0) {
-        Some(total) => format!("{} ({})", ByteSize(max_size), disk_share_note(total)),
-        None => format!("{} (default; disk size unknown)", ByteSize(max_size)),
+        Some(total) => format!("{} ({})", kache_core::size::format_bytes(max_size), disk_share_note(total)),
+        None => format!("{} (default; disk size unknown)", kache_core::size::format_bytes(max_size)),
     }
 }
 
@@ -3600,9 +3599,9 @@ pub fn describe_max_size(max_size: u64, filesystem_bytes: Option<u64>) -> String
 pub fn disk_share_note(total: u64) -> String {
     format!(
         "{DISK_SHARE_PERCENT}% of {}, floor {}, cap {}",
-        ByteSize(total),
-        ByteSize(DISK_SHARE_FLOOR),
-        ByteSize(DISK_SHARE_CAP)
+        kache_core::size::format_bytes(total),
+        kache_core::size::format_bytes(DISK_SHARE_FLOOR),
+        kache_core::size::format_bytes(DISK_SHARE_CAP)
     )
 }
 
@@ -3622,7 +3621,7 @@ fn parse_local_max_size(value: &str, source: &str) -> Option<u64> {
 
 /// Parse a human size string, warning loudly when it is set but malformed.
 ///
-/// A value `ByteSize` can't parse (a typo'd unit like `100 gigs`, digit
+/// A value [`parse_size`] can't parse (a typo'd unit like `100 gigs`, digit
 /// grouping like `1_000`, plain garbage) otherwise degrades silently:
 /// `Config::load` falls through to the next source and finally to a hardcoded
 /// default, so the cap the user asked for is ignored without a word. `source`

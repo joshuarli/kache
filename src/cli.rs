@@ -1,7 +1,6 @@
 use crate::term;
 use crate::term::human_println as println;
 use anyhow::{Context, Result};
-use bytesize::ByteSize;
 use std::io::IsTerminal;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -1131,8 +1130,8 @@ pub(crate) fn config_mismatch_warnings(
     if eff.max_size != config.max_size {
         warnings.push(format!(
             "warning: {daemon_side} has local_max_size={}; {client_side} says {} — {remedy}",
-            ByteSize(eff.max_size),
-            ByteSize(config.max_size),
+            kache_core::size::format_bytes(eff.max_size),
+            kache_core::size::format_bytes(config.max_size),
         ));
     }
     if eff.cache_dir != config.cache_dir.display().to_string() {
@@ -2381,7 +2380,7 @@ fn held_bytes_note(bytes_held: u64) -> String {
     if bytes_held == 0 {
         String::new()
     } else {
-        format!(" ({})", ByteSize(bytes_held))
+        format!(" ({})", kache_core::size::format_bytes(bytes_held))
     }
 }
 
@@ -2412,17 +2411,17 @@ pub(crate) fn describe_eviction(stats: &crate::store::GcStats, over_limit: bool)
             "dropped {} {} from the store ({}).",
             stats.entries_evicted,
             plural(stats.entries_evicted),
-            ByteSize(stats.bytes_freed)
+            kache_core::size::format_bytes(stats.bytes_freed)
         );
         msg.push_str(&format!(
             "\n  {} became free on disk.",
-            ByteSize(stats.disk_bytes_reclaimed)
+            kache_core::size::format_bytes(stats.disk_bytes_reclaimed)
         ));
         let leftover = stats.bytes_freed.saturating_sub(stats.disk_bytes_reclaimed);
         if leftover > 0 {
             msg.push_str(&format!(
                 "\n  {} is still held by clones in build outputs or by filesystem snapshots.",
-                ByteSize(leftover)
+                kache_core::size::format_bytes(leftover)
             ));
         }
         if stats.entries_pinned > 0 {
@@ -3191,7 +3190,7 @@ pub fn list(
                 push_nonempty_detail(&mut lines, "  Target:   ", &meta.target);
                 lines.push("  Files:".to_string());
                 for file in &meta.files {
-                    lines.push(format!("    {} ({})", file.name, ByteSize(file.size)));
+                    lines.push(format!("    {} ({})", file.name, kache_core::size::format_bytes(file.size)));
                 }
             }
             lines.push(String::new());
@@ -3265,7 +3264,7 @@ fn entry_detail_lines(entry: &daemon::StatsEntry) -> Vec<String> {
     ];
     push_nonempty_detail(&mut lines, "  Type:     ", &entry.crate_type);
     push_nonempty_detail(&mut lines, "  Profile:  ", &entry.profile);
-    lines.push(format!("  Size:     {}", ByteSize(entry.size)));
+    lines.push(format!("  Size:     {}", kache_core::size::format_bytes(entry.size)));
     lines.push(format!("  Hits:     {}", entry.hit_count));
     lines.push(format!(
         "  Created:  {}",
@@ -3830,7 +3829,7 @@ fn human_gc_output(json: bool) -> bool {
 fn gc_store_usage(store: &Store, max_size: u64, filesystem_bytes: Option<u64>) -> Result<String> {
     Ok(format!(
         "{} / {} · {}",
-        ByteSize(store.physical_size()?),
+        kache_core::size::format_bytes(store.physical_size()?),
         crate::config::describe_max_size(max_size, filesystem_bytes),
         term::counted(store.entry_count()? as u64, "entry", "entries")
     ))
@@ -3938,7 +3937,7 @@ pub fn gc(
         let entry_count = store.entry_count()?;
         println!(
             "Store: {} · {}",
-            ByteSize(total_size),
+            kache_core::size::format_bytes(total_size),
             term::counted(entry_count as u64, "entry", "entries")
         );
         return Ok(());
@@ -4533,7 +4532,7 @@ fn render_unit_plan(path: &str, plan: &crate::target_liveness::Plan) -> String {
         format!(
             "{path}: {} ({}), {} live and {} unknown units kept",
             term::counted(plan.units as u64, "obsolete unit", "obsolete units"),
-            ByteSize(plan.bytes),
+            kache_core::size::format_bytes(plan.bytes),
             plan.protected,
             plan.unknown
         )
@@ -4656,7 +4655,7 @@ fn unit_clean_summary(
     Some(format!(
         "Removed {} ({}).",
         term::counted(removed as u64, "obsolete unit", "obsolete units"),
-        ByteSize(bytes)
+        kache_core::size::format_bytes(bytes)
     ))
 }
 
@@ -5414,8 +5413,8 @@ fn render_targets(rows: &[TargetRow], auto_orphans: bool) -> Vec<String> {
         "{} tracked target director{}: {} on disk, {} freeable\n",
         rows.len(),
         if rows.len() == 1 { "y" } else { "ies" },
-        ByteSize(apparent),
-        ByteSize(reclaimable)
+        kache_core::size::format_bytes(apparent),
+        kache_core::size::format_bytes(reclaimable)
     )];
     lines.push(format!(
         "  {:>10}  {:>10}  {:>5}  TARGET",
@@ -5436,8 +5435,8 @@ fn render_targets(rows: &[TargetRow], auto_orphans: bool) -> Vec<String> {
         let units = unit_cleanup_note(&row.unit_cleanup);
         lines.push(format!(
             "  {:>10}  {:>10}  {:>5}  {}{deleted}{discovered}{next_pass}{units}",
-            ByteSize(row.reclaimable_bytes).to_string(),
-            ByteSize(row.apparent_bytes).to_string(),
+            kache_core::size::format_bytes(row.reclaimable_bytes),
+            kache_core::size::format_bytes(row.apparent_bytes),
             row.idle_seconds
                 .map(format_idle)
                 .unwrap_or_else(|| "?".into()),
@@ -5799,7 +5798,7 @@ fn next_pass_note(plan: &crate::target_cleanup::Plan) -> String {
             "prunes {} unused unit{} ({})",
             plan.units.units,
             if plan.units.units == 1 { "" } else { "s" },
-            ByteSize(plan.units.bytes)
+            kache_core::size::format_bytes(plan.units.bytes)
         ));
     }
     match plan.remove {
@@ -6671,8 +6670,8 @@ pub(crate) fn doctor_shards(config: &Config) -> Vec<Check> {
                         detail: format!(
                             "{path}: {}, {} / {}{}",
                             term::counted(entries as u64, "entry", "entries"),
-                            ByteSize(bytes),
-                            ByteSize(shard.max_size),
+                            kache_core::size::format_bytes(bytes),
+                            kache_core::size::format_bytes(shard.max_size),
                             if drift {
                                 "; blob accounting needs repair"
                             } else {
@@ -6855,7 +6854,7 @@ fn doctor_index_quarantines(config: &Config) -> Check {
             detail: format!(
                 "{} ({}) retained in {} after index corruption",
                 term::counted(files.len() as u64, "file", "files"),
-                ByteSize(files.iter().map(|file| file.bytes).sum::<u64>()),
+                kache_core::size::format_bytes(files.iter().map(|file| file.bytes).sum::<u64>()),
                 term::home_path(&config.cache_dir)
             ),
             fix: Some("save the index.db.corrupt-* files if needed for investigation; `kache clean --cache` removes them along with all cached artifacts".to_string()),
@@ -7095,7 +7094,7 @@ pub fn doctor(
                 detail: format!(
                     "{}, {} stored across {}",
                     term::counted(view.entry_count as u64, "unique entry", "unique entries"),
-                    ByteSize(view.total_size),
+                    kache_core::size::format_bytes(view.total_size),
                     term::counted(
                         view.stores.len() as u64,
                         "configured store",
@@ -7611,7 +7610,7 @@ fn migrate(purge_sccache: bool) -> Result<()> {
                 actions.push(format!(
                     "Removed sccache cache {} ({})",
                     cache_dir.display(),
-                    ByteSize(size)
+                    kache_core::size::format_bytes(size)
                 ));
             }
         }
@@ -8121,7 +8120,7 @@ fn verify_store(config: &Config, checksums: bool, repair: bool) -> Result<Verify
             Ok(swept) => println!(
                 "Repairing: reclaimed {} orphan blobs ({})",
                 swept.removed,
-                ByteSize(swept.bytes_reclaimed)
+                kache_core::size::format_bytes(swept.bytes_reclaimed)
             ),
             Err(e) => log::warn!("orphan-blob sweep failed: {e}"),
         }
@@ -8141,13 +8140,13 @@ fn verify_store(config: &Config, checksums: bool, repair: bool) -> Result<Verify
         println!(
             "Repairing: reclaimed {} stale staging files ({})",
             swept_staging.removed,
-            ByteSize(swept_staging.bytes_reclaimed)
+            kache_core::size::format_bytes(swept_staging.bytes_reclaimed)
         );
         let handoffs = crate::daemon_publish::sweep_orphaned_handoffs(config, STAGING_SWEEP_GRACE);
         println!(
             "Repairing: reclaimed {} abandoned cc handoffs ({})",
             handoffs.removed,
-            ByteSize(handoffs.bytes_reclaimed)
+            kache_core::size::format_bytes(handoffs.bytes_reclaimed)
         );
         let memos = store.file_hash_cache();
         match memos.prune_cc_preprocess_memos() {
@@ -8168,8 +8167,8 @@ fn verify_store(config: &Config, checksums: bool, repair: bool) -> Result<Verify
         match memos.compact_sparse_index() {
             Ok(Some((before, after))) => println!(
                 "Repairing: compacted index file from {} to {}",
-                ByteSize(before),
-                ByteSize(after)
+                kache_core::size::format_bytes(before),
+                kache_core::size::format_bytes(after)
             ),
             Ok(None) => {}
             Err(error) => eprintln!("warning: index compaction deferred: {error:#}"),
@@ -8190,7 +8189,7 @@ fn verify_store(config: &Config, checksums: bool, repair: bool) -> Result<Verify
         total_blobs_on_disk, orphaned_blobs, missing_blobs, blobs_scrubbed, checksum_failures
     );
     println!("  Blob index drift: {index_drift}");
-    println!("  Store size: {}", ByteSize(store_size));
+    println!("  Store size: {}", kache_core::size::format_bytes(store_size));
 
     if should_print_repair_tip(corrupted_entries, orphaned_blobs, index_drift, repair) {
         println!();

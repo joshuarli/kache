@@ -2385,13 +2385,13 @@ fn rotation_cut_notice(max_size: u64, last_build: bool) -> String {
         return format!(
             "this build outgrew the event log ({}); counts include retained archives, but \
              expired or unreadable events may be missing",
-            bytesize::ByteSize(max_size)
+            kache_core::size::format_bytes(max_size)
         );
     }
     format!(
         "this build outgrew the event log ({}), so its earliest events were rotated away and \
          the counts above are incomplete; raise [cache] event_log_max_size",
-        bytesize::ByteSize(max_size)
+        kache_core::size::format_bytes(max_size)
     )
 }
 

@@ -189,14 +189,14 @@ pub(crate) fn run(config: &Config, trigger: Trigger<'_>) -> bool {
                 log::info!(
                     "removed {} unused build units ({}) from {}",
                     pruned.units,
-                    bytesize::ByteSize(pruned.bytes),
+                    kache_core::size::format_bytes(pruned.bytes),
                     path.display()
                 );
             }
             for (path, bytes) in swept.reclaimed {
                 log::info!(
                     "target recovery returned about {} of free space from {}",
-                    bytesize::ByteSize(bytes),
+                    kache_core::size::format_bytes(bytes),
                     path.display()
                 );
             }

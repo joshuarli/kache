@@ -307,7 +307,7 @@ pub(crate) fn counted(n: u64, one: &str, many: &str) -> String {
 
 /// `1.2 GiB`: binary units, the same form in every command.
 pub(crate) fn bytes(n: u64) -> String {
-    bytesize::ByteSize(n).to_string()
+    kache_core::size::format_bytes(n)
 }
 
 /// `~9 min`, `2.0 s`, `45 ms`: the largest unit that keeps the number short.

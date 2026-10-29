@@ -760,7 +760,7 @@ fn config_load_integrates_paths_base_dirs() {
 
 #[test]
 fn parse_size_checked_rejects_malformed_and_mirrors_parse_size() {
-    // Values ByteSize can't parse: a typo'd unit and digit grouping. These
+    // Values parse_size can't parse: a typo'd unit and digit grouping. These
     // are exactly what used to silently degrade to the hardcoded default.
     for bad in ["100 gigs", "1_000", "abc", ""] {
         assert!(parse_size(bad).is_none(), "expected {bad:?} to be invalid");
@@ -814,7 +814,7 @@ fn describe_max_size_names_the_disk_share_when_derived() {
     );
     assert_eq!(
         describe_max_size(2 * GIB, disk),
-        ByteSize(2 * GIB).to_string()
+        kache_core::size::format_bytes(2 * GIB).to_string()
     );
     assert!(
         describe_max_size(DISK_SHARE_FALLBACK, None).contains("disk size unknown"),

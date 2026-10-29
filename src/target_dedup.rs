@@ -337,7 +337,7 @@ fn share_note(replaced: usize, matched_bytes: u64) -> Option<String> {
     }
     Some(format!(
         "cloned {replaced} stored artifacts into old target directories (about {} now shared)",
-        bytesize::ByteSize(matched_bytes),
+        kache_core::size::format_bytes(matched_bytes),
     ))
 }
 
@@ -401,7 +401,7 @@ fn render(report: &Report, apply: bool) -> Vec<String> {
             "hashed: {}, matching the store: {} ({})",
             report.hashed,
             report.matches,
-            bytesize::ByteSize(report.matched_bytes),
+            kache_core::size::format_bytes(report.matched_bytes),
         ),
         format!(
             "already sharing blocks: {}, busy targets skipped: {}",

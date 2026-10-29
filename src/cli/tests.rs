@@ -964,8 +964,8 @@ fn the_gc_summary_has_a_line_per_shard_it_swept() {
         vec![format!(
             "Volume shard {}: {} / {} · 2 entries",
             shard_config.cache_dir.display(),
-            ByteSize(shard.physical_size().unwrap()),
-            ByteSize(1000),
+            kache_core::size::format_bytes(shard.physical_size().unwrap()),
+            kache_core::size::format_bytes(1000),
         )]
     );
 }
@@ -4051,7 +4051,7 @@ fn cache_limit_note_names_the_disk_share_budget() {
     const GIB: u64 = 1 << 30;
     let share = format!(
         " (5% of {}, floor 5.0 GiB, cap 100.0 GiB)",
-        ByteSize(200 * GIB)
+        kache_core::size::format_bytes(200 * GIB)
     );
     // 5% of 200 GiB is 10 GiB, inside the floor and the cap.
     assert_eq!(cache_limit_note(0, 10 * GIB, Some(200 * GIB)), share);
@@ -4062,7 +4062,7 @@ fn cache_limit_note_names_the_disk_share_budget() {
     let floor = cache_limit_note(0, 5 * GIB, Some(GIB));
     assert!(floor.contains("floor"), "{floor}");
     assert!(floor.contains("floor 5.0 GiB"), "{floor}");
-    assert!(floor.contains(&ByteSize(GIB).to_string()), "{floor}");
+    assert!(floor.contains(&kache_core::size::format_bytes(GIB).to_string()), "{floor}");
     // 5% of 4000 GiB is 200 GiB, then the cap lowers the budget to 100 GiB.
     let cap = cache_limit_note(0, 100 * GIB, Some(4000 * GIB));
     assert!(cap.contains("cap"), "{cap}");
@@ -6358,7 +6358,7 @@ fn doctor_and_full_clean_report_quarantined_indexes_without_deleting_them() {
         check.detail,
         format!(
             "2 files ({}) retained in {} after index corruption",
-            ByteSize(3000),
+            kache_core::size::format_bytes(3000),
             term::home_path(&config.cache_dir)
         )
     );

@@ -82,10 +82,10 @@ fn disk_check(
         pass: !low && !exhausted,
         detail: format!(
             "{} free of {} at {}; warning floor {}{inode_note}{volume_note}",
-            bytesize::ByteSize(usage.free),
-            bytesize::ByteSize(usage.total),
+            kache_core::size::format_bytes(usage.free),
+            kache_core::size::format_bytes(usage.total),
             path.display(),
-            bytesize::ByteSize(floor)
+            kache_core::size::format_bytes(floor)
         ),
         fix,
     }

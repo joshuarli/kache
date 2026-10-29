@@ -1,6 +1,5 @@
 use crate::store::StoreHashExt;
 use anyhow::{Context, Result};
-use bytesize::ByteSize;
 use chrono::Utc;
 pub(crate) use kache_store::markers::*;
 use std::path::{Component, Path, PathBuf};
@@ -91,7 +90,7 @@ fn print_progress(crate_name: &str, result: EventResult, elapsed_ms: u64, size: 
     };
 
     let size_str = if size > 0 {
-        format!(", {}", ByteSize(size))
+        format!(", {}", kache_core::size::format_bytes(size))
     } else {
         String::new()
     };
