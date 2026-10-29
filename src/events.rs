@@ -2025,7 +2025,7 @@ mod tests {
         log_event(&log_path, &old_event).unwrap();
         log_event(&log_path, &new_event).unwrap();
 
-        let since = UtcTime::now() - std::time::Duration::from_secs(1 * 3600);
+        let since = UtcTime::now() - std::time::Duration::from_secs(3600);
         let events = read_events_since(&log_path, since).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].crate_name, "new");
@@ -2107,7 +2107,7 @@ mod tests {
         assert_eq!(names.len(), 2, "the old segment is not listed: {names:?}");
         assert!(names.iter().all(|&newest| newest > old));
         assert!(
-            read_events_since(&log_path, now - std::time::Duration::from_secs(1 * 3600))
+            read_events_since(&log_path, now - std::time::Duration::from_secs(3600))
                 .unwrap()
                 .is_empty()
         );
@@ -2156,7 +2156,7 @@ mod tests {
         assert_eq!(segments.len(), 1);
         assert_eq!(
             segments[0].newest,
-            (now - std::time::Duration::from_secs(1 * 3600)).timestamp()
+            (now - std::time::Duration::from_secs(3600)).timestamp()
         );
         assert_eq!(
             segments[0].oldest,
@@ -2238,7 +2238,7 @@ mod tests {
         let nine_days = write(std::time::Duration::from_secs(9 * 86400));
         let week = write(std::time::Duration::from_secs(7 * 86400));
         let eight_days = write(std::time::Duration::from_secs(8 * 86400));
-        let hour = write(std::time::Duration::from_secs(1 * 3600));
+        let hour = write(std::time::Duration::from_secs(3600));
         prune_event_archive(
             &log_path,
             now,
@@ -2308,7 +2308,7 @@ mod tests {
         };
         // Hits before the window, misses inside it.
         for before in [
-            since - std::time::Duration::from_secs(1 * 3600),
+            since - std::time::Duration::from_secs(3600),
             since - std::time::Duration::from_millis(200),
         ] {
             let lines = [
@@ -2335,7 +2335,7 @@ mod tests {
             let lines: Vec<String> = (0..count)
                 .map(|i| {
                     let mut event = test_event("c", EventResult::Miss, 1, 1, 1, "k");
-                    event.ts = now - std::time::Duration::from_secs(10 as u64 * count as u64 + i as u64 * 60);
+                    event.ts = now - std::time::Duration::from_secs(10_u64 * count as u64 + i as u64 * 60);
                     serde_json::to_string(&event).unwrap() + "\n"
                 })
                 .collect();
@@ -2422,7 +2422,7 @@ mod tests {
         let log = dir.path().join("events.jsonl");
         let now = UtcTime::now();
         let mut event = test_event("memo", EventResult::Miss, 1, 2, 3, "k");
-        event.ts = now - std::time::Duration::from_secs(1 * 3600);
+        event.ts = now - std::time::Duration::from_secs(3600);
         let line = serde_json::to_string(&event).unwrap() + "\n";
         archive_dropped_events(&log, &[&line], now).unwrap();
         let segments = archive_segments(&log);
@@ -2443,7 +2443,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("events.jsonl");
         let now = UtcTime::now();
-        let since = now - std::time::Duration::from_secs(1 * 3600);
+        let since = now - std::time::Duration::from_secs(3600);
         let mut event = test_event("edge", EventResult::Miss, 1, 2, 3, "k");
         event.ts = since + std::time::Duration::from_secs(10 * 60);
         event.crate_name = "long_edge_".repeat(2048);
@@ -2480,7 +2480,7 @@ mod tests {
         let log = dir.path().join("events.jsonl");
         let now = UtcTime::now();
         let mut event = test_event("retry", EventResult::Miss, 1, 2, 3, "k");
-        event.ts = now - std::time::Duration::from_secs(1 * 3600);
+        event.ts = now - std::time::Duration::from_secs(3600);
         let line = serde_json::to_string(&event).unwrap() + "\n";
         archive_dropped_events(&log, &[&line], now).unwrap();
         let segments = archive_segments(&log);
@@ -2507,7 +2507,7 @@ mod tests {
         let now = UtcTime::now();
         let mut archived = test_event("large_record", EventResult::Miss, 1, 2, 3, "k");
         archived.crate_name = "large_record_".repeat(2048);
-        archived.ts = now - std::time::Duration::from_secs(1 * 3600);
+        archived.ts = now - std::time::Duration::from_secs(3600);
         let line = serde_json::to_string(&archived).unwrap() + "\n";
         let mut frame = zstd::encode_all(line.repeat(4).as_bytes(), 3).unwrap();
         let mut broken = zstd::encode_all(line.as_bytes(), 3).unwrap();
@@ -2531,7 +2531,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(decoded.iter().any(Result::is_ok));
         assert!(decoded.iter().any(Result::is_err));
-        let events = read_events_since(&log, now - std::time::Duration::from_secs(1 * 86400)).unwrap();
+        let events = read_events_since(&log, now - std::time::Duration::from_secs(86400)).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].crate_name, "live");
     }
@@ -2544,7 +2544,7 @@ mod tests {
         for i in 0..12 {
             let log = dir.path().join(format!("events-{i}.jsonl"));
             let mut event = test_event("bounded", EventResult::Miss, 1, 2, 3, "k");
-            event.ts = now - std::time::Duration::from_secs(1 * 3600);
+            event.ts = now - std::time::Duration::from_secs(3600);
             let line = serde_json::to_string(&event).unwrap() + "\n";
             archive_dropped_events(&log, &[&line], now).unwrap();
             assert_eq!(

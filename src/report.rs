@@ -2010,7 +2010,7 @@ fn event_timeline(e: &BuildEvent) -> (String, String, i64, i64) {
 }
 
 fn event_start(e: &BuildEvent) -> UtcTime {
-    let elapsed_ms = u64::try_from(e.elapsed_ms).unwrap_or(u64::MAX);
+    let elapsed_ms = e.elapsed_ms;
     e.ts
         .checked_sub_duration(std::time::Duration::from_millis(elapsed_ms))
         .unwrap_or(e.ts)

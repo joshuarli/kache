@@ -31,7 +31,7 @@ mod imp {
 
     pub fn home_dir() -> Option<PathBuf> {
         std::env::var_os("HOME")
-            .and_then(|home| if home.is_empty() { None } else { Some(home) })
+            .filter(|home| !home.is_empty())
             .or_else(passwd_home)
             .map(PathBuf::from)
     }

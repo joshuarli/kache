@@ -1910,7 +1910,7 @@ fn test_format_relative_time_buckets() {
     assert_eq!(fmt(now - std::time::Duration::from_secs(3 * 3600)), "3h ago");
     assert_eq!(fmt(now - std::time::Duration::from_secs(2 * 86400)), "2d ago");
     // A future timestamp clamps to "just now" (secs.max(0)).
-    assert_eq!(fmt(now + std::time::Duration::from_secs(1 * 3600)), "just now");
+    assert_eq!(fmt(now + std::time::Duration::from_secs(3600)), "just now");
 }
 
 #[test]

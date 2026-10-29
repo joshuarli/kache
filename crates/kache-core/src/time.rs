@@ -204,9 +204,9 @@ impl UtcTime {
             parts.year, parts.month, parts.day, parts.hour, parts.minute, parts.second
         );
         if parts.nanos != 0 {
-            if parts.nanos % 1_000_000 == 0 {
+            if parts.nanos.is_multiple_of(1_000_000) {
                 out.push_str(&format!(".{:03}", parts.nanos / 1_000_000));
-            } else if parts.nanos % 1_000 == 0 {
+            } else if parts.nanos.is_multiple_of(1_000) {
                 out.push_str(&format!(".{:06}", parts.nanos / 1_000));
             } else {
                 out.push_str(&format!(".{:09}", parts.nanos));
@@ -218,7 +218,7 @@ impl UtcTime {
     /// Parse RFC 3339 with a `Z` or numeric offset and optional fraction.
     /// Accepts what older kache versions wrote; `None` otherwise.
     pub fn parse_rfc3339(value: &str) -> Option<UtcTime> {
-        let (date, time) = value.split_once(|c| c == 'T' || c == 't' || c == ' ')?;
+        let (date, time) = value.split_once(['T', 't', ' '])?;
         let mut fields = date.split('-');
         let year: i32 = fields.next()?.parse().ok()?;
         let month: u8 = fields.next()?.parse().ok()?;
@@ -311,7 +311,7 @@ fn split_offset(time: &str) -> Option<(&str, i32)> {
     if let Some(clock) = time.strip_suffix('Z').or_else(|| time.strip_suffix('z')) {
         return Some((clock, 0));
     }
-    let at = time.find(|c| c == '+' || c == '-')?;
+    let at = time.find(['+', '-'])?;
     let (clock, zone) = time.split_at(at);
     let (sign, digits) = match zone.as_bytes()[0] {
         b'+' => (1i32, &zone[1..]),

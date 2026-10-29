@@ -41,7 +41,7 @@ fn load_gc_summary_includes_a_run_exactly_at_the_cutoff() {
 #[test]
 fn load_gc_summary_returns_recent_run_within_window() {
     let dir = tempfile::tempdir().unwrap();
-    write_gc_stats(dir.path(), UtcTime::now() - std::time::Duration::from_secs(1 * 3600));
+    write_gc_stats(dir.path(), UtcTime::now() - std::time::Duration::from_secs(3600));
     let gc = load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(UtcTime::now()))
         .expect("recent gc run is within the 24h window");
     assert_eq!(gc.entries_evicted, 3);

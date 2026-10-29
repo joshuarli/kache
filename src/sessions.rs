@@ -170,7 +170,7 @@ fn is_probe(event: &BuildEvent) -> bool {
 }
 
 fn event_start(event: &BuildEvent) -> UtcTime {
-    let elapsed = u64::try_from(event.elapsed_ms).unwrap_or(u64::MAX);
+    let elapsed = event.elapsed_ms;
     event
         .ts
         .checked_sub_duration(std::time::Duration::from_millis(elapsed))
