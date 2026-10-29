@@ -391,8 +391,7 @@ monitor *ARGS:
 # `just bump 0.5.0` for a final, `just bump 0.5.0-rc.4` for a candidate — both
 # publish to crates.io (a prerelease is only served on an explicit --version).
 # Then commit, open a PR, and merge; cut the tag from the merged commit with
-# `just release` (never re-typed). Auto-installs `cargo-edit` on first use — it
-# is not pinned in mise.toml because that compiles it in every CI run.
+# `just release` (never re-typed). Auto-installs `cargo-edit` on first use.
 #
 # Use a DOTTED-numeric prerelease (`-rc.4`, not `-rc4`): crates.io is permanent
 # and semver orders the no-dot form lexically (`rc.2` would sort after `rc.10`).
