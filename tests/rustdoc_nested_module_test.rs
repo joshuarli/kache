@@ -44,7 +44,7 @@ fn assert_doc_edit_refreshes(root_source: &str, module_file: &str, child_file: &
     fs::write(&child, "/// OLD_MARKER\npub fn thing() {}\n").unwrap();
     let rustdoc = std::env::var_os("RUSTDOC").unwrap_or_else(|| "rustdoc".into());
     let rustup_home = std::env::var_os("RUSTUP_HOME")
-        .unwrap_or_else(|| dirs::home_dir().unwrap().join(".rustup").into_os_string());
+        .unwrap_or_else(|| kache_fs::home_dir().unwrap().join(".rustup").into_os_string());
     let run = |wrapped: bool| {
         let mut command = if wrapped {
             let mut command = hermetic_command(kache_binary(), &cache, Some(&config));

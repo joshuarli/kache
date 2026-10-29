@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use kache_core::time::UtcTime;
 use serde::{Deserialize, Serialize};
 
 /// Coarse class of a free-form passthrough reason.
@@ -47,7 +47,7 @@ impl MissReason {
 /// A single build event logged by the wrapper.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BuildEvent {
-    pub ts: DateTime<Utc>,
+    pub ts: UtcTime,
     pub crate_name: String,
     /// Build tree/root this compiler invocation belongs to.
     ///
@@ -490,7 +490,7 @@ impl std::fmt::Display for EventResult {
 /// events by `session_id` + `cache_key` for full attribution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BuildSummaryEvent {
-    pub ts: DateTime<Utc>,
+    pub ts: UtcTime,
     pub schema: u32,
     /// Shutdown could not observe every prefetch outcome. Completed counters
     /// remain lower bounds; missing bytes and attempts must not be read as zero.
@@ -559,7 +559,7 @@ impl BuildEvent {
         cache_key: &str,
     ) -> BuildEvent {
         BuildEvent {
-            ts: Utc::now(),
+            ts: UtcTime::now(),
             crate_name: crate_name.to_string(),
             root: "/work/tree".to_string(),
             version: "0.0.0".to_string(),

@@ -51,7 +51,7 @@ impl DocFixture {
         }
         let rustdoc = std::env::var_os("RUSTDOC").unwrap_or_else(|| "rustdoc".into());
         let rustup_home = std::env::var_os("RUSTUP_HOME")
-            .unwrap_or_else(|| dirs::home_dir().unwrap().join(".rustup").into_os_string());
+            .unwrap_or_else(|| kache_fs::home_dir().unwrap().join(".rustup").into_os_string());
         let config = isolated_config_path(&self.cache);
         let mut command = if wrapped {
             let mut command = hermetic_command(kache_binary(), &self.cache, Some(&config));

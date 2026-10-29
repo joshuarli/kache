@@ -144,7 +144,7 @@ fn changing_diagnostic_format_preserves_requested_output_and_reuse() {
     .unwrap();
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     let rustup_home = std::env::var_os("RUSTUP_HOME")
-        .unwrap_or_else(|| dirs::home_dir().unwrap().join(".rustup").into_os_string());
+        .unwrap_or_else(|| kache_fs::home_dir().unwrap().join(".rustup").into_os_string());
     let run = |wrapped: bool, format: &str| {
         let mut command = if wrapped {
             let mut command = hermetic_command(kache_binary(), &cache, Some(&config));
@@ -238,7 +238,7 @@ fn explicit_metadata_destinations_are_materialized_without_cache_replay() {
     fs::write(project.join("lib.rs"), "pub fn answer() -> u32 { 42 }\n").unwrap();
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     let rustup_home = std::env::var_os("RUSTUP_HOME")
-        .unwrap_or_else(|| dirs::home_dir().unwrap().join(".rustup").into_os_string());
+        .unwrap_or_else(|| kache_fs::home_dir().unwrap().join(".rustup").into_os_string());
     let run = |wrapped: bool, emit: &str, separated: bool| {
         let mut command = if wrapped {
             let mut command = hermetic_command(kache_binary(), &cache, Some(&config));

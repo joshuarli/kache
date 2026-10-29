@@ -14,5 +14,8 @@ categories = ["development-tools::build-utils", "caching"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 serde_json = "1"

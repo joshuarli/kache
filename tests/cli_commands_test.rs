@@ -2221,7 +2221,7 @@ fn doctor_fix_in_isolated_home_succeeds() {
     e.cmd().args(["doctor", "--fix"]).assert().success();
 }
 
-// Unix-only: migrate resolves `~/.zshrc` via `dirs::home_dir()`, which on
+// Unix-only: migrate resolves `~/.zshrc` via `kache_fs::home_dir()`, which on
 // Windows reads the OS profile API and ignores the `HOME`/`CARGO_HOME` the test
 // helper sets — so the test couldn't isolate (and would mutate the runner's real
 // cargo config). The migration logic is platform-shared and covered here.
@@ -5126,7 +5126,7 @@ fn doctor_probe_restores_a_rust_library_without_touching_the_configured_store() 
     let e = env();
     let rustup_home = std::env::var_os("RUSTUP_HOME")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| dirs::home_dir().unwrap().join(".rustup"));
+        .unwrap_or_else(|| kache_fs::home_dir().unwrap().join(".rustup"));
     let output = e
         .cmd()
         .env("RUSTUP_HOME", rustup_home)
@@ -5236,7 +5236,7 @@ fn explain_json_distinguishes_uncached_compiles_hits_and_compiler_queries() {
             "no_cache_lookups",
         ),
     ] {
-        let event = serde_json::json!({"ts": chrono::Utc::now(), "crate_name":"demo", "result":result, "elapsed_ms":1, "size":1, "passthrough_reason":reason, "schema":26});
+        let event = serde_json::json!({"ts": kache_core::time::UtcTime::now(), "crate_name":"demo", "result":result, "elapsed_ms":1, "size":1, "passthrough_reason":reason, "schema":26});
         std::fs::write(e.cache.join("events.jsonl"), format!("{event}\n")).unwrap();
         let output = e
             .cmd()

@@ -894,7 +894,7 @@ fn default_work_dir(profile_name: &str) -> PathBuf {
 fn dated_run_id(cache_backend: CacheBackend) -> String {
     format!(
         "{}-{}-{}",
-        chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+        kache_core::time::format_compact_utc(kache_core::time::UtcTime::now()),
         cache_backend.label(),
         std::process::id()
     )

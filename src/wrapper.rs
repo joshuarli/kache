@@ -1,6 +1,6 @@
 use crate::store::StoreHashExt;
 use anyhow::{Context, Result};
-use chrono::Utc;
+use kache_core::time::UtcTime;
 pub(crate) use kache_store::markers::*;
 use std::path::{Component, Path, PathBuf};
 
@@ -8428,7 +8428,7 @@ pub(crate) fn build_event_details(config: &Config, inputs: EventInputs<'_>) -> B
     let key_diff = explain_miss_diff(config, root, crate_name, result, cache_key, &key_fields);
     let miss_reason = events::MissReason::classify(&passthrough_reason);
     BuildEvent {
-        ts: Utc::now(),
+        ts: UtcTime::now(),
         crate_name: crate_name.to_string(),
         root: root.to_string(),
         version: crate::VERSION.to_string(),
@@ -8587,10 +8587,10 @@ fn explain_miss_diff(
         // the post-hoc folds (key salt / extra inputs).
         changed.push("salt_or_extra_inputs".to_string());
     }
-    let ago = Utc::now()
-        .signed_duration_since(last_hit.ts)
-        .num_minutes()
-        .max(0);
+    let ago = UtcTime::now()
+        .saturating_duration_since(last_hit.ts)
+        .as_secs()
+        / 60;
     crate::notice::show(&format!(
         "[kache] miss: crate {} (last hit {}m ago; key changed in: {})",
         crate_name,

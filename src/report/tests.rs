@@ -1,7 +1,7 @@
 use super::*;
-use chrono::Utc;
+use kache_core::time::UtcTime;
 
-fn write_gc_stats(dir: &std::path::Path, last_run: chrono::DateTime<Utc>) {
+fn write_gc_stats(dir: &std::path::Path, last_run: UtcTime) {
     let persisted = format!(
         r#"{{"last_run":"{}","entries_evicted":3,"bytes_freed":4096,"blobs_removed":5,"duration_ms":12}}"#,
         last_run.to_rfc3339()
@@ -15,27 +15,25 @@ fn write_gc_stats(dir: &std::path::Path, last_run: chrono::DateTime<Utc>) {
 #[test]
 fn load_gc_summary_includes_a_run_exactly_at_the_cutoff() {
     let dir = tempfile::tempdir().unwrap();
-    let last_run = Utc::now() - chrono::Duration::hours(3);
+    let last_run = UtcTime::now() - std::time::Duration::from_secs(3 * 3600);
     write_gc_stats(dir.path(), last_run);
     // The fixture writes an RFC 3339 string, so compare against the value
     // that string parses back to rather than the original instant.
     let persisted: GcStatsPersisted =
         serde_json::from_str(&std::fs::read_to_string(dir.path().join("gc_stats.json")).unwrap())
             .unwrap();
-    let written = chrono::DateTime::parse_from_rfc3339(&persisted.last_run)
-        .unwrap()
-        .with_timezone(&Utc);
+    let written = UtcTime::parse_rfc3339(&persisted.last_run).unwrap();
 
     assert!(
         load_gc_summary(dir.path(), written).is_some(),
         "a run at the cutoff is within the window"
     );
     assert!(
-        load_gc_summary(dir.path(), written - chrono::Duration::seconds(1)).is_some(),
+        load_gc_summary(dir.path(), written - std::time::Duration::from_secs(1)).is_some(),
         "a run after the cutoff is within the window"
     );
     assert!(
-        load_gc_summary(dir.path(), written + chrono::Duration::seconds(1)).is_none(),
+        load_gc_summary(dir.path(), written + std::time::Duration::from_secs(1)).is_none(),
         "a run before the cutoff is outside it"
     );
 }
@@ -43,8 +41,8 @@ fn load_gc_summary_includes_a_run_exactly_at_the_cutoff() {
 #[test]
 fn load_gc_summary_returns_recent_run_within_window() {
     let dir = tempfile::tempdir().unwrap();
-    write_gc_stats(dir.path(), Utc::now() - chrono::Duration::hours(1));
-    let gc = load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(Utc::now()))
+    write_gc_stats(dir.path(), UtcTime::now() - std::time::Duration::from_secs(1 * 3600));
+    let gc = load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(UtcTime::now()))
         .expect("recent gc run is within the 24h window");
     assert_eq!(gc.entries_evicted, 3);
     assert_eq!(gc.bytes_freed, 4096);
@@ -54,9 +52,9 @@ fn load_gc_summary_returns_recent_run_within_window() {
 #[test]
 fn load_gc_summary_drops_run_older_than_window() {
     let dir = tempfile::tempdir().unwrap();
-    write_gc_stats(dir.path(), Utc::now() - chrono::Duration::hours(48));
+    write_gc_stats(dir.path(), UtcTime::now() - std::time::Duration::from_secs(48 * 3600));
     assert!(
-        load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(Utc::now())).is_none(),
+        load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(UtcTime::now())).is_none(),
         "a run 48h ago must fall outside the 24h window"
     );
 }
@@ -64,14 +62,14 @@ fn load_gc_summary_drops_run_older_than_window() {
 #[test]
 fn load_gc_summary_absent_when_no_stats_file() {
     let dir = tempfile::tempdir().unwrap();
-    assert!(load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(Utc::now())).is_none());
+    assert!(load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(UtcTime::now())).is_none());
 }
 
 #[test]
 fn load_gc_summary_absent_on_malformed_stats_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("gc_stats.json"), b"not json").unwrap();
-    assert!(load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(Utc::now())).is_none());
+    assert!(load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(UtcTime::now())).is_none());
 }
 
 #[test]
@@ -84,9 +82,7 @@ fn load_gc_summary_all_sums_unique_stores_and_selects_latest_instant() {
         max_size: Some(1000),
     };
     config.volume_stores = vec![shard.clone(), shard.clone()];
-    let cutoff = DateTime::parse_from_rfc3339("2026-09-28T00:00:00Z")
-        .unwrap()
-        .with_timezone(&Utc);
+    let cutoff = UtcTime::parse_rfc3339("2026-09-28T00:00:00Z").unwrap();
     assert!(load_gc_summary_all(&config, cutoff).is_none());
     for (path, time, n) in [
         (&config.cache_dir, "2026-09-28T10:00:00+02:00", 2),
@@ -179,7 +175,7 @@ fn gc_runs_history_is_appended_only_with_record_sessions() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(records.len(), 2, "{log}");
-    assert!(chrono::DateTime::parse_from_rfc3339(&records[0].ts).is_ok());
+    assert!(UtcTime::parse_rfc3339(&records[0].ts).is_some());
     assert_eq!(
         records[0],
         GcRunRecord {
@@ -372,7 +368,7 @@ fn gc_stats_with_totals_from_an_earlier_version_still_parses() {
 
     let raw = std::fs::read_to_string(dir.path().join(GC_STATS_FILE)).unwrap();
     assert!(!raw.contains("totals"), "{raw}");
-    let gc = load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(Utc::now()))
+    let gc = load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(UtcTime::now()))
         .expect("the recorded run is inside the window");
     assert_eq!(gc.entries_evicted, 5);
 }
@@ -386,7 +382,7 @@ fn test_event(
     cache_key: &str,
 ) -> BuildEvent {
     BuildEvent {
-        ts: Utc::now(),
+        ts: UtcTime::now(),
         session_id: String::new(),
         demands: Vec::new(),
         rebuilt_package: None,
@@ -497,7 +493,7 @@ fn test_transfer(
         blobs_skipped: 0,
         blobs_total: 2,
         ok,
-        timestamp: Utc::now().timestamp() as u64,
+        timestamp: UtcTime::now().timestamp() as u64,
     }
 }
 fn write_transfer_line(path: &std::path::Path, event: &TransferEvent) {
@@ -1164,7 +1160,7 @@ fn report_window_narrows_events_and_labels_itself() {
     let dir = tempfile::tempdir().unwrap();
     let config = write_test_events(dir.path());
     let mut stale = test_event("ancient", EventResult::Miss, 5000, 4800, 1024, "old");
-    stale.ts = Utc::now() - chrono::Duration::hours(3);
+    stale.ts = UtcTime::now() - std::time::Duration::from_secs(3 * 3600);
     events::log_event(&config.event_log_path(), &stale).unwrap();
 
     let wide = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
@@ -1214,7 +1210,7 @@ fn session_event(root: &str, session: &str, second: i64, elapsed_ms: u64) -> Bui
     let mut event = test_event("fixture", EventResult::Miss, elapsed_ms, 10, 100, "key");
     event.root = root.to_string();
     event.session_id = session.to_string();
-    event.ts = DateTime::from_timestamp(1_700_000_000 + second, 0).unwrap();
+    event.ts = UtcTime::from_timestamp(1_700_000_000 + second, 0).unwrap();
     event
 }
 
@@ -1308,7 +1304,7 @@ fn last_build_report_uses_retained_history_and_omits_unscoped_data() {
     let lines =
         [&hit, &miss, &bypass, &old, &other].map(|event| serde_json::to_string(event).unwrap());
     std::fs::write(config.event_log_path(), lines.join("\n") + "\n").unwrap();
-    write_gc_stats(dir.path(), Utc::now());
+    write_gc_stats(dir.path(), UtcTime::now());
 
     let report = generate_report_with_filter(
         &config,
@@ -1461,10 +1457,10 @@ fn assign_trace_lanes_packs_concurrent_events() {
     // `event_start` = ts - elapsed_ms, so set ts (the end) to place each
     // slice on the timeline. Two overlapping events must get distinct lanes;
     // a later non-overlapping event reuses lane 0 instead of a fresh one.
-    let base = Utc::now();
+    let base = UtcTime::now();
     let mk = |name: &str, result, key: &str, start_off_ms: i64, dur_ms: u64| {
         let mut e = test_event(name, result, dur_ms, 0, 0, key);
-        e.ts = base + chrono::Duration::milliseconds(start_off_ms + dur_ms as i64);
+        e.ts = base + std::time::Duration::from_millis((start_off_ms + dur_ms as i64).max(0) as u64);
         e
     };
     let a = mk("a", EventResult::LocalHit, "k1", 0, 100); // [0, 100)
@@ -1480,7 +1476,7 @@ fn assign_trace_lanes_packs_concurrent_events() {
 /// A miss with every phase set, values chosen so no two offsets coincide.
 fn phase_heavy_miss(lane: u32) -> TraceEvent {
     let mut e = test_event("m", EventResult::Miss, 140, 100, 0, "k-miss");
-    e.ts = Utc::now();
+    e.ts = UtcTime::now();
     e.startup_ms = 1;
     e.key_ms = 10;
     e.dep_info_ms = 4;
@@ -1573,7 +1569,7 @@ fn trace_phase_events_nest_in_wrapper_order_on_the_parent_lane() {
 #[test]
 fn trace_phase_events_skip_empty_phases_and_never_draw_a_hit_compile() {
     let mut e = test_event("h", EventResult::LocalHit, 20, 250, 0, "k-hit");
-    e.ts = Utc::now();
+    e.ts = UtcTime::now();
     e.key_ms = 10;
     e.lookup_ms = 2;
     e.restore_ms = 5;
@@ -1593,7 +1589,7 @@ fn trace_phase_events_clamp_to_the_parent_and_drop_what_follows() {
     // Phases sum to 24 ms inside a 10 ms parent: key fills [0, 8), lookup
     // is cut to [8, 10), restore has no room and is dropped.
     let mut e = test_event("c", EventResult::LocalHit, 10, 0, 0, "k-clamp");
-    e.ts = Utc::now();
+    e.ts = UtcTime::now();
     e.key_ms = 8;
     e.lookup_ms = 8;
     e.restore_ms = 8;
@@ -1616,7 +1612,7 @@ fn trace_phase_events_keep_dep_info_inside_key() {
     // Inconsistent event: dep-info time without key time. The nested
     // slice needs a key slice to live in, so it is clamped away.
     let mut e = test_event("d", EventResult::LocalHit, 10, 0, 0, "k-dep");
-    e.ts = Utc::now();
+    e.ts = UtcTime::now();
     e.dep_info_ms = 5;
     e.dep_info_runs = 1;
     e.lookup_ms = 1;
@@ -1640,7 +1636,7 @@ fn trace_phase_events_keep_dep_info_inside_key() {
 #[test]
 fn trace_phase_events_are_empty_for_a_zero_length_parent() {
     let mut e = test_event("z", EventResult::Miss, 0, 0, 0, "k-zero");
-    e.ts = Utc::now();
+    e.ts = UtcTime::now();
     e.key_ms = 3;
     let parent = to_trace_event(&e, 0);
     assert!(trace_phase_events(&parent).is_empty());
@@ -2363,7 +2359,7 @@ fn test_suggestion_network_latency_thresholds() {
         blobs_skipped: 0,
         blobs_total: 2,
         ok: true,
-        timestamp: Utc::now().timestamp() as u64,
+        timestamp: UtcTime::now().timestamp() as u64,
     };
     write_transfer_line(&config.transfer_log_path(), &slow);
 
@@ -4232,11 +4228,8 @@ fn average_ms_prints_a_decimal_only_below_ten() {
 fn local_time_keeps_an_unparsed_input() {
     assert_eq!(local_time("not-a-time"), "not-a-time");
     let stamp = "2026-09-30T12:34:00Z";
-    let expected = chrono::DateTime::parse_from_rfc3339(stamp)
-        .unwrap()
-        .with_timezone(&chrono::Local)
-        .format("%b %d %H:%M")
-        .to_string();
+    let expected =
+        kache_core::time::local_parts(UtcTime::parse_rfc3339(stamp).unwrap()).month_name_day_clock();
     assert_eq!(local_time(stamp), expected);
     assert_ne!(local_time(stamp), "xyzzy");
 }

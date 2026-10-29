@@ -6,7 +6,7 @@
 //! Keeping the parsed value here, in seconds plus the unit the user typed,
 //! means every consumer filters by the same cutoff and prints the same label.
 
-use chrono::{DateTime, Utc};
+use kache_core::time::UtcTime;
 
 /// The unit a window was written in. Kept so the label says `15m` when the
 /// user typed `15m` and `24h` when they typed `24h` (or a bare `24`).
@@ -117,17 +117,15 @@ impl SinceWindow {
     }
 
     /// The instant events must be at or after to fall inside the window.
-    /// Saturates at the earliest representable time rather than wrapping.
-    pub(crate) fn cutoff(self, now: DateTime<Utc>) -> DateTime<Utc> {
-        let secs = i64::try_from(self.secs).unwrap_or(i64::MAX);
-        chrono::Duration::try_seconds(secs)
-            .and_then(|d| now.checked_sub_signed(d))
-            .unwrap_or(DateTime::<Utc>::MIN_UTC)
+    /// Absurd windows land before the epoch rather than wrapping.
+    pub(crate) fn cutoff(self, now: UtcTime) -> UtcTime {
+        let secs = u64::try_from(i64::try_from(self.secs).unwrap_or(i64::MAX)).unwrap_or(0);
+        now.saturating_sub_duration(std::time::Duration::from_secs(secs))
     }
 
     /// [`Self::cutoff`] as Unix seconds, for the transfer log whose timestamps
     /// are stored that way. Clamped at zero for a window older than the epoch.
-    pub(crate) fn cutoff_unix_secs(self, now: DateTime<Utc>) -> u64 {
+    pub(crate) fn cutoff_unix_secs(self, now: UtcTime) -> u64 {
         u64::try_from(self.cutoff(now).timestamp()).unwrap_or(0)
     }
 }
@@ -141,7 +139,6 @@ impl std::fmt::Display for SinceWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
 
     #[test]
     fn parses_every_unit() {
@@ -245,20 +242,20 @@ mod tests {
 
     #[test]
     fn cutoff_subtracts_the_window() {
-        let now = Utc.with_ymd_and_hms(2026, 9, 1, 12, 0, 0).unwrap();
+        let now = UtcTime::from_ymd_hms(2026, 9, 1, 12, 0, 0).unwrap();
         let window = SinceWindow::parse("15m").unwrap();
         assert_eq!(
             window.cutoff(now),
-            Utc.with_ymd_and_hms(2026, 9, 1, 11, 45, 0).unwrap()
+            UtcTime::from_ymd_hms(2026, 9, 1, 11, 45, 0).unwrap()
         );
         assert_eq!(window.cutoff_unix_secs(now), now.timestamp() as u64 - 900);
     }
 
     #[test]
     fn cutoff_saturates_for_absurd_windows() {
-        let now = Utc.with_ymd_and_hms(2026, 9, 1, 12, 0, 0).unwrap();
+        let now = UtcTime::from_ymd_hms(2026, 9, 1, 12, 0, 0).unwrap();
         let window = SinceWindow::parse("18446744073709551615s").unwrap();
-        assert_eq!(window.cutoff(now), DateTime::<Utc>::MIN_UTC);
+        assert!(window.cutoff(now) <= UtcTime::from_unix_secs(0));
         assert_eq!(window.cutoff_unix_secs(now), 0);
     }
 }

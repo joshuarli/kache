@@ -6,6 +6,7 @@ use crate::events::{self, BuildEvent};
 use crate::term::{self, Align};
 use crate::sessions::{self, Analysis, Cause, Session};
 use anyhow::Result;
+use kache_core::time::UtcTime;
 use std::path::Path;
 use std::time::Duration;
 
@@ -327,7 +328,7 @@ const NO_BUILD: &str = "no recorded build to explain";
 pub fn run_all(config: &Config, root: Option<&Path>, json: bool) -> Result<()> {
     let mut events = events::read_events_since(
         &config.event_log_path(),
-        chrono::DateTime::<chrono::Utc>::MIN_UTC,
+        UtcTime::MIN,
     )?;
     let root = root.map(crate::report::normalize_filter_root);
     if let Some(root) = &root {
@@ -547,7 +548,7 @@ mod tests {
         let mut event = BuildEvent::new_for_test(name, result);
         event.root = "/w".to_string();
         event.session_id = session.to_string();
-        event.ts = chrono::DateTime::from_timestamp(1_700_000_000 + secs, 0).unwrap();
+        event.ts = UtcTime::from_timestamp(1_700_000_000 + secs, 0).unwrap();
         event.cache_key = key.to_string();
         event.compile_time_ms = 1_000;
         event

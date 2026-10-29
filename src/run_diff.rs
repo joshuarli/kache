@@ -214,10 +214,10 @@ pub fn run(config: &Config, root: Option<&Path>, json: bool) -> Result<bool> {
 mod tests {
     use super::*;
     use crate::events::EventResult;
-    use chrono::{DateTime, Utc};
+    use kache_core::time::UtcTime;
 
-    fn at(secs: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp(1_700_000_000 + secs, 0).unwrap()
+    fn at(secs: i64) -> UtcTime {
+        UtcTime::from_timestamp(1_700_000_000 + secs, 0).unwrap()
     }
 
     fn ev(

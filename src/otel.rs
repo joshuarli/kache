@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
+use kache_core::time::UtcTime;
 
 /// Major schema version in the sidecar file and as a resource attribute.
 pub(crate) const SCHEMA_VERSION: u32 = 2;
@@ -285,7 +286,7 @@ fn machine_metrics(snap: &MachineSnapshot, now: &str) -> Vec<Value> {
 
 fn gc_metrics(gc: &crate::report::GcStatsPersisted, now: &str) -> Vec<Value> {
     let mut metrics = Vec::new();
-    if let Ok(last_run) = chrono::DateTime::parse_from_rfc3339(&gc.last_run) {
+    if let Some(last_run) = UtcTime::parse_rfc3339(&gc.last_run) {
         metrics.push(gauge(
             "kache.cache.gc.last_run.time",
             "s",
@@ -630,7 +631,7 @@ mod tests {
                 )
             })
             .collect();
-        let last_run = chrono::DateTime::parse_from_rfc3339("2026-09-12T12:11:05+00:00")
+        let last_run = UtcTime::parse_rfc3339("2026-09-12T12:11:05+00:00")
             .unwrap()
             .timestamp()
             .to_string();

@@ -14,7 +14,7 @@ use crate::config::Config;
 use crate::events::BuildEvent;
 use crate::store::SweepOrigin;
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use kache_core::time::UtcTime;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -29,7 +29,7 @@ pub const SAVINGS_SCHEMA: u32 = 1;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Totals {
     /// The oldest event or GC run counted.
-    pub since: DateTime<Utc>,
+    pub since: UtcTime,
     /// Local, prefetched and remote hits.
     #[serde(default)]
     pub hits: u64,
@@ -51,7 +51,7 @@ pub struct Totals {
 }
 
 impl Totals {
-    fn empty(since: DateTime<Utc>) -> Self {
+    fn empty(since: UtcTime) -> Self {
         Self {
             since,
             hits: 0,
@@ -237,7 +237,7 @@ pub(crate) fn record_pruned(
     cache_dir: &Path,
     origin: SweepOrigin,
     bytes: u64,
-    at: DateTime<Utc>,
+    at: UtcTime,
 ) -> Result<()> {
     if bytes == 0 {
         return Ok(());

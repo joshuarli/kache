@@ -334,44 +334,21 @@ pub(crate) fn short_key(key: &str) -> &str {
 }
 
 /// `2026-10-14 17:18:56` in this machine's zone.
-pub(crate) fn local_datetime(at: chrono::DateTime<chrono::Utc>) -> String {
-    datetime_in(at, &chrono::Local)
+pub(crate) fn local_datetime(at: kache_core::time::UtcTime) -> String {
+    kache_core::time::local_parts(at).datetime()
 }
 
 /// `17:18:56` in this machine's zone.
-pub(crate) fn local_clock(at: chrono::DateTime<chrono::Utc>) -> String {
-    clock_in(at, &chrono::Local)
+pub(crate) fn local_clock(at: kache_core::time::UtcTime) -> String {
+    kache_core::time::local_parts(at).clock()
 }
 
 /// A store timestamp (`2026-10-14 15:18:56`, UTC as SQLite writes it) in this
 /// machine's zone; the input unchanged when it does not parse.
 pub(crate) fn local_store_time(utc: &str) -> String {
-    store_time_in(utc, &chrono::Local)
-}
-
-fn datetime_in<Tz: chrono::TimeZone>(at: chrono::DateTime<chrono::Utc>, zone: &Tz) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
-    at.with_timezone(zone)
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string()
-}
-
-fn clock_in<Tz: chrono::TimeZone>(at: chrono::DateTime<chrono::Utc>, zone: &Tz) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
-    at.with_timezone(zone).format("%H:%M:%S").to_string()
-}
-
-fn store_time_in<Tz: chrono::TimeZone>(utc: &str, zone: &Tz) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
-    chrono::NaiveDateTime::parse_from_str(utc, "%Y-%m-%d %H:%M:%S")
-        .map(|naive| datetime_in(naive.and_utc(), zone))
-        .unwrap_or_else(|_| utc.to_string())
+    kache_core::time::UtcTime::parse_sqlite(utc)
+        .map(local_datetime)
+        .unwrap_or_else(|| utc.to_string())
 }
 
 /// `12.5%`.
@@ -719,22 +696,23 @@ mod tests {
 
     #[test]
     fn times_render_in_the_given_zone() {
-        let zone = chrono::FixedOffset::east_opt(2 * 3600).unwrap();
-        let at = chrono::DateTime::parse_from_rfc3339("2026-10-14T15:18:56Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        assert_eq!(datetime_in(at, &zone), "2026-10-14 17:18:56");
-        assert_eq!(clock_in(at, &zone), "17:18:56");
+        use kache_core::time::{UtcTime, shifted_parts};
+        let at = UtcTime::parse_rfc3339("2026-10-14T15:18:56Z").unwrap();
+        let shifted = shifted_parts(at, 2 * 3600);
+        assert_eq!(shifted.datetime(), "2026-10-14 17:18:56");
+        assert_eq!(shifted.clock(), "17:18:56");
         assert_eq!(
-            store_time_in("2026-10-14 15:18:56", &zone),
+            shifted_parts(
+                UtcTime::parse_sqlite("2026-10-14 15:18:56").unwrap(),
+                2 * 3600
+            )
+            .datetime(),
             "2026-10-14 17:18:56"
         );
-        assert_eq!(store_time_in("not a time", &zone), "not a time");
-        assert_eq!(local_datetime(at), datetime_in(at, &chrono::Local));
-        assert_eq!(local_clock(at), clock_in(at, &chrono::Local));
+        assert_eq!(local_store_time("not a time"), "not a time");
         assert_eq!(
             local_store_time("2026-10-14 15:18:56"),
-            datetime_in(at, &chrono::Local)
+            local_datetime(UtcTime::parse_sqlite("2026-10-14 15:18:56").unwrap())
         );
     }
 

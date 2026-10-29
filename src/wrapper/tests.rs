@@ -6780,13 +6780,13 @@ fn local_hit_demand_reaches_event_without_remote_wait() {
     let config = test_config(dir.path().join("cache"));
     let store = Store::open(&config).unwrap();
     put_test_entry(&store, dir.path(), "local-demand-key");
-    let before = chrono::Utc::now().timestamp_millis() as u64;
+    let before = kache_core::time::UtcTime::now().timestamp_millis() as u64;
     assert!(
         lookup_local_entry(&store, &[], "local-demand-key")
             .unwrap()
             .is_some()
     );
-    let after = chrono::Utc::now().timestamp_millis() as u64;
+    let after = kache_core::time::UtcTime::now().timestamp_millis() as u64;
     log_event(
         &config,
         EventInputs::new("/repo", "foo", EventResult::LocalHit, 10)

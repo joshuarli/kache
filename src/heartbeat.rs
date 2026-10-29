@@ -28,6 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
+use kache_core::time::UtcTime;
 
 use crate::events::{HEARTBEAT_EVENT_TAG, HEARTBEAT_SCHEMA, HeartbeatEvent};
 
@@ -266,7 +267,7 @@ fn run_ticks(
 
         let hb = HeartbeatEvent {
             event: HEARTBEAT_EVENT_TAG.to_string(),
-            ts: chrono::Utc::now(),
+            ts: UtcTime::now(),
             crate_name: crate_name.to_string(),
             root: ctx.root.clone(),
             pid,

@@ -11,6 +11,7 @@ pub use kache_protocol::{
     StatsResponse,
 };
 use crate::lifecycle::Lifecycle;
+use kache_core::time::UtcTime;
 #[path = "daemon_lifecycle.rs"]
 mod lifecycle_client;
 pub(crate) use lifecycle_client::Ensured;
@@ -652,7 +653,7 @@ impl Daemon {
             Err(error) => return Response::err(format!("store open failed: {error}")),
         };
 
-        let since = stats_window(req).cutoff(chrono::Utc::now());
+        let since = stats_window(req).cutoff(UtcTime::now());
         let es =
             events::event_stats_since(&self.config.event_log_path(), since).unwrap_or_default();
         let recent_summaries = if req.include_summaries {

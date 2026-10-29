@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use kache_core::time::UtcTime;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -33,7 +33,7 @@ pub use kache_protocol::{BuildEvent, BuildSummaryEvent, EventResult, MissReason}
 pub struct HeartbeatEvent {
     /// Always [`HEARTBEAT_EVENT_TAG`] — the discriminator for jsonl consumers.
     pub event: String,
-    pub ts: DateTime<Utc>,
+    pub ts: UtcTime,
     pub crate_name: String,
     /// Build tree/root, same derivation as [`BuildEvent::root`].
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -68,7 +68,7 @@ pub const CLEANUP_SCHEMA: u32 = 1;
 pub struct CleanupEvent {
     pub event: String,
     pub schema: u32,
-    pub ts: DateTime<Utc>,
+    pub ts: UtcTime,
     pub target: String,
     pub root: String,
     pub removed_paths: Vec<String>,
@@ -89,7 +89,7 @@ impl CleanupEvent {
         Self {
             event: CLEANUP_EVENT_TAG.to_string(),
             schema: CLEANUP_SCHEMA,
-            ts: Utc::now(),
+            ts: UtcTime::now(),
             target,
             root,
             removed_paths,
@@ -328,7 +328,7 @@ pub fn read_events_and<T>(
 /// The archive is read first. A rotation drops lines from the log before it
 /// archives them, so a rotation between the two reads can only leave its
 /// lines out of this answer, never count them twice.
-pub fn read_events_since(event_log_path: &Path, since: DateTime<Utc>) -> Result<Vec<BuildEvent>> {
+pub fn read_events_since(event_log_path: &Path, since: UtcTime) -> Result<Vec<BuildEvent>> {
     let mut events = Vec::new();
     for segment in archive_segments_since(event_log_path, since) {
         let before = events.len();
@@ -361,7 +361,7 @@ pub fn read_events_since(event_log_path: &Path, since: DateTime<Utc>) -> Result<
 /// once written, so a total over the same segments is the same total; a new
 /// segment is added to it, and when one leaves the window the total is made
 /// again. The segment the window starts in, and the log, are read each time.
-pub fn event_stats_since(event_log_path: &Path, since: DateTime<Utc>) -> Result<EventStats> {
+pub fn event_stats_since(event_log_path: &Path, since: UtcTime) -> Result<EventStats> {
     static MEMO: std::sync::Mutex<InsideStatsMemo> = std::sync::Mutex::new(Vec::new());
     // A segment's times are whole seconds: one whose oldest event is in the
     // window's first second may still hold an event before `since`.
@@ -458,7 +458,7 @@ fn remember_stats(memo: &mut InsideStatsMemo, dir: PathBuf, names: Vec<String>, 
 fn segment_stats_onto(
     mut stats: EventStats,
     path: &Path,
-    since: Option<DateTime<Utc>>,
+    since: Option<UtcTime>,
 ) -> Result<EventStats> {
     for event in read_segment(path)? {
         let event = event?;
@@ -530,7 +530,7 @@ fn archive_segments(event_log_path: &Path) -> Vec<ArchiveSegment> {
 
 /// The segments with an event at or after `since`, oldest first. The others
 /// are never opened.
-fn archive_segments_since(event_log_path: &Path, since: DateTime<Utc>) -> Vec<ArchiveSegment> {
+fn archive_segments_since(event_log_path: &Path, since: UtcTime) -> Vec<ArchiveSegment> {
     let mut segments = archive_segments(event_log_path);
     segments.retain(|segment| segment.newest >= since.timestamp());
     segments
@@ -561,11 +561,11 @@ fn read_segment(path: &Path) -> Result<impl Iterator<Item = Result<BuildEvent>>>
 fn archive_dropped_events(
     event_log_path: &Path,
     dropped: &[&str],
-    now: DateTime<Utc>,
+    now: UtcTime,
 ) -> Result<()> {
     #[derive(Deserialize)]
     struct TsOnly {
-        ts: DateTime<Utc>,
+        ts: UtcTime,
     }
     let times: Vec<i64> = dropped
         .iter()
@@ -599,7 +599,7 @@ fn archive_dropped_events(
 /// byte budget. A single oversized or expired segment is not an exception.
 fn prune_event_archive(
     event_log_path: &Path,
-    now: DateTime<Utc>,
+    now: UtcTime,
     max_age_secs: i64,
     max_bytes: u64,
 ) {
@@ -1056,7 +1056,7 @@ pub fn rotate_events_if_needed(
         "event log",
         LogLock::Build,
         |dropped| {
-            if let Err(e) = archive_dropped_events(event_log_path, dropped, Utc::now()) {
+            if let Err(e) = archive_dropped_events(event_log_path, dropped, UtcTime::now()) {
                 log::warn!("archiving rotated events: {e:#}");
             }
             fold(dropped)
@@ -1378,7 +1378,7 @@ mod tests {
         let log_path = dir.path().join("events.jsonl");
 
         let event = BuildEvent {
-            ts: Utc::now(),
+            ts: UtcTime::now(),
             crate_name: "serde".to_string(),
             root: "/work/tree".to_string(),
             version: "1.0.210".to_string(),
@@ -1720,7 +1720,7 @@ mod tests {
     fn test_heartbeat(crate_name: &str, elapsed_s: u64) -> HeartbeatEvent {
         HeartbeatEvent {
             event: HEARTBEAT_EVENT_TAG.to_string(),
-            ts: Utc::now(),
+            ts: UtcTime::now(),
             crate_name: crate_name.to_string(),
             root: "/work/tree".to_string(),
             pid: 4242,
@@ -2019,13 +2019,13 @@ mod tests {
         let log_path = dir.path().join("events.jsonl");
 
         let mut old_event = test_event("old", EventResult::Miss, 100, 80, 1024, "key1");
-        old_event.ts = Utc::now() - chrono::Duration::hours(2);
+        old_event.ts = UtcTime::now() - std::time::Duration::from_secs(2 * 3600);
         let new_event = test_event("new", EventResult::LocalHit, 10, 250, 512, "key2");
 
         log_event(&log_path, &old_event).unwrap();
         log_event(&log_path, &new_event).unwrap();
 
-        let since = Utc::now() - chrono::Duration::hours(1);
+        let since = UtcTime::now() - std::time::Duration::from_secs(1 * 3600);
         let events = read_events_since(&log_path, since).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].crate_name, "new");
@@ -2038,10 +2038,10 @@ mod tests {
     fn read_events_since_reaches_past_rotations() {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("events.jsonl");
-        let start = Utc::now() - chrono::Duration::hours(10);
+        let start = UtcTime::now() - std::time::Duration::from_secs(10 * 3600);
         for i in 0..40 {
             let mut event = test_event(&format!("c{i}"), EventResult::Miss, 1, 1, 1, "k");
-            event.ts = start + chrono::Duration::minutes(i * 15);
+            event.ts = start + std::time::Duration::from_secs(i * 15 * 60);
             log_event(&log_path, &event).unwrap();
             rotate_events_if_needed(&log_path, 2048, 3, dir.path()).unwrap();
         }
@@ -2060,7 +2060,7 @@ mod tests {
         // A window that starts later leaves the older events out, archived
         // or not.
         let recent =
-            read_events_since(&log_path, start + chrono::Duration::minutes(15 * 30)).unwrap();
+            read_events_since(&log_path, start + std::time::Duration::from_secs(15 * 30 * 60)).unwrap();
         assert_eq!(recent.len(), 10);
         assert_eq!(recent[0].crate_name, "c30");
 
@@ -2078,8 +2078,8 @@ mod tests {
         let archive = event_archive_dir(&log_path);
         assert_eq!(archive, dir.path().join("events.jsonl.archive"));
         std::fs::create_dir_all(&archive).unwrap();
-        let now = Utc::now();
-        let old = (now - chrono::Duration::hours(30)).timestamp();
+        let now = UtcTime::now();
+        let old = (now - std::time::Duration::from_secs(30 * 3600)).timestamp();
         std::fs::write(
             archive.join(format!("{old:011}-{old:011}-1-1.jsonl.zst")),
             b"garbage",
@@ -2093,21 +2093,21 @@ mod tests {
         .unwrap();
 
         let mut event = test_event("kept", EventResult::Miss, 1, 1, 1, "k");
-        event.ts = now - chrono::Duration::hours(2);
+        event.ts = now - std::time::Duration::from_secs(2 * 3600);
         let line = serde_json::to_string(&event).unwrap() + "\n";
         archive_dropped_events(&log_path, &[line.as_str()], now).unwrap();
 
-        let events = read_events_since(&log_path, now - chrono::Duration::hours(24)).unwrap();
+        let events = read_events_since(&log_path, now - std::time::Duration::from_secs(24 * 3600)).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].crate_name, "kept");
-        let names: Vec<_> = archive_segments_since(&log_path, now - chrono::Duration::hours(24))
+        let names: Vec<_> = archive_segments_since(&log_path, now - std::time::Duration::from_secs(24 * 3600))
             .into_iter()
             .map(|s| s.newest)
             .collect();
         assert_eq!(names.len(), 2, "the old segment is not listed: {names:?}");
         assert!(names.iter().all(|&newest| newest > old));
         assert!(
-            read_events_since(&log_path, now - chrono::Duration::hours(1))
+            read_events_since(&log_path, now - std::time::Duration::from_secs(1 * 3600))
                 .unwrap()
                 .is_empty()
         );
@@ -2132,7 +2132,7 @@ mod tests {
     fn archiving_lines_without_events_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("events.jsonl");
-        archive_dropped_events(&log_path, &["not json\n"], Utc::now()).unwrap();
+        archive_dropped_events(&log_path, &["not json\n"], UtcTime::now()).unwrap();
         assert!(!event_archive_dir(&log_path).exists());
     }
 
@@ -2141,12 +2141,12 @@ mod tests {
     fn archived_segment_is_named_by_its_events() {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("events.jsonl");
-        let now = Utc::now();
+        let now = UtcTime::now();
         let lines: Vec<String> = [5, 1, 3]
             .iter()
             .map(|h| {
                 let mut event = test_event("c", EventResult::Miss, 1, 1, 1, "k");
-                event.ts = now - chrono::Duration::hours(*h);
+                event.ts = now - std::time::Duration::from_secs(*h * 3600);
                 serde_json::to_string(&event).unwrap() + "\n"
             })
             .collect();
@@ -2156,11 +2156,11 @@ mod tests {
         assert_eq!(segments.len(), 1);
         assert_eq!(
             segments[0].newest,
-            (now - chrono::Duration::hours(1)).timestamp()
+            (now - std::time::Duration::from_secs(1 * 3600)).timestamp()
         );
         assert_eq!(
             segments[0].oldest,
-            (now - chrono::Duration::hours(5)).timestamp()
+            (now - std::time::Duration::from_secs(5 * 3600)).timestamp()
         );
     }
 
@@ -2171,7 +2171,7 @@ mod tests {
         let log_path = dir.path().join("events.jsonl");
         let archive = event_archive_dir(&log_path);
         std::fs::create_dir_all(&archive).unwrap();
-        let now = Utc::now();
+        let now = UtcTime::now();
         let t = now.timestamp();
         let write = |newest: i64, len: usize| {
             let name = format!("{newest:011}-{newest:011}-1-{len}.jsonl.zst");
@@ -2204,7 +2204,7 @@ mod tests {
         let log_path = dir.path().join("events.jsonl");
         let archive = event_archive_dir(&log_path);
         std::fs::create_dir_all(&archive).unwrap();
-        let now = Utc::now();
+        let now = UtcTime::now();
         let t = now.timestamp();
         let paths: Vec<_> = [(4, 10), (3, 11), (2, 12), (1, 13)]
             .iter()
@@ -2228,17 +2228,17 @@ mod tests {
         let log_path = dir.path().join("events.jsonl");
         let archive = event_archive_dir(&log_path);
         std::fs::create_dir_all(&archive).unwrap();
-        let now = Utc::now();
-        let write = |age: chrono::Duration| {
+        let now = UtcTime::now();
+        let write = |age: std::time::Duration| {
             let newest = (now - age).timestamp();
             let name = format!("{newest:011}-{newest:011}-1-1.jsonl.zst");
             std::fs::write(archive.join(&name), b"x").unwrap();
             archive.join(name)
         };
-        let nine_days = write(chrono::Duration::days(9));
-        let week = write(chrono::Duration::days(7));
-        let eight_days = write(chrono::Duration::days(8));
-        let hour = write(chrono::Duration::hours(1));
+        let nine_days = write(std::time::Duration::from_secs(9 * 86400));
+        let week = write(std::time::Duration::from_secs(7 * 86400));
+        let eight_days = write(std::time::Duration::from_secs(8 * 86400));
+        let hour = write(std::time::Duration::from_secs(1 * 3600));
         prune_event_archive(
             &log_path,
             now,
@@ -2257,17 +2257,17 @@ mod tests {
         let _lock = crate::test_support::process_state_test_lock();
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("events.jsonl");
-        let start = Utc::now() - chrono::Duration::hours(20);
+        let start = UtcTime::now() - std::time::Duration::from_secs(20 * 3600);
         let log = |from: i64, to: i64| {
             for i in from..to {
                 let mut event =
                     test_event(&format!("c{i}"), EventResult::Miss, 1, 2, i as u64, "k");
-                event.ts = start + chrono::Duration::minutes(i * 10);
+                event.ts = start + std::time::Duration::from_secs(i as u64 * 10 * 60);
                 log_event(&log_path, &event).unwrap();
                 rotate_events_if_needed(&log_path, 2048, 2, dir.path()).unwrap();
             }
         };
-        let check = |since: DateTime<Utc>| {
+        let check = |since: UtcTime| {
             let stats = event_stats_since(&log_path, since).unwrap();
             let expected = compute_stats(&read_events_since(&log_path, since).unwrap());
             assert_eq!(stats, expected, "since {since}");
@@ -2280,7 +2280,7 @@ mod tests {
         log(60, 90);
         assert_eq!(check(start).misses, 90);
         // A window that drops segments makes the total again.
-        let later = start + chrono::Duration::minutes(10 * 45);
+        let later = start + std::time::Duration::from_secs(10 * 45 * 60);
         assert_eq!(check(later).misses, 45);
         assert_eq!(check(start).misses, 90);
         // Another log's archive is not this one's.
@@ -2297,23 +2297,23 @@ mod tests {
         let _lock = crate::test_support::process_state_test_lock();
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("events.jsonl");
-        let now = Utc::now();
+        let now = UtcTime::now();
         let since =
-            DateTime::from_timestamp((now - chrono::Duration::hours(2)).timestamp(), 500_000_000)
+            UtcTime::from_timestamp((now - std::time::Duration::from_secs(2 * 3600)).timestamp(), 500_000_000)
                 .unwrap();
-        let line = |result: EventResult, ts: DateTime<Utc>| {
+        let line = |result: EventResult, ts: UtcTime| {
             let mut event = test_event("c", result, 1, 1, 1, "k");
             event.ts = ts;
             serde_json::to_string(&event).unwrap() + "\n"
         };
         // Hits before the window, misses inside it.
         for before in [
-            since - chrono::Duration::hours(1),
-            since - chrono::Duration::milliseconds(200),
+            since - std::time::Duration::from_secs(1 * 3600),
+            since - std::time::Duration::from_millis(200),
         ] {
             let lines = [
                 line(EventResult::LocalHit, before),
-                line(EventResult::Miss, since + chrono::Duration::minutes(30)),
+                line(EventResult::Miss, since + std::time::Duration::from_secs(30 * 60)),
             ];
             let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
             archive_dropped_events(&log_path, &refs, now).unwrap();
@@ -2330,12 +2330,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("events.jsonl");
         let archive = event_archive_dir(&log_path);
-        let now = Utc::now();
+        let now = UtcTime::now();
         let archive_misses = |count: i64| {
             let lines: Vec<String> = (0..count)
                 .map(|i| {
                     let mut event = test_event("c", EventResult::Miss, 1, 1, 1, "k");
-                    event.ts = now - chrono::Duration::minutes(10 * count + i);
+                    event.ts = now - std::time::Duration::from_secs(10 as u64 * count as u64 + i as u64 * 60);
                     serde_json::to_string(&event).unwrap() + "\n"
                 })
                 .collect();
@@ -2380,10 +2380,10 @@ mod tests {
     fn alternating_stats_windows_reuse_their_own_complete_totals() {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("events.jsonl");
-        let now = Utc::now();
+        let now = UtcTime::now();
         for age in [2, 1] {
             let mut event = test_event("archived", EventResult::Miss, 1, 2, 3, "k");
-            event.ts = now - chrono::Duration::hours(age);
+            event.ts = now - std::time::Duration::from_secs(age * 3600);
             let line = serde_json::to_string(&event).unwrap() + "\n";
             archive_dropped_events(&log, &[&line], now).unwrap();
         }
@@ -2420,9 +2420,9 @@ mod tests {
     fn a_shared_stats_memo_reuses_a_completed_window() {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("events.jsonl");
-        let now = Utc::now();
+        let now = UtcTime::now();
         let mut event = test_event("memo", EventResult::Miss, 1, 2, 3, "k");
-        event.ts = now - chrono::Duration::hours(1);
+        event.ts = now - std::time::Duration::from_secs(1 * 3600);
         let line = serde_json::to_string(&event).unwrap() + "\n";
         archive_dropped_events(&log, &[&line], now).unwrap();
         let segments = archive_segments(&log);
@@ -2442,10 +2442,10 @@ mod tests {
     fn a_broken_edge_segment_cannot_add_its_decoded_prefix_to_stats() {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("events.jsonl");
-        let now = Utc::now();
-        let since = now - chrono::Duration::hours(1);
+        let now = UtcTime::now();
+        let since = now - std::time::Duration::from_secs(1 * 3600);
         let mut event = test_event("edge", EventResult::Miss, 1, 2, 3, "k");
-        event.ts = since + chrono::Duration::minutes(10);
+        event.ts = since + std::time::Duration::from_secs(10 * 60);
         event.crate_name = "long_edge_".repeat(2048);
         let line = serde_json::to_string(&event).unwrap() + "\n";
         let mut frame = zstd::encode_all(line.repeat(4).as_bytes(), 3).unwrap();
@@ -2471,16 +2471,16 @@ mod tests {
         assert_eq!(stats.misses, 0);
         let segments = archive_segments_since(&log, event.ts);
         assert_eq!(segments.len(), 1, "the exact newest timestamp is included");
-        assert!(archive_segments_since(&log, event.ts + chrono::Duration::seconds(1)).is_empty());
+        assert!(archive_segments_since(&log, event.ts + std::time::Duration::from_secs(1)).is_empty());
     }
 
     #[test]
     fn a_failed_segment_is_retried_instead_of_becoming_a_cached_zero() {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("events.jsonl");
-        let now = Utc::now();
+        let now = UtcTime::now();
         let mut event = test_event("retry", EventResult::Miss, 1, 2, 3, "k");
-        event.ts = now - chrono::Duration::hours(1);
+        event.ts = now - std::time::Duration::from_secs(1 * 3600);
         let line = serde_json::to_string(&event).unwrap() + "\n";
         archive_dropped_events(&log, &[&line], now).unwrap();
         let segments = archive_segments(&log);
@@ -2504,10 +2504,10 @@ mod tests {
     fn streaming_a_broken_segment_discards_its_already_decoded_records() {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("events.jsonl");
-        let now = Utc::now();
+        let now = UtcTime::now();
         let mut archived = test_event("large_record", EventResult::Miss, 1, 2, 3, "k");
         archived.crate_name = "large_record_".repeat(2048);
-        archived.ts = now - chrono::Duration::hours(1);
+        archived.ts = now - std::time::Duration::from_secs(1 * 3600);
         let line = serde_json::to_string(&archived).unwrap() + "\n";
         let mut frame = zstd::encode_all(line.repeat(4).as_bytes(), 3).unwrap();
         let mut broken = zstd::encode_all(line.as_bytes(), 3).unwrap();
@@ -2531,7 +2531,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(decoded.iter().any(Result::is_ok));
         assert!(decoded.iter().any(Result::is_err));
-        let events = read_events_since(&log, now - chrono::Duration::days(1)).unwrap();
+        let events = read_events_since(&log, now - std::time::Duration::from_secs(1 * 86400)).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].crate_name, "live");
     }
@@ -2539,12 +2539,12 @@ mod tests {
     #[test]
     fn the_stats_memo_stays_bounded_across_many_archives() {
         let dir = tempfile::tempdir().unwrap();
-        let now = Utc::now();
+        let now = UtcTime::now();
         let mut memo = Vec::new();
         for i in 0..12 {
             let log = dir.path().join(format!("events-{i}.jsonl"));
             let mut event = test_event("bounded", EventResult::Miss, 1, 2, 3, "k");
-            event.ts = now - chrono::Duration::hours(1);
+            event.ts = now - std::time::Duration::from_secs(1 * 3600);
             let line = serde_json::to_string(&event).unwrap() + "\n";
             archive_dropped_events(&log, &[&line], now).unwrap();
             assert_eq!(
@@ -2563,7 +2563,7 @@ mod tests {
         let log = dir.path().join("events.jsonl");
         let archive = event_archive_dir(&log);
         fs::create_dir_all(&archive).unwrap();
-        let now = Utc::now();
+        let now = UtcTime::now();
         let old = now.timestamp() - 11;
         let path = archive.join(format!("{old:011}-{old:011}-1-1.jsonl.zst"));
         fs::write(&path, b"1234").unwrap();

@@ -11,6 +11,7 @@ use crate::events;
 use crate::machine::{PathIdentity, directory_identity};
 use crate::since::SinceWindow;
 use crate::store::{STAGING_SWEEP_GRACE, Store};
+use kache_core::time::UtcTime;
 
 mod doctor_daemon;
 mod doctor_probe;
@@ -173,7 +174,7 @@ pub(crate) fn snapshot_from_direct_reads(
 ) -> StatsSnapshot {
     let inventory = crate::store_view::read(config, false, "size").unwrap_or_default();
 
-    let since = window.cutoff(chrono::Utc::now());
+    let since = window.cutoff(UtcTime::now());
     let es = events::event_stats_since(&config.event_log_path(), since).unwrap_or_default();
 
     let recent_summaries = if include_summaries {
@@ -637,7 +638,10 @@ pub fn stats(
     }
 
     let mut extras = StatsExtras {
-        lifetime: lifetime_rows(lifetime.as_ref(), chrono::Local::now().date_naive()),
+        lifetime: lifetime_rows(
+            lifetime.as_ref(),
+            kache_core::time::today_local(),
+        ),
         ..Default::default()
     };
     extras.cache.extend(cloned_targets_row(&disk));
@@ -679,9 +683,7 @@ fn prefetch_session_lines(summaries: &[crate::events::BuildSummaryEvent]) -> Vec
         .take(5)
         .map(|s| {
             vec![
-                s.ts.with_timezone(&chrono::Local)
-                    .format("%m-%d %H:%M")
-                    .to_string(),
+                kache_core::time::local_parts(s.ts).month_day_clock(),
                 if s.session_id.is_empty() {
                     "legacy".to_string()
                 } else {
@@ -752,13 +754,9 @@ fn machine_rows(machine: &crate::otel::MachineSnapshot) -> Vec<StatsRow> {
         } else {
             gc.source.as_str()
         };
-        let when = chrono::DateTime::parse_from_rfc3339(&gc.last_run)
-            .map(|at| {
-                at.with_timezone(&chrono::Local)
-                    .format("%b %d %H:%M")
-                    .to_string()
-            })
-            .unwrap_or_else(|_| gc.last_run.clone());
+        let when = UtcTime::parse_rfc3339(&gc.last_run)
+            .map(|at| kache_core::time::local_parts(at).month_name_day_clock())
+            .unwrap_or_else(|| gc.last_run.clone());
         let mut note = format!(
             "{source}, {} evicted",
             term::count(gc.entries_evicted as u64)
@@ -828,7 +826,7 @@ pub(crate) fn render_stats_with(
 /// every total is. Dates are local, like the `Last GC` row.
 fn lifetime_rows(
     totals: Option<&crate::savings::Totals>,
-    today: chrono::NaiveDate,
+    today: kache_core::time::CivilDate,
 ) -> Vec<StatsRow> {
     let Some(totals) = totals else {
         return Vec::new();
@@ -869,19 +867,14 @@ fn lifetime_rows(
     if rows.is_empty() {
         return rows;
     }
-    let since = totals.since.with_timezone(&chrono::Local).date_naive();
+    let since = kache_core::time::local_date(totals.since);
     rows.insert(0, ("Since", since_label(since, today), String::new()));
     rows
 }
 
 /// `Sep 12`, with the year when it is not this year's.
-fn since_label(since: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
-    use chrono::Datelike;
-    if since.year() == today.year() {
-        since.format("%b %d").to_string()
-    } else {
-        since.format("%b %d %Y").to_string()
-    }
+fn since_label(since: kache_core::time::CivilDate, today: kache_core::time::CivilDate) -> String {
+    since.label_since(today)
 }
 
 /// Hit rate, source counts, weighted hit rate, time saved and miss time.
@@ -1175,8 +1168,8 @@ fn format_epoch_ms_utc(ms: u64) -> String {
     if ms == 0 {
         return "unknown time".to_string();
     }
-    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms as i64)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
+    UtcTime::from_timestamp_millis(ms as i64)
+        .map(kache_core::time::format_utc_ymd_hm)
         .unwrap_or_else(|| "unknown time".to_string())
 }
 
@@ -1365,16 +1358,11 @@ pub fn report(
 /// Format a SQLite datetime string (e.g. "2024-03-12 10:30:00") as a
 /// human-readable relative time like "2h ago", "3d ago", etc.
 fn format_relative_time(sqlite_dt: &str) -> String {
-    let parsed = chrono::NaiveDateTime::parse_from_str(sqlite_dt, "%Y-%m-%d %H:%M:%S")
-        .ok()
-        .map(|naive| {
-            chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(naive, chrono::Utc)
-        });
+    let parsed = UtcTime::parse_sqlite(sqlite_dt);
 
     match parsed {
         Some(dt) => {
-            let dur = chrono::Utc::now().signed_duration_since(dt);
-            let secs = dur.num_seconds().max(0);
+            let secs = UtcTime::now().saturating_duration_since(dt).as_secs();
             if secs < 60 {
                 "just now".to_string()
             } else if secs < 3600 {

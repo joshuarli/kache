@@ -897,10 +897,10 @@ fn same_root(event: &BuildEvent, root: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, TimeZone, Utc};
+    use kache_core::time::UtcTime;
 
-    fn ts(secs: i64) -> DateTime<Utc> {
-        Utc.timestamp_opt(1_700_000_000 + secs, 0).unwrap()
+    fn ts(secs: i64) -> UtcTime {
+        UtcTime::from_timestamp(1_700_000_000 + secs, 0).unwrap()
     }
 
     fn event(
