@@ -82,7 +82,7 @@
 //!   paths don't use `<`/`>`; Windows uses them only inside `\\?\`
 //!   device-path forms which aren't cache-key inputs. Acceptable risk.
 //!
-//! ## macOS Unicode normalization (NFC vs NFD)
+//! ## macOS Unicode forms (NFC vs NFD): matched byte-literally
 //!
 //! HFS+ historically stored filenames in NFD form (`é` as `e` +
 //! combining accent — three UTF-8 bytes); APFS preserves whatever
@@ -90,14 +90,13 @@
 //! typically use NFC (`é` as a single codepoint — two UTF-8 bytes).
 //! Same character to the eye, **different bytes**.
 //!
-//! Without normalization, a user `José` would silently lose
-//! cross-machine cache sharing while ASCII-named users got it for
-//! free — the cache key for their workspace would diverge across
-//! tools that disagree on the encoding. We normalize both sides
-//! (rule prefixes via [`canonical_string`], input via
-//! [`PathNormalizer::normalize`]) to NFC before matching. Same
-//! source bytes after normalization → same key.
-//!
+//! Matching is byte-literal: no Unicode normalization is applied to
+//! either side, so tools that disagree on the encoding (NFC vs NFD)
+//! produce different keys for the same eye-identical path. A user
+//! `José` whose filesystem APIs return NFD while their env vars use
+//! NFC gets no cross-form sharing while ASCII-named users do. Same
+//! source bytes → same key; different bytes → different key, even
+//! when the characters look identical.
 //! ## Sentinel strategy
 //!
 //! Each prefix maps to a stable token. Sentinels are angle-bracketed
@@ -116,7 +115,6 @@
 //! during ad-hoc dev runs without needing to run the full harness.
 
 use std::path::{Path, PathBuf};
-use unicode_normalization::UnicodeNormalization;
 
 /// One canonicalized prefix plus the two things it maps to: a stable
 /// `key_sentinel` for cache-key inputs, and a resolvable `flag_target`
@@ -744,20 +742,13 @@ impl PathNormalizer {
     /// [`Self::from_env`] — see that method's docs. The matching
     /// here is a byte-literal pass over every variant.
     ///
-    /// **Unicode normalization to NFC** is applied to the input
-    /// before matching, because rule prefixes are stored in NFC
-    /// (see [`canonical_string`]). This handles the macOS HFS+/APFS
-    /// case where filesystem APIs may return paths in NFD (`é` as
-    /// `e` + combining accent) while env vars set by other tools
-    /// use NFC (`é` as a single codepoint). Same character to the
-    /// eye, different bytes — without this, a user `José` would
-    /// silently lose cross-machine cache sharing while ASCII-named
-    /// users got it for free. NFC is semantic-preserving for path
-    /// strings (composed and decomposed forms are equivalent path
-    /// representations); the normalize step is a no-op on inputs
-    /// that are already NFC (the common case).
+    /// Matching is byte-literal over the input and every stored
+    /// prefix variant: no Unicode normalization is applied, so an
+    /// NFD input does not match an NFC rule prefix even when they
+    /// look identical. Callers that need cross-form sharing must
+    /// agree on one encoding before calling.
     pub fn normalize<S: AsRef<str>>(&self, s: S) -> String {
-        let mut out: String = s.as_ref().nfc().collect();
+        let mut out: String = s.as_ref().to_string();
         for rule in &self.rules {
             if rule.prefix.is_empty() {
                 continue;
@@ -958,7 +949,7 @@ fn configured_base_dir_rules(base_dirs: &[String]) -> (Vec<String>, Vec<Rule>) {
 
     let mut lexical_rules = Vec::new();
     for (index, path) in configured.iter().enumerate() {
-        push_configured_base_dir_rule(&mut lexical_rules, path.nfc().collect(), index);
+        push_configured_base_dir_rule(&mut lexical_rules, path.to_owned(), index);
     }
     let reserved_lexical: std::collections::HashSet<String> = lexical_rules
         .iter()
@@ -967,7 +958,7 @@ fn configured_base_dir_rules(base_dirs: &[String]) -> (Vec<String>, Vec<Rule>) {
 
     let mut alias_rules = Vec::new();
     for (index, path) in configured.iter().enumerate() {
-        let lexical: String = path.nfc().collect();
+        let lexical: String = path.to_owned();
         // Shared configs may contain roots for another OS. Keep those lexical
         // and inert: on Windows, for example, `/work` is root-relative and
         // canonicalizing it could manufacture a `C:\\work` alias that was
@@ -1269,18 +1260,12 @@ fn warn_if_path_leaked(s: &str) {
 /// match between every byte and produce nonsense.
 ///
 /// Returns the OS-native canonical form (Windows: `\` separators,
-/// preserved case) **normalized to Unicode NFC**. The Windows
-/// separator/case variants are added as ADDITIONAL rules by
+/// preserved case), byte-verbatim. The Windows separator/case
+/// variants are added as ADDITIONAL rules by
 /// [`push_rule_with_variants`] — keeping the OS-native form intact
 /// lets `Path::starts_with` and other path-aware code consume this
-/// string without surprise.
-///
-/// Why NFC: macOS filesystem APIs may return paths in NFD form
-/// (HFS+ legacy, sometimes APFS); env vars typically use NFC. Both
-/// rule and input get normalized to NFC at their respective sites
-/// so byte-literal substring matching works regardless of which
-/// form the source produced. See [`PathNormalizer::normalize`] for
-/// the matching-side normalization.
+/// string without surprise. No Unicode normalization is applied:
+/// see [`PathNormalizer::normalize`] for the matching contract.
 pub(crate) fn canonical_string(path: &Path) -> Option<String> {
     canonical_form(&path.canonicalize().ok()?)
 }
@@ -1288,7 +1273,7 @@ pub(crate) fn canonical_string(path: &Path) -> Option<String> {
 /// [`canonical_string`] for a path the caller has already canonicalized.
 pub(crate) fn canonical_form(canon: &Path) -> Option<String> {
     let lossy = canon.to_string_lossy();
-    let s: String = strip_verbatim_prefix(&lossy).nfc().collect();
+    let s: String = strip_verbatim_prefix(&lossy).into_owned();
     if s.is_empty() { None } else { Some(s) }
 }
 
@@ -1414,15 +1399,14 @@ fn push_legacy_base_dir_rules(
     );
 }
 
-/// Preserve raw filesystem spelling while also adding the NFC/key form and
-/// the ordinary Windows spelling of a verbatim canonical path.
+/// Preserve raw filesystem spelling alongside the ordinary Windows
+/// spelling of a verbatim canonical path.
 fn os_path_spellings(path: &Path) -> Vec<String> {
     let Some(raw) = path.as_os_str().to_str().filter(|value| !value.is_empty()) else {
         return Vec::new();
     };
-    let normalized: String = raw.nfc().collect();
-    let stripped = strip_verbatim_prefix(&normalized).into_owned();
-    let mut spellings = vec![raw.to_string(), normalized, stripped];
+    let stripped = strip_verbatim_prefix(raw).into_owned();
+    let mut spellings = vec![raw.to_string(), stripped];
     spellings.retain(|spelling| !is_filesystem_root_prefix(spelling));
     spellings.dedup();
     spellings
@@ -2588,17 +2572,11 @@ mod tests {
     }
 
     #[test]
-    fn normalize_matches_across_nfc_nfd_unicode_normalization_forms() {
-        // The macOS NFC vs NFD case. `é` has two valid UTF-8
-        // byte sequences:
-        //   NFC: U+00E9         → 0xC3 0xA9       (2 bytes)
-        //   NFD: U+0065 U+0301  → 0x65 0xCC 0x81  (3 bytes)
-        // String::replace is byte-literal so the two forms don't
-        // match each other directly. PathNormalizer normalizes both
-        // sides to NFC before matching, so a rule built from a path
-        // returned in NFD (HFS+ legacy / some macOS APIs) still
-        // matches an input string in NFC (typical env-var form).
-        let nfc_prefix = "/Users/Jos\u{00E9}/.cargo"; // single codepoint é
+    fn normalize_is_byte_literal_across_unicode_forms() {
+        // No normalization is applied: NFC (U+00E9) and NFD (U+0065
+        // U+0301) are different byte sequences and do not match each
+        // other. Only byte-identical spellings hit.
+        let nfc_prefix = "/Users/Jos\u{00E9}/.cargo"; // single codepoint
         let nfd_input = "/Users/Jos\u{0065}\u{0301}/.cargo/registry/foo"; // e + combining acute
 
         // Sanity: the byte sequences differ.
@@ -2607,37 +2585,28 @@ mod tests {
             &nfd_input.as_bytes()[..nfc_prefix.len()]
         );
 
-        // Rule prefix in NFC form — `from_env`'s `canonical_string`
-        // would have produced this. Input arrives in NFD; normalize
-        // converts it to NFC before matching, so the substring hit
-        // fires.
         let n = pn_with_rules(vec![(nfc_prefix, "<CARGO_HOME>")]);
-        let out = n.normalize(nfd_input);
-        assert_eq!(out, "<CARGO_HOME>/registry/foo");
+        assert_eq!(n.normalize(nfd_input), nfd_input);
 
-        // Symmetric: NFC input also matches.
         let nfc_input = "/Users/Jos\u{00E9}/.cargo/registry/bar";
         assert_eq!(n.normalize(nfc_input), "<CARGO_HOME>/registry/bar");
     }
 
     #[test]
-    fn canonical_string_normalizes_to_nfc() {
-        // Rule construction must produce NFC-form prefixes so that
-        // the NFC normalization in `normalize` can match. Even if
-        // the underlying path uses non-NFC bytes (which canonicalize
-        // may return on macOS), the stored prefix must be NFC.
+    fn canonical_string_passes_through_raw_bytes() {
+        // Rule construction stores the canonical bytes verbatim: no
+        // normalization step reshapes them.
         let dir = TempDir::new().unwrap();
-        let nfc_name = "Jos\u{00E9}";
-        let subdir = dir.path().join(nfc_name);
+        let subdir = dir.path().join("plain");
         std::fs::create_dir(&subdir).unwrap();
 
         let result = canonical_string(&subdir).expect("canonicalize should succeed");
-        // NFC contract: re-normalizing gives the same string.
-        let renormalized: String = result.nfc().collect();
-        assert_eq!(
-            result, renormalized,
-            "canonical_string output must be in NFC form, got {result:?}"
-        );
+        let expected = subdir
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(result, expected);
     }
 
     #[test]

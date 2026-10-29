@@ -90,9 +90,6 @@ libc = "0.2"
 mutants = "0.0.4"
 memchr = "2"
 tempfile = "3"
-# Unicode tables affect persisted cache-key bytes. Keep Unicode 17 until
-# normalization changes have a reviewed cache-key compatibility migration.
-unicode-normalization = "=0.1.25"
 # Used by `src/compiler/flags.rs` (the cc / future Swift / future MSVC
 # flag classifier). The `regex` crate is linear-time by construction
 # (no backtracking, no lookarounds) — matters because the wrapper runs

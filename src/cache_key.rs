@@ -5410,7 +5410,7 @@ fn normalize_env_dep_value_with_hasher(
     // Resolve the value to the SAME canonical form the rule prefixes use
     // (kunobi-ninja/kache#399). An out-of-tree `OUT_DIR` can arrive with
     // an unresolved `..`. The PathNormalizer rules are `canonicalize()`d (symlinks + `..` resolved, `\\?\` stripped, OS-native
-    // separators, NFC), and `normalize` is a byte-literal substring replace — so
+    // separators), and `normalize` is a byte-literal substring replace — so
     // the raw value matches no rule and the build location stays in the key,
     // missing on relocate. Running the value through the rules' own
     // `canonical_string` puts it in matchable shape (an out-of-tree OUT_DIR
@@ -5419,7 +5419,8 @@ fn normalize_env_dep_value_with_hasher(
     // dir exists at key time (the build script already
     // wrote into it). Fall back to a lexical `.`/`..` collapse when the path is
     // absent. A no-op on Linux/macOS with a relative target dir, which cargo
-    // canonicalizes before invoking rustc.
+    // canonicalizes before invoking rustc. Both sides stay byte-verbatim
+    // (no Unicode normalization), so they always agree with each other.
     let resolved = value
         .canonical()
         .and_then(crate::path_normalizer::canonical_form)
