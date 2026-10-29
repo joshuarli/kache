@@ -33,8 +33,6 @@ tempfile = "3"
 
 [dev-dependencies]
 filetime = "0.2"
-tempfile = "3"
-serde_json = "1"
 
 # Preserve the lint settings of the binary these modules came from.
 [lints.clippy]
