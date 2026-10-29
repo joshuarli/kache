@@ -126,7 +126,7 @@ impl Selectors {
     /// Needles from any `name:<needle>` selectors. `name:` is a substring
     /// filter, so callers that must resolve to a single scenario (the bench
     /// runner) use these to prefer an exact-name match when the substring is
-    /// ambiguous — e.g. `firefox` also catches `bench-firefox-windows`.
+    /// ambiguous — e.g. `hk` also catches `bench-hk-pull-mbx`.
     pub fn name_needles(&self) -> Vec<&str> {
         self.items
             .iter()

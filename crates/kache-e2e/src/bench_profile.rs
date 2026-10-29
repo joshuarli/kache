@@ -175,14 +175,11 @@ impl BenchProfile {
             }
             profiles.push(Self::load(&metadata.toml_path)?);
         }
-        // `name:` is a substring match, so a short profile like `firefox` also
-        // catches `bench-firefox-windows`. When several scenarios match but
-        // exactly one carries the name the profile names (`<needle>` or
-        // `bench-<needle>`), prefer that single scenario. This lets
-        // `make bench PROFILE=firefox` resolve unambiguously to `bench-firefox` without
-        // an `os:`-flavored discriminator tag (#458). A genuinely ambiguous
-        // substring with no exact hit is left untouched for the caller's
-        // "matched multiple scenarios" guard to report.
+        // `name:firefox` is a SUBSTRING match, so it catches the
+        // host-native (`bench-firefox`) cross-clone scenario plus its pull-scenario
+        // variants. Discovery then disambiguates to the scenario whose exact name
+        // the profile names (`bench-firefox`), so `make bench PROFILE=firefox` resolves
+        // to a single scenario without an `os:`-flavored discriminator tag (#458).
         if profiles.len() > 1 {
             let needles = selectors.name_needles();
             let mut exact: Vec<String> = profiles
@@ -926,21 +923,6 @@ setup_marker = "{}"
             "short `firefox` profile resolves to exactly one scenario"
         );
         assert_eq!(firefox[0].name, "bench-firefox");
-
-        // Exact match for the cross-clone Windows scenario.
-        let mut win_sel = base.to_vec();
-        win_sel.push("name:bench-firefox-windows".to_string());
-        let win = BenchProfile::discover(&root, &Selectors::parse_many(&win_sel).unwrap()).unwrap();
-        assert_eq!(win.len(), 1);
-        assert_eq!(win[0].name, "bench-firefox-windows");
-
-        // Exact match for the pull-scenario Windows variant.
-        let mut pull_win_sel = base.to_vec();
-        pull_win_sel.push("name:bench-firefox-pull-windows".to_string());
-        let pull_win =
-            BenchProfile::discover(&root, &Selectors::parse_many(&pull_win_sel).unwrap()).unwrap();
-        assert_eq!(pull_win.len(), 1);
-        assert_eq!(pull_win[0].name, "bench-firefox-pull-windows");
     }
 
     #[test]
@@ -1162,37 +1144,6 @@ diff --git a/hello.txt b/hello.txt
         assert!(moz.contains("mk_add_options \"export MOZ_BUILD_DATE=20260101000000\""));
         assert!(moz.contains("export KACHE_PATH_ONLY_ENV_VARS=BUILDCONFIG_RS,"));
         assert!(moz.ends_with('\n'), "mozconfig is newline-terminated");
-    }
-
-    #[test]
-    fn shipped_firefox_windows_profile_uses_only_upstream_firefox_fixes() {
-        let p = BenchProfile::load(&repo_profile("firefox-windows"))
-            .expect("firefox-windows.toml loads");
-        assert_eq!(p.name, "bench-firefox-windows");
-        let patches = p
-            .files
-            .iter()
-            .filter(|file| file.mode == FileMode::Patch)
-            .map(|file| file.content_file.as_deref().expect("patch file"))
-            .collect::<Vec<_>>();
-        // Both are Mozilla's own fixes that FIREFOX_151_0_RELEASE lacks:
-        // cbindgen visibility (Bug 2046162) and the gecko-profiler bindgen
-        // alias under libclang 21 (Bug 2038918, #1017).
-        assert_eq!(patches.len(), 2, "{patches:?}");
-        assert!(patches[0].ends_with("firefox-cbindgen-visibility.patch"));
-        assert!(patches[1].ends_with("firefox-gecko-profiler-bindgen.patch"));
-        let mozconfig = p
-            .files
-            .iter()
-            .find(|file| file.path == "mozconfig")
-            .expect("mozconfig entry");
-        assert!(
-            !mozconfig
-                .content
-                .as_deref()
-                .expect("inline mozconfig")
-                .contains("KACHE_PATH_ONLY_ENV_VARS")
-        );
     }
 
     /// The shipped Lance scenario wires kache via `RUSTC_WRAPPER`, exposes the

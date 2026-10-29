@@ -318,11 +318,13 @@ fn wrapped_compile_failures_do_not_degrade_the_run() {
 }
 
 #[test]
-fn resolve_binary_prefers_existing_then_exe() {
+fn resolve_binary_never_guesses_an_extension() {
     let dir = std::env::temp_dir().join(format!("kb-resolvebin-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
+    // No `.exe` fallback: Windows support is gone, so a missing binary stays
+    // missing even when a same-named `.exe` sits beside it.
     std::fs::write(dir.join("foo.exe"), b"x").unwrap();
-    assert_eq!(resolve_binary(&dir.join("foo")), dir.join("foo.exe"));
+    assert_eq!(resolve_binary(&dir.join("foo")), dir.join("foo"));
     std::fs::write(dir.join("bar"), b"x").unwrap();
     assert_eq!(resolve_binary(&dir.join("bar")), dir.join("bar"));
     assert_eq!(resolve_binary(&dir.join("nope")), dir.join("nope"));
@@ -2559,9 +2561,9 @@ fn a_reason_label_drops_paths_and_keeps_flags() {
         ("x '/a/b' \"/c/d\" y", "x '<path> \"<path> y"),
         ("x (./obj/a.o) y", "x (<path> y"),
         ("x ../src/a.c ~/b.c y", "x <path> <path> y"),
-        ("x .\\obj\\a.o ..\\b.o y", "x <path> <path> y"),
-        ("x C:\\Users\\me\\a.h C:/b/c y", "x <path> <path> y"),
-        ("x \\\\?\\C:\\a y", "x <path> y"),
+        // A drive-letter spelling is a relative name on Unix, not a path
+        // worth a placeholder.
+        ("x C:/b/c y", "x C:/b/c y"),
         // An MSVC option, a list of extensions and a relative name are not
         // paths worth a placeholder.
         (
