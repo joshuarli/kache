@@ -291,7 +291,7 @@ pub(crate) fn warn_marker_path(kind: &str, cache_dir: &Path) -> PathBuf {
 /// `warn_marker_path`) because the cache dir can't be trusted here.
 fn warn_store_unavailable_once(config: &Config, err: &anyhow::Error) {
     // Full detail always goes to the debug log for `KACHE_LOG` users.
-    tracing::warn!("failed to open store: {:#}", err);
+    log::warn!("failed to open store: {:#}", err);
 
     let marker = warn_marker_path("store", &config.cache_dir);
     warn_once_per_session(&marker, WARN_SESSION_SECS, &store_unavailable_message(err));
@@ -316,10 +316,10 @@ pub(crate) fn warn_nonlocal_cache_fs_once(config: &Config) {
         return;
     };
 
-    tracing::warn!(
-        cache_dir = %config.cache_dir.display(),
-        filesystem = ?probe.name,
-        "cache directory is not on host-local storage; the WAL index can corrupt"
+    log::warn!(
+        "cache directory is not on host-local storage; the WAL index can corrupt; cache_dir={} filesystem={:?}",
+        config.cache_dir.display(),
+        probe.name
     );
 
     let marker = warn_marker_path("cachefs", &config.cache_dir);
@@ -488,11 +488,11 @@ pub(crate) fn record_auto_gc_outcome(config: &Config, size_after: u64, held: u64
         let _ = std::fs::remove_file(&path);
         return;
     };
-    tracing::info!("{}", auto_gc_outcome_line(&next, config.max_size));
+    log::info!("{}", auto_gc_outcome_line(&next, config.max_size));
     if let Ok(json) = serde_json::to_vec(&next)
         && let Err(e) = crate::atomic::atomic_replace(&path, &json)
     {
-        tracing::debug!("auto-gc: could not write {}: {e:#}", path.display());
+        log::debug!("auto-gc: could not write {}: {e:#}", path.display());
     }
 }
 
@@ -563,7 +563,7 @@ fn auto_gc_wanted(config: &Config, store: &Store) -> bool {
     let total = match store.physical_size() {
         Ok(total) => total,
         Err(e) => {
-            tracing::debug!("auto-gc: store size query failed: {e:#}");
+            log::debug!("auto-gc: store size query failed: {e:#}");
             return false;
         }
     };
@@ -583,7 +583,7 @@ fn auto_gc_wanted(config: &Config, store: &Store) -> bool {
         return false;
     }
 
-    tracing::info!(
+    log::info!(
         "auto-gc: cache or disk pressure, triggering background GC (store {}, max {}, slack {}%)",
         total,
         swept.max_size,
@@ -631,7 +631,7 @@ fn claim_auto_gc_check(config: &Config, stamp: &Path) -> bool {
     match std::fs::File::create_new(stamp) {
         Ok(_) => true,
         Err(e) => {
-            tracing::debug!("auto-gc: could not claim {}: {e}", stamp.display());
+            log::debug!("auto-gc: could not claim {}: {e}", stamp.display());
             false
         }
     }
@@ -682,7 +682,7 @@ fn after_store_with(
     if !is_storage_full(error) || !space_recovery_wanted(config, store) {
         return;
     }
-    tracing::info!(
+    log::info!(
         "auto-gc: the volume of {} is full, requesting recovery",
         store.cache_dir().display()
     );
@@ -738,7 +738,7 @@ fn request_auto_gc(
     spawn_worker: impl FnOnce(&Config),
 ) {
     if hint_daemon(config) {
-        tracing::info!("auto-gc: handed the sweep to the daemon");
+        log::info!("auto-gc: handed the sweep to the daemon");
         return;
     }
     spawn_worker(config);
@@ -760,7 +760,7 @@ fn spawn_auto_gc_worker(config: &Config) {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(e) => {
-            tracing::warn!("auto-gc: cannot resolve current executable: {e}");
+            log::warn!("auto-gc: cannot resolve current executable: {e}");
             return;
         }
     };
@@ -789,8 +789,8 @@ fn spawn_auto_gc_worker(config: &Config) {
     crate::platform::configure_detached_process(&mut cmd);
 
     match cmd.spawn() {
-        Ok(_) => tracing::info!("auto-gc: spawned background `kache gc`"),
-        Err(e) => tracing::warn!("auto-gc: failed to spawn `kache gc`: {e}"),
+        Ok(_) => log::info!("auto-gc: spawned background `kache gc`"),
+        Err(e) => log::warn!("auto-gc: failed to spawn `kache gc`: {e}"),
     }
 }
 
@@ -815,7 +815,7 @@ fn flush_or_hand_off_durability(config: &Config, store: &Store, cache_key: &str)
         return;
     }
     if let Err(error) = store.flush_entry_durability(cache_key) {
-        tracing::debug!("durability flush failed for {cache_key}: {error:#}");
+        log::debug!("durability flush failed for {cache_key}: {error:#}");
     }
 }
 
@@ -1046,7 +1046,7 @@ fn open_primary_and_fallback_for(
     if !volume_cache_dirs_match(&routed.cache_dir, &config.cache_dir) {
         match Store::open_with_options(config, options.clone()) {
             Ok(store) => fallbacks.push(store),
-            Err(e) => tracing::warn!(
+            Err(e) => log::warn!(
                 "main store unavailable for volume-shard fallback ({}): {e:#}",
                 config.cache_dir.display()
             ),
@@ -1117,7 +1117,7 @@ fn lookup_or_miss_with_clock<T>(
         }
         step = (step * 2).min(LOOKUP_BUSY_PAUSE_MAX);
     };
-    tracing::warn!(
+    log::warn!(
         "local store lookup failed for {crate_name} after {:?}: {error:#}; compiling it as a miss",
         elapsed()
     );
@@ -1140,7 +1140,7 @@ pub(crate) fn open_readonly_store(
     match Store::open_read_only_with_options(&readonly, options) {
         Ok(store) => Some(store),
         Err(e) => {
-            tracing::warn!("read-only store {} unavailable: {e:#}", dir.display());
+            log::warn!("read-only store {} unavailable: {e:#}", dir.display());
             None
         }
     }
@@ -1314,7 +1314,7 @@ fn run_cc_inner(
     let refuse = compiler.refuse_reasons(&parsed);
     if !refuse.is_empty() {
         let reasons: Vec<&str> = refuse.iter().map(|r| r.description()).collect();
-        tracing::debug!(
+        log::debug!(
             "{}: passthrough ({})",
             compiler.id().as_str(),
             reasons.join("; ")
@@ -1342,7 +1342,7 @@ fn run_cc_inner(
             .project_rules
             .user_bypass_reason_for(&crate_name, &parsed.rest, env)
     {
-        tracing::debug!("cc invocation bypassed by user rule: {reason}");
+        log::debug!("cc invocation bypassed by user rule: {reason}");
         return cc_passthrough_with_event(config, &parsed, &crate_name, &event_root, start, reason);
     }
 
@@ -1353,7 +1353,7 @@ fn run_cc_inner(
             .project_rules
             .source_excluded_for(source, &exclude_roots, env)
     {
-        tracing::debug!("cc source excluded from cache: {}", source.display());
+        log::debug!("cc source excluded from cache: {}", source.display());
         return cc_passthrough_with_event(
             config,
             &parsed,
@@ -1507,7 +1507,7 @@ fn run_cc_with_store(
             unreachable!("a deferred cc key is resolved above")
         }
         Err(e) => {
-            tracing::debug!(
+            log::debug!(
                 "cc cache key failed for {}: {} — passthrough",
                 crate_name,
                 e
@@ -1523,7 +1523,7 @@ fn run_cc_with_store(
         }
     };
     let key_ms = key_start.elapsed().as_millis() as u64;
-    tracing::debug!("cc cache key for {}: {}", crate_name, &cache_key[..16]);
+    log::debug!("cc cache key for {}: {}", crate_name, &cache_key[..16]);
 
     // ── Local cache lookup ───────────────────────────────────────
     let lookup_start = std::time::Instant::now();
@@ -1544,11 +1544,11 @@ fn run_cc_with_store(
     if let Some((hit_store, meta)) = lookup {
         if meta.files.is_empty() {
             // Poisoned entry (earlier bug) — evict and recompile.
-            tracing::warn!("cc cache entry for {} has no files, evicting", crate_name);
+            log::warn!("cc cache entry for {} has no files, evicting", crate_name);
             lookup_rejection = "matching entry has no cached artifacts".to_string();
             let _ = hit_store.remove_entry(&cache_key);
         } else if let Some(reason) = cc_cache_entry_rejection_reason(parsed, &meta) {
-            tracing::warn!(
+            log::warn!(
                 "cc cache entry for {} lacks artifacts required by this invocation ({reason}), evicting",
                 crate_name,
             );
@@ -1563,7 +1563,7 @@ fn run_cc_with_store(
                 if e.downcast_ref::<PartialCcRestore>().is_some() {
                     return restored.map(|_| 0);
                 }
-                tracing::warn!(
+                log::warn!(
                     "restoring cc cache hit for {} failed: {} — recompiling",
                     crate_name,
                     e
@@ -1582,7 +1582,7 @@ fn run_cc_with_store(
             }
             if let Ok(meta) = restored {
                 let restore_ms = restore_start.elapsed().as_millis() as u64;
-                tracing::debug!(
+                log::debug!(
                     "cc local cache hit for {} ({})",
                     crate_name,
                     &cache_key[..16]
@@ -1648,7 +1648,7 @@ fn run_cc_with_store(
             Ok(BuildClaim::Acquired(lock)) => _build_lock = Some(lock),
             Ok(BuildClaim::Committed(meta)) => committed = Some(*meta),
             Ok(BuildClaim::Contended) => {
-                tracing::debug!(
+                log::debug!(
                     "waiting for cc {} to be built by another process",
                     crate_name
                 );
@@ -1659,7 +1659,7 @@ fn run_cc_with_store(
                     .filter(|meta| cc_scheduled_hit_ok(parsed, meta));
             }
             Err(e) => {
-                tracing::debug!("cc claim_build failed ({e:#}); compiling without a key lock");
+                log::debug!("cc claim_build failed ({e:#}); compiling without a key lock");
             }
         }
     }
@@ -1677,7 +1677,7 @@ fn run_cc_with_store(
             if e.downcast_ref::<PartialCcRestore>().is_some() {
                 return Err(e);
             }
-            tracing::warn!(
+            log::warn!(
                 "restoring cc coalesced hit for {} failed: {} — recompiling",
                 crate_name,
                 e
@@ -1757,7 +1757,7 @@ fn run_cc_with_store(
         }
     };
     if inputs_changed {
-        tracing::debug!(
+        log::debug!(
             "cc: {} read an input modified during the build; not storing it",
             crate_name
         );
@@ -1796,19 +1796,16 @@ fn run_cc_with_store(
     let admitted = store_admits_compile(config, compile_time_ms);
     let store_decision = cc_store_decision(store_candidate, admitted);
     if store_decision.admission_skipped {
-        tracing::debug!(
-            crate_name = %crate_name,
-            compile_time_ms,
-            min_store_compile_ms = config.min_store_compile_ms,
-            "admission: compile too cheap to store"
+        log::debug!(
+            "admission: compile too cheap to store; crate_name={crate_name} compile_time_ms={compile_time_ms} min_store_compile_ms={}",
+            config.min_store_compile_ms
         );
     }
     // A store candidate's memo is withheld only when the include dirs moved;
     // the entry would describe the same stale read set.
     if store_decision.should_store && !memo_publishable {
-        tracing::debug!(
-            crate_name = %crate_name,
-            "cc include-dir names changed during compile; skipping store"
+        log::debug!(
+            "cc include-dir names changed during compile; skipping store; crate_name={crate_name}"
         );
     } else if store_decision.should_store {
         let _trace = crate::phase_trace::phase("store");
@@ -1895,7 +1892,7 @@ fn run_cc_with_store(
                     }
                     Err(e) => {
                         store_error = store_error_for_event(&e);
-                        tracing::warn!(
+                        log::warn!(
                             "failed to store cc cache entry for {}: {}",
                             crate_name,
                             store_error
@@ -1905,7 +1902,7 @@ fn run_cc_with_store(
             }
             Err(e) => {
                 store_error = store_error_for_event(&e);
-                tracing::warn!(
+                log::warn!(
                     "failed to prepare cc cache entry for {}: {}",
                     crate_name,
                     store_error
@@ -2581,7 +2578,7 @@ fn restore_cc_from_cache(
             ArtifactKind::DepInfo => match parsed.depinfo_output_path() {
                 Some(path) => path,
                 None => {
-                    tracing::debug!(
+                    log::debug!(
                         "cc restore: cached dep-info {} not requested by invocation; skipping",
                         cached.name
                     );
@@ -2616,7 +2613,7 @@ fn restore_cc_from_cache(
             _ => match cc_preprocess_restore_target(parsed, &cached.name) {
                 Some(target) => target,
                 None => {
-                    tracing::debug!(
+                    log::debug!(
                         "cc restore: cached artifact {} has unsupported kind {:?}; skipping",
                         cached.name,
                         kind
@@ -2719,13 +2716,13 @@ pub(crate) fn run_for(
     if drop_fallback || drop_incremental {
         let mut safe = config.clone();
         if drop_fallback {
-            tracing::debug!(
+            log::debug!(
                 "disabling fallback cache for {crate_name}: its key holds inputs the fallback does not know"
             );
             safe.fallback = None;
         }
         if drop_incremental {
-            tracing::debug!(
+            log::debug!(
                 "disabling preserved incremental state for active extra_inputs crate {crate_name}"
             );
             safe.preserve_incremental = false;
@@ -2834,7 +2831,7 @@ pub(crate) fn complete_extra_inputs_dep_info(
 ) -> Result<()> {
     let crate_name = args.crate_name.as_deref().unwrap_or("unknown");
     let Some(dep_info_path) = args.dep_info_path() else {
-        tracing::debug!(
+        log::debug!(
             "extra_inputs dep-info completion skipped because rustc did not request a supported \
              dep-info path for {crate_name}; non-Cargo callers retain their own freshness mechanism"
         );
@@ -2908,7 +2905,7 @@ fn resolve_build_script_inputs(
     let snapshot = match resolved {
         crate::build_script_inputs::Resolved::Folded(snapshot) => {
             // Counts only: a declared variable may hold a secret.
-            tracing::trace!(
+            log::trace!(
                 "[key:{crate_name}] build_script_inputs package_mode={} paths={} vars={} -> {}",
                 snapshot.package_mode,
                 snapshot.paths,
@@ -3002,13 +2999,13 @@ fn build_script_inputs_moved(
             false
         }
         Ok(_) => {
-            tracing::warn!(
+            log::warn!(
                 "not caching {crate_name}: inputs its build script declared changed while it compiled"
             );
             true
         }
         Err(error) => {
-            tracing::warn!(
+            log::warn!(
                 "not caching {crate_name}: inputs its build script declared could not be read after the compile: {error:#}"
             );
             true
@@ -3054,20 +3051,20 @@ fn extra_inputs_changed_during_compile(
     let after = match crate::extra_inputs::ExtraInputsSnapshot::resolve_for_rustc(args, &hasher) {
         Ok(snapshot) => snapshot,
         Err(error) => {
-            tracing::warn!(
+            log::warn!(
                 "not caching {crate_name}: extra_inputs could not be revalidated after compile: {error:#}"
             );
             return true;
         }
     };
     if before != after.as_ref() {
-        tracing::warn!(
+        log::warn!(
             "not caching {crate_name}: extra_inputs changed while the compiler was running"
         );
         return true;
     }
     if key_inputs_changed_during_compile(hasher.too_new(), &hasher.take_guarded_inputs()) {
-        tracing::warn!(
+        log::warn!(
             "not caching {crate_name}: extra_inputs may have changed while the compiler was running"
         );
         return true;
@@ -3115,7 +3112,7 @@ fn run_parsed_rustc(
     // the dep-info key pass; non-incremental dependencies still use kache.
     let preserve_incremental = preserve_incremental_requested(config, args);
     if preserve_incremental && compile::isolate_incremental_flags(&args.all_args).is_some() {
-        tracing::debug!("preserving incremental compilation for {crate_name}");
+        log::debug!("preserving incremental compilation for {crate_name}");
         return preserved_incremental_with_event(
             config,
             args,
@@ -3126,7 +3123,7 @@ fn run_parsed_rustc(
         );
     }
     if preserve_incremental {
-        tracing::warn!(
+        log::warn!(
             "[kache] incremental directory for {crate_name} has no safe sibling path; stripping incremental flags"
         );
     }
@@ -3257,7 +3254,7 @@ fn run_parsed_rustc(
         && let Some(store) = &store
         && let Err(e) = store.remember_incremental_dir(incr_dir)
     {
-        tracing::warn!(
+        log::warn!(
             "failed to register incremental dir {}: {}",
             incr_dir.display(),
             e
@@ -3267,7 +3264,7 @@ fn run_parsed_rustc(
     // configured fallback cache, which would replay the same incomplete
     // outputs.
     if untrusted_codegen_backend.is_some() {
-        tracing::debug!("rustc codegen backend dylib not trusted; running rustc directly");
+        log::debug!("rustc codegen backend dylib not trusted; running rustc directly");
         reset_adaptive_unit(adaptive_unit.as_ref());
         return rustc_direct_passthrough_with_event(
             config,
@@ -3285,7 +3282,7 @@ fn run_parsed_rustc(
     // time macros, etc.).
     if !refuse.is_empty() {
         let reasons: Vec<&str> = refuse.iter().map(|r| r.description()).collect();
-        tracing::debug!(
+        log::debug!(
             "{}: bypassing cache ({})",
             compiler.id().as_str(),
             reasons.join("; ")
@@ -3303,7 +3300,7 @@ fn run_parsed_rustc(
     }
 
     if let Some(source) = excluded_source {
-        tracing::debug!("rustc source excluded from cache: {}", source.display());
+        log::debug!("rustc source excluded from cache: {}", source.display());
         reset_adaptive_unit(adaptive_unit.as_ref());
         return passthrough_with_event(
             config,
@@ -3317,7 +3314,7 @@ fn run_parsed_rustc(
     }
 
     if let Some(reason) = user_bypass {
-        tracing::debug!("rustc invocation bypassed by user rule: {reason}");
+        log::debug!("rustc invocation bypassed by user rule: {reason}");
         reset_adaptive_unit(adaptive_unit.as_ref());
         return passthrough_with_event(
             config,
@@ -3338,7 +3335,7 @@ fn run_parsed_rustc(
     // fresh per build, producing non-byte-identical `.dylib` output
     // that broke downstream cache keys via `extern:` hashes.
     if skip_user_facing {
-        tracing::debug!("skipping cache for user-facing executable: {}", crate_name);
+        log::debug!("skipping cache for user-facing executable: {}", crate_name);
         return intentional_passthrough_with_event(
             config,
             args,
@@ -3379,7 +3376,7 @@ fn run_parsed_rustc(
             ) {
                 Ok(resolved) => resolved,
                 Err(e) => {
-                    tracing::warn!("not caching {crate_name}: {e:#}");
+                    log::warn!("not caching {crate_name}: {e:#}");
                     return rustc_direct_passthrough_with_event(
                         config,
                         args,
@@ -3465,7 +3462,7 @@ fn run_parsed_rustc(
                 let _ = lease.finish(CompileOutcome::Abnormal);
             }
             // `{:#}` walks the cause chain; see `uncacheable_reason`.
-            tracing::warn!("failed to compute cache key for {}: {:#}", crate_name, e);
+            log::warn!("failed to compute cache key for {}: {:#}", crate_name, e);
             return passthrough_with_event(
                 config,
                 args,
@@ -3526,7 +3523,7 @@ fn run_parsed_rustc(
         // No record and nowhere else the entry could be: compile now, then
         // key from what rustc emitted. `discovery_flight` stays held across
         // the recursion so peers wait for this compile.
-        tracing::debug!("no closure record for {crate_name}; compiling before keying");
+        log::debug!("no closure record for {crate_name}; compiling before keying");
         return compile_before_key(
             &compile_first,
             stop_on_hit,
@@ -3583,7 +3580,7 @@ fn run_parsed_rustc(
             crate::cache_key::rustc_version_text_for(&args.rustc, args.invocation_env()).as_deref(),
         )
     {
-        tracing::warn!(
+        log::warn!(
             "failed to register target root {}: {}",
             target_dir.display(),
             e
@@ -3591,7 +3588,7 @@ fn run_parsed_rustc(
     }
     drop(trace_remember);
 
-    tracing::debug!("cache key for {}: {}", crate_name, &cache_key[..16]);
+    log::debug!("cache key for {}: {}", crate_name, &cache_key[..16]);
 
     // A prediction may READ the cache, local or remote, before it has been
     // checked. The soundness argument does not distinguish the two: an entry
@@ -3637,13 +3634,13 @@ fn run_parsed_rustc(
         if let Some((hit_store, meta)) = lookup_result {
             // Safety: skip entries with no cached files (poisoned by earlier bugs)
             if meta.files.is_empty() {
-                tracing::warn!(
+                log::warn!(
                     "cache entry for {} has no files, evicting and recompiling",
                     crate_name
                 );
                 let _ = hit_store.remove_entry(&cache_key);
             } else {
-                tracing::debug!("local cache hit for {} ({})", crate_name, &cache_key[..16]);
+                log::debug!("local cache hit for {} ({})", crate_name, &cache_key[..16]);
                 match hit_context.restore_and_finish(
                     hit_store,
                     &meta,
@@ -3665,7 +3662,7 @@ fn run_parsed_rustc(
                         return Ok(0);
                     }
                     Err(e) => {
-                        tracing::warn!(
+                        log::warn!(
                             "restoring local cache hit for {} failed: {} — recompiling",
                             crate_name,
                             e
@@ -3780,7 +3777,7 @@ fn run_parsed_rustc(
         }
     }
     if let Some(stop_on_hit) = compile_then_key {
-        tracing::debug!("{crate_name}: no lane took the miss; compiling before keying again");
+        log::debug!("{crate_name}: no lane took the miss; compiling before keying again");
         return compile_before_key(
             &compile_first,
             stop_on_hit,
@@ -3810,7 +3807,7 @@ fn run_parsed_rustc(
             Ok(BuildClaim::Acquired(lock)) => (Some(lock), None),
             Ok(BuildClaim::Committed(meta)) => (None, Some(*meta)),
             Err(e) => {
-                tracing::warn!(
+                log::warn!(
                     "claiming build for {} failed: {} — recompiling",
                     crate_name,
                     e
@@ -3819,7 +3816,7 @@ fn run_parsed_rustc(
             }
             Ok(BuildClaim::Contended) => {
                 // Another process is building this key — wait for it
-                tracing::debug!("waiting for {} to be built by another process", crate_name);
+                log::debug!("waiting for {} to be built by another process", crate_name);
                 let committed = crate::invocation::wait_for_committed(&store, &cache_key, None)
                     .unwrap_or(false)
                     .then(|| store.get(&cache_key).ok().flatten())
@@ -3843,7 +3840,7 @@ fn run_parsed_rustc(
             &key_outputs,
             &key_record,
         ) {
-            tracing::warn!(
+            log::warn!(
                 "restoring cache hit for {} failed: {} — recompiling",
                 crate_name,
                 e
@@ -3867,7 +3864,7 @@ fn run_parsed_rustc(
     }
 
     // 4. Compile
-    tracing::debug!(
+    log::debug!(
         "cache miss for {}, compiling ({})",
         crate_name,
         &cache_key[..16]
@@ -4026,7 +4023,7 @@ fn run_parsed_rustc(
     // `llvm-ir` missing. The compile already ran and is in place; we just decline
     // to cache it (mirrors the too-new guard above).
     if let Some(missing) = missing_requested_emit(args, &result.artifacts) {
-        tracing::warn!(
+        log::warn!(
             "not caching {}: discovered outputs do not cover requested --emit {} \
              (have {:?}) — refusing to store a partial entry",
             crate_name,
@@ -4074,7 +4071,7 @@ fn run_parsed_rustc(
     // records: it is cached only with that very `.pdb`, named by file name.
     let unpaired = unpaired_executable_debug_info(args, &result.artifacts);
     if let Some(reason) = unaudited.or(degraded).or(unpaired) {
-        tracing::warn!("not caching {crate_name}: {reason}");
+        log::warn!("not caching {crate_name}: {reason}");
         let elapsed = start.elapsed().as_millis() as u64;
         log_event(
             config,
@@ -4094,11 +4091,9 @@ fn run_parsed_rustc(
     // Put-side admission control: the compile already ran and its outputs are
     // in place; a configured threshold may decline local retention.
     if !store_admits_compile(config, compile_time_ms) {
-        tracing::debug!(
-            crate_name = %crate_name,
-            compile_time_ms,
-            min_store_compile_ms = config.min_store_compile_ms,
-            "admission: compile too cheap to store"
+        log::debug!(
+            "admission: compile too cheap to store; crate_name={crate_name} compile_time_ms={compile_time_ms} min_store_compile_ms={}",
+            config.min_store_compile_ms
         );
         let elapsed = start.elapsed().as_millis() as u64;
         log_event(
@@ -4153,12 +4148,14 @@ fn run_parsed_rustc(
 
     // Store-time debug bundle (kunobi-ninja/kache#319): a macOS `-g`
     // executable's `N_OSO` debug map points at per-build `.o` files that a
-    // restoring build won't have — so while they still exist, bake a
-    // self-contained `.dSYM` and cache it (as one flat tar; the store holds
-    // flat files only) alongside the entry. Restore unpacks it next to the
-    // binary, where lldb prefers it over the stale debug map. The staging
-    // TempDir must outlive `store.put*` below, which hashes the tar at this
-    // path — same lifetime pattern as `prepare_cc_store_files`.
+    // restoring build won't have. Unpacked debug info still has those
+    // objects, so the platform runs dsymutil. Packed debug info, including
+    // rustc's macOS default when `-Csplit-debuginfo` was not passed, already
+    // wrote the adjacent `.dSYM` (kunobi-ninja/kache#1752); that bundle is
+    // what gets cached. The store holds one flat tar. Restore unpacks it
+    // next to the binary, where lldb prefers it over the stale debug map.
+    // The staging TempDir must outlive `store.put*` below, which hashes the
+    // tar at this path — same lifetime pattern as `prepare_cc_store_files`.
     let mut _debug_bundle_staging: Option<tempfile::TempDir> = None;
     if wants_debug_bundle(args)
         && let Some((exec_path, exec_name)) =
@@ -4166,9 +4163,11 @@ fn run_parsed_rustc(
     {
         match tempfile::tempdir_in(args.invocation_env().temp_dir()) {
             Ok(staging) => {
-                match platform::current_for(args.invocation_env())
-                    .package_debug_bundle(&exec_path, staging.path())
-                {
+                match platform::current_for(args.invocation_env()).package_debug_bundle(
+                    &exec_path,
+                    staging.path(),
+                    args.get_codegen_opt("split-debuginfo"),
+                ) {
                     Ok(Some(tar_path)) => {
                         result.artifacts.push(crate::compiler::Artifact {
                             path: tar_path,
@@ -4181,12 +4180,12 @@ fn run_parsed_rustc(
                         });
                         _debug_bundle_staging = Some(staging);
                     }
-                    // None (non-macOS host, tool missing/failed) is the
-                    // documented best-effort degradation: cache the
-                    // binary without a bundle.
+                    // None (non-macOS host, packed with no bundle, tool
+                    // missing/failed) is the documented best-effort
+                    // degradation: cache the binary without a bundle.
                     Ok(None) => {}
                     Err(e) => {
-                        tracing::warn!(
+                        log::warn!(
                             "failed to package debug bundle for {}: {e:#}",
                             exec_path.display()
                         );
@@ -4194,7 +4193,7 @@ fn run_parsed_rustc(
                 }
             }
             Err(e) => {
-                tracing::warn!("failed to create debug bundle staging dir: {e}");
+                log::warn!("failed to create debug bundle staging dir: {e}");
             }
         }
     }
@@ -4209,7 +4208,7 @@ fn run_parsed_rustc(
     ) {
         Ok(prepared) => prepared,
         Err(error) => {
-            tracing::warn!(
+            log::warn!(
                 "not caching {}: dep-info could not be staged safely: {error:#}",
                 crate_name
             );
@@ -4285,7 +4284,7 @@ fn run_parsed_rustc(
             if let Some(unit) = args.get_codegen_opt("metadata")
                 && let Err(e) = store.record_entry_unit(&cache_key, unit)
             {
-                tracing::debug!("recording the unit of {crate_name}'s entry failed: {e}");
+                log::debug!("recording the unit of {crate_name}'s entry failed: {e}");
             }
             // A large executable just stored is the next build's restore.
             if stores_prestage_candidate(&prepared_store.files)
@@ -4307,7 +4306,7 @@ fn run_parsed_rustc(
         // is permanent rather than cold (#629).
         Err(e) => {
             store_error = store_error_for_event(&e);
-            tracing::warn!(
+            log::warn!(
                 "failed to store cache entry for {}: {}",
                 crate_name,
                 store_error
@@ -4409,7 +4408,7 @@ fn hand_off_cc_store(
     let snapshots = match crate::daemon_publish::snapshot_for_handoff(config, handoff.files) {
         Ok(snapshots) => snapshots,
         Err(error) => {
-            tracing::debug!("cc hand-off: could not snapshot outputs: {error:#}");
+            log::debug!("cc hand-off: could not snapshot outputs: {error:#}");
             return CcHandoffOutcome::Publish;
         }
     };
@@ -4454,7 +4453,7 @@ fn hand_off_cc_store(
             CcHandoffOutcome::Accepted
         }
         Handoff::Declined(reason) => {
-            tracing::debug!("cc hand-off declined for {}: {reason}", handoff.crate_name);
+            log::debug!("cc hand-off declined for {}: {reason}", handoff.crate_name);
             crate::daemon_publish::remove_handoff_files(&request.files);
             match reclaim_after_declined_handoff(store, handoff.cache_key, HANDOFF_HOLDER_WAIT) {
                 Ok(BuildClaim::Acquired(lock)) => {
@@ -4478,7 +4477,7 @@ fn hand_off_cc_store(
                     CcHandoffOutcome::Done
                 }
                 Err(error) => {
-                    tracing::warn!(
+                    log::warn!(
                         "reclaiming {} after a declined hand-off failed: {error:#}; storing without a lock",
                         handoff.crate_name
                     );
@@ -5285,7 +5284,7 @@ impl VerifiedLoadable {
             .map_or(Ok(()), std::fs::create_dir_all)
             .and_then(|()| std::fs::write(&self.0, b""));
         if let Err(error) = written {
-            tracing::debug!(
+            log::debug!(
                 "could not remember {} as loadable: {error}",
                 self.0.display()
             );
@@ -5847,7 +5846,7 @@ fn compile_before_key(
     if let Some((dep_info, tree)) = hit_closure {
         // Stopped before anything reached Cargo. Key again from the
         // closure the compile wrote, and restore like any hit.
-        tracing::debug!("{crate_name}: stored entry found while compiling; restoring it");
+        log::debug!("{crate_name}: stored entry found while compiling; restoring it");
         crate::cache_key::provide_dep_info(dep_info, tree);
         return run_parsed_rustc(
             config,
@@ -5907,7 +5906,7 @@ fn compile_before_key(
     let dep_info = match emitted {
         Some(Ok(dep_info)) => dep_info,
         other => {
-            tracing::debug!(
+            log::debug!(
                 "not caching {crate_name}: the compile left no readable dep-info ({:?})",
                 other.map(|r| r.map(|_| ()))
             );
@@ -6314,7 +6313,6 @@ fn compute_rustc_cache_key(
     if let KeyDiscovery::Emitted(dep_info, tree) = discovery {
         crate::cache_key::provide_dep_info(dep_info, tree);
     }
-    let emitted_sources = crate::cache_key::provided_dep_info_sources_for(args.invocation_env());
     let mut file_hasher = match store {
         Some(store) => store
             .file_hasher_for(args.invocation_env())
@@ -6325,6 +6323,7 @@ fn compute_rustc_cache_key(
     .with_input_predictions(config.input_predictions)
     .with_prediction_flights(flight_dir)
     .with_own_dirs(written_while_building(config, store, args.invocation_env()));
+    let emitted_sources = crate::cache_key::provided_dep_info_sources_for(&file_hasher);
     if config.modified_input_guard || emitted {
         // Flag keyed inputs touched at/after this invocation started — their
         // content at hash time may differ from what rustc reads, so we'll look
@@ -6603,24 +6602,18 @@ fn maybe_verify_restored_hit(
             let summary = report.event_summary();
             match report.worst() {
                 crate::verify_compare::DivergenceClass::Match => {
-                    tracing::info!(
-                        crate_name,
-                        summary = %summary,
-                        "KACHE_VERIFY: restored artifacts match a fresh compile"
+                    log::info!(
+                        "KACHE_VERIFY: restored artifacts match a fresh compile; crate_name={crate_name} summary={summary}"
                     );
                 }
                 crate::verify_compare::DivergenceClass::PathDebug => {
-                    tracing::warn!(
-                        crate_name,
-                        summary = %summary,
-                        "KACHE_VERIFY: path/debug divergence versus a fresh compile"
+                    log::warn!(
+                        "KACHE_VERIFY: path/debug divergence versus a fresh compile; crate_name={crate_name} summary={summary}"
                     );
                 }
                 crate::verify_compare::DivergenceClass::Content => {
-                    tracing::error!(
-                        crate_name,
-                        summary = %summary,
-                        "KACHE_VERIFY: content mismatch versus a fresh compile; serving the restored hit"
+                    log::error!(
+                        "KACHE_VERIFY: content mismatch versus a fresh compile; serving the restored hit; crate_name={crate_name} summary={summary}"
                     );
                 }
             }
@@ -6628,10 +6621,8 @@ fn maybe_verify_restored_hit(
         }
         Err(error) => {
             let summary = format!("recompile-failed: {error:#}");
-            tracing::error!(
-                crate_name,
-                error = %error,
-                "KACHE_VERIFY: recompile failed; serving the restored hit"
+            log::error!(
+                "KACHE_VERIFY: recompile failed; serving the restored hit; crate_name={crate_name} error={error}"
             );
             crate::verify_compare::record_report(summary);
         }
@@ -7024,11 +7015,11 @@ fn restore_from_cache_with_memo_store(
 
     // One platform per restore, shared across every cached file. The
     // detect call is cheap (cfg cascade) but doing it once keeps the
-    // tracing context coherent and lets a future per-restore override
+    // restore context coherent and lets a future per-restore override
     // (e.g. cross-restore from a Linux cache to a macOS host) plug in
     // at one site.
     let platform = platform::current_for(args.invocation_env());
-    tracing::debug!(
+    log::debug!(
         "restoring {} files via platform={}",
         meta.files.len(),
         platform.name()
@@ -7169,7 +7160,7 @@ fn handle_response_file_error(
         return Err(error)
             .context("materializing rustc response file after rewriting incremental arguments");
     }
-    tracing::warn!(
+    log::warn!(
         "failed to materialize expanded rustc response file; using unchanged original argv: {error:#}"
     );
     Ok(None)
@@ -7188,12 +7179,12 @@ fn passthrough_args(
     let compiler_args_changed = compiler_args_changed(args, compiler_args);
     let stripped_incremental = stripped_incremental_count(args, compiler_args);
     if incremental_preserved {
-        tracing::info!(
+        log::info!(
             "[kache] passthrough: preserving isolated incremental state for {}",
             args.crate_name.as_deref().unwrap_or("unknown")
         );
     } else if let Some(stripped) = stripped_incremental {
-        tracing::info!(
+        log::info!(
             "[kache] passthrough: stripped {} incremental flag(s) for {}",
             stripped,
             args.crate_name.as_deref().unwrap_or("unknown")
@@ -7571,7 +7562,7 @@ fn adaptive_incremental_with_event<R: Into<String>>(
         Err(error) => {
             // rustc never ran, or a pipe failure made kache kill it mid-session.
             let _ = lease.finish(CompileOutcome::Abnormal);
-            tracing::warn!("adaptive incremental compiler spawn failed for {crate_name}: {error}");
+            log::warn!("adaptive incremental compiler spawn failed for {crate_name}: {error}");
             return passthrough_with_event(
                 config,
                 args,
@@ -7593,11 +7584,8 @@ fn adaptive_incremental_with_event<R: Into<String>>(
     after_rustc_exit(result.exit_code, &result.stderr, &args.externs);
     let outcome = compile_outcome(result.exit_code, result.signaled, &result.stderr);
     let kept = lease.finish(outcome);
-    tracing::debug!(
-        ?kind,
-        ?outcome,
-        kept,
-        "adaptive incremental compiler lease finished"
+    log::debug!(
+        "adaptive incremental compiler lease finished; kind={kind:?} outcome={outcome:?} kept={kept}"
     );
 
     let (cache_key, key_ms, key_hash_stats, lookup_ms) =
@@ -7744,7 +7732,7 @@ fn passthrough_with_event<R: Into<String>>(
 ) -> Result<i32> {
     if let Some(exit_code) = PRECOMPILED_EXIT.with(std::cell::Cell::get) {
         let reason = reason.into();
-        tracing::debug!("{crate_name}: compiled, not stored: {reason}");
+        log::debug!("{crate_name}: compiled, not stored: {reason}");
         let elapsed = start.elapsed().as_millis() as u64;
         log_event(
             config,
@@ -7854,7 +7842,7 @@ fn cc_compile_before_key(
         ..
     } = invocation;
     let start = *start;
-    tracing::debug!("no read-set memo for {crate_name}; compiling before keying");
+    log::debug!("no read-set memo for {crate_name}; compiling before keying");
     // The compile runs before its key exists, but it still takes a slot in the
     // scheduler's pool: that pool is the only limit when a build runs its own
     // jobs beside Cargo's.
@@ -7940,7 +7928,7 @@ fn cc_precompiled_skipped(
     exit_code: i32,
     rebuilt: RebuiltArtifacts,
 ) -> Result<i32> {
-    tracing::debug!("{crate_name}: compiled, not stored: {reason}");
+    log::debug!("{crate_name}: compiled, not stored: {reason}");
     let elapsed = start.elapsed().as_millis() as u64;
     log_event(
         config,
@@ -8647,7 +8635,7 @@ fn maybe_notice_unknown_layout(config: &Config, args: &RustcArgs, root: &str, no
     if cargo_workspace_of(out_dir).is_none() {
         return false;
     }
-    tracing::debug!("unrecognized Cargo layout: {}", out_dir.display());
+    log::debug!("unrecognized Cargo layout: {}", out_dir.display());
     let session_id = session_id_for_event(config, root, now);
     if session_id.is_empty() {
         return false;
@@ -8888,7 +8876,7 @@ fn clean_incremental_dir(config: &Config, args: &RustcArgs) {
         && incr_dir.is_dir()
         && let Err(e) = std::fs::remove_dir_all(incr_dir)
     {
-        tracing::debug!(
+        log::debug!(
             "failed to clean incremental dir {}: {}",
             incr_dir.display(),
             e

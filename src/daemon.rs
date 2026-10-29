@@ -644,8 +644,8 @@ impl Daemon {
         })();
         match flushed {
             Ok(0) => {}
-            Ok(n) => tracing::debug!("flushed {n} entries to disk"),
-            Err(error) => tracing::debug!("durability flush failed: {error:#}"),
+            Ok(n) => log::debug!("flushed {n} entries to disk"),
+            Err(error) => log::debug!("durability flush failed: {error:#}"),
         }
     }
 
@@ -899,7 +899,7 @@ impl Daemon {
             .name("kache-invocation-gc".to_string())
             .spawn(move || {
                 if let Err(error) = daemon.sweep_invocation_under_size_pressure(&config) {
-                    tracing::warn!("invocation GC sweep failed: {error:#}");
+                    log::warn!("invocation GC sweep failed: {error:#}");
                 }
             });
     }
@@ -922,7 +922,7 @@ impl Daemon {
         }
         let _release = Release(&self.gc_hint_pending);
         if let Err(e) = self.sweep_under_size_pressure() {
-            tracing::warn!("hinted GC sweep failed: {e:#}");
+            log::warn!("hinted GC sweep failed: {e:#}");
         }
     }
 
@@ -942,7 +942,7 @@ impl Daemon {
         crate::disk_recovery::run(shard);
         let store = Store::open(shard)?;
         let Some(_gc_lock) = store.try_gc_lock()? else {
-            tracing::debug!(
+            log::debug!(
                 "gc.lock of shard {} held by another GC; skipping size-pressure eviction",
                 shard.cache_dir.display()
             );
@@ -966,7 +966,7 @@ impl Daemon {
             Ok(Some((lock, store.physical_size()?)))
         })?
         else {
-            tracing::debug!("gc.lock held by another GC; skipping size-pressure eviction");
+            log::debug!("gc.lock held by another GC; skipping size-pressure eviction");
             return Ok(());
         };
         self.size_pressure_sweep_if_due(&self.config, size)
@@ -987,7 +987,7 @@ impl Daemon {
             crate::store::SweepOrigin::Automatic,
             &stats,
         ) {
-            tracing::warn!("recording size-pressure GC run: {e:#}");
+            log::warn!("recording size-pressure GC run: {e:#}");
         }
         Ok(())
     }
@@ -1001,7 +1001,7 @@ impl Daemon {
         store: &Store,
         size: u64,
     ) -> Result<crate::store::GcStats> {
-        tracing::info!(
+        log::info!(
             "store {} size {} over the automatic trigger (max {}), running LRU eviction",
             config.cache_dir.display(),
             size,
@@ -1031,7 +1031,7 @@ impl Daemon {
         }
         let size = store.physical_size()?;
         if !crate::wrapper::auto_gc_sweep_due(config, size) {
-            tracing::info!("periodic GC: size pass not due (under the trigger or backing off)");
+            log::info!("periodic GC: size pass not due (under the trigger or backing off)");
             return Ok(crate::store::GcStats::default());
         }
         self.automatic_size_pass(config, store, size)
@@ -1071,7 +1071,7 @@ impl Daemon {
             GcDriver::Periodic => match gc_store.try_gc_lock()? {
                 Some(lock) => lock,
                 None => {
-                    tracing::info!("gc.lock held by another GC; skipping this run");
+                    log::info!("gc.lock held by another GC; skipping this run");
                     return Ok(GcRunReport::skipped(mode));
                 }
             },
@@ -1082,14 +1082,14 @@ impl Daemon {
                 // Backfill content_hash for legacy entries
                 let backfilled = store.backfill_content_hashes().unwrap_or(0);
                 if backfilled > 0 {
-                    tracing::info!("backfilled {backfilled} content hashes");
+                    log::info!("backfilled {backfilled} content hashes");
                 }
 
                 // Backfill rebuild cost for entries written before it was
                 // indexed (#594), so a value-aware policy has data to work with.
                 let costs = store.backfill_compile_times().unwrap_or(0);
                 if costs > 0 {
-                    tracing::info!("backfilled {costs} compile times");
+                    log::info!("backfilled {costs} compile times");
                 }
 
                 // Backfill entry→blob rows for entries written before the
@@ -1097,19 +1097,19 @@ impl Daemon {
                 // entry would actually free.
                 let mapped = store.backfill_entry_blobs().unwrap_or(0);
                 if mapped > 0 {
-                    tracing::info!("backfilled {mapped} entry blob maps");
+                    log::info!("backfilled {mapped} entry blob maps");
                 }
 
                 match store.file_hash_cache().prune_cc_preprocess_memos() {
-                    Ok((memos, inputs)) => tracing::debug!(memos, inputs, "gc: pruned C/C++ memos"),
-                    Err(error) => tracing::warn!("gc: C/C++ memo pruning failed: {error}"),
+                    Ok((memos, inputs)) => log::debug!("gc: pruned C/C++ memos; memos={memos} inputs={inputs}"),
+                    Err(error) => log::warn!("gc: C/C++ memo pruning failed: {error}"),
                 }
                 let markers = crate::wrapper::prune_session_markers(
                     &self.config,
                     crate::wrapper::SESSION_MARKER_RETENTION,
                     std::time::SystemTime::now(),
                 );
-                tracing::debug!(markers, "gc: pruned build-session markers");
+                log::debug!("gc: pruned build-session markers; markers={markers}");
 
                 // Bound the post-eviction demand log, and report what it says
                 // so far: a high demand rate means eviction is discarding
@@ -1120,12 +1120,9 @@ impl Daemon {
                 if let Ok((tracked, demanded)) = store.tombstone_stats()
                     && tracked > 0
                 {
-                    tracing::info!(
-                        tracked,
-                        demanded,
-                        pruned,
-                        demand_rate_pct = demanded * 100 / tracked.max(1),
-                        "gc: post-eviction demand"
+                    log::info!(
+                        "gc: post-eviction demand; tracked={tracked} demanded={demanded} pruned={pruned} demand_rate_pct={}",
+                        demanded * 100 / tracked.max(1)
                     );
                 }
                 // The #594 policy comparison: demand rate on entries the
@@ -1136,12 +1133,12 @@ impl Daemon {
                 if let Ok(split) = store.shadow_demand_split()
                     && split.agreed + split.shadow_kept > 0
                 {
-                    tracing::info!(
-                        shadow_agreed = split.agreed,
-                        shadow_agreed_demanded = split.agreed_demanded,
-                        shadow_kept = split.shadow_kept,
-                        shadow_kept_demanded = split.shadow_kept_demanded,
-                        "gc: post-eviction demand by shadow verdict (value-density, #594)"
+                    log::info!(
+                        "gc: post-eviction demand by shadow verdict (value-density, #594); shadow_agreed={} shadow_agreed_demanded={} shadow_kept={} shadow_kept_demanded={}",
+                        split.agreed,
+                        split.agreed_demanded,
+                        split.shadow_kept,
+                        split.shadow_kept_demanded
                     );
                 }
                 // Both sides over the same sweeps: what each policy's
@@ -1149,14 +1146,14 @@ impl Daemon {
                 if let Ok(cost) = store.shadow_counterfactual()
                     && cost.shadow.evicted > 0
                 {
-                    tracing::info!(
-                        live_evicted = cost.live.evicted,
-                        live_bytes = cost.live.bytes,
-                        live_demanded_compile_time_ms = cost.live.demanded_compile_time_ms,
-                        shadow_evicted = cost.shadow.evicted,
-                        shadow_bytes = cost.shadow.bytes,
-                        shadow_demanded_compile_time_ms = cost.shadow.demanded_compile_time_ms,
-                        "gc: rebuild cost of each policy's evictions (value-density, #594)"
+                    log::info!(
+                        "gc: rebuild cost of each policy's evictions (value-density, #594); live_evicted={} live_bytes={} live_demanded_compile_time_ms={} shadow_evicted={} shadow_bytes={} shadow_demanded_compile_time_ms={}",
+                        cost.live.evicted,
+                        cost.live.bytes,
+                        cost.live.demanded_compile_time_ms,
+                        cost.shadow.evicted,
+                        cost.shadow.bytes,
+                        cost.shadow.demanded_compile_time_ms
                     );
                 }
 
@@ -1184,10 +1181,10 @@ impl Daemon {
                     }
                 };
                 if dedup_stats.entries_evicted > 0 {
-                    tracing::info!("evicted {} duplicate entries", dedup_stats.entries_evicted);
+                    log::info!("evicted {} duplicate entries", dedup_stats.entries_evicted);
                 }
                 if age_evict_stats.entries_evicted > 0 {
-                    tracing::info!(
+                    log::info!(
                         "evicted {} entries by age policy",
                         age_evict_stats.entries_evicted
                     );
@@ -1217,21 +1214,21 @@ impl Daemon {
                     crate::store::STAGING_SWEEP_GRACE,
                 );
                 if handoffs.removed > 0 {
-                    tracing::info!(
+                    log::info!(
                         "swept {} abandoned cc handoffs ({})",
                         handoffs.removed,
                         crate::report::format_bytes(handoffs.bytes_reclaimed)
                     );
                 }
                 if staging_stats.removed > 0 {
-                    tracing::info!(
+                    log::info!(
                         "swept {} stale staging files ({})",
                         staging_stats.removed,
                         crate::report::format_bytes(staging_stats.bytes_reclaimed)
                     );
                 }
                 if orphan_stats.removed > 0 {
-                    tracing::info!(
+                    log::info!(
                         "swept {} of {} blobs as orphans ({} reclaimed)",
                         orphan_stats.removed,
                         orphan_stats.scanned,
@@ -1257,17 +1254,16 @@ impl Daemon {
         let housekeeping = gc_store.sweep_housekeeping();
         let prestage_pruned =
             crate::prestage::prune(&self.config.cache_dir, std::time::SystemTime::now());
-        tracing::info!(
-            key_locks_removed = housekeeping.key_locks_removed,
-            key_locks_remaining = housekeeping.key_locks_remaining,
-            predictions_pruned = housekeeping.predictions_pruned,
-            file_hashes_pruned = housekeeping.file_hashes_pruned,
-            prestage_pruned,
-            "gc: housekeeping"
+        log::info!(
+            "gc: housekeeping; key_locks_removed={} key_locks_remaining={} predictions_pruned={} file_hashes_pruned={} prestage_pruned={prestage_pruned}",
+            housekeeping.key_locks_removed,
+            housekeeping.key_locks_remaining,
+            housekeeping.predictions_pruned,
+            housekeeping.file_hashes_pruned
         );
 
         if incremental_cleaned > 0 {
-            tracing::info!("cleaned {incremental_cleaned} registered incremental dirs");
+            log::info!("cleaned {incremental_cleaned} registered incremental dirs");
         }
 
         // Aggregate stats
@@ -1320,7 +1316,7 @@ impl Daemon {
             housekeeping: Some(housekeeping),
         };
 
-        tracing::info!(
+        log::info!(
             "gc complete: {} entries evicted, {} freed, {} blobs removed in {}ms",
             stats.entries_evicted,
             crate::report::format_bytes(stats.bytes_freed),
@@ -1333,7 +1329,7 @@ impl Daemon {
         if let Err(e) =
             crate::report::record_gc_run(config, "daemon", driver.sweep_origin(), &stats)
         {
-            tracing::debug!(
+            log::debug!(
                 "gc: could not record {}: {e:#}",
                 crate::report::GC_STATS_FILE
             );
@@ -1393,15 +1389,15 @@ pub fn run_server(
     let Some(_lock) =
         kunobi_daemon::ProcessLock::try_acquire(&lock_path).context("acquiring daemon run lock")?
     else {
-        tracing::info!("another daemon holds the run lock, exiting");
+        log::info!("another daemon holds the run lock, exiting");
         return Ok(());
     };
     match crate::platform::raise_open_file_limit() {
         Ok(Some((before, after))) => {
-            tracing::info!("raised the open-file limit from {before} to {after}");
+            log::info!("raised the open-file limit from {before} to {after}");
         }
         Ok(None) => {}
-        Err(error) => tracing::warn!("could not raise the open-file limit: {error}"),
+        Err(error) => log::warn!("could not raise the open-file limit: {error}"),
     }
     let coord = DaemonCoordFile::for_socket(&socket_path);
     coord
@@ -1410,11 +1406,11 @@ pub fn run_server(
     let _coord_guard = DaemonCoordGuard::new(coord.path.clone());
 
     let capacity = DaemonCapacity::discover(config.daemon_execution_concurrency);
-    tracing::info!(
-        pipeline_requests = capacity.executions,
-        rpc_handlers = capacity.connections,
-        blocking_threads = capacity.blocking_threads,
-        "daemon request capacity"
+    log::info!(
+        "daemon request capacity; pipeline_requests={} rpc_handlers={} blocking_threads={}",
+        capacity.executions,
+        capacity.connections,
+        capacity.blocking_threads
     );
     let _ = capacity.blocking_threads;
     server_main(config, provenance, coord, readiness, capacity)
@@ -1455,7 +1451,7 @@ pub(crate) fn drain_publish_queue(
         crate::daemon_publish::PUBLISH_DRAIN_STALL,
     );
     if let Some(warning) = publish_drain_warning(unpublished) {
-        tracing::warn!("{warning}");
+        log::warn!("{warning}");
     }
 }
 
@@ -1470,7 +1466,7 @@ fn server_main(
     std::fs::create_dir_all(socket_path.parent().unwrap())?;
 
     let Some(listener) = crate::transport::bind_daemon_listener(&socket_path)? else {
-        tracing::info!("another daemon owns the endpoint");
+        log::info!("another daemon owns the endpoint");
         return Ok(());
     };
     listener
@@ -1489,7 +1485,7 @@ fn server_main(
         capacity,
     ));
 
-    tracing::info!("daemon listening on {}", socket_path.display());
+    log::info!("daemon listening on {}", socket_path.display());
 
     // Exclude cache dir from Time Machine / Spotlight (once, not per-crate).
     #[cfg(target_os = "macos")]
@@ -1503,18 +1499,16 @@ fn server_main(
     // wrapper's stderr (kunobi-ninja/kache#415). Log-only: the wrapper owns the
     // stderr advisory and its once-per-session dedup.
     match crate::cache_fs::classify(&crate::cache_fs::probe(&config.cache_dir)) {
-        crate::cache_fs::CacheFsVerdict::NotLocal { name } => tracing::warn!(
-            cache_dir = %config.cache_dir.display(),
-            filesystem = %name,
+        crate::cache_fs::CacheFsVerdict::NotLocal { name } => log::warn!(
             "cache directory is not on host-local storage: the WAL index needs working \
              file locking and a single writing machine, and can be corrupted on a shared \
              or network mount. Set KACHE_CACHE_DIR to a local path; to share artifacts \
-             between machines use a remote cache instead."
+             between machines use a remote cache instead; cache_dir={} filesystem={name}",
+            config.cache_dir.display()
         ),
-        verdict => tracing::debug!(
-            cache_dir = %config.cache_dir.display(),
-            ?verdict,
-            "cache filesystem locality check"
+        verdict => log::debug!(
+            "cache filesystem locality check; cache_dir={} verdict={verdict:?}",
+            config.cache_dir.display()
         ),
     }
 
@@ -1590,7 +1584,7 @@ fn server_main(
     // Periodic GC task: run immediately on startup, then every 6 hours.
     let gc_daemon = daemon.clone();
     let gc = stop_thread("kache-gc", move |stop| loop {
-        tracing::info!("periodic GC sweep starting");
+        log::info!("periodic GC sweep starting");
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             gc_daemon.run_gc(
                 GcPolicy::Automatic {
@@ -1601,8 +1595,8 @@ fn server_main(
         }));
         match result {
             Ok(Ok(_)) => {}
-            Ok(Err(e)) => tracing::warn!("periodic GC failed: {e}"),
-            Err(_) => tracing::warn!("periodic GC task panicked"),
+            Ok(Err(e)) => log::warn!("periodic GC failed: {e}"),
+            Err(_) => log::warn!("periodic GC task panicked"),
         }
         if sleep_while_running(stop, std::time::Duration::from_secs(6 * 3600)) {
             return;
@@ -1627,7 +1621,7 @@ fn server_main(
             if let Ok(stats) = result
                 && stats.entries_migrated > 0
             {
-                tracing::info!(
+                log::info!(
                     "background migration: migrated {} entries",
                     stats.entries_migrated,
                 );
@@ -1643,14 +1637,14 @@ fn server_main(
     let heartbeat_coord = coord.clone();
     let heartbeat = stop_thread("kache-heartbeat", move |stop| {
         if let Err(e) = heartbeat_coord.write_phase(DaemonPhase::Ready) {
-            tracing::debug!("daemon coordinator heartbeat failed: {e}");
+            log::debug!("daemon coordinator heartbeat failed: {e}");
         }
         loop {
             if sleep_while_running(stop, DAEMON_COORD_HEARTBEAT_INTERVAL) {
                 return;
             }
             if let Err(e) = heartbeat_coord.write_phase(DaemonPhase::Ready) {
-                tracing::debug!("daemon coordinator heartbeat failed: {e}");
+                log::debug!("daemon coordinator heartbeat failed: {e}");
             }
         }
     });
@@ -1673,7 +1667,7 @@ fn server_main(
             return;
         }
         if crate::config::config_file_has_changed(&config_provenance) {
-            tracing::info!("config file changed on disk, scheduling restart to reload it");
+            log::info!("config file changed on disk, scheduling restart to reload it");
             config_watch_lifecycle.start_drain();
             return;
         }
@@ -1688,7 +1682,7 @@ fn server_main(
         .name("kache-shutdown".to_string())
         .spawn(move || {
             shutdown_signal();
-            tracing::info!("shutdown signal received, draining...");
+            log::info!("shutdown signal received, draining...");
             shutdown_lifecycle.start_drain();
         });
 
@@ -1722,7 +1716,7 @@ fn server_main(
 
     control.finish();
     // Socket file is cleaned up by `_socket_guard` (Drop).
-    tracing::info!("daemon stopped");
+    log::info!("daemon stopped");
     Ok(())
 }
 
@@ -1762,7 +1756,7 @@ fn accept_loop(
 
     loop {
         if !lifecycle.accepting_calls() {
-            tracing::info!("shutdown requested via protocol, draining...");
+            log::info!("shutdown requested via protocol, draining...");
             break;
         }
 
@@ -1774,7 +1768,7 @@ fn accept_loop(
         if let Some(timeout) = idle_timeout
             && last_activity.elapsed() > timeout
         {
-            tracing::info!("daemon idle for {:?}, shutting down", timeout);
+            log::info!("daemon idle for {:?}, shutting down", timeout);
             break;
         }
 
@@ -1808,20 +1802,20 @@ fn accept_loop(
                                 if e.downcast_ref::<std::io::Error>()
                                     .is_some_and(is_client_disconnect)
                                 {
-                                    tracing::debug!(
+                                    log::debug!(
                                         "connection handler: client disconnected: {e}"
                                     );
                                 } else {
-                                    tracing::warn!("connection handler error: {e}");
+                                    log::warn!("connection handler error: {e}");
                                 }
                             }
                             Err(_) => {
-                                tracing::warn!("connection handler task failed");
+                                log::warn!("connection handler task failed");
                             }
                         }
                     }) {
                     Ok(thread) => handlers.push(thread),
-                    Err(error) => tracing::warn!("connection handler spawn failed: {error}"),
+                    Err(error) => log::warn!("connection handler spawn failed: {error}"),
                 }
             }
             Err(error)
@@ -1830,7 +1824,7 @@ fn accept_loop(
                 std::thread::sleep(Duration::from_millis(5));
             }
             Err(error) => {
-                tracing::warn!("accept error: {e}", e = error);
+                log::warn!("accept error: {e}", e = error);
                 if let Some(pause) = accept_backoff(&error) {
                     std::thread::sleep(pause);
                 } else {
@@ -1853,9 +1847,9 @@ fn accept_loop(
         &mut handlers,
         drain_deadline.saturating_duration_since(Instant::now()),
     ) {
-        tracing::warn!(
-            timeout_ms = handler_drain_timeout.as_millis() as u64,
-            "connection handler drain timed out; leaving remaining handlers to their clients"
+        log::warn!(
+            "connection handler drain timed out; leaving remaining handlers to their clients; timeout_ms={}",
+            handler_drain_timeout.as_millis() as u64
         );
     }
 }
@@ -1977,7 +1971,7 @@ fn handle_connection_after_queue(
     if let Err(error) =
         crate::transport::require_self_peer(crate::transport::peer_euid_std(&stream))
     {
-        tracing::warn!(%error, "rejected IPC connection from another local user");
+        log::warn!("rejected IPC connection from another local user: {error}");
         return Ok(());
     }
     let _permit = loop {
@@ -2022,7 +2016,7 @@ fn handle_connection_started_at(
             Ok(None) => break,
             Err(e) if is_client_disconnect(&e) => {
                 // Fire-and-forget client closed abruptly — not an error.
-                tracing::debug!("client disconnected mid-read: {e}");
+                log::debug!("client disconnected mid-read: {e}");
                 break;
             }
             Err(e) => return Err(e.into()),
@@ -2082,7 +2076,7 @@ fn handle_connection_started_at(
                 Response::ok()
             }
             Err(e) => {
-                tracing::warn!("invalid request from client: {e}");
+                log::warn!("invalid request from client: {e}");
                 Response::err(format!("invalid request: {e}"))
             }
         };
@@ -2093,9 +2087,9 @@ fn handle_connection_started_at(
         if let Some((error, routine)) = request_failure(&resp) {
             let elapsed_ms = elapsed.as_millis() as u64;
             if routine {
-                tracing::debug!(elapsed_ms, error, "request failed");
+                log::debug!("request failed; elapsed_ms={elapsed_ms} error={error}");
             } else {
-                tracing::warn!(elapsed_ms, error, "request failed");
+                log::warn!("request failed; elapsed_ms={elapsed_ms} error={error}");
             }
         }
 
@@ -2103,7 +2097,7 @@ fn handle_connection_started_at(
         resp_line.push('\n');
         if let Err(e) = std::io::Write::write_all(&mut stream, resp_line.as_bytes()) {
             // Client closed without reading (fire-and-forget mode) — not an error.
-            tracing::debug!("response write failed (client likely closed): {e}");
+            log::debug!("response write failed (client likely closed): {e}");
             break;
         }
     }
@@ -2117,10 +2111,10 @@ fn retire_for_newer_client(daemon: &Daemon, lifecycle: &Lifecycle, client_versio
     if client_version.is_some_and(|version| client_version_is_newer(version, &daemon.version))
         && lifecycle.accepting_calls()
     {
-        tracing::info!(
-            daemon_version = daemon.version,
-            client_version,
-            "newer client release requested daemon replacement"
+        log::info!(
+            "newer client release requested daemon replacement; daemon_version={} client_version={}",
+            daemon.version,
+            client_version.unwrap_or_default()
         );
         lifecycle.start_drain();
     }
@@ -2340,7 +2334,7 @@ fn handle_seed_target(config: &Config, req: &SeedTargetRequest) -> Response {
         deadline,
     );
     if let Some(donor) = &seeded.donor {
-        tracing::info!(
+        log::info!(
             "seeded {} registry units into {} from {}",
             seeded.units,
             target.target_dir.display(),
@@ -2361,7 +2355,7 @@ pub fn send_seed_target(config: &Config, target: &crate::target_seed::NewTarget,
     });
     let wait = crate::target_seed::seed_wait();
     if let Err(e) = send_request_with_timeout(&config.socket_path(), &req, wait) {
-        tracing::debug!("seed request: daemon unreachable or slow ({e}), building unseeded");
+        log::debug!("seed request: daemon unreachable or slow ({e}), building unseeded");
     }
 }
 
@@ -2372,7 +2366,7 @@ pub fn send_prestage(config: &Config, target_dir: &Path) {
         target_dir: target_dir.to_string_lossy().into_owned(),
     });
     if let Err(e) = send_request_fire_and_forget(&config.socket_path(), &req) {
-        tracing::debug!("prestage hint: daemon unreachable ({e}), skipping");
+        log::debug!("prestage hint: daemon unreachable ({e}), skipping");
     }
 }
 
@@ -2420,7 +2414,7 @@ pub fn send_compile_started(socket_path: &std::path::Path, req: CompileStartedRe
     }
     let req = Request::CompileStarted(req);
     if let Err(e) = send_request_fire_and_forget(socket_path, &req) {
-        tracing::debug!("compile-started: daemon unreachable ({e}), skipping");
+        log::debug!("compile-started: daemon unreachable ({e}), skipping");
     }
 }
 
@@ -2432,7 +2426,7 @@ pub fn send_compile_finished(socket_path: &std::path::Path, pid: u32, started_at
     }
     let req = Request::CompileFinished(CompileFinishedRequest { pid, started_at_ms });
     if let Err(e) = send_request_fire_and_forget(socket_path, &req) {
-        tracing::debug!("compile-finished: daemon unreachable ({e}), skipping");
+        log::debug!("compile-finished: daemon unreachable ({e}), skipping");
     }
 }
 
@@ -2545,10 +2539,9 @@ fn refresh_stale_response<T>(
     if !client_version_is_newer(client_version, version(&stats)) {
         return Ok(stats);
     }
-    tracing::info!(
-        daemon_version = version(&stats),
-        client_version,
-        "older daemon release detected, replacing"
+    log::info!(
+        "older daemon release detected, replacing; daemon_version={} client_version={client_version}",
+        version(&stats)
     );
     anyhow::ensure!(restart()?, "replacement daemon did not become ready");
     let fresh = refetch().context("reading replacement daemon response")?;
@@ -2652,7 +2645,7 @@ pub fn is_running(config: &Config) -> Result<bool> {
 
 /// Best-effort restart for stale-daemon detection from stats polling.
 /// This path is intentionally outside build hot paths, so a short bounded wait
-/// is acceptable to keep monitor/status output current.
+/// is acceptable to keep status output current.
 pub(crate) fn restart_daemon_for_stale_client(config: &Config) -> Result<bool> {
     // Keep service-managed daemons under their manager after an upgrade.
     // A protocol shutdown followed by a direct spawn leaves launchd/systemd
@@ -2776,7 +2769,7 @@ fn send_line_fire_and_forget(
 pub fn start_daemon_background() -> Result<bool> {
     let ready = start_daemon_background_inner()?;
     if !ready {
-        tracing::warn!("daemon did not start after recovery");
+        log::warn!("daemon did not start after recovery");
     }
     Ok(ready)
 }
@@ -2829,7 +2822,7 @@ fn spawn_detached_daemon(
         daemon.spawn().context("spawning daemon process")?
     };
     if child.in_callers_job() {
-        tracing::debug!(
+        log::debug!(
             "the daemon (PID {}) shares the build's job object and stops if the build is \
              interrupted; `kache daemon install` starts it outside any build",
             child.id()

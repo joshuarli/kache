@@ -187,19 +187,20 @@ fn help_lists_subcommands() {
         .success()
         .stdout(predicates::str::contains("list"))
         .stdout(predicates::str::contains("stats"))
-        .stdout(predicates::str::contains("doctor"))
-        .stdout(predicates::str::contains("completions"));
+        .stdout(predicates::str::contains("doctor"));
 }
 
 #[test]
 fn unknown_subcommand_is_a_usage_error() {
     let e = env();
-    e.cmd()
-        .arg("definitely-not-a-command")
-        .assert()
-        .failure()
-        .code(2)
-        .stdout(predicates::str::is_empty());
+    for arg in ["definitely-not-a-command", "monitor", "completions"] {
+        e.cmd()
+            .arg(arg)
+            .assert()
+            .failure()
+            .code(2)
+            .stdout(predicates::str::is_empty());
+    }
 }
 
 /// `kache test-runner` hands back the test binary's exit code, with the
@@ -267,37 +268,22 @@ fn removal_without_a_terminal_names_yes_once() {
 }
 
 #[test]
-fn interactive_commands_refuse_captured_non_tty_output() {
+fn bare_config_lists_values_without_a_terminal() {
     let e = env();
+    e.cmd()
+        .args(["config", "set", "cache.explain_miss", "true"])
+        .assert()
+        .success();
     e.cmd()
         .arg("config")
         .assert()
-        .failure()
-        .stderr(predicates::str::contains("needs a terminal"))
-        .stderr(predicates::str::contains(
-            e.cache.join("config.toml").display().to_string(),
-        ))
-        .stderr(predicates::str::contains("KACHE_"));
-    e.cmd()
-        .arg("monitor")
-        .assert()
-        .failure()
-        .stderr(predicates::str::contains("kache stats --json"));
+        .success()
+        .stdout(predicates::str::contains("cache.explain_miss"));
 }
 
 #[test]
-fn json_rejects_interactive_or_mutating_commands() {
+fn json_rejects_mutating_commands() {
     let e = env();
-    e.cmd()
-        .args(["--json", "monitor"])
-        .assert()
-        .code(2)
-        .stderr(predicates::str::contains("monitor` is interactive"));
-    e.cmd()
-        .args(["--json", "config"])
-        .assert()
-        .code(2)
-        .stderr(predicates::str::contains("config` is interactive"));
     e.cmd()
         .args(["--json", "purge"])
         .assert()
@@ -308,6 +294,11 @@ fn json_rejects_interactive_or_mutating_commands() {
         .assert()
         .code(2)
         .stderr(predicates::str::contains("reports diagnostics only"));
+    e.cmd()
+        .args(["--json", "config"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("\"schema_version\""));
 }
 
 /// Argument errors kache finds after parsing exit 2 like clap's own, in
@@ -447,7 +438,6 @@ fn subcommand_help_is_available() {
         "purge",
         "doctor",
         "stats",
-        "completions",
     ] {
         let e = env();
         e.cmd()
@@ -456,62 +446,6 @@ fn subcommand_help_is_available() {
             .success()
             .stdout(predicates::str::contains("Usage"));
     }
-}
-
-// ── shell completions ───────────────────────────────────────────────────────
-
-#[test]
-fn completions_zsh_emits_script() {
-    let e = env();
-    e.cmd()
-        .args(["completions", "zsh"])
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("#compdef"))
-        .stdout(predicates::str::contains("kache"));
-}
-
-#[test]
-fn completions_bash_emits_script() {
-    let e = env();
-    e.cmd()
-        .args(["completions", "bash"])
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("complete"))
-        .stdout(predicates::str::contains("kache"));
-}
-
-#[test]
-fn completions_fish_emits_script() {
-    let e = env();
-    e.cmd()
-        .args(["completions", "fish"])
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("complete"))
-        .stdout(predicates::str::contains("kache"));
-}
-
-#[test]
-fn completions_invalid_shell_is_a_usage_error() {
-    let e = env();
-    e.cmd()
-        .args(["completions", "not-a-shell"])
-        .assert()
-        .failure()
-        .code(2);
-}
-
-#[test]
-fn completions_work_with_broken_config() {
-    let e = env();
-    std::fs::write(e.cache.join("config.toml"), "{{{{ not toml").unwrap();
-    e.cmd()
-        .args(["completions", "zsh"])
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("#compdef"));
 }
 
 #[test]
@@ -921,19 +855,14 @@ fn init_preview_backs_up_existing_startup_files_before_each_edit() {
         .iter()
         .position(|step| step.starts_with("test_runner "))
         .unwrap();
-    let completions = steps
-        .iter()
-        .position(|step| step.starts_with("completions "))
-        .unwrap();
     assert_eq!(steps[shell + 1], "backup create .bashrc", "{steps:?}");
     assert_eq!(steps[tests + 1], "backup create .bashrc", "{steps:?}");
-    assert_eq!(steps[completions + 1], "backup create .bashrc", "{steps:?}");
     assert_eq!(
         steps
             .iter()
             .filter(|step| step.starts_with("backup "))
             .count(),
-        3,
+        2,
         "{steps:?}"
     );
     assert_eq!(plan["test_activation_required"], true, "{plan}");
@@ -941,77 +870,7 @@ fn init_preview_backs_up_existing_startup_files_before_each_edit() {
 
 #[cfg(unix)]
 #[test]
-fn init_installs_and_updates_shell_completions() {
-    for (shell, relative_script, startup) in [
-        (
-            "bash",
-            ".local/share/kache/completions/kache.bash",
-            Some(".bashrc"),
-        ),
-        (
-            "zsh",
-            ".local/share/kache/completions/kache.zsh",
-            Some(".zshrc"),
-        ),
-        ("fish", ".config/fish/completions/kache.fish", None),
-    ] {
-        let e = env();
-        let script = e.home.join(relative_script);
-        let run = |check| {
-            let mut command = e.cmd();
-            command
-                .args(["init", "--yes", "--no-service", "--json"])
-                .env("SHELL", format!("/bin/{shell}"));
-            if check {
-                command.arg("--check");
-            }
-            let output = command.output().unwrap();
-            assert!(output.status.success(), "{shell}: {output:?}");
-            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
-        };
-        let completion_step = |result: &serde_json::Value| {
-            result["steps"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|step| step["component"] == "completions")
-                .unwrap_or_else(|| panic!("completions missing: {result}"))
-                .clone()
-        };
-        assert_eq!(completion_step(&run(true))["action"], "configure");
-        assert!(!script.exists(), "preview wrote {script:?}");
-        assert_eq!(completion_step(&run(false))["action"], "configure");
-        let generated = e.cmd().args(["completions", shell]).output().unwrap();
-        assert!(generated.status.success());
-        assert_eq!(std::fs::read(&script).unwrap(), generated.stdout);
-        if let Some(startup) = startup {
-            let text = std::fs::read_to_string(e.home.join(startup)).unwrap();
-            assert!(text.contains("# >>> kache shell completions >>>"), "{text}");
-            assert!(text.contains(script.to_str().unwrap()), "{text}");
-        }
-        assert_eq!(completion_step(&run(true))["action"], "keep");
-        assert_eq!(completion_step(&run(false))["action"], "keep");
-        std::fs::write(&script, "# old completions\n").unwrap();
-        assert_eq!(completion_step(&run(false))["action"], "configure");
-        assert_eq!(std::fs::read(&script).unwrap(), generated.stdout);
-        assert!(
-            std::fs::read_dir(script.parent().unwrap())
-                .unwrap()
-                .any(|entry| {
-                    let entry = entry.unwrap();
-                    entry
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with(".kache-shell-backup-")
-                        && std::fs::read(entry.path()).unwrap() == b"# old completions\n"
-                })
-        );
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn init_leaves_completions_alone_when_shell_setup_is_skipped_or_cancelled() {
+fn init_leaves_shell_setup_alone_when_skipped_or_cancelled() {
     let e = env();
     let output = e
         .cmd()
@@ -1019,15 +878,6 @@ fn init_leaves_completions_alone_when_shell_setup_is_skipped_or_cancelled() {
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
-    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(
-        !result["steps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|step| step["component"] == "completions")
-    );
-    assert!(!e.home.join(".local/share/kache/completions").exists());
     assert!(!e.home.join(".bashrc").exists());
 
     let cancelled = env();
@@ -1037,142 +887,10 @@ fn init_leaves_completions_alone_when_shell_setup_is_skipped_or_cancelled() {
         .write_stdin("n\n")
         .assert()
         .success();
-    assert!(
-        !cancelled
-            .home
-            .join(".local/share/kache/completions")
-            .exists()
-    );
     assert!(!cancelled.home.join(".bashrc").exists());
-
-    let unsupported = env();
-    let output = unsupported
-        .cmd()
-        .args(["init", "--check", "--no-service", "--json"])
-        .env("SHELL", "/bin/tcsh")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let completions = result["steps"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|step| step["component"] == "completions")
-        .unwrap();
-    assert_eq!(completions["action"], "unsupported");
-    assert!(
-        !unsupported
-            .home
-            .join(".local/share/kache/completions")
-            .exists()
-    );
 }
 
 #[cfg(unix)]
-#[test]
-fn init_completions_follow_custom_shell_and_data_directories() {
-    for shell in ["zsh", "fish"] {
-        let e = env();
-        let data = e.home.join("custom ' data");
-        let config = e.home.join("custom ' config");
-        let dots = e.home.join("dotfiles");
-        let output = e
-            .cmd()
-            .args(["init", "--yes", "--no-service", "--json"])
-            .env("SHELL", format!("/bin/{shell}"))
-            .env("ZDOTDIR", &dots)
-            .env("XDG_CONFIG_HOME", &config)
-            .env("XDG_DATA_HOME", &data)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{shell}: {output:?}");
-        let script = if shell == "zsh" {
-            data.join("kache/completions/kache.zsh")
-        } else {
-            config.join("fish/completions/kache.fish")
-        };
-        assert!(script.exists(), "{script:?}");
-        assert!(!e.home.join(".local/share/kache/completions").exists());
-        if shell == "zsh" {
-            assert!(
-                std::fs::read_to_string(dots.join(".zshrc"))
-                    .unwrap()
-                    .contains("kache shell completions")
-            );
-            assert!(!e.home.join(".zshrc").exists());
-        }
-        let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        let completion = receipt["steps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|step| step["component"] == "completions")
-            .unwrap();
-        assert!(
-            completion["paths"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|path| path.as_str() == script.to_str())
-        );
-        assert_eq!(completion["action"], "configure");
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn init_reports_completion_activation_even_when_compiler_shims_are_active() {
-    let e = env();
-    let original_path = std::env::var_os("PATH").unwrap();
-    e.cmd()
-        .args(["init", "--yes", "--no-service"])
-        .env("PATH", &original_path)
-        .assert()
-        .success();
-    let shims = e.home.join(".local/lib/kache/shims");
-    let active_path =
-        std::env::join_paths(std::iter::once(shims).chain(std::env::split_paths(&original_path)))
-            .unwrap();
-    let script = e.home.join(".local/share/kache/completions/kache.bash");
-    let generated = std::fs::read(&script).unwrap();
-    let run = |check, path: &std::ffi::OsStr| {
-        let mut command = e.cmd();
-        command
-            .args(["init", "--yes", "--no-service", "--json"])
-            .env("PATH", path);
-        if check {
-            command.arg("--check");
-        }
-        let output = command.output().unwrap();
-        assert!(output.status.success(), "{output:?}");
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
-    };
-    // A configured terminal needs no reload until the completion script changes.
-    let ready = run(true, &active_path);
-    assert_eq!(ready["shell_activation_required"], false, "{ready}");
-    std::fs::write(&script, "# old completions\n").unwrap();
-    let preview = run(true, &active_path);
-    assert_eq!(preview["shell_activation_required"], true, "{preview}");
-    let shell = preview["steps"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|step| step["component"] == "shell")
-        .unwrap();
-    assert_eq!(shell["action"], "keep", "only completions need an update");
-    assert_eq!(std::fs::read(&script).unwrap(), b"# old completions\n");
-    let applied = run(false, &active_path);
-    assert_eq!(applied["shell_activation_required"], true, "{applied}");
-    assert_eq!(std::fs::read(&script).unwrap(), generated);
-    // Compiler activation alone must still request a new terminal.
-    let compiler_only = run(true, &original_path);
-    assert_eq!(
-        compiler_only["shell_activation_required"], true,
-        "{compiler_only}"
-    );
-}
-
 /// With a login shell init cannot set up, it installs no shims, so there is
 /// no rustdoc shim to point Cargo at and no terminal to replace.
 #[cfg(unix)]
@@ -1866,8 +1584,7 @@ fn json_failures_emit_one_document_and_nonzero_exit() {
             "invalid_arguments",
         ),
         (vec!["init", "--json"], 2, "invalid_arguments"),
-        (vec!["monitor", "--json"], 2, "invalid_arguments"),
-        (vec!["config", "--json"], 2, "invalid_arguments"),
+        (vec!["--json", "monitor"], 2, "invalid_arguments"),
         (
             vec!["stats", "--json", "--format", "github"],
             2,

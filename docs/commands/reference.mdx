@@ -19,10 +19,9 @@ The envelope is documented in [`cli.schema.json`](https://github.com/kunobi-ninj
 | --- | --- |
 | `init` | Configure Cargo, optional C/C++ shims, test pacing, and the daemon service |
 | `doctor` | Diagnose setup and store integrity |
-| `config` | Open the configuration editor |
+| `config` | Inspect or change configuration |
 | `stats` | Hit rate, time saved and cache size; `--full` for the full build report. Alias: `status` |
 | `clean` | Free disk space: remove old target directories, or empty the cache |
-| `monitor` | Open the live dashboard |
 | `explain` | Explain why a crate, or the latest build, missed the cache |
 | `list` | Inspect local entries |
 | `daemon` | Inspect and manage the background daemon |
@@ -224,17 +223,6 @@ kache daemon log
 
 See [Daemon lifecycle](/docs/daemon/lifecycle).
 
-## `kache monitor`
-
-```bash
-kache monitor
-kache monitor --since 7d
-```
-
-`--since` takes the same forms as `kache stats`. Without it, the monitor loads the last hour. It needs a terminal; scripts use `kache stats --json`.
-
-See [Monitor](/docs/monitor).
-
 ## `kache stats`
 
 ```bash
@@ -373,11 +361,11 @@ kache config set --project cache.cache_executables false
 kache config unset --project cache.cache_executables
 ```
 
-Without a subcommand, opens the interactive editor. The subcommands read or edit the selected TOML file without starting a daemon. `get` and `list` show explicit file values, excluding environment overrides, host settings and defaults. A missing key makes `get` or `unset` fail.
+Without a subcommand, lists the selected file's values. The subcommands read or edit the selected TOML file without starting a daemon. `get` and `list` show explicit file values, excluding environment overrides, host settings and defaults. A missing key makes `get` or `unset` fail.
 
 Each subcommand accepts `--project`, `--global`, or `--file PATH`. Without one, it uses Kache's normal config-file selection. `--project` selects the nearest existing `.kache.toml`, or creates it in the current directory when setting a value. `--global` selects the user config and ignores `KACHE_CONFIG` and project files. `--file` selects an explicit path. These selectors cannot be combined.
 
-`set` validates known keys and their TOML types. Boolean, number and array values use TOML syntax; strings such as `50GiB` can be unquoted. Workspace declarations and entire tables are edited directly in TOML. Edits preserve comments and other keys, follow existing file symlinks, and replace the file atomically under a writer lock. Invalid TOML is refused. All subcommands support `--json`; the interactive editor does not. See [Configuration](/docs/getting-started/configuration).
+`set` validates known keys and their TOML types. Boolean, number and array values use TOML syntax; strings such as `50GiB` can be unquoted. Workspace declarations and entire tables are edited directly in TOML. Edits preserve comments and other keys, follow existing file symlinks, and replace the file atomically under a writer lock. Invalid TOML is refused. All subcommands support `--json`. See [Configuration](/docs/getting-started/configuration).
 
 ## `kache test-runner`
 

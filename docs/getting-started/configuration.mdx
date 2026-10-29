@@ -266,7 +266,7 @@ The local store is not designed for sharing across machines. Each machine keeps 
 
 ### Daemon index maintenance
 
-The daemon looks after `index.db` on its own. It checks 60 seconds after it starts, every 5 minutes after that, and once at shutdown. Each check runs two steps in order: it heals the blob index, then compacts the file. Both steps hold the index write lock while they work, so both wait for a quiet machine. A machine is quiet when no compile or test binary run through the [test runner](#test-runner) holds a scheduler slot, and the daemon has received no build request for 60 seconds. Stats polling and an open `kache monitor` do not count as build requests. Neither step overlaps a GC sweep.
+The daemon looks after `index.db` on its own. It checks 60 seconds after it starts, every 5 minutes after that, and once at shutdown. Each check runs two steps in order: it heals the blob index, then compacts the file. Both steps hold the index write lock while they work, so both wait for a quiet machine. A machine is quiet when no compile or test binary run through the [test runner](#test-runner) holds a scheduler slot, and the daemon has received no build request for 60 seconds. Stats polling does not count as a build request. Neither step overlaps a GC sweep.
 
 Set `cache.index_auto_compact = false` or `KACHE_INDEX_AUTO_COMPACT=0` to turn both steps off. `kache doctor --repair` does the same work on demand either way.
 
@@ -439,7 +439,7 @@ bypass_env = ["SPECIAL_BUILD=1"]
 
 Use `KACHE_VERIFY` to check a cache-key change. Set it to `1` or `true` to recompile every rustc cache hit into a staging directory and diff those artifacts against the files just restored. Leave it unset (or `0` / `false`) in ordinary builds: each hit pays a full compile. There is no `kache build` command for this.
 
-Path and debug-info bytes that differ only as embedded absolute paths are reported as `path-debug` and do not fail the build. Remaining byte differences are `content`. In both cases the restored files stay in place so the build continues; the wrapper records the class on the hit event as `verify_compare` (and in tracing when logging is on).
+Path and debug-info bytes that differ only as embedded absolute paths are reported as `path-debug` and do not fail the build. Remaining byte differences are `content`. In both cases the restored files stay in place so the build continues; the wrapper records the class on the hit event as `verify_compare` (and in the log when logging is on).
 
 `KACHE_VERIFY_RESTORES` only re-hashes stored blobs before restore. It does not recompile.
 
@@ -594,8 +594,8 @@ Every GC driver (the daemon's sweep and its eviction after an upload, the auto-G
 | `KACHE_DEFERRED_DURABILITY` | `cache.deferred_durability` | `true` | Store a miss or a downloaded entry without an fsync and let a background worker flush it a moment later; a hit on an entry not yet flushed verifies its bytes first. Set to `0` to flush every entry inside the compile or download that stored it. |
 | `KACHE_SHARED_HARDLINK_RESTORES` | `cache.shared_hardlink_restores` | `false` | Let every target directory hardlink the same store blob on filesystems without reflink. Only for single-use target directories (a CI job's tree): the restore-time mtime stamp on a shared inode re-dates the artifact in every other tree that links it. |
 | `KACHE_PROGRESS` | none | off | `hits` or `verbose` compiler progress |
-| `KACHE_LOG` | none | CLI: `kache=warn`; wrapper: off | Stderr tracing filter |
-| `KACHE_LOG_FILE` | none | CLI/daemon: `kache=info`; wrapper: off | File tracing filter and wrapper opt-in. The file is `~/Library/Logs/kache/kache.log` on macOS and `kache.log` in the default store directory elsewhere, even when `KACHE_CACHE_DIR` or `cache.local_store` moves the store. A process that starts while it is over 5 MiB truncates it |
+| `KACHE_LOG` | none | CLI: `kache=warn`; wrapper: off | Stderr log filter |
+| `KACHE_LOG_FILE` | none | CLI/daemon: `kache=info`; wrapper: off | File log filter and wrapper opt-in. The file is `~/Library/Logs/kache/kache.log` on macOS and `kache.log` in the default store directory elsewhere, even when `KACHE_CACHE_DIR` or `cache.local_store` moves the store. A process that starts while it is over 5 MiB truncates it |
 | `KACHE_EVENT_ROOT` | none | detected | Root attached to events for report filtering |
 | `KACHE_PAGER` | none | platform pager | Pager command for `kache list` |
 | `KACHE_MAX_DIAGNOSTICS_BYTES` | none | unset | Cap, in bytes, on the compiler diagnostics stored with an entry. Unset stores them in full, so a hit replays exactly what the compile printed. Above the cap they are truncated with a marker |

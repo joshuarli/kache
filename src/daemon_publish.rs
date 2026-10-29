@@ -406,7 +406,7 @@ pub(crate) fn run_publish_worker(daemon: Arc<Daemon>, rx: std::sync::mpsc::Recei
     let store = match Store::open(&config) {
         Ok(store) => store,
         Err(error) => {
-            tracing::warn!("publish worker could not open the store: {error:#}; hand-offs refused");
+            log::warn!("publish worker could not open the store: {error:#}; hand-offs refused");
             daemon.publish_queue().close();
             // Drain so accepted jobs release their locks and files.
             while let Ok(job) = rx.recv() {
@@ -479,12 +479,12 @@ fn publish_one(daemon: &Arc<Daemon>, config: &Config, store: &Store, job: Publis
                         .collect::<Vec<_>>(),
                 )
             {
-                tracing::debug!("daemon could not record the cc memo: {error}");
+                log::debug!("daemon could not record the cc memo: {error}");
             }
         }
         Err(error) => {
             event.store_error = crate::wrapper::store_error_for_event(&error);
-            tracing::warn!(
+            log::warn!(
                 "daemon could not store the cc entry for {}: {}",
                 request.crate_name,
                 event.store_error
@@ -665,7 +665,7 @@ fn finish_handoff(receipt: &HandoffReceipt, reply: Result<String>) -> Handoff {
         Err(error) => {
             // Cancellation could not be established. Leave this optional put
             // to the daemon instead of racing it with a second publication.
-            tracing::debug!("could not cancel cc handoff receipt: {error}");
+            log::debug!("could not cancel cc handoff receipt: {error}");
             Handoff::Accepted
         }
     }

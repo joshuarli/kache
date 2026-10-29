@@ -22,13 +22,12 @@ use miss_diagnosis::{Cause, MissDiagnosis};
 // ── Stats snapshot (daemon-first, fallback to direct) ──────────────────────
 
 /// Cached store + event stats, refreshed periodically.
-/// Used by both the TUI monitor and `kache stats` CLI.
+/// Used by `kache stats`.
 pub(crate) struct StatsSnapshot {
     pub stores: Vec<crate::store_view::StoreSummary>,
     pub total_size: u64,
     pub max_size: u64,
     pub entry_count: usize,
-    pub entries: Vec<daemon::StatsEntry>,
     pub event_stats: daemon::EventStatsResponse,
     pub daemon_connected: bool,
     pub daemon_version: String,
@@ -37,9 +36,6 @@ pub(crate) struct StatsSnapshot {
     /// Recent daemon-owned session summaries, or direct-store summaries when
     /// no daemon was reachable.
     pub recent_summaries: Vec<crate::events::BuildSummaryEvent>,
-    /// In-flight miss compiles (kunobi-ninja/kache#131); empty when the
-    /// daemon is unreachable (the TUI then falls back to tailed heartbeats).
-    pub in_flight: Vec<daemon::InFlightEntry>,
     /// The daemon's effective config from the stats response
     /// (kunobi-ninja/kache#689); `None` when the daemon is unreachable or
     /// predates effective-config reporting.
@@ -53,7 +49,6 @@ impl Default for StatsSnapshot {
             total_size: 0,
             max_size: 0,
             entry_count: 0,
-            entries: Vec::new(),
             event_stats: daemon::EventStatsResponse {
                 local_hits: 0,
                 prefetch_hits: 0,
@@ -75,7 +70,6 @@ impl Default for StatsSnapshot {
             daemon_build_epoch: 0,
             blob_stats: None,
             recent_summaries: Vec::new(),
-            in_flight: Vec::new(),
             daemon_effective_config: None,
         }
     }
@@ -104,13 +98,9 @@ pub fn compile_weighted_hit_rate(es: &daemon::EventStatsResponse) -> Option<f64>
 /// With `announce_auto_start` set, the daemon-unreachable path says on stderr
 /// that it is starting a daemon inheriting this process's environment
 /// (kunobi-ninja/kache#689) — otherwise the same command silently flips from
-/// "daemon's config" to "my config" depending on daemon liveness. The CLI
-/// passes true; the TUI passes false because its raw-mode alternate screen
-/// owns the terminal.
+/// "daemon's config" to "my config" depending on daemon liveness.
 pub(crate) fn fetch_stats_snapshot(
     config: &Config,
-    include_entries: bool,
-    sort_by: &str,
     window: SinceWindow,
     announce_auto_start: bool,
     include_summaries: bool,
@@ -118,9 +108,9 @@ pub(crate) fn fetch_stats_snapshot(
     // Try daemon
     if let Ok(resp) = daemon::send_stats_request_options(
         config,
-        include_entries,
+        false,
         include_summaries,
-        Some(sort_by),
+        None,
         Some(window),
     ) {
         return StatsSnapshot {
@@ -128,19 +118,17 @@ pub(crate) fn fetch_stats_snapshot(
             total_size: resp.total_size,
             max_size: resp.max_size,
             entry_count: resp.entry_count,
-            entries: resp.entries.unwrap_or_default(),
             event_stats: resp.events,
             daemon_connected: true,
             daemon_version: resp.version,
             daemon_build_epoch: resp.build_epoch,
             blob_stats: resp.blob_stats,
             recent_summaries: resp.recent_summaries,
-            in_flight: resp.in_flight,
             daemon_effective_config: resp.effective_config,
         };
     }
 
-    // Daemon unreachable or stale socket: best-effort auto-start for monitor/stats UX.
+    // Daemon unreachable or stale socket: best-effort auto-start for stats UX.
     // This path is not used by compile-time hot operations.
     if announce_auto_start {
         eprintln!(
@@ -151,9 +139,9 @@ pub(crate) fn fetch_stats_snapshot(
     if daemon::start_daemon_background().unwrap_or(false)
         && let Ok(resp) = daemon::send_stats_request_options(
             config,
-            include_entries,
+            false,
             include_summaries,
-            Some(sort_by),
+            None,
             Some(window),
         )
     {
@@ -162,20 +150,18 @@ pub(crate) fn fetch_stats_snapshot(
             total_size: resp.total_size,
             max_size: resp.max_size,
             entry_count: resp.entry_count,
-            entries: resp.entries.unwrap_or_default(),
             event_stats: resp.events,
             daemon_connected: true,
             daemon_version: resp.version,
             daemon_build_epoch: resp.build_epoch,
             blob_stats: resp.blob_stats,
             recent_summaries: resp.recent_summaries,
-            in_flight: resp.in_flight,
             daemon_effective_config: resp.effective_config,
         };
     }
 
     // Fallback: direct reads (no daemon reachable).
-    snapshot_from_direct_reads(config, include_entries, sort_by, window, include_summaries)
+    snapshot_from_direct_reads(config, window, include_summaries)
 }
 
 /// Build a [`StatsSnapshot`] by reading the store and event log directly, with no
@@ -183,12 +169,10 @@ pub(crate) fn fetch_stats_snapshot(
 /// testable against a seeded cache without a running (or auto-started) daemon.
 pub(crate) fn snapshot_from_direct_reads(
     config: &Config,
-    include_entries: bool,
-    sort_by: &str,
     window: SinceWindow,
     include_summaries: bool,
 ) -> StatsSnapshot {
-    let inventory = crate::store_view::read(config, include_entries, sort_by).unwrap_or_default();
+    let inventory = crate::store_view::read(config, false, "size").unwrap_or_default();
 
     let since = window.cutoff(chrono::Utc::now());
     let es = events::event_stats_since(&config.event_log_path(), since).unwrap_or_default();
@@ -207,7 +191,6 @@ pub(crate) fn snapshot_from_direct_reads(
         total_size: inventory.total_size,
         max_size: inventory.max_size,
         entry_count: inventory.entry_count,
-        entries: inventory.entries,
         stores: inventory.stores,
         event_stats: daemon::EventStatsResponse {
             local_hits: es.local_hits,
@@ -230,7 +213,6 @@ pub(crate) fn snapshot_from_direct_reads(
         daemon_build_epoch: 0,
         blob_stats: Some(inventory.blob_stats),
         recent_summaries,
-        in_flight: Vec::new(),
         daemon_effective_config: None,
     }
 }
@@ -382,17 +364,15 @@ pub fn telemetry_write(
             total_size: resp.total_size,
             max_size: resp.max_size,
             entry_count: resp.entry_count,
-            entries: resp.entries.unwrap_or_default(),
             event_stats: resp.events,
             daemon_connected: true,
             daemon_version: resp.version,
             daemon_build_epoch: resp.build_epoch,
             blob_stats: resp.blob_stats,
             recent_summaries: resp.recent_summaries,
-            in_flight: resp.in_flight,
             daemon_effective_config: resp.effective_config,
         },
-        Err(_) => snapshot_from_direct_reads(config, false, "size", SinceWindow::DEFAULT, false),
+        Err(_) => snapshot_from_direct_reads(config, SinceWindow::DEFAULT, false),
     };
     crate::otel::write_otlp(
         dir,
@@ -540,7 +520,7 @@ pub fn stats(
     window: SinceWindow,
     json: bool,
 ) -> Result<()> {
-    let snap = fetch_stats_snapshot(config, false, "size", window, true, true);
+    let snap = fetch_stats_snapshot(config, window, true, true);
 
     // #689: the numbers below are daemon-first, so before rendering them say
     // when the daemon's effective config disagrees with this invocation's —
@@ -1239,17 +1219,44 @@ pub fn stats_last_build(
 }
 
 /// The full build report's output formats.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReportFormat {
     Text,
     Json,
-    #[value(alias = "md")]
     Markdown,
-    #[value(alias = "gh")]
     Github,
     /// Perfetto / Chrome trace JSON
-    #[value(aliases = ["perfetto", "chrome-trace"])]
     Trace,
+}
+
+impl ReportFormat {
+    /// Spellings the `--format` flag accepts, with the short and
+    /// tool-specific aliases.
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "text" => ReportFormat::Text,
+            "json" => ReportFormat::Json,
+            "markdown" | "md" => ReportFormat::Markdown,
+            "github" | "gh" => ReportFormat::Github,
+            "trace" | "perfetto" | "chrome-trace" => ReportFormat::Trace,
+            _ => return None,
+        })
+    }
+
+    /// Every spelling `--format` accepts, for help and error messages.
+    pub(crate) fn spellings() -> &'static [&'static str] {
+        &[
+            "text",
+            "json",
+            "markdown",
+            "md",
+            "github",
+            "gh",
+            "trace",
+            "perfetto",
+            "chrome-trace",
+        ]
+    }
 }
 
 impl ReportFormat {
@@ -2369,19 +2376,6 @@ where
     (unique_diffs.into_iter().take(limit).collect(), extra)
 }
 
-pub fn format_duration_ms(ms: u64) -> String {
-    let secs = ms / 1000;
-    if secs >= 3600 {
-        format!("~{:.1}h", secs as f64 / 3600.0)
-    } else if secs >= 60 {
-        format!("~{:.0}min", secs as f64 / 60.0)
-    } else if secs > 0 {
-        format!("~{secs}s")
-    } else {
-        format!("~{ms}ms")
-    }
-}
-
 /// ` (<size>)` after a count of held entries, when the sweep measured it.
 fn held_bytes_note(bytes_held: u64) -> String {
     if bytes_held == 0 {
@@ -3477,8 +3471,8 @@ pub fn run_gc_local(config: &Config, mode: GcMode) -> Result<crate::store::GcSta
     // by age or size; a flusher that never ran is caught up here.
     match store.flush_durability(usize::MAX) {
         Ok(0) => {}
-        Ok(flushed) => tracing::info!("flushed {flushed} entries pending durability"),
-        Err(error) => tracing::warn!("durability flush before gc failed: {error:#}"),
+        Ok(flushed) => log::info!("flushed {flushed} entries pending durability"),
+        Err(error) => log::warn!("durability flush before gc failed: {error:#}"),
     }
     let mut combined = crate::store::GcStats::default();
     let started = std::time::Instant::now();
@@ -3634,7 +3628,7 @@ pub fn run_gc_local(config: &Config, mode: GcMode) -> Result<crate::store::GcSta
         "manual"
     };
     if let Err(e) = crate::report::record_gc_run(config, source, mode.sweep_origin(), &combined) {
-        tracing::debug!(
+        log::debug!(
             "gc: could not record {}: {e:#}",
             crate::report::GC_STATS_FILE
         );
@@ -3737,7 +3731,7 @@ pub fn run_auto_gc_worker(config: &Config, retry_delay: std::time::Duration) {
     };
     match Store::open(config).and_then(|store| store.physical_size()) {
         Ok(size) => crate::wrapper::record_auto_gc_outcome(config, size, last.bytes_held),
-        Err(e) => tracing::debug!("auto-gc: store size after the sweep unknown: {e:#}"),
+        Err(e) => log::debug!("auto-gc: store size after the sweep unknown: {e:#}"),
     }
 }
 
@@ -3891,7 +3885,7 @@ fn record_manual_gc_run(config: &Config, stats: &crate::store::GcStats) {
         crate::store::SweepOrigin::Requested,
         stats,
     ) {
-        tracing::warn!("recording GC run: {e:#}");
+        log::warn!("recording GC run: {e:#}");
     }
 }
 
@@ -4130,211 +4124,6 @@ pub fn purge(config: &Config, crate_filter: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Outcome of one key press in the interactive `clean` selector.
-#[derive(Debug, PartialEq, Eq)]
-enum CleanStep {
-    /// Stay in the loop (cursor/selection may have changed).
-    Continue,
-    /// Quit without deleting.
-    Cancel,
-    /// Delete the currently-selected targets.
-    Confirm,
-}
-
-/// Apply one key press to the `clean` selector state. Pure (mutates the passed
-/// `selected`/`cursor`), so the navigation/selection logic is unit-testable
-/// without a terminal.
-fn clean_handle_key(
-    code: crossterm::event::KeyCode,
-    selected: &mut [bool],
-    cursor: &mut usize,
-    len: usize,
-) -> CleanStep {
-    use crossterm::event::KeyCode;
-    match code {
-        KeyCode::Char('q') | KeyCode::Esc => return CleanStep::Cancel,
-        KeyCode::Up => *cursor = cursor.saturating_sub(1),
-        KeyCode::Down if *cursor + 1 < len => *cursor += 1,
-        KeyCode::Char(' ') if *cursor < selected.len() => {
-            selected[*cursor] = !selected[*cursor];
-            if *cursor + 1 < len {
-                *cursor += 1;
-            }
-        }
-        KeyCode::Char('a') => {
-            for s in selected.iter_mut() {
-                *s = true;
-            }
-        }
-        KeyCode::Char('n') => {
-            for s in selected.iter_mut() {
-                *s = false;
-            }
-        }
-        KeyCode::Enter => return CleanStep::Confirm,
-        _ => {}
-    }
-    CleanStep::Continue
-}
-
-/// Ignore key-repeat/release notifications: one physical key press must apply
-/// exactly one selector action on terminals that report all key event kinds.
-fn clean_handle_event(
-    event: crossterm::event::Event,
-    selected: &mut [bool],
-    cursor: &mut usize,
-    len: usize,
-) -> CleanStep {
-    use crossterm::event::{Event, KeyEventKind};
-    match event {
-        Event::Key(key) if key.kind == KeyEventKind::Press => {
-            clean_handle_key(key.code, selected, cursor, len)
-        }
-        _ => CleanStep::Continue,
-    }
-}
-
-/// Render one frame of the interactive `clean` selector. Extracted from the
-/// event loop so it can be unit-tested against a ratatui `TestBackend` with a
-/// fixed `targets`/`selected`/`cursor` state (the real loop owns the terminal).
-fn draw_clean(
-    frame: &mut ratatui::Frame,
-    targets: &[TargetEntry],
-    selected: &[bool],
-    cursor: usize,
-    root: &std::path::Path,
-) {
-    use ratatui::prelude::*;
-    use ratatui::widgets::*;
-
-    // Keep the raw per-row/header totals, but label the selection's scan-time
-    // physical-reclaim estimate explicitly. It is not the cached-file total:
-    // partial reflinks and hardlink groups need extent/link-aware accounting.
-    let selected_size: u64 = targets
-        .iter()
-        .zip(selected.iter())
-        .filter(|(_, s)| **s)
-        .map(|(t, _)| t.estimated_reclaimable_bytes)
-        .sum();
-    let selected_count = selected.iter().filter(|s| **s).count();
-    let total_size: u64 = targets.iter().map(|t| t.size).sum();
-    let total_cached: u64 = targets.iter().map(|t| t.cached_bytes).sum();
-
-    let area = frame.area();
-
-    let chunks = Layout::vertical([
-        Constraint::Length(3), // Header
-        Constraint::Min(5),    // Table
-        Constraint::Length(4), // Detail panel
-        Constraint::Length(3), // Help
-    ])
-    .split(area);
-
-    // Header
-    let header = Paragraph::new(format!(
-        " {} dirs ({} total, {} cached)    Selected: {} (est. {})",
-        targets.len(),
-        ByteSize(total_size),
-        ByteSize(total_cached),
-        selected_count,
-        ByteSize(selected_size),
-    ))
-    .block(Block::bordered().title(" kache clean "));
-    frame.render_widget(header, chunks[0]);
-
-    // List
-    let rows: Vec<Row> = targets
-        .iter()
-        .zip(selected.iter())
-        .enumerate()
-        .map(|(i, (t, sel))| {
-            let rel = t.path.strip_prefix(root).unwrap_or(&t.path);
-            let checkbox = if *sel { "[x]" } else { "[ ]" };
-            let profile_str = if t.profiles.is_empty() {
-                String::new()
-            } else {
-                format!("[{}]", t.profiles.join(", "))
-            };
-            let style = if i == cursor {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else if *sel {
-                Style::default().fg(Color::Red)
-            } else {
-                Style::default()
-            };
-            Row::new(vec![
-                Cell::from(format!(" {checkbox}")),
-                Cell::from(format!("{}", rel.display())),
-                Cell::from(format!("{:>10}", ByteSize(t.size))),
-                Cell::from(format!("{:>10}", ByteSize(t.cached_bytes))),
-                Cell::from(profile_str),
-            ])
-            .style(style)
-        })
-        .collect();
-
-    let widths = [
-        Constraint::Length(5),
-        Constraint::Min(20),
-        Constraint::Length(10),
-        Constraint::Length(10),
-        Constraint::Length(16),
-    ];
-
-    let table =
-        Table::new(rows, widths).block(Block::bordered().title(" Select directories to remove "));
-    frame.render_widget(table, chunks[1]);
-
-    // Detail panel — breakdown for cursor row
-    let current = &targets[cursor];
-    let b = &current.breakdown;
-    let rel = current.path.strip_prefix(root).unwrap_or(&current.path);
-    let cached_pct = if current.size > 0 {
-        (current.cached_bytes as f64 / current.size as f64) * 100.0
-    } else {
-        0.0
-    };
-    let detail_title = format!(
-        " {} — {} total, {} cached ({:.0}%) ",
-        rel.display(),
-        ByteSize(current.size),
-        ByteSize(current.cached_bytes),
-        cached_pct,
-    );
-    let detail_lines = vec![
-        Line::from(vec![
-            Span::styled("  incremental: ", Style::default().fg(Color::Yellow)),
-            Span::raw(format!("{:>10}", ByteSize(b.incremental))),
-            Span::raw("   "),
-            Span::styled("build: ", Style::default().fg(Color::Yellow)),
-            Span::raw(format!("{:>10}", ByteSize(b.build_scripts))),
-            Span::raw("   "),
-            Span::styled("deps (local): ", Style::default().fg(Color::Yellow)),
-            Span::raw(format!("{:>10}", ByteSize(b.deps_local))),
-        ]),
-        Line::from(vec![
-            Span::styled("  fingerprint: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{:>10}", ByteSize(b.fingerprints))),
-            Span::raw("   "),
-            Span::styled("binaries: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{:>7}", ByteSize(b.binaries))),
-            Span::raw("   "),
-            Span::styled("other: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{:>17}", ByteSize(b.other))),
-        ]),
-    ];
-    let detail = Paragraph::new(detail_lines).block(Block::bordered().title(detail_title));
-    frame.render_widget(detail, chunks[2]);
-
-    // Help bar
-    let help = Paragraph::new(
-        " space: toggle  a: select all  n: select none  enter: delete selected  q: cancel",
-    )
-    .style(Style::default().fg(Color::DarkGray))
-    .block(Block::bordered());
-    frame.render_widget(help, chunks[3]);
-}
-
 #[derive(Debug, Clone, serde::Serialize)]
 struct CleanSkipped {
     path: String,
@@ -4417,7 +4206,7 @@ fn plan_selection(
 }
 
 /// Whether that view is printed as text: `--dry-run`, or a clean with
-/// nothing to remove. JSON prints the same plan; otherwise the selector runs.
+/// nothing to remove. JSON prints the same plan; otherwise it asks once.
 fn prints_plan(json: bool, dry_run: bool, selected: usize) -> bool {
     !json && (dry_run || selected == 0)
 }
@@ -4892,11 +4681,7 @@ fn clean_with_terminal(
     scope: CleanScope,
     terminal: bool,
 ) -> Result<()> {
-    use crossterm::event;
-    use ratatui::prelude::*;
-    use std::io::stdout;
-
-    // The selector needs a terminal: refuse before scanning or forgetting
+    // Without flags nothing is removed: refuse before scanning or forgetting
     // anything.
     if !dry_run && !yes && !json && !terminal {
         return Err(no_terminal("nothing removed", &command_args(), true));
@@ -5031,8 +4816,7 @@ fn clean_with_terminal(
         crate::machine::emit_outcome("clean", removal_failure(failed).as_deref(), body, next)
     };
 
-    // `--json` without `--yes`, or with `--dry-run`, is a preview. Agents
-    // should not enter the TUI.
+    // `--json` without `--yes`, or with `--dry-run`, is a preview.
     if json && preview {
         let waiting = crate::target_use::blockers(&config.cache_dir).unwrap_or_default();
         return emit_clean_json(&targets, &skipped, &waiting, &[], Vec::new(), 0);
@@ -5091,69 +4875,43 @@ fn clean_with_terminal(
         return removal_outcome(&failed);
     }
 
-    // TUI mode — interactive selection
-    let mut selected: Vec<bool> = vec![false; targets.len()];
-    let mut cursor: usize = 0;
-
-    // Scoped so the guard restores the terminal before the post-TUI
-    // summary prints to the real screen.
-    let result = {
-        let _terminal_mode = crate::tui::TerminalModeGuard::enter()?;
-        let backend = CrosstermBackend::new(stdout());
-        let mut terminal = Terminal::new(backend)?;
-
-        loop {
-            terminal.draw(|frame| draw_clean(frame, &targets, &selected, cursor, &root))?;
-
-            if event::poll(std::time::Duration::from_millis(100))? {
-                match clean_handle_event(event::read()?, &mut selected, &mut cursor, targets.len())
-                {
-                    CleanStep::Cancel => break None,
-                    CleanStep::Confirm => {
-                        let to_remove: Vec<_> = targets
-                            .iter()
-                            .zip(selected.iter())
-                            .filter(|(_, s)| **s)
-                            .map(|(t, _)| RemovalTarget::from_entry(t))
-                            .collect();
-                        break Some(to_remove);
-                    }
-                    CleanStep::Continue => {}
-                }
-            }
-        }
-    };
-
-    // Process deletions outside TUI
-    match result {
-        None => {
-            println!("Cancelled.");
-        }
-        Some(to_remove) if to_remove.is_empty() => {
-            println!("Nothing selected.");
-        }
-        Some(to_remove) => {
-            let mut skipped = Vec::new();
-            let mut failed = Vec::new();
-            let (removed, estimated_reclaimed, apparent_gap) = remove_targets(
-                &to_remove,
-                &root,
-                &config.cache_dir,
-                false,
-                &mut skipped,
-                &mut Vec::new(),
-                &mut failed,
-            );
-            forget_removed_targets(config, &to_remove, &failed, &skipped)?;
-            println!(
-                "\n{}",
-                removal_summary(removed, estimated_reclaimed, apparent_gap)
-            );
-            return removal_outcome(&failed);
-        }
+    // A terminal without flags: list what would go and ask once.
+    for line in render_clean_dry_run(&targets, &root, &orphans)
+        .into_iter()
+        .take_while(|line| !line.starts_with("Dry run,"))
+    {
+        println!("{line}");
     }
-
-    Ok(())
+    if !prompt_yes_no(
+        &format!(
+            "Remove {} target director{}?",
+            targets.len(),
+            if targets.len() == 1 { "y" } else { "ies" }
+        ),
+        false,
+        false,
+    )? {
+        println!("Cancelled.");
+        return Ok(());
+    }
+    let to_remove: Vec<_> = targets.iter().map(RemovalTarget::from_entry).collect();
+    let mut skipped = skipped.clone();
+    let mut failed = Vec::new();
+    let (removed, estimated_reclaimed, apparent_gap) = remove_targets(
+        &to_remove,
+        &root,
+        &config.cache_dir,
+        false,
+        &mut skipped,
+        &mut Vec::new(),
+        &mut failed,
+    );
+    forget_removed_targets(config, &to_remove, &failed, &skipped)?;
+    println!(
+        "\n{}",
+        removal_summary(removed, estimated_reclaimed, apparent_gap)
+    );
+    removal_outcome(&failed)
 }
 
 /// Forget the registry rows of the targets that are gone, whether this
@@ -5251,7 +5009,7 @@ fn remove_targets(
     let mut apparent_gap = 0u64;
     let mut removed = 0usize;
     let reservation = crate::target_use::try_exclusive(cache_dir).unwrap_or_else(|error| {
-        tracing::warn!("cannot check running Cargo commands before clean: {error}");
+        log::warn!("cannot check running Cargo commands before clean: {error}");
         None
     });
     // Without the reservation nothing can go, whatever each target's state:
@@ -5515,9 +5273,6 @@ pub(crate) struct TargetEntry {
     pub estimated_reclaimable_bytes: u64,
     pub(crate) scan_identity: Option<PathIdentity>,
     pub profiles: Vec<String>,
-    pub breakdown: CategoryBreakdown,
-    /// Marked true when a rescan starts; cleared when fresh data arrives.
-    pub stale: bool,
 }
 
 /// Whether the worktree a tracked target was built from is still there.
@@ -6232,7 +5987,7 @@ fn tracked_target_entries(
             skipped.push(skip("directory identity is unavailable"));
             continue;
         };
-        let (stats, breakdown) = compute_project_stats(&tracked.path);
+        let (stats, _) = compute_project_stats(&tracked.path);
         if directory_identity(&tracked.path) != Some(scan_identity) {
             skipped.push(skip("directory changed while it was scanned"));
             continue;
@@ -6248,81 +6003,22 @@ fn tracked_target_entries(
             estimated_reclaimable_bytes: stats.estimated_reclaimable_bytes,
             scan_identity: Some(scan_identity),
             profiles,
-            breakdown,
-            stale: false,
         });
     }
 
     Ok((targets, skipped, orphans))
 }
 
-/// Returns true if `path` is under a macOS directory that would trigger a TCC
-/// (Transparency, Consent, Control) permission prompt or is a system path that
-/// never contains Rust projects.  The check uses full-path prefix matching so it
-/// works at any recursion depth and regardless of the starting scan directory.
-///
-/// Called *before* `read_dir` so the prompt is never triggered.
-#[cfg(target_os = "macos")]
-fn is_macos_protected(path: &std::path::Path) -> bool {
-    use std::sync::OnceLock;
-
-    static PREFIXES: OnceLock<Vec<std::path::PathBuf>> = OnceLock::new();
-
-    let prefixes = PREFIXES.get_or_init(|| {
-        let mut v: Vec<std::path::PathBuf> = vec![
-            "/System".into(),
-            "/Library".into(),
-            "/private".into(),
-            "/Applications".into(),
-            "/Volumes".into(),
-            "/Network".into(),
-        ];
-        if let Some(home) = dirs::home_dir() {
-            for name in [
-                "Desktop",
-                "Documents",
-                "Downloads",
-                "Library",
-                "Pictures",
-                "Music",
-                "Movies",
-                "Applications",
-                "Public",
-            ] {
-                v.push(home.join(name));
-            }
-        }
-        v
-    });
-
-    prefixes.iter().any(|p| path.starts_with(p))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn is_macos_protected(_path: &std::path::Path) -> bool {
-    false
-}
-
 /// Walk directories to find Cargo.toml + target/ pairs.
 /// Hidden directories that hold worktrees, scanned for targets anyway.
 const WORKTREE_CONTAINERS: [&str; 2] = [".worktrees", ".claude"];
 
-pub(crate) fn find_target_dirs(dir: &std::path::Path, results: &mut Vec<TargetEntry>) {
-    walk_target_dirs(dir, results, true);
-}
-
-/// [`find_target_dirs`] for a directory the user named. macOS-protected
-/// locations under it are read too: the user asked for this one.
+/// Scan the directory the user named for Cargo.toml + target/ pairs.
 pub(crate) fn find_target_dirs_in(dir: &std::path::Path, results: &mut Vec<TargetEntry>) {
-    walk_target_dirs(dir, results, false);
+    walk_target_dirs(dir, results);
 }
 
-fn walk_target_dirs(dir: &std::path::Path, results: &mut Vec<TargetEntry>, protect: bool) {
-    // Check *before* read_dir to avoid triggering macOS TCC permission prompts.
-    if protect && is_macos_protected(dir) {
-        return;
-    }
-
+fn walk_target_dirs(dir: &std::path::Path, results: &mut Vec<TargetEntry>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -6358,7 +6054,7 @@ fn walk_target_dirs(dir: &std::path::Path, results: &mut Vec<TargetEntry>, prote
         && let Some(target) = subdirs.iter().find(|(n, _)| n == "target")
         && let Some(scan_identity) = directory_identity(&target.1)
     {
-        let (ps, breakdown) = compute_project_stats(&target.1);
+        let (ps, _) = compute_project_stats(&target.1);
         // Do not publish estimates for a directory that was replaced while
         // it was being scanned. Deletion checks the same identity again.
         if ps.total_bytes > 0 && directory_identity(&target.1) == Some(scan_identity) {
@@ -6370,8 +6066,6 @@ fn walk_target_dirs(dir: &std::path::Path, results: &mut Vec<TargetEntry>, prote
                 estimated_reclaimable_bytes: ps.estimated_reclaimable_bytes,
                 scan_identity: Some(scan_identity),
                 profiles,
-                breakdown,
-                stale: false,
             });
         }
     }
@@ -6379,7 +6073,7 @@ fn walk_target_dirs(dir: &std::path::Path, results: &mut Vec<TargetEntry>, prote
     // Recurse into subdirs (but not into target/ itself)
     for (name, path) in &subdirs {
         if name != "target" {
-            walk_target_dirs(path, results, protect);
+            walk_target_dirs(path, results);
         }
     }
 }
@@ -6786,13 +6480,13 @@ fn native_linker_check(env: &crate::invocation::InvocationEnv) -> Check {
 /// there is no recorded build to look at.
 fn doctor_checkout_check(event_log: &std::path::Path) -> Option<Check> {
     let events = crate::events::read_events(event_log).ok()?;
-    let sessions = crate::tui_sessions::group(
+    let sessions = crate::sessions::group(
         &events,
         std::time::Duration::from_secs(crate::wrapper::BUILD_SESSION_SECS),
     );
     let builds = crate::explain::latest_builds(&sessions, None)?;
     let (count, baseline) =
-        crate::tui_sessions::other_checkout_misses(&events, &builds.latest.events);
+        crate::sessions::other_checkout_misses(&events, &builds.latest.events);
     Some(checkout_check(
         &builds.latest.root,
         count,
@@ -8119,7 +7813,7 @@ fn scrub_blob_checksums(
                     match computed {
                         Ok(computed) if &computed == hash => {}
                         Ok(computed) => {
-                            tracing::warn!(
+                            log::warn!(
                                 "blob {} checksum mismatch (computed {})",
                                 &hash[..16.min(hash.len())],
                                 &computed[..16.min(computed.len())]
@@ -8127,7 +7821,7 @@ fn scrub_blob_checksums(
                             failures.lock().expect("scrub mutex").insert(hash.clone());
                         }
                         Err(e) => {
-                            tracing::warn!("blob {} unreadable: {e}", &hash[..16.min(hash.len())]);
+                            log::warn!("blob {} unreadable: {e}", &hash[..16.min(hash.len())]);
                             failures.lock().expect("scrub mutex").insert(hash.clone());
                         }
                     }
@@ -8224,7 +7918,7 @@ fn verify_store(config: &Config, checksums: bool, repair: bool) -> Result<Verify
             Ok(content) => match serde_json::from_str::<crate::store::EntryMeta>(&content) {
                 Ok(m) => m,
                 Err(e) => {
-                    tracing::warn!(
+                    log::warn!(
                         "entry {} has invalid meta.json: {e}",
                         &entry.cache_key[..16.min(entry.cache_key.len())]
                     );
@@ -8234,7 +7928,7 @@ fn verify_store(config: &Config, checksums: bool, repair: bool) -> Result<Verify
                 }
             },
             Err(e) => {
-                tracing::warn!(
+                log::warn!(
                     "entry {} missing meta.json: {e}",
                     &entry.cache_key[..16.min(entry.cache_key.len())]
                 );
@@ -8250,7 +7944,7 @@ fn verify_store(config: &Config, checksums: bool, repair: bool) -> Result<Verify
             let blob_path = store.blob_path(&cached_file.hash);
 
             if !blob_path.is_file() {
-                tracing::warn!(
+                log::warn!(
                     "entry {} missing blob {} (file: {})",
                     &entry.cache_key[..16.min(entry.cache_key.len())],
                     &cached_file.hash[..16.min(cached_file.hash.len())],
@@ -8265,7 +7959,7 @@ fn verify_store(config: &Config, checksums: bool, repair: bool) -> Result<Verify
             if let Ok(file_meta) = std::fs::metadata(&blob_path)
                 && file_meta.len() != cached_file.size
             {
-                tracing::warn!(
+                log::warn!(
                     "entry {} blob {} size mismatch (expected {}, got {})",
                     &entry.cache_key[..16.min(entry.cache_key.len())],
                     &cached_file.hash[..16.min(cached_file.hash.len())],
@@ -8365,7 +8059,7 @@ fn verify_store(config: &Config, checksums: bool, repair: bool) -> Result<Verify
         for key in &corrupted_keys {
             match store.remove_entry(key) {
                 Ok(()) => corrupted_removed += 1,
-                Err(e) => tracing::warn!(
+                Err(e) => log::warn!(
                     "failed to remove corrupted entry {}: {e}",
                     &key[..16.min(key.len())]
                 ),
@@ -8400,7 +8094,7 @@ fn verify_store(config: &Config, checksums: bool, repair: bool) -> Result<Verify
                 0
             }
             Err(e) => {
-                tracing::warn!("blob index reconciliation failed: {e:#}");
+                log::warn!("blob index reconciliation failed: {e:#}");
                 1
             }
         }
@@ -8408,7 +8102,7 @@ fn verify_store(config: &Config, checksums: bool, repair: bool) -> Result<Verify
         match store.blob_index_drift() {
             Ok(drift) => drift.total(),
             Err(e) => {
-                tracing::warn!("blob index verification failed: {e:#}");
+                log::warn!("blob index verification failed: {e:#}");
                 1
             }
         }
@@ -8429,7 +8123,7 @@ fn verify_store(config: &Config, checksums: bool, repair: bool) -> Result<Verify
                 swept.removed,
                 ByteSize(swept.bytes_reclaimed)
             ),
-            Err(e) => tracing::warn!("orphan-blob sweep failed: {e}"),
+            Err(e) => log::warn!("orphan-blob sweep failed: {e}"),
         }
     }
 
@@ -9031,8 +8725,6 @@ struct SetupFacts {
     rustdoc: Option<&'static str>,
     test_runner: Option<SetupStep>,
     test_changes: Vec<(std::path::PathBuf, bool)>,
-    completions: Option<SetupStep>,
-    completion_changes: Vec<(std::path::PathBuf, bool)>,
     /// The `free_space_recovery` step's action.
     recovery: &'static str,
     recovery_path: std::path::PathBuf,
@@ -9077,10 +8769,6 @@ fn setup_steps(facts: &SetupFacts) -> Vec<SetupStep> {
     for (path, exists) in &facts.test_changes {
         steps.extend(backup_step(&mut created, path, *exists));
     }
-    steps.extend(facts.completions);
-    for (path, exists) in &facts.completion_changes {
-        steps.extend(backup_step(&mut created, path, *exists));
-    }
     steps.push(SetupStep::new(
         "free_space_recovery",
         facts.recovery,
@@ -9115,8 +8803,6 @@ struct RunOutcome {
     /// have written the same startup files.
     test_runner: Option<SetupStep>,
     test_changes: Vec<(std::path::PathBuf, bool)>,
-    completions: Option<SetupStep>,
-    completion_changes: Vec<(std::path::PathBuf, bool)>,
     recovery: &'static str,
     /// Whether the login service was installed or updated now.
     service_installed_now: bool,
@@ -9138,8 +8824,6 @@ fn run_facts(plan: &SetupFacts, outcome: RunOutcome) -> SetupFacts {
         rustdoc: outcome.rustdoc,
         test_runner: outcome.test_runner,
         test_changes: outcome.test_changes,
-        completions: outcome.completions,
-        completion_changes: outcome.completion_changes,
         recovery: outcome.recovery,
         service,
         ..plan.clone()
@@ -9438,8 +9122,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
     #[cfg(unix)]
     let tests = plan_test_runner(no_shell)?;
     #[cfg(unix)]
-    let completions = plan_completions(no_shell)?;
-    #[cfg(unix)]
     let shell_facts = (
         compiler.step(),
         existing_paths(compiler.changed_paths()),
@@ -9456,15 +9138,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
         (None, Vec::new(), None, None, Vec::new())
     };
     let (shell, shell_changes, rustdoc, test_runner, test_changes) = shell_facts;
-    #[cfg(unix)]
-    let completion_facts = (
-        completions.step(),
-        existing_paths(completions.changed_paths()),
-        completions.activation_required(),
-    );
-    #[cfg(not(unix))]
-    let completion_facts = (None, Vec::new(), false);
-    let (completion_step, completion_changes, completion_activation) = completion_facts;
     let (recovery, recovery_path, _) = target_recovery_offer(yes)?;
     // Asking runs the service manager, which --no-service must not touch.
     let service_available = !no_service && crate::service::login_service_available();
@@ -9483,8 +9156,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
         rustdoc,
         test_runner,
         test_changes,
-        completions: completion_step,
-        completion_changes,
         recovery: recovery_action(&recovery),
         recovery_path,
         service: service_action(
@@ -9516,11 +9187,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
             ("Config", term::home_path(&cargo_path), String::new()),
         ];
         if !no_shell && shell_supported {
-            plan_rows.push((
-                "Completions",
-                "tab completion".into(),
-                "kache commands and flags".into(),
-            ));
             plan_rows.push((
                 "Shell",
                 "new terminals".into(),
@@ -9644,24 +9310,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
     let (shell_pending, tests_pending, rustdoc_done, tests_done, tests_changes) =
         (false, false, None, None, Vec::new());
 
-    #[cfg(unix)]
-    let (completions_pending, completions_done, completion_changes) = {
-        let completions = if check {
-            completions
-        } else {
-            plan_completions(no_shell)?
-        };
-        let step = completions.step();
-        let changes = existing_paths(completions.changed_paths());
-        (
-            init_completions(completions, check, &mut created)?,
-            step,
-            changes,
-        )
-    };
-    #[cfg(not(unix))]
-    let (completions_pending, completions_done, completion_changes) = (false, None, Vec::new());
-
     let recovery_done = offer_target_recovery(yes, check)?;
 
     // ── Step 2: daemon service ───────────────────────────────────
@@ -9704,7 +9352,7 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
                     preview: true,
                     steps,
                     cargo_configured: cargo_ready,
-                    shell_activation_required: shell_activation || completion_activation,
+                    shell_activation_required: shell_activation,
                     test_activation_required: test_activation,
                     service_installed,
                     daemon_running: None,
@@ -9781,9 +9429,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
     if tests_pending {
         println!("  Open a new terminal to pace test binaries.");
     }
-    if completions_pending {
-        println!("  Open a new terminal to activate shell completions.");
-    }
     println!("  Run kache doctor to check this terminal.\n");
     if crate::machine::is_json() {
         crate::machine::emit(
@@ -9797,14 +9442,12 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
                         rustdoc: rustdoc_done,
                         test_runner: tests_done,
                         test_changes: tests_changes,
-                        completions: completions_done,
-                        completion_changes,
                         recovery: recovery_done,
                         service_installed_now: service_action_taken,
                     },
                 )),
                 cargo_configured: cargo_ready,
-                shell_activation_required: shell_pending || completions_pending,
+                shell_activation_required: shell_pending,
                 test_activation_required: tests_pending,
                 service_installed: login_service_configured(
                     service_installed,
@@ -10079,112 +9722,6 @@ fn shell_startup_files() -> Result<Option<(crate::init_shell::Shell, Vec<std::pa
 }
 
 #[cfg(unix)]
-enum CompletionsPlan {
-    Skipped,
-    Unsupported,
-    Manual(String),
-    Ready(crate::init_completions::Plan),
-}
-
-#[cfg(unix)]
-impl CompletionsPlan {
-    fn step(&self) -> Option<SetupStep> {
-        let (action, paths) = match self {
-            Self::Skipped => return None,
-            Self::Unsupported => ("unsupported", Vec::new()),
-            Self::Manual(_) => ("manual", Vec::new()),
-            Self::Ready(plan) => (
-                edit_action(self.activation_required(), false),
-                plan.edits.iter().map(|edit| edit.path.clone()).collect(),
-            ),
-        };
-        Some(SetupStep::new("completions", action, paths))
-    }
-
-    fn changed_paths(&self) -> Vec<std::path::PathBuf> {
-        match self {
-            Self::Ready(plan) => plan
-                .edits
-                .iter()
-                .filter(|edit| edit.changed())
-                .map(|edit| edit.path.clone())
-                .collect(),
-            _ => Vec::new(),
-        }
-    }
-
-    fn activation_required(&self) -> bool {
-        matches!(self, Self::Ready(plan) if plan.edits.iter().any(|edit| edit.changed()))
-    }
-}
-
-#[cfg(unix)]
-fn plan_completions(no_shell: bool) -> Result<CompletionsPlan> {
-    if no_shell {
-        return Ok(CompletionsPlan::Skipped);
-    }
-    let Some((shell, paths)) = shell_startup_files()? else {
-        return Ok(CompletionsPlan::Unsupported);
-    };
-    let home = dirs::home_dir().context("could not find your home directory")?;
-    let path_var = |name| {
-        std::env::var_os(name)
-            .filter(|value| !value.is_empty())
-            .map(std::path::PathBuf::from)
-    };
-    let config = path_var("XDG_CONFIG_HOME");
-    let data = path_var("XDG_DATA_HOME");
-    Ok(
-        match crate::init_completions::plan(shell, paths, &home, config.as_deref(), data.as_deref())
-        {
-            Ok(plan) => CompletionsPlan::Ready(plan),
-            Err(error) => CompletionsPlan::Manual(error.to_string()),
-        },
-    )
-}
-
-#[cfg(unix)]
-fn init_completions(
-    plan: CompletionsPlan,
-    check: bool,
-    created: &mut Vec<std::path::PathBuf>,
-) -> Result<bool> {
-    let plan = match plan {
-        CompletionsPlan::Skipped => {
-            println!("  • Shell completions: skipped (--no-shell)");
-            return Ok(false);
-        }
-        CompletionsPlan::Unsupported => {
-            println!("  • Shell completions: run kache completions <shell> for manual setup");
-            return Ok(false);
-        }
-        CompletionsPlan::Manual(error) => {
-            println!("  • Shell completions need manual setup: {error}");
-            return Ok(false);
-        }
-        CompletionsPlan::Ready(plan) => plan,
-    };
-    let changed = plan.edits.iter().any(|edit| edit.changed());
-    if check {
-        println!(
-            "  Shell completions: {} ({})",
-            if changed {
-                "would configure"
-            } else {
-                "configured"
-            },
-            crate::wrapper_config::display_path(&plan.script)
-        );
-        return Ok(false);
-    }
-    apply_shell_edits(&plan.edits, created)?;
-    println!(
-        "  ✓ Shell completions: configured ({})",
-        crate::wrapper_config::display_path(&plan.script)
-    );
-    Ok(changed)
-}
-
 /// What `kache init` sets as Cargo's runner for the host target.
 #[cfg(unix)]
 const TEST_RUNNER: &str = "kache test-runner";

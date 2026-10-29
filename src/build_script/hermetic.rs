@@ -548,7 +548,7 @@ fn attempt(
         .with_context(|| format!("running {}", script.display()))?;
     std::fs::remove_dir_all(&bin)?;
     if !output.status.success() {
-        tracing::debug!("hermetic build script failed; running it as usual");
+        log::debug!("hermetic build script failed; running it as usual");
         return Ok(None);
     }
     let Ok(stdout) = String::from_utf8(output.stdout) else {
@@ -556,13 +556,13 @@ fn attempt(
     };
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     if let Err(error) = validate_link_paths(&run.environment, sandbox, &stdout) {
-        tracing::debug!("hermetic build script has an unowned link path: {error}");
+        log::debug!("hermetic build script has an unowned link path: {error}");
         return Ok(None);
     }
     // The key was computed before the run, maybe before waiting for the
     // lock; an input edited meanwhile is older than `started`.
     if key(run, prediction, below_target)? != expected_key {
-        tracing::debug!("a declared input changed before the hermetic script ran");
+        log::debug!("a declared input changed before the hermetic script ran");
         return Ok(None);
     }
 
@@ -576,7 +576,7 @@ fn attempt(
             prediction.default_package,
         ))
     {
-        tracing::debug!("hermetic build script declared other inputs than its key");
+        log::debug!("hermetic build script declared other inputs than its key");
         return Ok(None);
     }
     for declared in &prediction.inputs {
@@ -587,12 +587,12 @@ fn attempt(
             Vec::new()
         };
         if modified_since(&path, &excluded, started)? {
-            tracing::debug!("a declared input changed while the hermetic script ran");
+            log::debug!("a declared input changed while the hermetic script ran");
             return Ok(None);
         }
     }
     if let Some(escape) = escape(sandbox)? {
-        tracing::debug!(
+        log::debug!(
             "hermetic build script wrote outside OUT_DIR: {}",
             escape.display()
         );

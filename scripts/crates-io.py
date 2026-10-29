@@ -196,7 +196,7 @@ def new_crate_hint(crate_name: str) -> str:
     return (
         f"{crate_name} does not exist on crates.io yet, and Trusted Publishing "
         "cannot create crates. From a worktree at the release tag, run:\n"
-        "  just crates-bootstrap\n"
+        "  make crates-bootstrap\n"
         "with a crates.io token that has the `publish-new` and "
         "`trusted-publishing` scopes, then re-run Publish crates."
     )
@@ -528,7 +528,7 @@ def cmd_bootstrap(
 ) -> int:
     version = crates[0].version
     if any(crate.version != version for crate in crates):
-        raise SystemExit("publishable crate versions are not uniform; run `just bump`")
+        raise SystemExit("publishable crate versions are not uniform; run `make bump`")
     if not client.token:
         raise SystemExit(
             "CARGO_REGISTRY_TOKEN is required (or `cargo login`) with the "

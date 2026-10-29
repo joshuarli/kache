@@ -1899,17 +1899,6 @@ fn test_compile_weighted_hit_rate_weights_by_time() {
 }
 
 #[test]
-fn test_format_duration_ms_buckets() {
-    assert_eq!(format_duration_ms(0), "~0ms");
-    assert_eq!(format_duration_ms(500), "~500ms");
-    assert_eq!(format_duration_ms(1_000), "~1s");
-    assert_eq!(format_duration_ms(59_000), "~59s");
-    assert_eq!(format_duration_ms(60_000), "~1min");
-    assert_eq!(format_duration_ms(3_600_000), "~1.0h");
-    assert_eq!(format_duration_ms(7_200_000), "~2.0h");
-}
-
-#[test]
 fn test_format_relative_time_invalid_passes_through() {
     assert_eq!(format_relative_time("not a date"), "not a date");
 }
@@ -2023,7 +2012,7 @@ fn targets_inside_worktree_containers_are_found() {
         fs::write(root.join("target/debug/out.rlib"), vec![0u8; 1024]).unwrap();
     }
     let mut results = Vec::new();
-    find_target_dirs(dir.path(), &mut results);
+    find_target_dirs_in(dir.path(), &mut results);
     let mut found: Vec<_> = results
         .iter()
         .map(|entry| entry.path.strip_prefix(dir.path()).unwrap().to_path_buf())
@@ -2115,7 +2104,7 @@ fn test_dir_size_nonexistent() {
 fn test_find_target_dirs_empty() {
     let dir = tempfile::tempdir().unwrap();
     let mut results = Vec::new();
-    find_target_dirs(dir.path(), &mut results);
+    find_target_dirs_in(dir.path(), &mut results);
     assert!(results.is_empty());
 }
 
@@ -2133,7 +2122,7 @@ fn test_find_target_dirs_with_cargo_project() {
     fs::write(debug.join("test.rlib"), vec![0u8; 100]).unwrap();
 
     let mut results = Vec::new();
-    find_target_dirs(dir.path(), &mut results);
+    find_target_dirs_in(dir.path(), &mut results);
     assert_eq!(results.len(), 1);
     assert!(results[0].size >= 100);
     assert!(results[0].profiles.contains(&"debug".to_string()));
@@ -2147,7 +2136,7 @@ fn find_target_dirs_ignores_an_empty_cargo_target() {
     fs::write(project.join("Cargo.toml"), "[package]\nname = \"empty\"").unwrap();
 
     let mut results = Vec::new();
-    find_target_dirs(dir.path(), &mut results);
+    find_target_dirs_in(dir.path(), &mut results);
 
     assert!(
         results.is_empty(),
@@ -2164,7 +2153,7 @@ fn test_find_target_dirs_skips_hidden() {
     fs::create_dir(hidden.join("target")).unwrap();
 
     let mut results = Vec::new();
-    find_target_dirs(dir.path(), &mut results);
+    find_target_dirs_in(dir.path(), &mut results);
     assert!(results.is_empty());
 }
 
@@ -2177,7 +2166,7 @@ fn test_find_target_dirs_skips_node_modules() {
     fs::create_dir(nm.join("target")).unwrap();
 
     let mut results = Vec::new();
-    find_target_dirs(dir.path(), &mut results);
+    find_target_dirs_in(dir.path(), &mut results);
     assert!(results.is_empty());
 }
 
@@ -2504,56 +2493,6 @@ fn test_compute_project_stats_classifies_remaining_buckets() {
     );
 }
 
-
-#[test]
-fn test_is_macos_protected() {
-    // On non-macOS the stub always returns false — verify that invariant
-    // and skip the positive-match assertions.
-    if !cfg!(target_os = "macos") {
-        assert!(!is_macos_protected(std::path::Path::new("/System/Library")));
-        assert!(!is_macos_protected(std::path::Path::new("/tmp/build")));
-        return;
-    }
-
-    // System paths
-    assert!(is_macos_protected(std::path::Path::new("/System/Library")));
-    assert!(is_macos_protected(std::path::Path::new(
-        "/Library/Preferences"
-    )));
-    assert!(is_macos_protected(std::path::Path::new(
-        "/Applications/Xcode.app"
-    )));
-    assert!(is_macos_protected(std::path::Path::new(
-        "/Volumes/External"
-    )));
-    assert!(is_macos_protected(std::path::Path::new("/private/var")));
-    assert!(is_macos_protected(std::path::Path::new("/Network/Servers")));
-
-    // Home TCC dirs (if home is available)
-    if let Some(home) = dirs::home_dir() {
-        assert!(is_macos_protected(&home.join("Desktop")));
-        assert!(is_macos_protected(&home.join("Documents")));
-        assert!(is_macos_protected(&home.join("Downloads")));
-        assert!(is_macos_protected(&home.join("Library")));
-        assert!(is_macos_protected(&home.join("Pictures")));
-        assert!(is_macos_protected(&home.join("Music")));
-        assert!(is_macos_protected(&home.join("Movies")));
-        assert!(is_macos_protected(&home.join("Applications")));
-        assert!(is_macos_protected(&home.join("Public")));
-        // Nested paths under protected dirs are also caught
-        assert!(is_macos_protected(&home.join("Documents/subfolder")));
-
-        // Developer directories are NOT protected
-        assert!(!is_macos_protected(&home.join("projects")));
-        assert!(!is_macos_protected(&home.join("src")));
-        assert!(!is_macos_protected(&home.join("work")));
-        assert!(!is_macos_protected(&home.join(".config")));
-    }
-
-    // Arbitrary dev paths are not protected
-    assert!(!is_macos_protected(std::path::Path::new("/tmp/build")));
-    assert!(!is_macos_protected(std::path::Path::new("/Users/dev/code")));
-}
 
 #[test]
 fn test_category_breakdown_default() {
@@ -4208,7 +4147,7 @@ fn snapshot_from_direct_reads_returns_only_the_newest_five_summaries() {
     summaries.push('\n');
     std::fs::write(summary_path, summaries).unwrap();
 
-    let snap = snapshot_from_direct_reads(&config, false, "size", SinceWindow::DEFAULT, true);
+    let snap = snapshot_from_direct_reads(&config, SinceWindow::DEFAULT, true);
     let ids = snap
         .recent_summaries
         .iter()
@@ -4249,11 +4188,9 @@ fn snapshot_from_direct_reads_reflects_store_and_events() {
     )
     .unwrap();
 
-    let snap = snapshot_from_direct_reads(&config, true, "name", SinceWindow::DEFAULT, false);
+    let snap = snapshot_from_direct_reads(&config, SinceWindow::DEFAULT, false);
     assert!(!snap.daemon_connected, "direct reads report no daemon");
     assert_eq!(snap.entry_count, 1);
-    assert_eq!(snap.entries.len(), 1);
-    assert_eq!(snap.entries[0].crate_name, "serde");
     assert_eq!(snap.event_stats.local_hits, 1);
     assert_eq!(snap.event_stats.misses, 1);
     assert_eq!(snap.max_size, config.max_size);
@@ -4288,30 +4225,15 @@ fn snapshot_from_direct_reads_honors_a_sub_hour_window() {
     crate::events::log_event(&config.event_log_path(), &old).unwrap();
 
     let narrow = SinceWindow::parse("15m").unwrap();
-    let snap = snapshot_from_direct_reads(&config, false, "size", narrow, false);
+    let snap = snapshot_from_direct_reads(&config, narrow, false);
     assert_eq!(snap.event_stats.local_hits, 1);
     assert_eq!(snap.event_stats.misses, 0, "a 3h-old miss is outside 15m");
 
     let wide = SinceWindow::parse("24h").unwrap();
-    let snap = snapshot_from_direct_reads(&config, false, "size", wide, false);
+    let snap = snapshot_from_direct_reads(&config, wide, false);
     assert_eq!(snap.event_stats.local_hits, 1);
     assert_eq!(snap.event_stats.misses, 1);
 }
-
-#[test]
-fn snapshot_from_direct_reads_without_entries_skips_listing() {
-    // include_entries=false -> entries list is empty even with a populated store.
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"));
-    put_entry(&config, "k1", "serde", dir.path());
-    let snap = snapshot_from_direct_reads(&config, false, "size", SinceWindow::DEFAULT, false);
-    assert!(
-        snap.entries.is_empty(),
-        "entries omitted when not requested"
-    );
-    assert_eq!(snap.entry_count, 1, "count still reflects the store");
-}
-
 
 #[test]
 fn repair_tip_and_reconciliation_message_cover_every_boundary() {
@@ -4740,64 +4662,6 @@ fn diff_meta(
 
 
 
-#[test]
-fn draw_clean_renders_target_table() {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-
-    let targets = vec![
-        TargetEntry {
-            path: std::path::PathBuf::from("/work/proj-a/target"),
-            size: 5_000_000,
-            cached_bytes: 3_000_000,
-            estimated_reclaimable_bytes: 2_000_000,
-            scan_identity: None,
-            profiles: vec!["debug".to_string(), "release".to_string()],
-            breakdown: CategoryBreakdown::default(),
-            stale: false,
-        },
-        TargetEntry {
-            path: std::path::PathBuf::from("/work/proj-b/target"),
-            size: 2_000_000,
-            cached_bytes: 0,
-            estimated_reclaimable_bytes: 2_000_000,
-            scan_identity: None,
-            profiles: vec![],
-            breakdown: CategoryBreakdown::default(),
-            stale: false,
-        },
-    ];
-    // First row selected (the one carrying cached bytes), cursor on it.
-    let selected = vec![true, false];
-
-    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
-    terminal
-        .draw(|frame| draw_clean(frame, &targets, &selected, 0, std::path::Path::new("/work")))
-        .expect("clean selector draw should succeed");
-    let buffer = terminal.backend().buffer().clone();
-    let rendered: String = buffer.content().iter().map(|c| c.symbol()).collect();
-    assert!(rendered.contains("kache clean"), "header should render");
-    assert!(
-        rendered.contains("proj-a") && rendered.contains("proj-b"),
-        "both target rows should render"
-    );
-    // The selected row's checkbox is set.
-    assert!(rendered.contains("[x]"), "selected row shows a checked box");
-    // Selection uses the separate scan-time reclaim estimate, not cached bytes.
-    assert!(
-        rendered.contains("Selected: 1 (est. 1.9 MiB)"),
-        "selected total subtracts cached bytes, got: {rendered}"
-    );
-    assert!(
-        !rendered.contains("Selected: 1 (est. 4.8 MiB)"),
-        "selected total must not report the raw size"
-    );
-    // The header's dir totals stay raw (4.8 + 1.9 MiB, 2.9 MiB cached).
-    assert!(
-        rendered.contains("2 dirs (6.7 MiB total, 2.9 MiB cached)"),
-        "header totals remain raw sizes"
-    );
-}
 
 #[test]
 fn render_clean_dry_run_formats_plural_profiles_and_fallback_paths() {
@@ -4810,8 +4674,6 @@ fn render_clean_dry_run_formats_plural_profiles_and_fallback_paths() {
         estimated_reclaimable_bytes: 512,
         scan_identity: None,
         profiles: vec!["debug".to_string()],
-        breakdown: CategoryBreakdown::default(),
-        stale: false,
     }];
     let none = std::collections::HashSet::new();
     let single_out = render_clean_dry_run(&single, root, &none).join("\n");
@@ -4838,8 +4700,6 @@ fn render_clean_dry_run_formats_plural_profiles_and_fallback_paths() {
             estimated_reclaimable_bytes: 10,
             scan_identity: None,
             profiles: Vec::new(),
-            breakdown: CategoryBreakdown::default(),
-            stale: false,
         },
         TargetEntry {
             path: std::path::PathBuf::from("/outside/proj-b/target"),
@@ -4848,8 +4708,6 @@ fn render_clean_dry_run_formats_plural_profiles_and_fallback_paths() {
             estimated_reclaimable_bytes: 15,
             scan_identity: None,
             profiles: vec!["release".to_string()],
-            breakdown: CategoryBreakdown::default(),
-            stale: false,
         },
     ];
     let many_out = render_clean_dry_run(&many, root, &none).join("\n");
@@ -4873,61 +4731,7 @@ fn render_clean_dry_run_formats_plural_profiles_and_fallback_paths() {
     );
 }
 
-#[test]
-fn clean_handle_key_navigation_and_selection() {
-    use crossterm::event::KeyCode;
-    let mut selected = vec![false, false, false];
-    let mut cursor = 0usize;
-    let len = 3;
 
-    // Down moves the cursor; clamped at the end.
-    assert_eq!(
-        clean_handle_key(KeyCode::Down, &mut selected, &mut cursor, len),
-        CleanStep::Continue
-    );
-    assert_eq!(cursor, 1);
-    // Up moves back; saturates at 0.
-    clean_handle_key(KeyCode::Up, &mut selected, &mut cursor, len);
-    assert_eq!(cursor, 0);
-    clean_handle_key(KeyCode::Up, &mut selected, &mut cursor, len);
-    assert_eq!(cursor, 0, "up saturates at 0");
-
-    // Space toggles the current row and advances.
-    clean_handle_key(KeyCode::Char(' '), &mut selected, &mut cursor, len);
-    assert!(selected[0]);
-    assert_eq!(cursor, 1);
-
-    // Select-all / select-none.
-    clean_handle_key(KeyCode::Char('a'), &mut selected, &mut cursor, len);
-    assert!(selected.iter().all(|s| *s));
-    clean_handle_key(KeyCode::Char('n'), &mut selected, &mut cursor, len);
-    assert!(selected.iter().all(|s| !*s));
-}
-
-#[test]
-fn clean_handle_key_handles_boundaries() {
-    use crossterm::event::KeyCode;
-    // Empty/edge state -> no panic and cursor stays bounded.
-    let mut empty = Vec::new();
-    let mut empty_cursor = 0usize;
-    assert_eq!(
-        clean_handle_key(KeyCode::Char(' '), &mut empty, &mut empty_cursor, 0),
-        CleanStep::Continue
-    );
-    assert_eq!(empty_cursor, 0);
-
-    let mut selected = vec![false, false];
-    let mut cursor = 1usize;
-    clean_handle_key(KeyCode::Down, &mut selected, &mut cursor, 2);
-    assert_eq!(cursor, 1, "down clamps at last row");
-    clean_handle_key(KeyCode::Char(' '), &mut selected, &mut cursor, 2);
-    assert!(selected[1]);
-    assert_eq!(cursor, 1, "space on last row does not advance");
-
-    cursor = 10;
-    clean_handle_key(KeyCode::Char(' '), &mut selected, &mut cursor, 2);
-    assert_eq!(cursor, 10, "out-of-range cursor is ignored");
-}
 
 #[test]
 fn remove_targets_deletes_all_and_reports_estimates() {
@@ -5728,7 +5532,7 @@ fn tracked_clean_json_previews_keep_missing_targets_registered() {
             (true, true, false, 1),
             (false, true, true, 0),
             (false, true, false, 0),
-            // The selector without a terminal is refused before it forgets.
+            // Without a terminal to ask at, nothing is removed.
             (false, false, false, 1),
         ] {
             let dir = tempfile::tempdir().unwrap();
@@ -5837,74 +5641,7 @@ fn remove_targets_refuses_a_directory_replaced_after_scan() {
     );
 }
 
-#[test]
-fn clean_handle_key_cancel_and_confirm() {
-    use crossterm::event::KeyCode;
-    let mut selected = vec![true];
-    let mut cursor = 0usize;
-    assert_eq!(
-        clean_handle_key(KeyCode::Char('q'), &mut selected, &mut cursor, 1),
-        CleanStep::Cancel
-    );
-    assert_eq!(
-        clean_handle_key(KeyCode::Esc, &mut selected, &mut cursor, 1),
-        CleanStep::Cancel
-    );
-    assert_eq!(
-        clean_handle_key(KeyCode::Enter, &mut selected, &mut cursor, 1),
-        CleanStep::Confirm
-    );
-    // An unhandled key is a no-op Continue.
-    assert_eq!(
-        clean_handle_key(KeyCode::Char('z'), &mut selected, &mut cursor, 1),
-        CleanStep::Continue
-    );
-}
 
-#[test]
-fn clean_event_applies_press_but_ignores_release() {
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-    let key_event = |kind| {
-        Event::Key(KeyEvent::new_with_kind(
-            KeyCode::Char('q'),
-            KeyModifiers::NONE,
-            kind,
-        ))
-    };
-    let mut selected = vec![false];
-    let mut cursor = 0;
-
-    assert_eq!(
-        clean_handle_event(
-            key_event(KeyEventKind::Release),
-            &mut selected,
-            &mut cursor,
-            1,
-        ),
-        CleanStep::Continue,
-        "key release must not repeat the action"
-    );
-    assert_eq!(
-        clean_handle_event(
-            key_event(KeyEventKind::Repeat),
-            &mut selected,
-            &mut cursor,
-            1,
-        ),
-        CleanStep::Continue,
-        "key repeat must not repeat the action"
-    );
-    assert_eq!(
-        clean_handle_event(
-            key_event(KeyEventKind::Press),
-            &mut selected,
-            &mut cursor,
-            1,
-        ),
-        CleanStep::Cancel,
-        "key press must apply the action"
-    );
-}
 
 
 
@@ -7238,8 +6975,6 @@ fn init_steps_list_each_edit_with_the_backup_before_it() {
         rustdoc: Some("configure"),
         test_runner: Some(SetupStep::new("test_runner", "configure", vec![rc.clone()])),
         test_changes: vec![(rc.clone(), rc_exists)],
-        completions: None,
-        completion_changes: Vec::new(),
         recovery: "keep",
         recovery_path: PathBuf::from("/home/me/.config/kache/config.toml"),
         service: Some("keep"),
@@ -7295,8 +7030,6 @@ fn init_steps_list_each_edit_with_the_backup_before_it() {
         rustdoc: Some("keep"),
         test_runner: None,
         test_changes: Vec::new(),
-        completions: None,
-        completion_changes: Vec::new(),
         recovery: "ask",
         service: None,
         ..facts(true, true, true)
@@ -7421,8 +7154,6 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
         rustdoc: Some("configure"),
         test_runner: None,
         test_changes: Vec::new(),
-        completions: None,
-        completion_changes: Vec::new(),
         recovery: "ask",
         recovery_path: PathBuf::from("/home/me/.config/kache/config.toml"),
         service: Some("configure"),
@@ -7455,8 +7186,6 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
             rustdoc: None,
             test_runner: None,
             test_changes: Vec::new(),
-            completions: None,
-            completion_changes: Vec::new(),
             recovery: "keep",
             service_installed_now: false,
         },
@@ -7477,8 +7206,6 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
             rustdoc: Some("configure"),
             test_runner: None,
             test_changes: Vec::new(),
-            completions: None,
-            completion_changes: Vec::new(),
             recovery: "configure",
             service_installed_now: true,
         },
@@ -7507,8 +7234,6 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
             rustdoc: Some("failed"),
             test_runner: None,
             test_changes: Vec::new(),
-            completions: None,
-            completion_changes: Vec::new(),
             recovery: "keep",
             service_installed_now: false,
         },
@@ -7523,40 +7248,6 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
         ]
     );
     assert_eq!(components(&kept)[4], "login_service keep");
-
-    // Completion edits are replanned after other shell edits. Report the
-    // backups from the applied plan, not the earlier preview.
-    let completion_path = PathBuf::from("/home/me/.local/share/kache/completions/kache.bash");
-    let completed = run_facts(
-        &SetupFacts {
-            completion_changes: vec![(PathBuf::from("/old-preview"), true)],
-            ..plan
-        },
-        RunOutcome {
-            cargo_applied: false,
-            rustdoc: None,
-            test_runner: None,
-            test_changes: Vec::new(),
-            completions: Some(SetupStep::new(
-                "completions",
-                "configure",
-                vec![completion_path.clone()],
-            )),
-            completion_changes: vec![(completion_path.clone(), true)],
-            recovery: "keep",
-            service_installed_now: false,
-        },
-    );
-    let steps = setup_steps(&completed);
-    let completion = steps.iter().find(|s| s.component == "completions").unwrap();
-    assert_eq!(completion.action, "configure");
-    assert_eq!(
-        completion.paths.as_slice(),
-        std::slice::from_ref(&completion_path)
-    );
-    let backups: Vec<_> = steps.iter().filter(|s| s.component == "backup").collect();
-    assert_eq!(backups.len(), 1);
-    assert_eq!(backups[0].paths, [completion_path]);
 }
 
 #[test]
@@ -7594,8 +7285,6 @@ fn a_run_reports_the_test_runner_it_planned_after_the_shell_edits() {
         rustdoc: None,
         test_runner: Some(SetupStep::new("test_runner", "unsupported", Vec::new())),
         test_changes: Vec::new(),
-        completions: None,
-        completion_changes: Vec::new(),
         recovery: "keep",
         recovery_path: PathBuf::from("/home/me/.config/kache/config.toml"),
         service: None,
@@ -7608,8 +7297,6 @@ fn a_run_reports_the_test_runner_it_planned_after_the_shell_edits() {
             rustdoc: None,
             test_runner: Some(SetupStep::new("test_runner", "configure", vec![rc.clone()])),
             test_changes: vec![(rc.clone(), true)],
-            completions: None,
-            completion_changes: Vec::new(),
             recovery: "keep",
             service_installed_now: false,
         },
@@ -8398,7 +8085,7 @@ fn direct_stats_include_rotated_events() {
     let miss = crate::events::BuildEvent::new_for_test("live", crate::events::EventResult::Miss);
     crate::events::log_event(&log, &miss).unwrap();
 
-    let snap = snapshot_from_direct_reads(&config, false, "size", SinceWindow::DEFAULT, false);
+    let snap = snapshot_from_direct_reads(&config, SinceWindow::DEFAULT, false);
     assert_eq!(snap.event_stats.local_hits, 12);
     assert_eq!(snap.event_stats.misses, 1);
 }

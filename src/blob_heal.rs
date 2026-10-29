@@ -119,7 +119,7 @@ fn record_failure(cache_dir: &Path, failed_at: u64, reason: &str) {
     if let Ok(json) = serde_json::to_vec(&state)
         && let Err(error) = crate::atomic::atomic_replace(&state_path(cache_dir), &json)
     {
-        tracing::debug!("blob index heal: could not record the failure: {error:#}");
+        log::debug!("blob index heal: could not record the failure: {error:#}");
     }
 }
 
@@ -295,16 +295,16 @@ pub(crate) fn run(config: &Config, trigger: Trigger<'_>) -> Option<Outcome> {
     match attempt(config, trigger, unix_now_secs()) {
         Ok(outcome) => {
             if outcome.is_refusal() {
-                tracing::warn!("{}", outcome.describe());
+                log::warn!("{}", outcome.describe());
             } else if outcome.is_noteworthy() {
-                tracing::info!("{}", outcome.describe());
+                log::info!("{}", outcome.describe());
             } else {
-                tracing::debug!("{}", outcome.describe());
+                log::debug!("{}", outcome.describe());
             }
             Some(outcome)
         }
         Err(error) => {
-            tracing::warn!("blob index heal failed: {error:#}");
+            log::warn!("blob index heal failed: {error:#}");
             None
         }
     }

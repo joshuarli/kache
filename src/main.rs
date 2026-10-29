@@ -14,7 +14,6 @@ mod compile;
 mod compiler;
 mod config;
 mod config_cli;
-mod config_tui;
 mod daemon;
 mod daemon_publish;
 mod demand;
@@ -26,8 +25,6 @@ mod fallback;
 mod heartbeat;
 mod incremental_policy;
 mod index_compact;
-#[cfg(unix)]
-mod init_completions;
 #[cfg(unix)]
 mod init_shell;
 mod invocation;
@@ -79,8 +76,8 @@ mod test_support;
 mod toolchain_dylib;
 use kache_ipc as transport;
 mod tree_stamp;
-mod tui;
-mod tui_sessions;
+mod sessions;
+mod cli_args;
 mod unit_prune;
 mod verify_compare;
 mod volume_gc;
@@ -100,33 +97,18 @@ static MACOS_INFO_PLIST: [u8; include_bytes!("Info.plist").len()] =
     *include_bytes!("Info.plist");
 
 use anyhow::{Context, Result};
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
-use std::io::IsTerminal;
 use std::path::PathBuf;
 
 mod version;
 pub use version::VERSION;
 
-/// Compiler cache for Rust and C/C++.
-///
-/// kache runs in front of rustc and the C/C++ compilers, so builds use the
-/// cache without changing how you run them.
-#[derive(Parser)]
-#[command(name = "kache", version = VERSION, styles = term::clap_styles(), after_help = "Start with `kache init`. Keep using cargo as usual.\nUse `kache stats` for a summary or `kache monitor` for live activity.")]
-pub(crate) struct Cli {
-    /// Machine-readable JSON on stdout, on commands that support it
-    #[arg(long, global = true)]
-    json: bool,
-
-    #[command(subcommand)]
-    pub(crate) command: Option<Commands>,
-}
+pub(crate) use cli_args::Cli;
 
 kache_client::define_engine_commands!();
 
 /// `kache list --sort` keys.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-enum ListSort {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListSort {
     Name,
     Size,
     Hits,
@@ -145,8 +127,8 @@ impl ListSort {
 }
 
 /// The bench phases `kache telemetry write --phase` labels a dump with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-enum BenchPhase {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BenchPhase {
     Cold,
     WarmSameTree,
     Warm,
@@ -164,22 +146,18 @@ impl BenchPhase {
     }
 }
 
-#[derive(Subcommand)]
-enum TargetCommands {
+pub(crate) enum TargetCommands {
     /// Share target files with blobs the store already holds
     Share {
         /// Clone each match from the stored blob. Without this, only report.
-        #[arg(long)]
         apply: bool,
 
         /// Target directories to read. Defaults to tracked directories.
-        #[arg(value_name = "TARGET")]
         paths: Vec<PathBuf>,
     },
 }
 
-#[derive(Subcommand)]
-enum DaemonCommands {
+pub(crate) enum DaemonCommands {
     /// Show daemon status (also bare `kache daemon`)
     Status,
     /// Run the daemon server in the foreground
@@ -199,17 +177,14 @@ enum DaemonCommands {
     Log,
 }
 
-#[derive(Subcommand)]
-enum TelemetryCommands {
+pub(crate) enum TelemetryCommands {
     /// Snapshot live cache counters into `metrics.otlp.json` + `schema_version`
     Write {
         /// Directory to write. Created if missing.
         dir: PathBuf,
         /// Bench scenario this dump belongs to (same string as `kache.bench.project`).
-        #[arg(long)]
         scenario: Option<String>,
         /// Bench phase this dump belongs to.
-        #[arg(long, value_enum)]
         phase: Option<BenchPhase>,
     },
 }
@@ -232,7 +207,7 @@ fn command_supports_json(command: &Option<Commands>) -> bool {
         | Commands::Diff { .. }
         | Commands::Report { .. } => true,
         Commands::Init { shims, .. } => shims.is_none(),
-        Commands::Config { command } => command.is_some(),
+        Commands::Config { .. } => true,
         Commands::Daemon { command } => match command {
             None | Some(DaemonCommands::Status) => true,
             Some(
@@ -245,56 +220,13 @@ fn command_supports_json(command: &Option<Commands>) -> bool {
                 | DaemonCommands::Log,
             ) => false,
         },
-        // Interactive, or Cargo's own output.
-        Commands::Cargo { .. }
-        | Commands::Monitor { .. }
-        | Commands::Completions { .. } => false,
+        // Cargo's own output.
+        Commands::Cargo { .. } => false,
         // No JSON form yet.
         Commands::Purge { .. }
         | Commands::Telemetry { .. }
         | Commands::InstallShims { .. } => false,
     }
-}
-
-/// Why `kache config` stops when there is no terminal for its editor, and
-/// what to use instead.
-fn config_without_terminal(path: &std::path::Path) -> String {
-    format!(
-        "`kache config` needs a terminal. Edit {} directly, or set KACHE_* environment variables.",
-        path.display()
-    )
-}
-
-/// Use the same visible command tree for `init` and `completions`.
-fn generate_completions(shell: clap_complete::Shell, output: &mut dyn std::io::Write) {
-    let mut command = without_hidden(&Cli::command());
-    let name = command.get_name().to_string();
-    clap_complete::generate(shell, &mut command, name, output);
-}
-
-/// `command` with its hidden subcommands and flags left out, for shell
-/// completions. Relations between flags are dropped too: some name hidden
-/// flags, and completions do not need them.
-fn without_hidden(command: &clap::Command) -> clap::Command {
-    let mut out = clap::Command::new(command.get_name().to_string())
-        .visible_aliases(command.get_visible_aliases().map(str::to_string));
-    if let Some(version) = command.get_version() {
-        out = out.version(version.to_string());
-    }
-    if let Some(about) = command.get_about() {
-        out = out.about(about.clone());
-    }
-    for arg in command.get_arguments().filter(|arg| !arg.is_hide_set()) {
-        out = out.arg(
-            arg.clone()
-                .conflicts_with(clap::builder::Resettable::Reset)
-                .requires(clap::builder::Resettable::Reset),
-        );
-    }
-    for sub in command.get_subcommands().filter(|sub| !sub.is_hide_set()) {
-        out = out.subcommand(without_hidden(sub));
-    }
-    out
 }
 
 /// Why `--json` cannot run `command`, or `None` when it can. The general
@@ -304,12 +236,6 @@ fn json_refusal(command: &Option<Commands>) -> Option<&'static str> {
         return None;
     }
     Some(match command {
-        Some(Commands::Config { command: None }) => {
-            "`kache config` is interactive; use a config subcommand with --json."
-        }
-        Some(Commands::Monitor { .. }) => {
-            "`kache monitor` is interactive; use `kache stats --json`."
-        }
         Some(Commands::Purge { .. }) => {
             "`kache purge` has no JSON form yet; run it without `--json`."
         }
@@ -356,7 +282,6 @@ const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024; // 5 MB
 enum LogMode {
     Wrapper,
     Cli,
-    TerminalUi,
 }
 
 fn detect_log_mode(env_args: &[String]) -> LogMode {
@@ -383,112 +308,109 @@ fn detect_log_mode_with_rustc(
         }
     }
 
-    match env_args.get(1).map(String::as_str) {
-        Some("monitor" | "config") => LogMode::TerminalUi,
-        _ => LogMode::Cli,
-    }
+    LogMode::Cli
 }
 
 fn init_logging(mode: LogMode) {
-    tracing::dispatcher::set_global_default(logging_dispatch(
-        mode,
-        &invocation::InvocationEnv::capture(),
-    ))
-    .expect("install global logging subscriber");
+    kache_log::install(logging_logger(mode, &invocation::InvocationEnv::capture()));
 }
 
-fn logging_dispatch(mode: LogMode, env: &invocation::InvocationEnv) -> tracing::Dispatch {
-    use std::sync::Mutex;
-    use tracing_subscriber::prelude::*;
-    use tracing_subscriber::{EnvFilter, fmt};
-
-    // Wrapper mode: cargo captures RUSTC_WRAPPER stderr and caches it as compiler
-    // diagnostics, replaying stale warnings on every subsequent build.  Default to
-    // silent; users can still opt in via KACHE_LOG for one-off debugging.
-    // TUI mode: owns the terminal, stderr must stay silent.
-    let stderr_layer = if mode == LogMode::TerminalUi {
-        None
-    } else {
-        let default_filter = if mode == LogMode::Wrapper {
-            "off"
-        } else {
-            "kache=warn"
-        };
-        let stderr_filter = env
-            .var("KACHE_LOG")
-            .ok()
-            .and_then(|filter| EnvFilter::try_new(filter).ok())
-            .unwrap_or_else(|| default_filter.parse().unwrap());
-        Some(
-            fmt::layer()
-                .with_writer(invocation::io::stderr)
-                .log_internal_errors(false)
-                .with_filter(stderr_filter),
-        )
-    };
-
-    // File layer: persistent log at info level (overridable via KACHE_LOG_FILE).
-    //
-    // CLI/daemon mode: always enabled at the default `kache.log` path — these
-    // run rarely, so 2 syscalls (stat + open) per invocation is fine.
-    //
-    // Wrapper mode: cargo can fan out hundreds of `kache rustc …` processes
-    // per build, so the file layer is OFF by default to avoid the per-crate
-    // syscalls. Opt in by setting `KACHE_LOG_FILE` explicitly — useful for
-    // diagnostics when cargo would otherwise eat wrapper stderr. The path
-    // can be overridden via `KACHE_LOG_FILE_PATH` (e.g. the e2e bench writes
-    // a per-phase wrapper.log so each cold/warm phase has a clean log).
-    let file_layer = {
-        let wrapper_opted_in = mode == LogMode::Wrapper && env.var_os("KACHE_LOG_FILE").is_some();
-        let enable_file_layer = mode != LogMode::Wrapper || wrapper_opted_in;
-
-        if !enable_file_layer {
-            None
-        } else {
-            (|| -> Option<_> {
-                let path = env
-                    .var_os("KACHE_LOG_FILE_PATH")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| diagnostic_log_path_for(env));
-                let path = env.resolve(&path)?;
-                std::fs::create_dir_all(path.parent()?).ok()?;
-
-                // Simple rotation: truncate if file exceeds 5 MB.
-                // Skipped when a custom path is provided — the caller owns
-                // the file lifecycle (e.g. the bench wipes it per phase).
-                if env.var_os("KACHE_LOG_FILE_PATH").is_none()
-                    && std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_LOG_BYTES)
-                {
-                    let _ = std::fs::write(&path, b"--- log rotated ---\n");
-                }
-
-                let file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .ok()?;
-
-                let file_filter = env
-                    .var("KACHE_LOG_FILE")
-                    .ok()
-                    .and_then(|filter| EnvFilter::try_new(filter).ok())
-                    .unwrap_or_else(|| "kache=info".parse().unwrap());
-
-                Some(
-                    fmt::layer()
-                        .with_ansi(false)
-                        .with_writer(Mutex::new(file))
-                        .with_filter(file_filter),
-                )
-            })()
-        }
-    };
-
-    tracing::Dispatch::new(
-        tracing_subscriber::registry()
-            .with(stderr_layer)
-            .with(file_layer),
+/// Builds the process-wide logger for `mode` and `env`. Tests call this
+/// directly and route records through the returned logger instead of
+/// installing anything process-wide, so concurrent tests stay isolated.
+fn logging_logger(
+    mode: LogMode,
+    env: &invocation::InvocationEnv,
+) -> kache_log::KacheLogger {
+    kache_log::KacheLogger::new(
+        stderr_level_for(mode, env),
+        || Box::new(invocation::io::stderr()) as Box<dyn std::io::Write + Send>,
+        file_sink_for(mode, env),
     )
+}
+
+// Wrapper mode: cargo captures RUSTC_WRAPPER stderr and caches it as compiler
+// diagnostics, replaying stale warnings on every subsequent build.  Default to
+// silent; users can still opt in via KACHE_LOG for one-off debugging.
+fn stderr_level_for(mode: LogMode, env: &invocation::InvocationEnv) -> log::LevelFilter {
+    let default_filter = if mode == LogMode::Wrapper {
+        "off"
+    } else {
+        "kache=warn"
+    };
+    env.var("KACHE_LOG")
+        .ok()
+        .and_then(|filter| kache_log::parse_level_filter(&filter))
+        .unwrap_or_else(|| {
+            kache_log::parse_level_filter(default_filter).expect("default stderr filter parses")
+        })
+}
+
+// File layer: persistent log at info level (overridable via KACHE_LOG_FILE).
+//
+// CLI/daemon mode: always enabled at the default `kache.log` path — these
+// run rarely, so 2 syscalls (stat + open) per invocation is fine.
+//
+// Wrapper mode: cargo can fan out hundreds of `kache rustc …` processes
+// per build, so the file layer is OFF by default to avoid the per-crate
+// syscalls. Opt in by setting `KACHE_LOG_FILE` explicitly — useful for
+// diagnostics when cargo would otherwise eat wrapper stderr. The path
+// can be overridden via `KACHE_LOG_FILE_PATH` (e.g. the e2e bench writes
+// a per-phase wrapper.log so each cold/warm phase has a clean log).
+fn file_sink_for(
+    mode: LogMode,
+    env: &invocation::InvocationEnv,
+) -> Option<kache_log::FileSink> {
+    let wrapper_opted_in =
+        mode == LogMode::Wrapper && env.var_os("KACHE_LOG_FILE").is_some();
+    let enable_file_layer = mode != LogMode::Wrapper || wrapper_opted_in;
+
+    if !enable_file_layer {
+        return None;
+    }
+    (|| -> Option<_> {
+        let path = env
+            .var_os("KACHE_LOG_FILE_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| diagnostic_log_path_for(env));
+        let path = env.resolve(&path)?;
+        std::fs::create_dir_all(path.parent()?).ok()?;
+
+        // Simple rotation: truncate if file exceeds 5 MB.
+        // Skipped when a custom path is provided — the caller owns
+        // the file lifecycle (e.g. the bench wipes it per phase).
+        if env.var_os("KACHE_LOG_FILE_PATH").is_none()
+            && std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_LOG_BYTES)
+        {
+            let _ = std::fs::write(&path, b"--- log rotated ---\n");
+        }
+
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .ok()?;
+
+        let file_level = env
+            .var("KACHE_LOG_FILE")
+            .ok()
+            .and_then(|filter| kache_log::parse_level_filter(&filter))
+            .unwrap_or(log::LevelFilter::Info);
+
+        Some(kache_log::FileSink::new(file, file_level))
+    })()
+}
+
+/// Routes the calling thread's records through `env`'s stderr level and file
+/// until the guard drops. Compiler invocations served by the daemon run in a
+/// process whose startup environment is the daemon's, so without this the
+/// client's `KACHE_LOG*` settings would not reach the records its own
+/// compile emits.
+fn invocation_log_scope(env: &invocation::InvocationEnv) -> kache_log::InvocationGuard {
+    kache_log::enter(&kache_log::InvocationConfig::new(
+        stderr_level_for(LogMode::Wrapper, env),
+        file_sink_for(LogMode::Wrapper, env),
+    ))
 }
 
 /// How main reads argv, decided before any of it is parsed.
@@ -656,53 +578,50 @@ fn run_main() -> Result<()> {
         );
     }
 
-    // CLI mode: parse subcommands
-    let matches = match Cli::command().try_get_matches_from(&raw_args) {
-        Ok(matches) => matches,
-        Err(error) => {
-            let json = raw_args
-                .iter()
-                .skip(1)
-                .take_while(|arg| *arg != "--")
-                .any(|arg| arg == "--json");
-            if json && error.kind() == clap::error::ErrorKind::DisplayHelp {
-                machine::emit_help(Cli::command())?;
-                return Ok(());
+    // CLI mode: parse subcommands. `--json` may appear before or inside
+    // the subcommand; help, version and failures already know whether it
+    // was seen. Non-UTF-8 arguments fail closed inside the parser; only
+    // `cargo` keeps them verbatim.
+    let cli = match cli_args::parse_cli(raw_args.get(1..).unwrap_or(&[])) {
+        Ok(cli_args::ParseOutcome::Run(cli)) => cli,
+        Ok(cli_args::ParseOutcome::Help { text, json }) => {
+            if json {
+                machine::emit_help()?;
+            } else {
+                println!("{text}");
             }
-            if json && error.kind() == clap::error::ErrorKind::DisplayVersion {
+            return Ok(());
+        }
+        Ok(cli_args::ParseOutcome::Version { json }) => {
+            if json {
                 machine::emit(
                     "version",
                     serde_json::json!({ "version": VERSION }),
                     Vec::new(),
                 )?;
-                return Ok(());
+            } else {
+                println!("kache {VERSION}");
             }
-            if json && error.use_stderr() {
+            return Ok(());
+        }
+        Err(failure) => {
+            if failure.json {
                 // A closed stdout must not turn a usage error into success.
-                let _ = machine::emit_error(
-                    "cli",
-                    "invalid_arguments",
-                    &anyhow::anyhow!(error.to_string()),
-                );
-                eprint!("{error}");
+                let _ = machine::emit_error("cli", "invalid_arguments", &failure.error);
+                eprint!("{}", failure.error);
                 std::process::exit(2);
             }
-            error.exit();
+            eprintln!("error: {}", failure.error);
+            eprintln!("\nFor more information, try '--help'.");
+            std::process::exit(2);
         }
     };
-    let cli = Cli::from_arg_matches(&matches)?;
-    let json = cli.json;
-    let mut names = Vec::new();
-    let mut matched = &matches;
-    while let Some((name, args)) = matched.subcommand() {
-        names.push(name);
-        matched = args;
+    if cli.json && cli.command.is_none() {
+        machine::emit_help()?;
+        return Ok(());
     }
-    let command = if names.is_empty() {
-        "cli".into()
-    } else {
-        names.join("-")
-    };
+    let json = cli.json;
+    let command = cli.command_path();
     machine::configure(json, command.clone());
     if let Err(error) = run_cli(cli, readiness) {
         let Some((code, exit)) = machine::failure_exit(&error) else {
@@ -731,16 +650,14 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
             if let Some(command) = command {
                 return config_cli::run(command, json);
             }
-            if !std::io::stdout().is_terminal() {
-                anyhow::bail!(config_without_terminal(&config::resolve_config_path()));
-            }
-            return config_tui::run_config_editor();
+            return config_cli::run(
+                &config_cli::Command::List {
+                    scope: Default::default(),
+                },
+                json,
+            );
         }
         Some(Commands::Cargo { args }) => return cargo_proxy::run(args.clone()),
-        Some(Commands::Completions { shell }) => {
-            generate_completions(*shell, &mut std::io::stdout());
-            return Ok(());
-        }
         _ => {}
     }
 
@@ -1006,15 +923,6 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
             }
             Ok(())
         }
-        Some(Commands::Monitor { since }) => {
-            crate::machine::require_tty(
-                std::io::stdout().is_terminal(),
-                "monitor",
-                "`kache stats --json`",
-            )?;
-            let window = since.as_deref().map(parse_since_window).transpose()?;
-            tui::run_monitor(&config, window)
-        }
         #[cfg(unix)]
         Some(Commands::InstallShims {
             dir,
@@ -1026,13 +934,9 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
         Some(Commands::InstallShims { .. }) => Err(anyhow::anyhow!(UNIX_ONLY_SHIMS)),
         Some(Commands::Cargo { .. }) => unreachable!(),
         Some(Commands::Config { .. }) => unreachable!(),
-        Some(Commands::Completions { .. }) => unreachable!(),
         None => {
-            // No subcommand — print help. New users often find an unexpected TUI
-            // disorienting; they can still launch it explicitly with `kache monitor`.
-            use clap::CommandFactory;
-            Cli::command().print_help()?;
-            println!();
+            // No subcommand — print help.
+            print!("{}", cli_args::top_help_text());
             Ok(())
         }
     }
@@ -1232,7 +1136,7 @@ fn run_compiler_process_directly_for(
         match compile::isolate_incremental_flags(effective_args) {
             Some(isolated) => Some(isolated),
             None => {
-                tracing::warn!(
+                log::warn!(
                     "[kache] incremental directory has no safe sibling path; stripping incremental flags"
                 );
                 None
@@ -1266,7 +1170,7 @@ fn run_compiler_process_directly_for(
                         "materializing rustc response file after rewriting incremental arguments",
                     );
                 }
-                tracing::warn!(
+                log::warn!(
                     "failed to materialize expanded rustc response file; using unchanged original argv: {error:#}"
                 );
                 None
@@ -1389,7 +1293,7 @@ fn run_wrapper_mode(args: &[String]) -> Result<()> {
                         std::process::exit(exit);
                     }
                 }
-                Err(error) => tracing::debug!(%error, "compiler daemon did not start"),
+                Err(error) => log::debug!("compiler daemon did not start: {error}"),
             }
         }
         Some(config)
@@ -1436,8 +1340,7 @@ fn run_original_compiler_invocation(
 ) -> Result<i32> {
     let _cancellation = invocation::process::CancellationScope::enter(context.cancellation.clone());
     let _io = invocation::io::InvocationIoScope::enter(context.io.clone());
-    let logging = logging_dispatch(LogMode::Wrapper, &context.env);
-    let _logging = tracing::dispatcher::set_default(&logging);
+    let _log_scope = invocation_log_scope(&context.env);
     invocation::process::check()?;
     let rewritten = if args
         .first()
@@ -1487,8 +1390,7 @@ fn run_compiler_invocation_inner(
     #[cfg(unix)]
     let _jobserver = kache_ipc::jobserver::Scope::enter(jobserver);
     let _io = invocation::io::InvocationIoScope::enter(io);
-    let logging = logging_dispatch(LogMode::Wrapper, &env);
-    let _logging = tracing::dispatcher::set_default(&logging);
+    let _log_scope = invocation_log_scope(&env);
     let _alias_state = out_dir_alias::InvocationAliasScope::enter();
     let _key_state = cache_key::InvocationKeyScope::enter();
     let _wrapper_state = wrapper::InvocationWrapperScope::enter_for(&env, daemon.clone());
@@ -1548,9 +1450,9 @@ fn run_compiler_invocation_inner(
     if compiler::is_workspace_wrapper_chain_for(args, &env)
         && !compiler::is_cacheable_workspace_wrapper_chain_for(args, &env)
     {
-        tracing::debug!(
-            program = ?args.first(),
-            "workspace-wrapper chain is uncached; retaining extra-input Cargo freshness"
+        log::debug!(
+            "workspace-wrapper chain is uncached; retaining extra-input Cargo freshness; program={:?}",
+            args.first()
         );
         return run_workspace_wrapper_chain_for(&config, args, &env);
     }
@@ -1558,9 +1460,9 @@ fn run_compiler_invocation_inner(
     let direct_passthrough = compiler::is_passthrough_compiler_invocation_for(args, &env)
         && !compiler::rustc::RustcCompiler::recognizes(args);
     if direct_passthrough {
-        tracing::debug!(
-            program = ?args.first(),
-            "compiler has no cache adapter; passing through uncached"
+        log::debug!(
+            "compiler has no cache adapter; passing through uncached; program={:?}",
+            args.first()
         );
         return run_compiler_directly_for(&config, args, config.preserve_incremental, &env);
     }
@@ -1790,16 +1692,14 @@ mod tests {
             root.path().to_owned(),
         );
         {
-            let logging = logging_dispatch(LogMode::Wrapper, &env);
-            let _logging = tracing::dispatcher::set_default(&logging);
-            tracing::info!(target: "kache::request", "without-file-opt-in");
+            let logging = logging_logger(LogMode::Wrapper, &env);
+            logging.emit(log::Level::Info, "kache::request", "without-file-opt-in");
         }
         assert!(!root.path().join("wrapper.log").exists());
         env.set("KACHE_LOG_FILE", "kache=info");
         {
-            let logging = logging_dispatch(LogMode::Wrapper, &env);
-            let _logging = tracing::dispatcher::set_default(&logging);
-            tracing::info!(target: "kache::request", "with-file-opt-in");
+            let logging = logging_logger(LogMode::Wrapper, &env);
+            logging.emit(log::Level::Info, "kache::request", "with-file-opt-in");
         }
         let logged = std::fs::read_to_string(root.path().join("wrapper.log")).unwrap();
         assert!(logged.contains("with-file-opt-in"));
@@ -1825,9 +1725,8 @@ mod tests {
         };
         assert_eq!(diagnostic_log_path_for(&env), expected);
         {
-            let logging = logging_dispatch(LogMode::Cli, &env);
-            let _logging = tracing::dispatcher::set_default(&logging);
-            tracing::info!(target: "kache::request", "client-default-log");
+            let logging = logging_logger(LogMode::Cli, &env);
+            logging.emit(log::Level::Info, "kache::request", "client-default-log");
         }
         assert!(
             std::fs::read_to_string(expected)
@@ -1838,12 +1737,17 @@ mod tests {
 
     #[test]
     fn client_routes_every_engine_command_and_alias_without_loading_config() {
-        for command in Cli::command().get_subcommands() {
-            for name in std::iter::once(command.get_name()).chain(command.get_all_aliases()) {
-                assert!(
-                    kache_client::engine_command_names().contains(&name),
-                    "{name}"
-                );
+        for name in kache_client::engine_command_names() {
+            // `telemetry` requires a subcommand; probe it with its minimal
+            // shape. Everything else must route bare.
+            let argv: Vec<&str> = match *name {
+                "telemetry" => vec!["kache", name, "write", "telemetry-probe-dir"],
+                _ => vec!["kache", name],
+            };
+            match parsed(&argv) {
+                Ok(cli_args::ParseOutcome::Run(_)) => {}
+                Ok(_) if *name == "help" => {}
+                other => panic!("{name} does not parse: {}", other.is_ok()),
             }
         }
     }
@@ -1882,15 +1786,14 @@ mod tests {
                         Some(root.clone()),
                         root.clone(),
                     );
-                    let dispatch = logging_dispatch(LogMode::Wrapper, &env);
+                    let logging = logging_logger(LogMode::Wrapper, &env);
                     let _io =
                         invocation::io::InvocationIoScope::enter(logging_test_io(&root, name));
-                    let _logging = tracing::dispatcher::set_default(&dispatch);
                     barrier.wait();
                     for _ in 0..2 {
-                        tracing::warn!(target: "kache::request", client = name, "own-warning");
-                        tracing::error!(target: "kache::request", client = name, "own-error");
-                        tracing::debug!(target: "kache::request", client = name, "own-debug");
+                        logging.emit(log::Level::Warn, "kache::request", &format!("own-warning client={name}"));
+                        logging.emit(log::Level::Error, "kache::request", &format!("own-error client={name}"));
+                        logging.emit(log::Level::Debug, "kache::request", &format!("own-debug client={name}"));
                     }
                 });
             }
@@ -1927,18 +1830,16 @@ mod tests {
                 root.path().to_owned(),
             )
         };
-        let parent = logging_dispatch(LogMode::Wrapper, &env("kache=warn"));
+        let parent = logging_logger(LogMode::Wrapper, &env("kache=warn"));
         let monitor = {
             let _io =
                 invocation::io::InvocationIoScope::enter(logging_test_io(root.path(), "parent"));
-            let _logging = tracing::dispatcher::set_default(&parent);
-            tracing::warn!(target: "kache::request", "parent-before");
+            parent.emit(log::Level::Warn, "kache::request", "parent-before");
             {
-                let nested = logging_dispatch(LogMode::Wrapper, &env("invalid["));
-                let _logging = tracing::dispatcher::set_default(&nested);
-                tracing::error!(target: "kache::request", "nested-default-off");
+                let nested = logging_logger(LogMode::Wrapper, &env("invalid["));
+                nested.emit(log::Level::Error, "kache::request", "nested-default-off");
             }
-            tracing::warn!(target: "kache::request", "parent-after");
+            parent.emit(log::Level::Warn, "kache::request", "parent-after");
             invocation::io::current().borrow_for_monitor()
         };
         let log = std::fs::read_to_string(root.path().join("parent.err")).unwrap();
@@ -1947,13 +1848,12 @@ mod tests {
         assert!(!log.contains("nested-default-off"));
         assert!(!root.path().join("logs").exists());
         let _io = invocation::io::InvocationIoScope::enter(monitor);
-        let _logging = tracing::dispatcher::set_default(&parent);
         use std::io::Write;
         assert_eq!(
             invocation::io::stderr().write(b"late").unwrap_err().kind(),
             std::io::ErrorKind::BrokenPipe
         );
-        tracing::warn!(target: "kache::request", "late-monitor");
+        parent.emit(log::Level::Warn, "kache::request", "late-monitor");
         assert_eq!(
             std::fs::read_to_string(root.path().join("parent.err")).unwrap(),
             log
@@ -2309,6 +2209,33 @@ mod tests {
         machine::failure_exit(error) == Some(("invalid_arguments", 2))
     }
 
+    fn parsed(argv: &[&str]) -> Result<cli_args::ParseOutcome, cli_args::ParseFail> {
+        let args: Vec<std::ffi::OsString> =
+            argv.iter().skip(1).map(std::ffi::OsString::from).collect();
+        cli_args::parse_cli(&args)
+    }
+
+    fn parse(argv: &[&str]) -> Cli {
+        match parsed(argv) {
+            Ok(cli_args::ParseOutcome::Run(cli)) => cli,
+            other => panic!("expected a parsed invocation for {argv:?}: {}", other.is_ok()),
+        }
+    }
+
+    fn parse_err(argv: &[&str]) -> anyhow::Error {
+        match parsed(argv) {
+            Err(failure) => failure.error,
+            Ok(_) => panic!("expected a parse failure for {argv:?}"),
+        }
+    }
+
+    fn help_text(argv: &[&str]) -> String {
+        match parsed(argv) {
+            Ok(cli_args::ParseOutcome::Help { text, .. }) => text,
+            other => panic!("expected help for {argv:?}: {}", other.is_ok()),
+        }
+    }
+
     #[test]
     fn report_format_prefers_an_explicit_name() {
         use cli::ReportFormat;
@@ -2352,22 +2279,22 @@ mod tests {
             ("perfetto", ReportFormat::Trace),
             ("chrome-trace", ReportFormat::Trace),
         ] {
-            let stats = Cli::try_parse_from(["kache", "stats", "--format", spelling]).unwrap();
+            let stats = parse(&["kache", "stats", "--format", spelling]);
             assert!(
                 matches!(stats.command, Some(Commands::Stats { format: Some(f), .. }) if f == format),
                 "{spelling}"
             );
-            let report = Cli::try_parse_from(["kache", "report", "--format", spelling]).unwrap();
+            let report = parse(&["kache", "report", "--format", spelling]);
             assert!(
                 matches!(report.command, Some(Commands::Report { format: f, .. }) if f == format),
                 "{spelling}"
             );
             assert_eq!(
-                <ReportFormat as clap::ValueEnum>::from_str(format.name(), false),
-                Ok(format)
+                ReportFormat::parse(format.name()),
+                Some(format)
             );
         }
-        let report = Cli::try_parse_from(["kache", "report"]).unwrap();
+        let report = parse(&["kache", "report"]);
         assert!(matches!(
             report.command,
             Some(Commands::Report {
@@ -2379,8 +2306,8 @@ mod tests {
             ["kache", "stats", "--format", "jsno"],
             ["kache", "report", "--format", "html"],
         ] {
-            let error = Cli::try_parse_from(args).err().unwrap();
-            assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+            let error = parse_err(&args);
+            assert!(is_invalid_arguments(&error), "{error:#}");
             assert!(error.to_string().contains("markdown"), "{error}");
         }
     }
@@ -2393,11 +2320,11 @@ mod tests {
             ("hits", ListSort::Hits),
             ("age", ListSort::Age),
         ] {
-            let list = Cli::try_parse_from(["kache", "list", "--sort", spelling]).unwrap();
+            let list = parse(&["kache", "list", "--sort", spelling]);
             assert!(matches!(list.command, Some(Commands::List { sort: s, .. }) if s == sort));
             assert_eq!(sort.as_str(), spelling);
         }
-        let list = Cli::try_parse_from(["kache", "list"]).unwrap();
+        let list = parse(&["kache", "list"]);
         assert!(matches!(
             list.command,
             Some(Commands::List {
@@ -2405,10 +2332,8 @@ mod tests {
                 ..
             })
         ));
-        let error = Cli::try_parse_from(["kache", "list", "--sort", "sise"])
-            .err()
-            .unwrap();
-        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+        let error = parse_err(&["kache", "list", "--sort", "sise"]);
+        assert!(is_invalid_arguments(&error), "{error:#}");
 
         for (spelling, phase) in [
             ("cold", BenchPhase::Cold),
@@ -2416,9 +2341,7 @@ mod tests {
             ("warm", BenchPhase::Warm),
             ("pull", BenchPhase::Pull),
         ] {
-            let write =
-                Cli::try_parse_from(["kache", "telemetry", "write", "d", "--phase", spelling])
-                    .unwrap();
+            let write = parse(&["kache", "telemetry", "write", "d", "--phase", spelling]);
             assert!(matches!(
                 write.command,
                 Some(Commands::Telemetry {
@@ -2427,10 +2350,8 @@ mod tests {
             ));
             assert_eq!(phase.as_str(), spelling);
         }
-        let error = Cli::try_parse_from(["kache", "telemetry", "write", "d", "--phase", "hot"])
-            .err()
-            .unwrap();
-        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+        let error = parse_err(&["kache", "telemetry", "write", "d", "--phase", "hot"]);
+        assert!(is_invalid_arguments(&error), "{error:#}");
     }
 
     #[test]
@@ -2485,10 +2406,10 @@ mod tests {
 
     #[test]
     fn run_cli_rejects_unsupported_json_before_loading_configuration() {
-        let cli = Cli::try_parse_from(["kache", "config", "--json"]).unwrap();
+        let cli = parse(&["kache", "purge", "--json"]);
         let error = run_cli(cli, None).unwrap_err();
         assert!(is_invalid_arguments(&error), "{error:#}");
-        assert!(error.to_string().contains("config"), "{error:#}");
+        assert!(error.to_string().contains("purge"), "{error:#}");
     }
 
     #[test]
@@ -2508,24 +2429,15 @@ mod tests {
             })),
             Some(general)
         );
-        assert!(
-            json_refusal(&Some(Commands::Config { command: None }))
-                .unwrap()
-                .contains("kache config")
-        );
-        assert!(
-            json_refusal(&Some(Commands::Monitor { since: None }))
-                .unwrap()
-                .contains("kache stats --json")
-        );
+        assert_eq!(json_refusal(&Some(Commands::Config { command: None })), None);
         assert!(
             json_refusal(&Some(Commands::Purge { crate_name: None }))
                 .unwrap()
                 .contains("kache purge")
         );
-        let shims = Cli::try_parse_from(["kache", "init", "--shims"]).unwrap();
+        let shims = parse(&["kache", "init", "--shims"]);
         assert!(json_refusal(&shims.command).unwrap().contains("--shims"));
-        let init = Cli::try_parse_from(["kache", "init", "--check"]).unwrap();
+        let init = parse(&["kache", "init", "--check"]);
         assert_eq!(json_refusal(&init.command), None);
         assert_eq!(json_refusal(&Some(Commands::Diff { root: None })), None);
     }
@@ -2578,12 +2490,12 @@ mod tests {
 
     #[test]
     fn status_runs_stats_and_daemon_status_stays_the_daemons() {
-        let status = Cli::try_parse_from(["kache", "status", "--since", "2h"]).unwrap();
+        let status = parse(&["kache", "status", "--since", "2h"]);
         assert!(matches!(
             status.command,
             Some(Commands::Stats { ref since, .. }) if since == "2h"
         ));
-        let daemon = Cli::try_parse_from(["kache", "daemon", "status"]).unwrap();
+        let daemon = parse(&["kache", "daemon", "status"]);
         assert!(matches!(
             daemon.command,
             Some(Commands::Daemon {
@@ -2594,65 +2506,62 @@ mod tests {
 
     #[test]
     fn targets_share_is_a_subcommand() {
-        let list = Cli::try_parse_from(["kache", "targets"]).unwrap();
+        let list = parse(&["kache", "targets"]);
         assert!(matches!(
             list.command,
             Some(Commands::Targets { command: None })
         ));
         let share =
-            Cli::try_parse_from(["kache", "targets", "share", "--apply", "target"]).unwrap();
+            parse(&["kache", "targets", "share", "--apply", "target"]);
         assert!(matches!(
             share.command,
             Some(Commands::Targets {
                 command: Some(TargetCommands::Share { apply: true, ref paths })
             }) if paths == &vec![PathBuf::from("target")]
         ));
-        assert!(Cli::try_parse_from(["kache", "targets-dedup"]).is_err());
+        assert!(parsed(&["kache", "targets-dedup"]).is_err());
     }
 
     #[test]
     fn clean_flags_keep_targets_and_cache_apart() {
-        let parse = |args: &[&str]| Cli::try_parse_from(["kache", "clean"].iter().chain(args));
-        assert!(parse(&["--cache"]).is_ok());
+        assert!(parsed(&["kache", "clean", "--cache"]).is_ok());
         assert!(
-            parse(&["--cache", "--all"]).is_ok(),
+            parsed(&["kache", "clean", "--cache", "--all"]).is_ok(),
             "older scripts still parse"
         );
-        assert!(parse(&["--cache", "--stale", "7d"]).is_ok());
-        assert!(parse(&["--crate", "serde", "--yes"]).is_ok());
-        assert!(parse(&["some/dir", "--dry-run"]).is_ok());
-        assert!(parse(&["--tracked"]).is_ok(), "older scripts still parse");
-        assert!(parse(&["--all"]).is_err(), "--all needs --cache");
+        assert!(parsed(&["kache", "clean", "--cache", "--stale", "7d"]).is_ok());
+        assert!(parsed(&["kache", "clean", "--crate", "serde", "--yes"]).is_ok());
+        assert!(parsed(&["kache", "clean", "some/dir", "--dry-run"]).is_ok());
+        assert!(parsed(&["kache", "clean", "--tracked"]).is_ok(), "older scripts still parse");
+        assert!(parsed(&["kache", "clean", "--all"]).is_err(), "--all needs --cache");
         assert!(
-            parse(&["--stale-schema"]).is_err(),
+            parsed(&["kache", "clean", "--stale-schema"]).is_err(),
             "--stale-schema needs --cache"
         );
-        assert!(parse(&["some/dir", "--cache"]).is_err());
+        assert!(parsed(&["kache", "clean", "some/dir", "--cache"]).is_err());
         for selection in [&["--stale", "30d"][..], &["--orphans"]] {
-            let parsed = parse(&[&["some/dir", "--dry-run"][..], selection].concat());
-            assert_eq!(
-                parsed.err().map(|error| error.kind()),
-                Some(clap::error::ErrorKind::ArgumentConflict)
-            );
+            let mut argv = vec!["kache", "clean", "some/dir", "--dry-run"];
+            argv.extend(selection);
+            let error = parse_err(&argv);
+            assert!(is_invalid_arguments(&error), "{error:#}");
+            assert!(error.to_string().contains("cannot be used with"), "{error:#}");
         }
-        assert!(parse(&["--orphans", "--stale", "7d"]).is_err());
-        assert!(parse(&["--crate", "serde", "--cache"]).is_err());
-        assert!(parse(&["--cache", "--all", "--stale", "7d"]).is_err());
+        assert!(parsed(&["kache", "clean", "--orphans", "--stale", "7d"]).is_err());
+        assert!(parsed(&["kache", "clean", "--crate", "serde", "--cache"]).is_err());
+        assert!(parsed(&["kache", "clean", "--cache", "--all", "--stale", "7d"]).is_err());
         for hidden in ["gc", "purge", "targets", "report"] {
-            assert!(Cli::try_parse_from(["kache", hidden]).is_ok(), "{hidden}");
+            assert!(parsed(&["kache", hidden]).is_ok(), "{hidden}");
         }
     }
 
     #[test]
     fn clean_units_accepts_preview_and_apply_but_rejects_other_scopes() {
         for spelling in ["--units", "--artifacts"] {
-            let parsed =
-                Cli::try_parse_from(["kache", "clean", spelling, "target", "--dry-run", "--json"])
-                    .unwrap();
+            let invocation = parse(&["kache", "clean", spelling, "target", "--dry-run", "--json"]);
             assert!(
-                matches!(parsed.command, Some(Commands::Clean { units: true, dry_run: true, ref path, .. }) if path == &Some(PathBuf::from("target")))
+                matches!(invocation.command, Some(Commands::Clean { units: true, dry_run: true, ref path, .. }) if path == &Some(PathBuf::from("target")))
             );
-            assert!(Cli::try_parse_from(["kache", "clean", spelling, "--yes"]).is_ok());
+            assert!(parsed(&["kache", "clean", spelling, "--yes"]).is_ok());
             for arguments in [
                 vec!["--cache"],
                 vec!["--crate", "serde"],
@@ -2660,8 +2569,9 @@ mod tests {
                 vec!["--orphans"],
                 vec!["--cache", "--stale-schema"],
             ] {
-                let args = ["kache", "clean", spelling].into_iter().chain(arguments);
-                assert!(Cli::try_parse_from(args).is_err());
+                let mut argv = vec!["kache", "clean", spelling];
+                argv.extend(arguments);
+                assert!(parsed(&argv).is_err());
             }
         }
     }
@@ -2698,7 +2608,7 @@ mod tests {
     #[test]
     fn init_shims_and_why_miss_without_a_crate_parse() {
         let shims =
-            Cli::try_parse_from(["kache", "init", "--shims", "--from-path", "--force"]).unwrap();
+            parse(&["kache", "init", "--shims", "--from-path", "--force"]);
         assert!(matches!(
             shims.command,
             Some(Commands::Init {
@@ -2709,24 +2619,24 @@ mod tests {
             })
         ));
         let package =
-            Cli::try_parse_from(["kache", "init", "--shims", "/usr/lib/kache", "--force"]).unwrap();
+            parse(&["kache", "init", "--shims", "/usr/lib/kache", "--force"]);
         assert!(matches!(
             package.command,
             Some(Commands::Init { shims: Some(Some(ref dir)), force: true, .. })
                 if dir == std::path::Path::new("/usr/lib/kache")
         ));
-        let plain = Cli::try_parse_from(["kache", "init"]).unwrap();
+        let plain = parse(&["kache", "init"]);
         assert!(matches!(
             plain.command,
             Some(Commands::Init { shims: None, .. })
         ));
         assert!(
-            Cli::try_parse_from(["kache", "init", "--from-path"]).is_err(),
+            parsed(&["kache", "init", "--from-path"]).is_err(),
             "needs --shims"
         );
-        assert!(Cli::try_parse_from(["kache", "init", "--shims", "--check"]).is_err());
+        assert!(parsed(&["kache", "init", "--shims", "--check"]).is_err());
         let canonical =
-            Cli::try_parse_from(["kache", "init", "--shims", "--canonical-only"]).unwrap();
+            parse(&["kache", "init", "--shims", "--canonical-only"]);
         assert!(matches!(
             canonical.command,
             Some(Commands::Init {
@@ -2735,9 +2645,9 @@ mod tests {
                 ..
             })
         ));
-        assert!(Cli::try_parse_from(["kache", "init", "--canonical-only"]).is_err());
+        assert!(parsed(&["kache", "init", "--canonical-only"]).is_err());
         assert!(
-            Cli::try_parse_from([
+            parsed(&[
                 "kache",
                 "init",
                 "--shims",
@@ -2746,7 +2656,7 @@ mod tests {
             ])
             .is_err()
         );
-        let build = Cli::try_parse_from(["kache", "why-miss", "--root", "x"]).unwrap();
+        let build = parse(&["kache", "why-miss", "--root", "x"]);
         assert!(matches!(
             build.command,
             Some(Commands::Explain {
@@ -2755,16 +2665,16 @@ mod tests {
                 ..
             })
         ));
-        assert!(Cli::try_parse_from(["kache", "why-miss", "serde", "--root", "x"]).is_err());
+        assert!(parsed(&["kache", "why-miss", "serde", "--root", "x"]).is_err());
         for hidden in ["install-shims", "diff"] {
-            assert!(Cli::try_parse_from(["kache", hidden]).is_ok(), "{hidden}");
+            assert!(parsed(&["kache", hidden]).is_ok(), "{hidden}");
         }
     }
 
     #[test]
     fn dry_run_spellings_reach_every_preview() {
         for spelling in ["--check", "--dry-run", "-n"] {
-            let parsed = Cli::try_parse_from(["kache", "init", spelling, "--no-service"]).unwrap();
+            let parsed = parse(&["kache", "init", spelling, "--no-service"]);
             assert!(
                 matches!(
                     parsed.command,
@@ -2777,71 +2687,30 @@ mod tests {
                 "{spelling}"
             );
         }
-        let parsed = Cli::try_parse_from(["kache", "init", "--no-service"]).unwrap();
+        let invocation = parse(&["kache", "init", "--no-service"]);
         assert!(matches!(
-            parsed.command,
+            invocation.command,
             Some(Commands::Init { check: false, .. })
         ));
         for spelling in ["--dry-run", "-n"] {
-            let parsed = Cli::try_parse_from(["kache", "clean", spelling]).unwrap();
+            let invocation = parse(&["kache", "clean", spelling]);
             assert!(
                 matches!(
-                    parsed.command,
+                    invocation.command,
                     Some(Commands::Clean { dry_run: true, .. })
                 ),
                 "{spelling}"
             );
         }
-        assert!(Cli::try_parse_from(["kache", "init", "--shims", "-n"]).is_err());
-    }
-
-    #[test]
-    fn completions_leave_out_hidden_commands_and_flags() {
-        let mut command = without_hidden(&Cli::command());
-        let mut script = Vec::new();
-        clap_complete::generate(
-            clap_complete::Shell::Bash,
-            &mut command,
-            "kache",
-            &mut script,
-        );
-        let script = String::from_utf8(script).unwrap();
-        for visible in ["clean", "init", "--dry-run", "--json", "--no-service"] {
-            assert!(script.contains(visible), "{visible}");
-        }
-        for hidden in [
-            "install-shims",
-            "--tracked",
-            "--stale-schema",
-        ] {
-            assert!(!script.contains(hidden), "{hidden}");
-        }
-        assert!(command.find_subcommand("stats").is_some());
-        assert!(command.find_subcommand("diff").is_none());
-    }
-
-    #[test]
-    fn config_without_a_terminal_points_at_the_file_and_environment() {
-        let hint =
-            config_without_terminal(std::path::Path::new("/home/me/.config/kache/config.toml"));
-        assert!(
-            hint.contains("/home/me/.config/kache/config.toml"),
-            "{hint}"
-        );
-        assert!(hint.contains("KACHE_"), "{hint}");
-        assert!(hint.contains("needs a terminal"), "{hint}");
-        assert!(!hint.contains("`kache config` in a terminal"), "{hint}");
+        assert!(parsed(&["kache", "init", "--shims", "-n"]).is_err());
     }
 
     #[test]
     fn doctor_fix_help_names_only_what_fix_does() {
-        use clap::CommandFactory;
-        let mut command = Cli::command();
-        let doctor = command.find_subcommand_mut("doctor").unwrap();
-        let fix = doctor
-            .get_arguments()
-            .find(|arg| arg.get_id() == "fix")
-            .and_then(|arg| arg.get_help())
+        let help = help_text(&["kache", "doctor", "--help"]);
+        let fix = help
+            .lines()
+            .find(|line| line.contains("--fix"))
             .unwrap()
             .to_string();
         assert!(fix.contains("sccache") && fix.contains("daemon"), "{fix}");
@@ -2850,8 +2719,7 @@ mod tests {
 
     #[test]
     fn help_lists_commands_by_task_and_leaves_out_plumbing() {
-        use clap::CommandFactory;
-        let help = Cli::command().render_help().to_string();
+        let help = cli_args::top_help_text();
         let listed: Vec<&str> = help
             .lines()
             .skip_while(|line| *line != "Commands:")
@@ -2867,12 +2735,9 @@ mod tests {
                 "config",
                 "stats",
                 "clean",
-                "monitor",
                 "explain",
                 "list",
                 "daemon",
-                "completions",
-                "help",
             ]
         );
     }
@@ -2919,11 +2784,8 @@ mod tests {
         assert!(command_supports_json(&Some(Commands::Daemon {
             command: Some(DaemonCommands::Status),
         })));
-        assert!(!command_supports_json(&Some(Commands::Config {
+        assert!(command_supports_json(&Some(Commands::Config {
             command: None
-        })));
-        assert!(!command_supports_json(&Some(Commands::Monitor {
-            since: None
         })));
         assert!(!command_supports_json(&Some(Commands::Telemetry {
             command: TelemetryCommands::Write {
@@ -3279,12 +3141,8 @@ mod tests {
     fn test_detect_log_mode() {
         assert_eq!(detect_log_mode(&["kache".into()]), LogMode::Cli);
         assert_eq!(
-            detect_log_mode(&["kache".into(), "monitor".into()]),
-            LogMode::TerminalUi
-        );
-        assert_eq!(
             detect_log_mode(&["kache".into(), "config".into()]),
-            LogMode::TerminalUi
+            LogMode::Cli
         );
         assert_eq!(
             detect_log_mode(&["kache".into(), "stats".into()]),

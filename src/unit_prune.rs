@@ -325,7 +325,7 @@ fn watch_with(
         }
     }
     if let Err(error) = write(&record, now.max(not_before)) {
-        tracing::debug!(
+        log::debug!(
             "could not record when {} was armed: {error:#}",
             target_dir.display()
         );
@@ -366,7 +366,7 @@ fn forget_armed(record: &Path) -> bool {
         Ok(()) => true,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
         Err(error) => {
-            tracing::debug!("cannot replace {}: {error}", record.display());
+            log::debug!("cannot replace {}: {error}", record.display());
             false
         }
     }
@@ -443,7 +443,7 @@ fn can_arm(
             false
         }
         Err(error) => {
-            tracing::debug!(
+            log::debug!(
                 "skipping {} this pass: cannot tell whether reads show there: {error}",
                 target_dir.display()
             );
@@ -498,7 +498,7 @@ fn judge_with(
     }
     // On failure no record is left, and the next check arms from scratch.
     if let Err(error) = write(&record, now) {
-        tracing::debug!(
+        log::debug!(
             "could not record when {} was armed: {error:#}",
             target_dir.display()
         );

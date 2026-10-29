@@ -110,7 +110,7 @@
 //! After applying all rules, [`PathNormalizer::normalize`] scans the
 //! result for substrings that still look like absolute paths
 //! (`/Users/`, `/home/`, `/private/`, drive letters). When found,
-//! emits a `tracing::warn!` naming the suspicious value. This is a
+//! emits a `log::warn!` naming the suspicious value. This is a
 //! defense-in-depth check — the relocate e2e phase exists to surface
 //! these by failing the build, but the warning gives a faster signal
 //! during ad-hoc dev runs without needing to run the full harness.
@@ -1221,7 +1221,7 @@ pub(crate) fn check_for_path_leak(value: &str, context: &str) -> bool {
             // Show a small window around the leak to make it easier
             // to identify (env var name etc.) without dumping the
             // whole value, which could be huge.
-            tracing::warn!(
+            log::warn!(
                 "residual absolute path detected in `{}` (prefix `{}`): ...{}...",
                 context,
                 prefix,
@@ -2234,8 +2234,8 @@ mod tests {
         let _ = n.normalize("/Users/alice/leaked/path");
         let _ = n.normalize("/home/bob/leaked/path");
         let _ = n.normalize("C:\\Users\\charlie\\leaked");
-        // No assertions on log output (we don't capture tracing in
-        // unit tests); the assertion is "did not panic".
+        // No assertions on log output (unit tests don't capture the log);
+        // the assertion is "did not panic".
     }
 
     // ── Extended edge-case coverage ─────────────────────────────

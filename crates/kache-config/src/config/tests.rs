@@ -6,40 +6,6 @@ use std::ffi::OsString;
 
 #[test]
 fn ignored_override_warnings_use_only_client_keys_and_never_their_values() {
-    use std::sync::{Arc, Mutex};
-    use tracing::{Event, Metadata, Subscriber, span};
-
-    #[derive(Clone)]
-    struct Warnings(Arc<Mutex<Vec<String>>>);
-    impl Subscriber for Warnings {
-        fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-            *metadata.level() == tracing::Level::WARN
-        }
-        fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
-            span::Id::from_u64(1)
-        }
-        fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
-        fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
-        fn enter(&self, _: &span::Id) {}
-        fn exit(&self, _: &span::Id) {}
-        fn event(&self, event: &Event<'_>) {
-            struct Message(String);
-            impl tracing::field::Visit for Message {
-                fn record_debug(
-                    &mut self,
-                    field: &tracing::field::Field,
-                    value: &dyn std::fmt::Debug,
-                ) {
-                    if field.name() == "message" {
-                        self.0.push_str(&format!("{value:?}"));
-                    }
-                }
-            }
-            let mut message = Message(String::new());
-            event.record(&mut message);
-            self.0.lock().unwrap().push(message.0);
-        }
-    }
     let root = tempfile::tempdir().unwrap();
     let invocation = |vars: Vec<(&str, &str)>| {
         InvocationEnv::from_parts(
@@ -52,13 +18,11 @@ fn ignored_override_warnings_use_only_client_keys_and_never_their_values() {
     let empty = invocation(Vec::new());
     let left = invocation(vec![("KACHE_CACHE_DIR", "private-client-cache")]);
     let right = invocation(vec![("KACHE_KEY_SALT", "private-key-salt")]);
-    let warnings = Warnings(Arc::new(Mutex::new(Vec::new())));
-    tracing::subscriber::with_default(warnings.clone(), || {
-        warn_ignored_env_overrides_for(&empty);
-        warn_ignored_env_overrides_for(&left);
-        warn_ignored_env_overrides_for(&right);
-    });
-    let messages = warnings.0.lock().unwrap();
+    let capture = kache_log::capture();
+    warn_ignored_env_overrides_for(&empty);
+    warn_ignored_env_overrides_for(&left);
+    warn_ignored_env_overrides_for(&right);
+    let messages = capture.records();
     assert_eq!(messages.len(), 2, "{messages:?}");
     assert!(messages[0].contains("KACHE_CACHE_DIR"));
     assert!(!messages[0].contains("KACHE_KEY_SALT"));

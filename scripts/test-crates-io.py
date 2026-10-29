@@ -150,9 +150,9 @@ class CratesIoTests(unittest.TestCase):
             self.mod.is_desired_config({**config, "workflow_filename": "publish-crates.yml"})
         )
 
-    def test_new_crate_hint_names_the_just_recipe(self):
+    def test_new_crate_hint_names_the_make_recipe(self):
         hint = self.mod.new_crate_hint("kache-format")
-        self.assertIn("just crates-bootstrap", hint)
+        self.assertIn("make crates-bootstrap", hint)
         self.assertIn("kache-format", hint)
         self.assertIn("cannot create", hint.lower())
 

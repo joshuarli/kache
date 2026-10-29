@@ -105,7 +105,7 @@ impl Lease {
         if empty_directory(&self.unit.rustc_dir) {
             for donor_profile in donor_profiles {
                 if import(&self.unit, donor_profile, &key) {
-                    tracing::debug!(donor = %donor_profile.display(), "imported worktree incremental seed");
+                    log::debug!("imported worktree incremental seed; donor={}", donor_profile.display());
                     break;
                 }
             }

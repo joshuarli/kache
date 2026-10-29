@@ -1,7 +1,8 @@
 //! Unified scenario runner CLI.
 
 use anyhow::{Result, bail};
-use clap::Parser;
+use lexopt::prelude::*;
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use crate::bench_runner::{self, BenchRunConfig, CacheBackend};
@@ -10,87 +11,131 @@ use crate::scenario::{ScenarioMetadata, Selectors, SourceKind, discover_metadata
 
 const SCENARIOS_DIR: &str = "./scenarios";
 
-#[derive(Debug, Parser)]
-#[command(about = "Run kache scenarios selected by tags/name/source kind.")]
+const HELP: &str = "\
+Run kache scenarios selected by tags/name/source kind.
+
+usage: kache-scenario [options]
+  --kache <path>          kache binary under test [./target/release/kache]
+  --sccache <path>        sccache binary [sccache]
+  --mbx <path>            mbx binary [mbx]
+  --cache-backend <name>  kache|sccache|mbx [kache]
+  --scenarios <dir>       scenario directory [./scenarios]
+  --select <selector>     repeatable; selectors are ANDed
+  --profile <name>        shorthand for --select name:<name>
+  --list                  list selected scenarios instead of running them
+  --out <path>            e2e result JSON path [./tmp/e2e/results.json]
+  --only <substr>         legacy fixture-only name substring filter
+  --negative-control      fixture falsifiability mode (fixtures only)
+  --deny-missing-tools    fail if a supported fixture misses a tool
+  --ref <git-ref>         override a clone scenario's pinned source.ref
+  --work-dir <dir>        benchmark work dir for a clone scenario
+  --skip-clone            reuse clone worktrees already present
+  --force-setup           re-run clone scenario setup
+  --retry                 re-measure warm phase from a prior cold snapshot
+  --trace-keys            cache-key trace logging (kache backend only)
+  --warm-same-tree        add a same-worktree warm rebuild phase
+  -h, --help              print this help and exit";
+
+#[derive(Debug)]
 struct Args {
-    /// Path to the kache binary under test.
-    #[arg(long, default_value = "./target/release/kache")]
     kache: PathBuf,
-
-    /// Path to the sccache binary when running `--cache-backend sccache`.
-    #[arg(long, default_value = "sccache")]
     sccache: PathBuf,
-    /// Path to the mbx binary when running `--cache-backend mbx`.
-    #[arg(long, default_value = "mbx")]
     mbx: PathBuf,
-
-    /// Compiler-cache backend for clone benchmark scenarios.
-    #[arg(long, value_enum, default_value_t = CacheBackend::Kache)]
     cache_backend: CacheBackend,
-
-    /// Directory containing scenario subdirectories with `scenario.toml`.
-    #[arg(long = "scenarios", default_value = SCENARIOS_DIR)]
     scenarios: PathBuf,
-
-    /// Select scenarios by tag, source kind, or `name:<substring>`.
-    /// Multiple selectors are ANDed.
-    #[arg(long = "select")]
     select: Vec<String>,
-
-    /// Scenario name filter. Shorthand for `--select name:<profile>`.
-    #[arg(long)]
     profile: Option<String>,
-
-    /// List selected scenarios instead of running them.
-    #[arg(long)]
     list: bool,
-
-    /// E2E result JSON path for selected fixture scenarios.
-    #[arg(long, default_value = "./tmp/e2e/results.json")]
     out: PathBuf,
-
-    /// Legacy fixture-only name substring filter.
-    #[arg(long)]
     only: Option<String>,
-
-    /// Fixture falsifiability mode. Valid only when selected scenarios are
-    /// fixtures.
-    #[arg(long)]
     negative_control: bool,
-
-    /// Fail after writing results if a supported fixture is missing a required tool.
-    #[arg(long)]
     deny_missing_tools: bool,
-
-    /// Override a selected clone scenario's pinned `source.ref`.
-    #[arg(long = "ref")]
     git_ref: Option<String>,
-
-    /// Benchmark work dir for a selected clone scenario.
-    #[arg(long)]
     work_dir: Option<PathBuf>,
-
-    /// Reuse clone worktrees already present under the benchmark work dir.
-    #[arg(long)]
     skip_clone: bool,
-
-    /// Re-run clone scenario setup even if its setup marker exists.
-    #[arg(long)]
     force_setup: bool,
-
-    /// Re-measure only the warm benchmark phase from a prior cold snapshot.
-    #[arg(long)]
     retry: bool,
-
-    /// Enable cache-key trace logging for clone benchmark scenarios.
-    #[arg(long)]
     trace_keys: bool,
-
-    /// Add a same-worktree warm rebuild between the cold and cross-clone
-    /// phases (clone-a again, objdir wiped, store left warm). Off by default:
-    /// hk and eza enable it in both PR and nightly comparisons.
-    #[arg(long)]
     warm_same_tree: bool,
+}
+
+impl Default for Args {
+    fn default() -> Self {
+        Self {
+            kache: PathBuf::from("./target/release/kache"),
+            sccache: PathBuf::from("sccache"),
+            mbx: PathBuf::from("mbx"),
+            cache_backend: CacheBackend::Kache,
+            scenarios: PathBuf::from(SCENARIOS_DIR),
+            select: Vec::new(),
+            profile: None,
+            list: false,
+            out: PathBuf::from("./tmp/e2e/results.json"),
+            only: None,
+            negative_control: false,
+            deny_missing_tools: false,
+            git_ref: None,
+            work_dir: None,
+            skip_clone: false,
+            force_setup: false,
+            retry: false,
+            trace_keys: false,
+            warm_same_tree: false,
+        }
+    }
+}
+
+/// Returns `None` for `--help`.
+fn parse_cli(argv: &[OsString]) -> Result<Option<Args>, String> {
+    let mut args = Args::default();
+    let mut parser = lexopt::Parser::from_args(argv.iter().skip(1));
+    while let Some(arg) = parser.next().map_err(|e| e.to_string())? {
+        match arg {
+            Long("kache") => args.kache = value_path(&mut parser, "--kache")?,
+            Long("sccache") => args.sccache = value_path(&mut parser, "--sccache")?,
+            Long("mbx") => args.mbx = value_path(&mut parser, "--mbx")?,
+            Long("cache-backend") => {
+                let raw = value_string(&mut parser, "--cache-backend")?;
+                args.cache_backend = raw
+                    .parse()
+                    .map_err(|_| format!("invalid --cache-backend '{raw}': expected kache, sccache, or mbx"))?;
+            }
+            Long("scenarios") => args.scenarios = value_path(&mut parser, "--scenarios")?,
+            Long("select") => args.select.push(value_string(&mut parser, "--select")?),
+            Long("profile") => args.profile = Some(value_string(&mut parser, "--profile")?),
+            Long("list") => args.list = true,
+            Long("out") => args.out = value_path(&mut parser, "--out")?,
+            Long("only") => args.only = Some(value_string(&mut parser, "--only")?),
+            Long("negative-control") => args.negative_control = true,
+            Long("deny-missing-tools") => args.deny_missing_tools = true,
+            Long("ref") => args.git_ref = Some(value_string(&mut parser, "--ref")?),
+            Long("work-dir") => args.work_dir = Some(value_path(&mut parser, "--work-dir")?),
+            Long("skip-clone") => args.skip_clone = true,
+            Long("force-setup") => args.force_setup = true,
+            Long("retry") => args.retry = true,
+            Long("trace-keys") => args.trace_keys = true,
+            Long("warm-same-tree") => args.warm_same_tree = true,
+            Long("help") => return Ok(None),
+            Short('h') => return Ok(None),
+            Long(name) => return Err(format!("unexpected argument '--{name}'")),
+            Short(ch) => return Err(format!("unexpected argument '-{ch}'")),
+            Value(value) => {
+                return Err(format!(
+                    "unexpected argument '{}'",
+                    value.to_string_lossy()
+                ));
+            }
+        }
+    }
+    Ok(Some(args))
+}
+
+fn value_string(parser: &mut lexopt::Parser, flag: &str) -> Result<String, String> {
+    parser.value().map(|v| v.to_string_lossy().into_owned()).map_err(|_| format!("{flag} requires a value"))
+}
+
+fn value_path(parser: &mut lexopt::Parser, flag: &str) -> Result<PathBuf, String> {
+    parser.value().map(PathBuf::from).map_err(|_| format!("{flag} requires a value"))
 }
 
 impl Args {
@@ -129,7 +174,19 @@ fn turn_off_host_config() {
 
 pub fn main() -> Result<()> {
     turn_off_host_config();
-    let args = Args::parse();
+    let argv: Vec<OsString> = std::env::args_os().collect();
+    let args = match parse_cli(&argv) {
+        Ok(Some(args)) => args,
+        Ok(None) => {
+            println!("{HELP}");
+            return Ok(());
+        }
+        Err(message) => {
+            eprintln!("kache-scenario: error: {message}");
+            eprintln!("usage: kache-scenario [options]");
+            std::process::exit(2);
+        }
+    };
     let mut select = args.select.clone();
     if let Some(profile) = &args.profile {
         select.push(format!("name:{profile}"));
@@ -236,9 +293,9 @@ fn cache_backend_label(cache_backend: CacheBackend) -> &'static str {
 
 fn benchmark_recipe_hint(cache_backend: CacheBackend) -> &'static str {
     match cache_backend {
-        CacheBackend::Kache => "just bench <profile>",
-        CacheBackend::Sccache => "just bench-sccache <profile>",
-        CacheBackend::Mbx => "just bench-mbx <profile>",
+        CacheBackend::Kache => "make bench PROFILE=<profile>",
+        CacheBackend::Sccache => "make bench-sccache PROFILE=<profile>",
+        CacheBackend::Mbx => "make bench-mbx PROFILE=<profile>",
     }
 }
 
@@ -297,9 +354,17 @@ mod tests {
     /// The check is a long disjunction, and a term that stops contributing
     /// makes its flag silently inert against a fixture selection instead of
     /// producing the "no clone scenario was selected" error.
+    fn parse_argv(argv: &[&str]) -> Args {
+        let owned: Vec<OsString> = argv.iter().map(OsString::from).collect();
+        match parse_cli(&owned).expect("test argv must parse") {
+            Some(args) => args,
+            None => panic!("test argv must not request help"),
+        }
+    }
+
     #[test]
     fn every_benchmark_option_is_recognised_on_its_own() {
-        let plain = Args::parse_from(["kache-scenario", "--select", "suite:e2e"]);
+        let plain = parse_argv(&["kache-scenario", "--select", "suite:e2e"]);
         assert!(
             !plain.has_bench_options(),
             "a selection with no benchmark option must not look like one"
@@ -317,7 +382,7 @@ mod tests {
         ] {
             let mut argv = vec!["kache-scenario", "--select", "suite:e2e"];
             argv.extend(option.iter().copied());
-            let args = Args::parse_from(&argv);
+            let args = parse_argv(&argv);
             assert!(
                 args.has_bench_options(),
                 "{option:?} must count as a benchmark option"
@@ -340,17 +405,17 @@ mod tests {
         // The label and the recipe are what a `--list` reader types next;
         // both name the backend they were asked about.
         for (backend, label, recipe, suffix) in [
-            (CacheBackend::Kache, "kache", "just bench <profile>", None),
+            (CacheBackend::Kache, "kache", "make bench PROFILE=<profile>", None),
             (
                 CacheBackend::Sccache,
                 "sccache",
-                "just bench-sccache <profile>",
+                "make bench-sccache PROFILE=<profile>",
                 Some("-sccache"),
             ),
             (
                 CacheBackend::Mbx,
                 "mbx",
-                "just bench-mbx <profile>",
+                "make bench-mbx PROFILE=<profile>",
                 Some("-mbx"),
             ),
         ] {

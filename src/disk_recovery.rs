@@ -70,7 +70,7 @@ pub(crate) fn wanted(config: &Config) -> bool {
 /// to the build that asked for recovery.
 pub(crate) fn run(config: &Config) {
     if let Err(error) = recover(config) {
-        tracing::warn!(store = %config.cache_dir.display(), "disk recovery failed: {error:#}");
+        log::warn!("disk recovery failed: {error:#}; store={}", config.cache_dir.display());
     }
 }
 
@@ -96,9 +96,9 @@ fn recover_with(config: &Config, record: impl FnOnce(&Path, u64) -> Result<()>) 
     // A full disk refuses the timestamp just when space is needed most:
     // evict anyway, and pace this process from memory instead.
     if let Err(error) = record(&config.cache_dir.join(LAST_CHECK), now) {
-        tracing::warn!(
-            store = %config.cache_dir.display(),
-            "cannot record the disk recovery time, recovering anyway: {error:#}"
+        log::warn!(
+            "cannot record the disk recovery time, recovering anyway: {error:#}; store={}",
+            config.cache_dir.display()
         );
         unrecorded().insert(config.cache_dir.clone(), now);
     }
@@ -117,11 +117,11 @@ fn recover_with(config: &Config, record: impl FnOnce(&Path, u64) -> Result<()>) 
         crate::store::SweepOrigin::Automatic,
         &stats,
     )?;
-    tracing::info!(
-        store = %config.cache_dir.display(),
-        entries = stats.entries_evicted,
-        elapsed_ms = stats.duration_ms,
-        "disk recovery finished"
+    log::info!(
+        "disk recovery finished; store={} entries={} elapsed_ms={}",
+        config.cache_dir.display(),
+        stats.entries_evicted,
+        stats.duration_ms
     );
     Ok(())
 }

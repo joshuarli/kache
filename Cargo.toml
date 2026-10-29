@@ -35,6 +35,7 @@ members = [
     "crates/kache-ipc",
     "crates/kache-format",
     "crates/kache-fs",
+    "crates/kache-log",
     "crates/kache-shims",
     "crates/kache-store",
     "crates/kache-e2e",
@@ -72,15 +73,12 @@ serde_json = "1"
 semver = "1"
 toml = "1"
 toml_edit = "0.25"
-clap = { version = "4", features = ["derive", "string"] }
-clap_complete = "4"
 rusqlite = { version = "0.40", features = ["bundled"] }
-ratatui = "0.30"
-crossterm = "0.29"
 filetime = "0.2"
+lexopt = "0.3"
 anyhow = "1"
-tracing = { version = "0.1", default-features = false, features = ["std"] }
-tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "env-filter", "fmt", "registry", "ansi"] }
+log = "0.4"
+kache-log = { version = "2.0.0-rc.2", path = "crates/kache-log" }
 zstd = "0.14"
 bytesize = "2"
 chrono = { version = "0.4", features = ["serde"] }

@@ -179,10 +179,9 @@ With link caching enabled, explicit archive inputs such as `libvalue.a` remain e
 
 The assembler reads `.incbin` and `.include` files after preprocessing, so the key cannot see them, and a computed `asm` string could name one. The three assembly cases run the compiler directly and skip a configured `KACHE_FALLBACK` wrapper, because a wrapper that keys on preprocessor output cannot see those files either.
 
-Inspect passthrough reasons in the monitor or logs:
+Inspect passthrough reasons in the logs:
 
 ```bash
-kache monitor
 KACHE_LOG=kache=debug make
 ```
 

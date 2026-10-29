@@ -4,7 +4,7 @@
 use crate::config::Config;
 use crate::events::{self, BuildEvent};
 use crate::term::{self, Align};
-use crate::tui_sessions::{self, Analysis, Cause, Session};
+use crate::sessions::{self, Analysis, Cause, Session};
 use anyhow::Result;
 use std::path::Path;
 use std::time::Duration;
@@ -161,7 +161,7 @@ pub(crate) fn render(
     lines.push(String::new());
 
     let misses = analysis.misses_total;
-    let unexplained = tui_sessions::unexplained_misses(events, &latest.events);
+    let unexplained = sessions::unexplained_misses(events, &latest.events);
     let mut rows = vec![(
         "Misses",
         term::count(misses as u64),
@@ -170,7 +170,7 @@ pub(crate) fn render(
             |earlier| {
                 format!(
                     "{} in the build before",
-                    term::count(tui_sessions::miss_count(events, &earlier.events) as u64)
+                    term::count(sessions::miss_count(events, &earlier.events) as u64)
                 )
             },
         ),
@@ -185,7 +185,7 @@ pub(crate) fn render(
     lines.extend(term::named_sections(&[("Builds", rows)]));
 
     let mut causes = analysis.causes.clone();
-    tui_sessions::sort_costliest_first(&mut causes);
+    sessions::sort_costliest_first(&mut causes);
     if !causes.is_empty() {
         let body: Vec<Vec<String>> = causes
             .iter()
@@ -250,7 +250,7 @@ pub(crate) fn render(
             .map(|group| {
                 vec![
                     term::count(group.count as u64),
-                    tui_sessions::passthrough_words(&format!("{}|{}", group.kind, group.reason)),
+                    sessions::passthrough_words(&format!("{}|{}", group.kind, group.reason)),
                 ]
             })
             .collect();
@@ -295,7 +295,7 @@ fn percent(part: usize, whole: usize) -> f64 {
 pub fn run(config: &Config, root: Option<&Path>, json: bool) -> Result<()> {
     let events = events::read_events(&config.event_log_path())?;
     let root = root.map(crate::report::normalize_filter_root);
-    let sessions = tui_sessions::group(
+    let sessions = sessions::group(
         &events,
         Duration::from_secs(crate::wrapper::BUILD_SESSION_SECS),
     );
@@ -310,7 +310,7 @@ pub fn run(config: &Config, root: Option<&Path>, json: bool) -> Result<()> {
         println!("{NO_BUILD}");
         return Ok(());
     };
-    let analysis = tui_sessions::analyze_session(&events, builds.latest, &sessions);
+    let analysis = sessions::analyze_session(&events, builds.latest, &sessions);
     if json {
         let body = json_body(&builds, &analysis, &events, config.max_size);
         return crate::machine::emit("explain", body, Vec::new());
@@ -394,7 +394,7 @@ fn render_skips(body: &SkipsBody) -> Vec<String> {
                 term::count(reason.count as u64),
                 reason.result.clone(),
                 reason.route.clone(),
-                tui_sessions::passthrough_words(&reason.reason),
+                sessions::passthrough_words(&reason.reason),
             ]
         })
         .collect::<Vec<_>>();
@@ -415,7 +415,7 @@ fn render_skips(body: &SkipsBody) -> Vec<String> {
                 term::home_path(Path::new(&entry.root)),
                 entry.result.clone(),
                 term::duration_ms(entry.elapsed_ms),
-                tui_sessions::passthrough_words(&entry.reason),
+                sessions::passthrough_words(&entry.reason),
             ]
         })
         .collect::<Vec<_>>();
@@ -502,8 +502,8 @@ pub(crate) fn json_body(
         misses: analysis.misses_total,
         earlier_misses: builds
             .earlier
-            .map(|earlier| tui_sessions::miss_count(events, &earlier.events)),
-        unexplained: tui_sessions::unexplained_misses(events, &builds.latest.events),
+            .map(|earlier| sessions::miss_count(events, &earlier.events)),
+        unexplained: sessions::unexplained_misses(events, &builds.latest.events),
         causes: causes
             .iter()
             .map(|group| CauseBody {
@@ -554,7 +554,7 @@ mod tests {
     }
 
     fn sessions(events: &[BuildEvent]) -> Vec<Session> {
-        tui_sessions::group(events, Duration::from_secs(300))
+        sessions::group(events, Duration::from_secs(300))
     }
 
     #[test]
@@ -677,7 +677,7 @@ mod tests {
         ];
         let all = sessions(&events);
         let builds = latest_builds(&all, None).unwrap();
-        let analysis = tui_sessions::analyze_session(&events, builds.latest, &all);
+        let analysis = sessions::analyze_session(&events, builds.latest, &all);
         let lines = render(&builds, &analysis, &events, 5 << 30);
         let text = lines.join("\n");
         assert_eq!(lines[0], "kache · explain · latest build of /w");
@@ -744,7 +744,7 @@ mod tests {
         let events = vec![ev("a", EventResult::LocalHit, "s1", 1, "k1")];
         let all = sessions(&events);
         let builds = latest_builds(&all, None).unwrap();
-        let analysis = tui_sessions::analyze_session(&events, builds.latest, &all);
+        let analysis = sessions::analyze_session(&events, builds.latest, &all);
         let text = render(&builds, &analysis, &events, 1 << 30).join("\n");
         assert!(text.contains("no earlier build of this tree"), "{text}");
         assert!(!text.contains("Details missing"), "{text}");
@@ -757,7 +757,7 @@ mod tests {
     fn report(events: &[BuildEvent]) -> (Vec<String>, Body) {
         let all = sessions(events);
         let builds = latest_builds(&all, None).unwrap();
-        let analysis = tui_sessions::analyze_session(events, builds.latest, &all);
+        let analysis = sessions::analyze_session(events, builds.latest, &all);
         (
             render(&builds, &analysis, events, 1 << 30),
             json_body(&builds, &analysis, events, 1 << 30),
@@ -800,7 +800,7 @@ mod tests {
         assert!(!body.causes[0].failure);
         assert_eq!(body.not_cached[0].reason, sql_error);
         assert_eq!(
-            tui_sessions::passthrough_words(
+            sessions::passthrough_words(
                 "refused|build-script cache bypassed: no such column: other in SELECT other"
             ),
             "refused: build-script cache bypassed: no such column: other in SELECT other"
@@ -865,11 +865,11 @@ mod tests {
         let events = vec![ev("a", EventResult::Miss, "s1", 1, "k")];
         let all = sessions(&events);
         let builds = latest_builds(&all, None).unwrap();
-        let mut analysis = tui_sessions::analyze_session(&events, builds.latest, &all);
+        let mut analysis = sessions::analyze_session(&events, builds.latest, &all);
         let full = render(&builds, &analysis, &events, 1 << 30).join("\n");
         assert!(!full.contains("misses are shown"), "{full}");
         assert!(!full.contains("Keeps missing"), "{full}");
-        analysis.chronic.push(tui_sessions::Chronic {
+        analysis.chronic.push(sessions::Chronic {
             crate_name: "flaky".to_string(),
             missed: 3,
             seen: 4,

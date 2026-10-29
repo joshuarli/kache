@@ -445,7 +445,7 @@ pub fn run_shim() -> i32 {
 /// uncached, and without this nothing in a report says so. The next build
 /// misses the unit with no earlier event to explain it.
 fn log_bypass(error: &anyhow::Error) {
-    tracing::warn!("build-script cache bypassed: {error:#}");
+    log::warn!("build-script cache bypassed: {error:#}");
     let Ok(config) = Config::load() else {
         return;
     };
@@ -717,7 +717,7 @@ fn continue_after_restore_failure(error: anyhow::Error) -> Result<()> {
     if cache_bypass_exit_code(&error).is_some() {
         return Err(error);
     }
-    tracing::debug!("build-script result not restored, running it: {error:#}");
+    log::debug!("build-script result not restored, running it: {error:#}");
     Ok(())
 }
 
@@ -1959,7 +1959,7 @@ impl Run {
     /// A run that executed but was not stored is a passthrough, so reports
     /// count it as uncached rather than losing it.
     fn log_unrecorded(&self, why: &str, compile_ms: u64) {
-        tracing::debug!("build-script result not recorded: {why}");
+        log::debug!("build-script result not recorded: {why}");
         let root = crate::wrapper::build_script_event_root(
             &self.environment.out_dir,
             &self.environment.manifest_dir,
@@ -2237,8 +2237,8 @@ pub(crate) fn sweep_hermetic_out_dirs(
 /// drivers. A failed sweep leaves the runs in place for the next one.
 pub(crate) fn sweep_hermetic_out_dirs_for_gc(cache_dir: &Path) {
     match sweep_hermetic_out_dirs(cache_dir, HERMETIC_UNLINKED_RETENTION) {
-        Ok(sweep) => tracing::debug!("build-script run sweep: {sweep:?}"),
-        Err(error) => tracing::warn!("build-script run sweep failed: {error:#}"),
+        Ok(sweep) => log::debug!("build-script run sweep: {sweep:?}"),
+        Err(error) => log::warn!("build-script run sweep failed: {error:#}"),
     }
 }
 

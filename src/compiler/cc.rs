@@ -946,7 +946,7 @@ impl CcArgs {
                 format!("cc unsupported flag(s): {} — not yet", rejected.join(" "))
                     .into_boxed_str(),
             );
-            tracing::debug!("{detail} — passthrough");
+            log::debug!("{detail} — passthrough");
             reasons.push(RefuseReason::Unsupported(detail));
         }
 
@@ -2185,7 +2185,7 @@ fn preprocess_hash(
         {
             Ok(temp) => Some(temp),
             Err(error) => {
-                tracing::debug!("cc preprocess dependency tempdir unavailable: {error}");
+                log::debug!("cc preprocess dependency tempdir unavailable: {error}");
                 None
             }
         }
@@ -2221,7 +2221,7 @@ fn preprocess_hash(
         // An otherwise supported compiler may not implement the private
         // dependency flags. Preserve the existing cache-key behavior and just
         // leave this invocation unmemoized.
-        tracing::debug!("cc preprocess dependency capture failed; retrying without memo capture");
+        log::debug!("cc preprocess dependency capture failed; retrying without memo capture");
         output = run(&key_preprocess_args(parsed, prefix_maps))?;
     }
     if !output.status.success() {
@@ -2283,7 +2283,7 @@ fn preprocess_hash(
                 )
             }
             Err(error) => {
-                tracing::debug!("cc preprocess dependency capture unavailable: {error:#}");
+                log::debug!("cc preprocess dependency capture unavailable: {error:#}");
                 None
             }
         }
@@ -3959,21 +3959,21 @@ fn classify_and_trace_cc_flags<'a>(
             summary.record(Some(FlagClass::NoObjectEffect));
             let Some((_, inner)) = args.next() else {
                 // Trailing `-Xclang` with no operand: nothing to forward.
-                tracing::trace!("[cc:{subject}] flag -Xclang (no operand) -> NoObjectEffect");
+                log::trace!("[cc:{subject}] flag -Xclang (no operand) -> NoObjectEffect");
                 continue;
             };
             let class = classify_xclang_forwarded(inner, dialect);
             summary.record(class);
             match class {
-                Some(class) => tracing::trace!(
+                Some(class) => log::trace!(
                     "[cc:{subject}] flag -Xclang {inner} -> {class:?} [forwarded cc1]"
                 ),
                 None if extra_allowlist_flags.iter().any(|f| f == inner) => {
                     summary.user_allowed += 1;
-                    tracing::trace!("[cc:{subject}] flag -Xclang {inner} -> user-allowed (config)");
+                    log::trace!("[cc:{subject}] flag -Xclang {inner} -> user-allowed (config)");
                 }
                 None => {
-                    tracing::trace!(
+                    log::trace!(
                         "[cc:{subject}] flag -Xclang {inner} -> unmodeled [forwarded cc1]"
                     );
                     rejected.push(inner.as_str());
@@ -3985,18 +3985,18 @@ fn classify_and_trace_cc_flags<'a>(
         let analysis = analyze_cc_arg(arg, dialect);
         summary.record(analysis.class);
         match analysis.class {
-            Some(class) => tracing::trace!(
+            Some(class) => log::trace!(
                 "[cc:{subject}] flag {arg} -> {class:?} [{:?}]",
                 analysis.bucket
             ),
             None if extra_allowlist_flags.iter().any(|f| f == arg) => {
                 summary.user_allowed += 1;
-                tracing::trace!(
+                log::trace!(
                     "[cc:{subject}] flag {arg} -> user-allowed (config) [verbatim-keyed]"
                 );
             }
             None => {
-                tracing::trace!(
+                log::trace!(
                     "[cc:{subject}] flag {arg} -> unmodeled [{:?}]",
                     analysis.bucket
                 );
@@ -4016,7 +4016,7 @@ fn classify_and_trace_cc_flags<'a>(
                     .any(|source| source.as_os_str() == OsStr::new(input))
                 {
                     summary.record(None);
-                    tracing::trace!("[cc:{subject}] untracked input after --: {input}");
+                    log::trace!("[cc:{subject}] untracked input after --: {input}");
                     rejected.push(input.as_str());
                 }
             }
@@ -4025,12 +4025,12 @@ fn classify_and_trace_cc_flags<'a>(
         if takes_separate_value(&parsed.rest, idx, dialect)
             && let Some((_, value)) = args.next()
         {
-            tracing::trace!("[cc:{subject}] value {value} of {arg} -> consumed by the flag");
+            log::trace!("[cc:{subject}] value {value} of {arg} -> consumed by the flag");
         }
     }
 
     if !parsed.rest.is_empty() {
-        tracing::debug!(
+        log::debug!(
             "[cc:{subject}] flag classify: {} modeled / {} raw-keyed / {} probe / {} preprocessor / {} no-effect / {} parser-handled / {} user-allowed / {} unmodeled",
             summary.modeled_in_key,
             summary.raw_keyed,
@@ -4824,7 +4824,7 @@ fn fold_cc_memo_field(hasher: &mut blake3::Hasher, label: &[u8], value: &[u8]) {
     hasher.update(&(value.len() as u64).to_le_bytes());
     hasher.update(value);
     // Values are logged as digests only: an environment value may be a secret.
-    tracing::trace!(
+    log::trace!(
         target: "kache::cc_memo_key",
         "memo-field {}={}",
         String::from_utf8_lossy(label),
@@ -5224,12 +5224,28 @@ fn push_cwd_source_roots(
         // relocate (kunobi-ninja/kache#304, #394). Fall back to `<CC_SOURCE>`
         // only when there is no usable shared root, so a sibling source's
         // absolute path still cannot leak into the key.
+        //
+        // Do not anchor that fallback at `source_parent` when the parent is
+        // nested under the filesystem root (`/obj` + `/src/base/location.cc`).
+        // Mapping `/src/base` drops every directory below the first and
+        // `__FILE__` becomes `<CC_SOURCE>/location.cc`, which fails Chromium's
+        // `base/location.cc` assert (kunobi-ninja/kache#1755). A configured
+        // base dir of `/src` does not win either: the more specific parent map
+        // is applied last. Anchor at the root plus the source's first normal
+        // component (`/src`, or `C:\\src` with the Windows prefix kept) so the
+        // relative path below it survives. A file whose parent is already that
+        // anchor (`/src/foo.c`) still maps the anchor. Never map the bare root.
+        // If the canonical paths still share a directory (`/var` and
+        // `/private/var` on macOS), keep `source_parent`: widening to `/var`
+        // would leave the checkout id in the key.
         match common {
             Some(common) if has_normal_component(&common) => {
                 roots.push((common, CC_ROOT_SENTINEL));
             }
             _ => {
-                roots.push((source_parent.to_path_buf(), CC_SOURCE_SENTINEL));
+                if let Some(anchor) = cc_source_anchor_for(cwd_abs, source_parent) {
+                    roots.push((anchor, CC_SOURCE_SENTINEL));
+                }
             }
         }
     }
@@ -5241,6 +5257,41 @@ fn push_cwd_source_roots(
 fn has_normal_component(path: &Path) -> bool {
     path.components()
         .any(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+/// The filesystem root plus `source_parent`'s first normal component.
+///
+/// `/src/base` is `/src`. A Windows path keeps its prefix (`C:\\src\\base` is
+/// `C:\\src`; a UNC path keeps the server and share). `None` when
+/// `source_parent` is itself a bare root, so that root is never a map source.
+/// Lexical only: the caller passes the absolute parent it already computed.
+fn cc_source_anchor(source_parent: &Path) -> Option<&Path> {
+    source_parent
+        .ancestors()
+        .take_while(|path| has_normal_component(path))
+        .last()
+}
+
+/// Where `<CC_SOURCE>` anchors when the lexical common ancestor is the
+/// filesystem root.
+///
+/// Widen to the first directory only when the canonical paths also fail to
+/// meet. `/obj` and `/src/base` stay apart, so `/src` is the anchor and
+/// `base/location.cc` survives. `/private/var/.../clone-a` and
+/// `/var/.../clone-a/src` are the same directory once the `/var` symlink is
+/// resolved; mapping `/var` there would leave the clone id in the key.
+fn cc_source_anchor_for(cwd: &Path, source_parent: &Path) -> Option<PathBuf> {
+    let widened = cc_source_anchor(source_parent)?;
+    let shares_directory = common_ancestor(
+        &canonicalize_or_self(cwd),
+        &canonicalize_or_self(source_parent),
+    )
+    .is_some_and(|common| has_normal_component(&common));
+    if shares_directory {
+        Some(source_parent.to_path_buf())
+    } else {
+        Some(widened.to_path_buf())
+    }
 }
 
 fn prefix_maps_from_roots<I>(roots: I) -> Vec<CcPrefixMap>
@@ -6962,7 +7013,7 @@ fn cc_driver_captures_dependencies_for(
         let _trace = crate::phase_trace::phase("cc_direct_probe");
         cc_direct_probe(program, env)
     };
-    tracing::debug!("cc: probed {program} for compile-first capture: {supported}");
+    log::debug!("cc: probed {program} for compile-first capture: {supported}");
     crate::probe_memo::write_verified(&path, &digest, if supported { "ok" } else { "no" });
     supported
 }
@@ -7045,7 +7096,7 @@ fn cc_direct_probe(program: &str, env: &InvocationEnv) -> bool {
     let depfile = fs::read_to_string(root.join("probe.d")).unwrap_or_default();
     let ok =
         output.status.success() && root.join("probe.o").is_file() && depfile.contains("probe.c");
-    tracing::debug!(
+    log::debug!(
         "cc: {program} compile-first capture probe: exit {} object {} depfile {}: {}",
         output.status,
         root.join("probe.o").is_file(),
@@ -7679,7 +7730,7 @@ impl CcCompiler {
             cc_prefix_maps(parsed, &self.base_dirs)
         };
         for map in &prefix_maps {
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{}] prefix_map {} => {}",
                 trace_name,
@@ -7692,7 +7743,7 @@ impl CcCompiler {
         hasher.update(crate::cache_key::CACHE_KEY_VERSION.to_string().as_bytes());
         hasher.update(b"\n");
         hasher.update(artifact_schema);
-        tracing::trace!(
+        log::trace!(
             target: "kache::cache_key",
             "[key:{}] cc_key_version={}",
             trace_name,
@@ -7703,7 +7754,7 @@ impl CcCompiler {
             hasher.update(b"configured_base_dirs.v1:");
             hasher.update(self.base_dirs.len().to_string().as_bytes());
             hasher.update(b"\n");
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{}] configured_base_dirs={}",
                 trace_name,
@@ -7729,7 +7780,7 @@ impl CcCompiler {
         for sentinel in prefix_sentinels {
             hasher.update(sentinel.as_bytes());
             hasher.update(b"\x1f");
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{}] cc_prefix_map={}",
                 trace_name,
@@ -7747,7 +7798,7 @@ impl CcCompiler {
         hasher.update(b"compiler:");
         hasher.update(program_name.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!(
+        log::trace!(
             target: "kache::cache_key",
             "[key:{}] compiler={}",
             trace_name,
@@ -7786,7 +7837,7 @@ impl CcCompiler {
         hasher.update(b"compiler_version:");
         hasher.update(resolved.version_line.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!(
+        log::trace!(
             target: "kache::cache_key",
             "[key:{}] compiler_version={}",
             trace_name,
@@ -7828,7 +7879,7 @@ impl CcCompiler {
                 let mapped = apply_cc_prefix_maps_to_bytes(tok.clone().into_bytes(), &prefix_maps);
                 hasher.update(&mapped);
                 hasher.update(b"\x1f");
-                tracing::trace!(
+                log::trace!(
                     target: "kache::cache_key",
                     "[key:{}] resolved_token={}",
                     trace_name,
@@ -7843,7 +7894,7 @@ impl CcCompiler {
         hasher.update(b"arch:");
         hasher.update(arch.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!(
+        log::trace!(
             target: "kache::cache_key",
             "[key:{}] arch={}",
             trace_name,
@@ -7859,7 +7910,7 @@ impl CcCompiler {
             hasher.update(b"opt:");
             hasher.update(format!("{opt:?}").as_bytes());
             hasher.update(b"\n");
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{}] opt={opt:?}",
                 trace_name
@@ -7869,7 +7920,7 @@ impl CcCompiler {
             hasher.update(b"debug:");
             hasher.update(&[dbg]);
             hasher.update(b"\n");
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{}] debug={dbg}",
                 trace_name
@@ -7886,7 +7937,7 @@ impl CcCompiler {
             for p in &paths {
                 hasher.update(p.as_bytes());
                 hasher.update(b"\x1f");
-                tracing::trace!(
+                log::trace!(
                     target: "kache::cache_key",
                     "[key:{}] cl_debug_path={}",
                     trace_name,
@@ -7906,7 +7957,7 @@ impl CcCompiler {
             let mapped = cc_mapped_path(source, &prefix_maps);
             hasher.update(mapped.as_bytes());
             hasher.update(b"\x1f");
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{}] source_path={}",
                 trace_name,
@@ -7918,7 +7969,7 @@ impl CcCompiler {
             hasher.update(b"std:");
             hasher.update(std.as_bytes());
             hasher.update(b"\n");
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{}] std={}",
                 trace_name,
@@ -7928,7 +7979,7 @@ impl CcCompiler {
         hasher.update(b"pic:");
         hasher.update(&[parsed.pic as u8]);
         hasher.update(b"\n");
-        tracing::trace!(
+        log::trace!(
             target: "kache::cache_key",
             "[key:{}] pic={}",
             trace_name,
@@ -7946,7 +7997,7 @@ impl CcCompiler {
             for flag in raw_flags {
                 hasher.update(&(flag.len() as u64).to_le_bytes());
                 hasher.update(&flag);
-                tracing::trace!(
+                log::trace!(
                     target: "kache::cache_key",
                     "[key:{}] cc_raw_flag={}",
                     trace_name,
@@ -7971,7 +8022,7 @@ impl CcCompiler {
             for flag in matched {
                 hasher.update(flag.as_bytes());
                 hasher.update(b"\x1f");
-                tracing::trace!(
+                log::trace!(
                     target: "kache::cache_key",
                     "[key:{}] cc_extra_flag={}",
                     trace_name,
@@ -8017,7 +8068,7 @@ impl CcCompiler {
             hasher.update(b"depinfo_target:");
             hasher.update(depinfo_target.as_bytes());
             hasher.update(b"\n");
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{}] depinfo=1 include_system={} phony_targets={} missing_generated={} target={}",
                 trace_name,
@@ -8028,7 +8079,7 @@ impl CcCompiler {
             );
         } else {
             hasher.update(b"0\n");
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{}] depinfo=0",
                 trace_name
@@ -8105,7 +8156,7 @@ impl CcCompiler {
                         captured: true,
                     });
             }
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{}] preprocessed_memo=captured",
                 trace_name
@@ -8114,7 +8165,7 @@ impl CcCompiler {
         } else if let Some((memo_hash, satisfied)) = memo_hit {
             let (memo_hash, path_bound) = cc_memo_hash_parts(&memo_hash);
             self.key_path_bound.set(path_bound);
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{}] preprocessed_memo=hit path_bound={path_bound}",
                 trace_name
@@ -8132,7 +8183,7 @@ impl CcCompiler {
             // so let it run first and key from what it read. A memo that
             // exists but no longer matches keeps the preprocess below, which
             // can still find the entry an earlier state of the tree left.
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{}] preprocessed_memo=none deferred",
                 trace_name
@@ -8170,7 +8221,7 @@ impl CcCompiler {
                         captured: false,
                     });
             }
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{}] preprocessed_memo=miss",
                 trace_name
@@ -8180,7 +8231,7 @@ impl CcCompiler {
         hasher.update(b"preprocessed:");
         hasher.update(pp_hash.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!(
+        log::trace!(
             target: "kache::cache_key",
             "[key:{}] preprocessed={}",
             trace_name,
@@ -8204,7 +8255,7 @@ impl CcCompiler {
                 hasher.update(b"\0");
             }
             hasher.update(b"\n");
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{}] path_bound_roots={}",
                 trace_name,
@@ -8256,7 +8307,7 @@ impl CcCompiler {
         hasher.update(b"include_dir_names:");
         hasher.update(include_dir_digest.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!(
+        log::trace!(
             target: "kache::cache_key",
             "[key:{}] include_dir_names={} mode={}",
             trace_name,
@@ -8292,7 +8343,7 @@ impl CcCompiler {
             ctx.invocation_env,
         );
         let key = crate::cache_key::apply_key_salt(key, ctx.key_salt, &trace_name);
-        tracing::trace!(
+        log::trace!(
             target: "kache::cache_key",
             "[key:{}] final={}",
             trace_name,
@@ -8320,7 +8371,7 @@ impl CcCompiler {
             {
                 Ok(dir) => Some(dir),
                 Err(error) => {
-                    tracing::debug!("cc capture tempdir unavailable: {error}");
+                    log::debug!("cc capture tempdir unavailable: {error}");
                     None
                 }
             }
@@ -8375,7 +8426,7 @@ impl CcCompiler {
         let raw = match fs::read_to_string(&depfile) {
             Ok(raw) => raw,
             Err(error) => {
-                tracing::debug!("cc capture depfile unreadable: {error}");
+                log::debug!("cc capture depfile unreadable: {error}");
                 return None;
             }
         };
@@ -8383,7 +8434,7 @@ impl CcCompiler {
         let mut paths = match parse_preprocess_dependencies(&raw, cwd) {
             Ok(paths) => paths,
             Err(error) => {
-                tracing::debug!("cc capture depfile unusable: {error:#}");
+                log::debug!("cc capture depfile unusable: {error:#}");
                 return None;
             }
         };
@@ -8420,7 +8471,7 @@ impl CcCompiler {
             } else {
                 format!("the assembler may read a file the key cannot see (`{found}`)")
             };
-            tracing::debug!(
+            log::debug!(
                 "cc: {} not keyed from its read set: {why}",
                 cc_trace_name(parsed)
             );
@@ -8492,7 +8543,7 @@ impl CcCompiler {
                     keepalive.push(temp);
                 }
                 Err(error) => {
-                    tracing::warn!("cc: staging -E stdout failed: {error:#}; not caching it");
+                    log::warn!("cc: staging -E stdout failed: {error:#}; not caching it");
                 }
             }
         } else {
@@ -8512,7 +8563,7 @@ impl CcCompiler {
                 artifacts = match unsafe_to_store {
                     None => artifacts,
                     Some(reason) => {
-                        tracing::warn!("cc: {} {reason}; not caching it", cc_trace_name(parsed));
+                        log::warn!("cc: {} {reason}; not caching it", cc_trace_name(parsed));
                         ArtifactSet::empty()
                     }
                 };

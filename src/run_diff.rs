@@ -3,7 +3,7 @@
 use crate::config::Config;
 use crate::events::{self, BuildEvent};
 use crate::term;
-use crate::tui_sessions::{self, Session};
+use crate::sessions::{self, Session};
 use anyhow::Result;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -67,7 +67,7 @@ fn alarm_lines(body: &DiffBody) -> Vec<String> {
 }
 
 pub(crate) fn compare(events: &[BuildEvent], root: Option<&str>) -> DiffOutcome {
-    let sessions = tui_sessions::group(
+    let sessions = sessions::group(
         events,
         Duration::from_secs(crate::wrapper::BUILD_SESSION_SECS),
     );
@@ -90,8 +90,8 @@ pub(crate) fn compare(events: &[BuildEvent], root: Option<&str>) -> DiffOutcome 
 }
 
 fn share(events: &[BuildEvent], session: &Session) -> (usize, u64) {
-    let misses = tui_sessions::miss_count(events, &session.events);
-    let unexplained = tui_sessions::unexplained_misses(events, &session.events);
+    let misses = sessions::miss_count(events, &session.events);
+    let unexplained = sessions::unexplained_misses(events, &session.events);
     (misses, percent(unexplained, misses))
 }
 

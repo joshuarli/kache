@@ -8765,16 +8765,6 @@ fn a_read_set_with_an_assembler_include_is_not_keyable() {
 /// and the debug log names the construct that hides it.
 #[test]
 fn a_captured_read_set_that_hides_an_assembler_input_names_the_construct() {
-    struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-    impl std::io::Write for Capture {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("unit.c");
     let header = dir.path().join("embed.h");
@@ -8790,19 +8780,10 @@ fn a_captured_read_set_that_hides_an_assembler_input_names_the_construct() {
     let source = source.to_string_lossy().into_owned();
     let parsed = CcArgs::parse(&s(&["cc", "-c", &source])).unwrap();
     let file_hasher = crate::cache_key::FileHasher::new();
-    let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let writer = std::sync::Arc::clone(&output);
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .without_time()
-        .with_ansi(false)
-        .with_writer(move || Capture(std::sync::Arc::clone(&writer)))
-        .finish();
-    let inputs = tracing::subscriber::with_default(subscriber, || {
-        CcCompiler::new().captured_inputs(&parsed, &depfile, &file_hasher)
-    });
+    let capture = kache_log::capture();
+    let inputs = CcCompiler::new().captured_inputs(&parsed, &depfile, &file_hasher);
     assert!(inputs.is_none());
-    let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    let log = capture.records().join("\n");
     assert!(
         log.contains(
             "unit.c not keyed from its read set: \
@@ -9725,3 +9706,139 @@ fn linker_selection_is_keyed_with_warning_outcome_gates() {
         assert_ne!(lld_link, raw_flags(Some("-fuse-ld=lld")));
     }
 }
+/// kunobi-ninja/kache#1755: a build dir and a source that share only the
+/// filesystem root must keep the source directories under `<CC_SOURCE>`.
+/// Mapping the file's immediate parent flattens `__FILE__` to
+/// `<CC_SOURCE>/location.cc`. These paths are not created; the maps are
+/// lexical.
+#[test]
+fn cc_prefix_maps_anchor_root_source_at_its_first_directory() {
+    let src = "/src/base/location.cc";
+    let parsed = CcArgs::parse(&s(&["cc", "-c", src, "-o", "location.o"])).unwrap();
+    let maps = cc_prefix_maps_for(&parsed, Path::new("/obj"));
+
+    assert!(
+        maps.iter()
+            .any(|map| Path::new(&map.from) == Path::new("/src") && map.to == CC_SOURCE_SENTINEL),
+        "root-anchored source must map /src to <CC_SOURCE>, got {maps:?}"
+    );
+    assert!(
+        maps.iter()
+            .all(|map| Path::new(&map.from) != Path::new("/src/base")),
+        "must not map the source parent /src/base, got {maps:?}"
+    );
+    assert!(
+        maps.iter()
+            .all(|map| Path::new(&map.from) != Path::new("/")),
+        "must not map the filesystem root, got {maps:?}"
+    );
+
+    let got = String::from_utf8(apply_cc_prefix_maps_to_bytes(
+        src.as_bytes().to_vec(),
+        &maps,
+    ))
+    .unwrap();
+    assert!(
+        got.ends_with("base/location.cc"),
+        "source __FILE__ must keep the base/ parent dir, got {got:?} from {maps:?}"
+    );
+    assert_ne!(
+        got,
+        format!("{CC_SOURCE_SENTINEL}/location.cc"),
+        "source path must not collapse to a flat <CC_SOURCE>, got {got:?}"
+    );
+
+    // More than one directory below the anchor. Stopping at the file's
+    // parent, or one level above it, still drops part of the relative path.
+    let deep = "/src/security/sandbox/chromium/base/location.cc";
+    let deep_parsed = CcArgs::parse(&s(&["cc", "-c", deep, "-o", "location.o"])).unwrap();
+    let deep_maps = cc_prefix_maps_for(&deep_parsed, Path::new("/obj"));
+    assert!(
+        deep_maps.iter().any(|map| {
+            Path::new(&map.from) == Path::new("/src") && map.to == CC_SOURCE_SENTINEL
+        }),
+        "a deep source still anchors at /src, got {deep_maps:?}"
+    );
+    let deep_got = String::from_utf8(apply_cc_prefix_maps_to_bytes(
+        deep.as_bytes().to_vec(),
+        &deep_maps,
+    ))
+    .unwrap();
+    assert!(
+        deep_got.ends_with("security/sandbox/chromium/base/location.cc"),
+        "relative path below /src must survive, got {deep_got:?} from {deep_maps:?}"
+    );
+    assert_ne!(
+        deep_got,
+        format!("{CC_SOURCE_SENTINEL}/location.cc"),
+        "deep source must not collapse to a flat <CC_SOURCE>, got {deep_got:?}"
+    );
+
+    let direct = CcArgs::parse(&s(&["cc", "-c", "/src/foo.c", "-o", "foo.o"])).unwrap();
+    let direct_maps = cc_prefix_maps_for(&direct, Path::new("/build"));
+    assert!(
+        direct_maps.iter().any(|map| {
+            Path::new(&map.from) == Path::new("/src") && map.to == CC_SOURCE_SENTINEL
+        }),
+        "a file directly in /src still maps /src to <CC_SOURCE>, got {direct_maps:?}"
+    );
+
+    let with_base = cc_prefix_maps_cfg(
+        &parsed,
+        Path::new("/obj"),
+        Some(Path::new("/src")),
+        None,
+        &[],
+    );
+    assert!(
+        with_base
+            .iter()
+            .any(|map| { Path::new(&map.from) == Path::new("/src") && map.to == CC_BASE_SENTINEL }),
+        "base dir /src must be mapped, got {with_base:?}"
+    );
+    assert!(
+        with_base
+            .iter()
+            .all(|map| Path::new(&map.from) != Path::new("/src/base")),
+        "a base dir of /src must not leave a more specific /src/base map, got {with_base:?}"
+    );
+}
+
+/// `/var` and `/private/var` are one directory. Widening the anchor to `/var`
+/// leaves the checkout id in the key, so a relocated clone misses.
+#[cfg(unix)]
+#[test]
+fn cc_prefix_maps_keep_the_source_parent_when_var_and_private_var_meet() {
+    let canonical = std::fs::canonicalize("/var").unwrap_or_else(|_| PathBuf::from("/var"));
+    if canonical == Path::new("/var") {
+        return;
+    }
+    let dir = std::env::temp_dir();
+    let dir = std::fs::canonicalize(&dir).unwrap();
+    let via_private = dir.strip_prefix("/private").is_ok();
+    if !via_private {
+        return;
+    }
+    let via_var = PathBuf::from("/var").join(dir.strip_prefix("/private/var").unwrap());
+    let cwd = dir.join("clone-a");
+    let source_parent = via_var.join("clone-a/src");
+    std::fs::create_dir_all(cwd.join("src")).unwrap();
+    std::fs::create_dir_all(source_parent.as_path()).unwrap();
+    let source = source_parent.join("foo.c");
+    std::fs::write(&source, "int answer(void) { return 1; }\n").unwrap();
+    let parsed =
+        CcArgs::parse(&s(&["cc", "-c", &source.to_string_lossy(), "-o", "foo.o"])).unwrap();
+    let maps = cc_prefix_maps_for(&parsed, &cwd);
+    assert!(
+        maps.iter()
+            .all(|map| Path::new(&map.from) != Path::new("/var")
+                && Path::new(&map.from) != Path::new("/private")),
+        "a /var spelling must not anchor at the volume root, got {maps:?}"
+    );
+    assert!(
+        maps.iter().any(|map| Path::new(&map.from) == source_parent),
+        "the source parent must stay the <CC_SOURCE> anchor, got {maps:?}"
+    );
+    let _ = std::fs::remove_dir_all(dir.join("clone-a"));
+}
+

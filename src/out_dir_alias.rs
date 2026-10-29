@@ -975,7 +975,7 @@ fn apply_after_host_check(
     let crate_name = args.crate_name.as_deref().unwrap_or("unknown");
     match &aliased {
         Ok(dir) => {
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{crate_name}] out_dir_alias: aliased to {}",
                 dir.display()
@@ -985,7 +985,7 @@ fn apply_after_host_check(
             }
         }
         Err(reason) => {
-            tracing::trace!(
+            log::trace!(
                 target: "kache::cache_key",
                 "[key:{crate_name}] out_dir_alias: skip: {}",
                 reason.as_str()
@@ -1068,7 +1068,7 @@ pub(crate) fn store_gate(args: &RustcArgs) -> bool {
         .iter()
         .filter_map(|source| alias_unit_of(source, &plan.root));
     for unit_dir in dirty.into_iter().chain(listed) {
-        tracing::warn!(
+        log::warn!(
             "not caching: shared OUT_DIR {unit_dir} changed; it will not be shared again"
         );
         let _ = deny(&plan.root, unit_dir);

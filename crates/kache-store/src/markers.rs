@@ -73,7 +73,7 @@ impl WarnSink {
                     eprintln!("{message}");
                 }
             }
-            WarnSink::Log => tracing::warn!("{message}"),
+            WarnSink::Log => log::warn!("{message}"),
         }
     }
 }
@@ -119,7 +119,7 @@ pub fn warn_once_per_session_to(
         // working locks). Treating that as "someone else is warning" would
         // silence the advisory forever, so warn best-effort instead.
         Err(std::fs::TryLockError::Error(e)) => {
-            tracing::debug!("warn-once marker lock failed ({e}); warning anyway");
+            log::debug!("warn-once marker lock failed ({e}); warning anyway");
             sink.emit(message);
             return true;
         }

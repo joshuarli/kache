@@ -18,7 +18,7 @@ Use `KACHE_LOG=kache=debug kache daemon run` for foreground debugging. Stop the 
 
 When an installed service manages this cache, `start`, `restart` and automatic starts start the service instead of spawning a process. On macOS, Kache loads the job with `launchctl bootstrap` if launchd no longer has it.
 
-The service restarts the daemon only when it fails. After `kache daemon stop`, an idle timeout or a config change, the daemon exits cleanly and stays stopped until something starts it through the service, such as the next build, `kache stats`, `kache monitor` or `kache daemon start`.
+The service restarts the daemon only when it fails. After `kache daemon stop`, an idle timeout or a config change, the daemon exits cleanly and stays stopped until something starts it through the service, such as the next build, `kache stats` or `kache daemon start`.
 
 Every daemon, and every other `kache` command, appends info-level lines to a diagnostic log: `~/Library/Logs/kache/kache.log` on macOS, and `kache.log` in the default cache directory elsewhere (`~/.cache/kache/kache.log` on Linux). The log stays there when `cache.local_store` or `KACHE_CACHE_DIR` moves the store. `KACHE_LOG_FILE` changes its filter. A daemon that Kache starts without the service also writes its stderr to `<runtime_dir>/daemon.log`: warnings, errors and the reason a start failed.
 
@@ -63,11 +63,11 @@ Other environment is fixed when the process starts. An installed service uses it
 Kache 1.0.x and earlier compare the modification times of the `kache` binaries instead of releases. Later releases still send and report that time, so the binary that is newer on disk can retire the other release's daemon:
 
 - After an upgrade from 1.0.x, the old daemon drains on the next build that reaches it.
-- After a downgrade to 1.0.x, 1.0.x commands that check the daemon replace the newer one, for example `kache stats`, `kache monitor`, `kache daemon start` or `kache doctor --fix`. Builds and plain `kache doctor` do not, although `kache doctor` from 1.0.x says the daemon is shutting down and that the next build replaces it.
+- After a downgrade to 1.0.x, 1.0.x commands that check the daemon replace the newer one, for example `kache stats`, `kache daemon start` or `kache doctor --fix`. Builds and plain `kache doctor` do not, although `kache doctor` from 1.0.x says the daemon is shutting down and that the next build replaces it.
 
 Run `kache daemon restart` to switch right away, or when the binary you switched to is not newer on disk. Nix store paths are an example: they all share one modification time.
 
-Use one release at a time. When both stay in use, for example because one project pins 1.0.x, and the 1.0.x binary is newer on disk, each release's commands replace the other's daemon: 1.0.x by modification time, later releases by version. With a `kache monitor` from each release open, that happens on every poll. Remove the old binary or stop using it.
+Use one release at a time. When both stay in use, for example because one project pins 1.0.x, and the 1.0.x binary is newer on disk, each release's commands replace the other's daemon: 1.0.x by modification time, later releases by version. Running commands from both releases at once triggers a replacement on every poll. Remove the old binary or stop using it.
 
 ## Shared lifecycle
 
@@ -98,7 +98,7 @@ Idle shutdown is off by default. Set a timeout in seconds to turn it on:
 daemon_idle_timeout_secs = 600
 ```
 
-The equivalent environment variable is `KACHE_DAEMON_IDLE_TIMEOUT`. Every connection counts as activity, including the stats polling of an open `kache monitor`. After an idle exit, the next build starts the daemon again, as do `kache stats`, `kache monitor` and `kache daemon start`.
+The equivalent environment variable is `KACHE_DAEMON_IDLE_TIMEOUT`. Every connection counts as activity, including `kache stats` polling. After an idle exit, the next build starts the daemon again, as do `kache stats` and `kache daemon start`.
 
 ## Offline behavior
 
@@ -106,6 +106,6 @@ When the daemon cannot be reached:
 
 - local hits and local stores continue
 
-The monitor falls back to direct store and event-log reads. When the daemon stays offline, run `kache daemon status`: it shows where the daemon logs and where a failed start left its error.
+`kache stats` falls back to direct store and event-log reads. When the daemon stays offline, run `kache daemon status`: it shows where the daemon logs and where a failed start left its error.
 
 If `kache daemon start` launches a daemon itself and that daemon exits before it is ready, the command prints what the daemon wrote to `<runtime_dir>/daemon.log`, up to 2 KiB, and exits with status 1. If no daemon is ready within 8 seconds, it prints `daemon did not start within timeout` and exits with status 1. Later, `kache daemon status` says where the reason is: the file `<runtime_dir>/daemon.log` for `daemon start` and automatic starts, the file `~/Library/Logs/kache/err.log` under launchd, or the command `journalctl --user -u kache.service` under systemd.

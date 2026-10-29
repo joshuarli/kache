@@ -76,7 +76,7 @@ pub(crate) fn read_gc_stats(cache_dir: &Path) -> Option<GcStatsPersisted> {
     match serde_json::from_str(&content) {
         Ok(stats) => Some(stats),
         Err(e) => {
-            tracing::warn!(
+            log::warn!(
                 "{} does not parse ({e}); the next GC run replaces it",
                 path.display()
             );
@@ -181,7 +181,7 @@ pub fn record_gc_run(
     if let Err(e) =
         crate::savings::record_pruned(&config.cache_dir, origin, stats.bytes_freed, Utc::now())
     {
-        tracing::debug!("gc: could not update the savings ledger: {e:#}");
+        log::debug!("gc: could not update the savings ledger: {e:#}");
     }
     write_last_gc_run(&config.cache_dir, source, stats)?;
     if !config.record_sessions {
@@ -1938,7 +1938,7 @@ pub(crate) fn uncached_compile_words(event: &BuildEvent) -> String {
     if matches!(event.result, EventResult::Skipped) {
         format!("compiled, not stored: {}", event.skip_reason)
     } else {
-        crate::tui_sessions::passthrough_words(&event.passthrough_reason)
+        crate::sessions::passthrough_words(&event.passthrough_reason)
     }
 }
 
@@ -2839,7 +2839,7 @@ fn transfer_edge(span: &TransferSpan, ph: &str, id: &str) -> serde_json::Value {
 
 fn unexplained_suggestion(events: &[BuildEvent]) -> Option<String> {
     let indices: Vec<usize> = (0..events.len()).collect();
-    let unexplained = crate::tui_sessions::unexplained_misses(events, &indices);
+    let unexplained = crate::sessions::unexplained_misses(events, &indices);
     let misses = events
         .iter()
         .filter(|event| matches!(event.result, EventResult::Miss | EventResult::Dup))

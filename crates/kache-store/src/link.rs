@@ -162,13 +162,13 @@ fn storage_layout_advice_enabled() -> bool {
 }
 
 /// Send storage-layout advice to stderr (the default, for CLI
-/// commands) or to the tracing log. Wrapper entries pick the log: a
+/// commands) or to the log. Wrapper entries pick the log: a
 /// `RUSTC_WRAPPER`'s stderr is rustc's stderr to cargo and to every tool that
 /// reads it, so advice there looks like compiler output and can fail builds
 /// that reject unexpected stderr (kunobi-ninja/kache#1067).
 static LAYOUT_ADVICE_TO_LOG: AtomicBool = AtomicBool::new(false);
 
-/// Route storage-layout advice to the tracing log instead of stderr. Call
+/// Route storage-layout advice to the log instead of stderr. Call
 /// before restoring or storing.
 pub fn set_layout_advice_to_log(enabled: bool) {
     set_policy_bool(
@@ -305,7 +305,7 @@ pub(crate) fn warn_hardlink_fallback_once(
         reason,
         HardlinkIoReason::CrossDevice | HardlinkIoReason::Permission
     ) {
-        tracing::debug!(
+        log::debug!(
             "hardlink failed ({}), falling back to copy: {} -> {}",
             io_err,
             store_path.display(),
@@ -314,7 +314,7 @@ pub(crate) fn warn_hardlink_fallback_once(
         return;
     }
     if !storage_layout_advice_enabled() || reason.mapped_volume_advice(mapped_target()) {
-        tracing::debug!(
+        log::debug!(
             "hardlink failed ({:?}; layout advice muted): {} -> {}",
             reason,
             store_path.display(),
@@ -472,7 +472,7 @@ fn link_to_target_via(
                 // Executables and loadable libraries also need execute bits.
                 set_executable_permissions(target_path)?;
             }
-            tracing::debug!(
+            log::debug!(
                 "reflinked {} -> {}",
                 store_path.display(),
                 target_path.display()
@@ -573,20 +573,19 @@ fn hardlink_or_copy_with_prelink_hook(
         Ok(meta) => {
             use std::os::unix::fs::MetadataExt;
             if !shared && meta.nlink() != 1 {
-                tracing::debug!(
-                    links = meta.nlink(),
-                    "blob already has a hardlink consumer, restoring by copy: {} -> {}",
+                log::debug!(
+                    "blob already has a hardlink consumer, restoring by copy: {} -> {}; links={}",
                     store_path.display(),
-                    target_path.display()
+                    target_path.display(),
+                    meta.nlink()
                 );
                 crate::opcounts::record_restore_copy_exclusive(bytes);
                 return copy_instead();
             }
         }
         Err(error) => {
-            tracing::debug!(
-                %error,
-                "could not verify exclusive blob, restoring by copy: {} -> {}",
+            log::debug!(
+                "could not verify exclusive blob, restoring by copy: {} -> {}; error={error}",
                 store_path.display(),
                 target_path.display()
             );
@@ -630,11 +629,11 @@ fn hardlink_or_copy_with_prelink_hook(
         match fs::metadata(store_path) {
             Ok(meta) if meta.nlink() == 2 => {}
             Ok(meta) => {
-                tracing::debug!(
-                    links = meta.nlink(),
-                    "hardlink was not exclusive, restoring by copy: {} -> {}",
+                log::debug!(
+                    "hardlink was not exclusive, restoring by copy: {} -> {}; links={}",
                     store_path.display(),
-                    target_path.display()
+                    target_path.display(),
+                    meta.nlink()
                 );
                 remove_restore_file(target_path).with_context(|| {
                     format!(
@@ -651,7 +650,7 @@ fn hardlink_or_copy_with_prelink_hook(
         }
     }
 
-    tracing::debug!(
+    log::debug!(
         "hardlinked {} -> {}",
         store_path.display(),
         target_path.display()
@@ -690,9 +689,8 @@ fn verify_orphaned_hardlink(
         // target as the inode's sole name. It is already private and
         // safe to stamp, so retain the successful restore.
         Ok(meta) if meta.nlink() == 1 => {
-            tracing::debug!(
-                %source_error,
-                "blob disappeared after hardlink; retained private target {}",
+            log::debug!(
+                "blob disappeared after hardlink; retained private target {}; error={source_error}",
                 target_path.display()
             );
             Ok(())
@@ -771,7 +769,7 @@ fn copy_file(src: &Path, dst: &Path, executable: bool) -> Result<()> {
     }
     kache_fs::copy_writable(src, dst, executable)
         .with_context(|| format!("copying {} to {}", src.display(), dst.display()))?;
-    tracing::debug!("copied {} -> {}", src.display(), dst.display());
+    log::debug!("copied {} -> {}", src.display(), dst.display());
     Ok(())
 }
 
@@ -894,7 +892,7 @@ impl PreparedWritableTarget {
 fn record_published(reflinked: bool, bytes: u64, source: Option<&Path>, target: &Path) {
     if reflinked {
         if let Some(source) = source {
-            tracing::debug!("reflinked {} -> {}", source.display(), target.display());
+            log::debug!("reflinked {} -> {}", source.display(), target.display());
         }
         crate::opcounts::record_reflinked(bytes);
     } else {
@@ -957,9 +955,8 @@ fn prepare_writable_target_from_file_via(
             .with_context(|| format!("reading restore stage mode for {}", target.display()))?
             .permissions();
         if let Err(error) = fs::set_permissions(&cloned.path, permissions) {
-            tracing::debug!(
-                %error,
-                "cloned cc output kept the blob mode, restoring by copy: {} -> {}",
+            log::debug!(
+                "cloned cc output kept the blob mode, restoring by copy: {} -> {}; error={error}",
                 src.display(),
                 target.display()
             );
@@ -1057,7 +1054,7 @@ fn accepted_private_clone(src: &Path, dest: &Path) -> Option<PathBuf> {
     if link_count(&dst_meta) > 1 {
         let _ = fs::remove_file(dest);
     }
-    tracing::debug!(
+    log::debug!(
         "cc restore clone shared the blob inode, copying {} -> {}",
         src.display(),
         dest.display()
@@ -1070,7 +1067,7 @@ fn recover_vanished_blob(src: &Path, dest: &Path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(error) => {
-            tracing::debug!("could not recover vanished blob {}: {error}", src.display());
+            log::debug!("could not recover vanished blob {}: {error}", src.display());
             return;
         }
     }
@@ -1760,8 +1757,8 @@ fn replace_depinfo_text(
 /// `depinfo_next_char_boundary_always_advances_past_the_current_char`, instead
 /// of only showing up as the caller looping.
 ///
-/// The name is prefixed because `config_tui` has an unrelated
-/// `next_char_boundary`, and mutation excludes match on function name.
+/// The name is prefixed because `next_char_boundary` is generic, and
+/// mutation excludes match on function name.
 fn depinfo_next_char_boundary(input: &str, start: usize) -> usize {
     input[start..]
         .char_indices()

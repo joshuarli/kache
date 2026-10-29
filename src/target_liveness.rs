@@ -89,7 +89,7 @@ impl Capture {
         match Self::prepare_inner(command, config) {
             Ok(capture) => Some(capture),
             Err(error) => {
-                tracing::debug!(%error, "Cargo liveness capture unavailable");
+                log::debug!("Cargo liveness capture unavailable: {error}");
                 None
             }
         }
@@ -1172,7 +1172,7 @@ fn delete_staged(staged: &[(PathBuf, PathBuf)], removed: &mut Vec<String>) -> Re
 fn rollback(staged: &[(PathBuf, PathBuf)]) {
     for (original, aside) in staged.iter().rev() {
         if let Err(error) = std::fs::rename(aside, original) {
-            tracing::error!(?error, ?original, "restoring staged Cargo unit");
+            log::error!("restoring staged Cargo unit; error={error:?} original={original:?}");
         }
     }
 }

@@ -109,10 +109,11 @@ pub fn log_cleanup(event_log_path: &Path, event: &CleanupEvent) -> Result<()> {
     )
 }
 
-/// One parsed line of the event log, for consumers that want the full mixed
-/// stream (`kache monitor`). Existing [`BuildEvent`]-only readers keep their
-/// narrow view and skip heartbeat lines by parse failure.
+/// One parsed line of the event log, for the rotation tests' tail reader.
+/// Existing [`BuildEvent`]-only readers keep their narrow view and skip
+/// heartbeat lines by parse failure.
 #[derive(Debug, Clone)]
+#[cfg(test)]
 pub enum EventRecord {
     // Boxed: BuildEvent is ~350 bytes vs the heartbeat's ~140 (clippy
     // large_enum_variant), and records are consumed one at a time.
@@ -124,6 +125,7 @@ pub enum EventRecord {
 /// tried first: a heartbeat line can never parse as a `BuildEvent` (missing
 /// required fields), but the reverse must also never happen, which the
 /// required `event` tag guarantees.
+#[cfg(test)]
 fn parse_event_line(line: &str) -> Option<EventRecord> {
     if let Ok(hb) = serde_json::from_str::<HeartbeatEvent>(line) {
         if hb.event == HEARTBEAT_EVENT_TAG {
@@ -309,7 +311,7 @@ pub fn read_events_and<T>(
         match serde_json::from_slice::<BuildEvent>(&line) {
             Ok(event) => events.push(event),
             Err(e) => {
-                tracing::debug!("skipping invalid event line: {}", e);
+                log::debug!("skipping invalid event line: {}", e);
             }
         }
     }
@@ -341,7 +343,7 @@ pub fn read_events_since(event_log_path: &Path, since: DateTime<Utc>) -> Result<
         });
         if let Err(error) = loaded {
             events.truncate(before);
-            tracing::debug!(
+            log::debug!(
                 "skipping unreadable event archive {}: {error:#}",
                 segment.path.display()
             );
@@ -354,8 +356,8 @@ pub fn read_events_since(event_log_path: &Path, since: DateTime<Utc>) -> Result<
 
 /// [`compute_stats`] of [`read_events_since`], without reading again the
 /// archived segments that lie wholly inside the window each time: their
-/// stats are kept for recent windows (`kache monitor` asks every two
-/// seconds, and a busy day archives hundreds of MiB). Segments never change
+/// stats are kept for recent windows (a busy day archives hundreds of MiB).
+/// Segments never change
 /// once written, so a total over the same segments is the same total; a new
 /// segment is added to it, and when one leaves the window the total is made
 /// again. The segment the window starts in, and the log, are read each time.
@@ -371,7 +373,7 @@ pub fn event_stats_since(event_log_path: &Path, since: DateTime<Utc>) -> Result<
     for segment in edge {
         match segment_stats_onto(stats.clone(), &segment.path, Some(since)) {
             Ok(updated) => stats = updated,
-            Err(error) => tracing::debug!(
+            Err(error) => log::debug!(
                 "skipping unreadable event archive {}: {error:#}",
                 segment.path.display()
             ),
@@ -384,8 +386,8 @@ pub fn event_stats_since(event_log_path: &Path, since: DateTime<Utc>) -> Result<
     Ok(compute_stats_onto(stats, &live))
 }
 
-/// Recent archive/window totals. Keeping several windows prevents a monitor
-/// and a wider stats request from repeatedly evicting each other's totals.
+/// Recent archive/window totals. Keeping several windows prevents repeated
+/// stats requests over different windows from evicting each other's totals.
 type InsideStatsMemo = Vec<(PathBuf, Vec<String>, EventStats)>;
 const EVENT_STATS_MEMO_WINDOWS: usize = 4;
 
@@ -434,7 +436,7 @@ fn inside_segments_stats(
                 stats = updated;
                 names.push(segment.name.clone());
             }
-            Err(error) => tracing::debug!(
+            Err(error) => log::debug!(
                 "skipping unreadable event archive {}: {error:#}",
                 segment.path.display()
             ),
@@ -619,11 +621,10 @@ fn prune_event_archive(
 }
 
 /// Rotation marker sidecar (kunobi-ninja/kache#528): written by
-/// [`rotate_log_impl`] under the exclusive sidecar lock, read by
-/// [`EventTailer::poll_records`] under the shared lock. A byte position alone
-/// cannot distinguish the retained old lines at the head of a rotated file
-/// from newly appended ones; the marker records enough for the tailer to map
-/// its old cursor onto the new file exactly.
+/// [`rotate_log_impl`] under the exclusive sidecar lock, read back under the
+/// shared lock. A byte position alone cannot distinguish the retained old
+/// lines at the head of a rotated file from newly appended ones; the marker
+/// records enough to map an old cursor onto the new file exactly.
 #[derive(Serialize, Deserialize)]
 struct RotationMarker {
     /// Monotonic rotation count. The pre-marker state is generation 0.
@@ -651,6 +652,9 @@ fn read_rotation_marker(log_path: &Path) -> Option<RotationMarker> {
 }
 
 /// Tail the event log, returning new events since the last known position.
+/// Only the rotation tests read through this; production readers use the
+/// whole-log functions below.
+#[cfg(test)]
 pub struct EventTailer {
     path: PathBuf,
     position: u64,
@@ -659,28 +663,10 @@ pub struct EventTailer {
     file: Option<File>,
 }
 
+#[cfg(test)]
 impl EventTailer {
-    /// Start at the current end of the log.
-    #[cfg(test)]
-    pub fn new(path: PathBuf) -> Self {
-        let file = File::open(&path).ok();
-        let position = file
-            .as_ref()
-            .and_then(|file| file.metadata().ok())
-            .map(|m| m.len())
-            .unwrap_or(0);
-        let generation = read_rotation_marker(&path)
-            .map(|m| m.generation)
-            .unwrap_or(0);
-        EventTailer {
-            path,
-            position,
-            generation,
-            file,
-        }
-    }
-
     /// Start from the beginning.
+    #[cfg(test)]
     pub fn from_start(path: PathBuf) -> Self {
         let file = File::open(&path).ok();
         let generation = read_rotation_marker(&path)
@@ -712,8 +698,8 @@ impl EventTailer {
     }
 
     /// Read all new records since last poll — build events AND heartbeats
-    /// (kunobi-ninja/kache#131), for consumers like `kache monitor` that
-    /// render in-flight compiles.
+    /// (kunobi-ninja/kache#131).
+    #[cfg(test)]
     pub fn poll_records(&mut self) -> Result<Vec<EventRecord>> {
         // Nothing was ever logged: don't create the lock sidecar in a
         // directory that doesn't exist yet.
@@ -734,6 +720,7 @@ impl EventTailer {
         res
     }
 
+    #[cfg(test)]
     fn poll_records_locked(&mut self) -> Result<Vec<EventRecord>> {
         if self.file.is_none() {
             match File::open(&self.path) {
@@ -831,7 +818,7 @@ impl EventTailer {
             }
             match parse_event_line(line) {
                 Some(record) => records.push(record),
-                None => tracing::debug!("skipping invalid event line: {line}"),
+                None => log::debug!("skipping invalid event line: {line}"),
             }
         }
 
@@ -1012,7 +999,7 @@ fn rotate_log_impl(
             let _ = crate::atomic::atomic_replace(&rotation_marker_path(log_path), json.as_bytes());
         }
 
-        tracing::info!(
+        log::info!(
             "rotated {}: kept {} of {} lines",
             log_label,
             kept.len(),
@@ -1028,7 +1015,7 @@ fn rotate_log_impl(
     if let Some(dropped) = res? {
         let lines: Vec<&str> = dropped.split_inclusive('\n').collect();
         if let Err(e) = fold(&lines) {
-            tracing::warn!("folding rotated {log_label} lines: {e:#}");
+            log::warn!("folding rotated {log_label} lines: {e:#}");
         }
     }
     Ok(())
@@ -1070,7 +1057,7 @@ pub fn rotate_events_if_needed(
         LogLock::Build,
         |dropped| {
             if let Err(e) = archive_dropped_events(event_log_path, dropped, Utc::now()) {
-                tracing::warn!("archiving rotated events: {e:#}");
+                log::warn!("archiving rotated events: {e:#}");
             }
             fold(dropped)
         },
@@ -1099,7 +1086,7 @@ pub fn read_summaries(summary_log_path: &Path) -> Result<Vec<BuildSummaryEvent>>
         match serde_json::from_str::<BuildSummaryEvent>(&line) {
             Ok(event) => events.push(event),
             Err(e) => {
-                tracing::debug!("skipping invalid summary line: {}", e);
+                log::debug!("skipping invalid summary line: {}", e);
             }
         }
     }
@@ -1132,7 +1119,7 @@ pub fn read_transfers(transfer_log_path: &Path) -> Result<Vec<TransferEvent>> {
         match serde_json::from_str::<TransferEvent>(&line) {
             Ok(event) => events.push(event),
             Err(e) => {
-                tracing::debug!("skipping invalid transfer line: {}", e);
+                log::debug!("skipping invalid transfer line: {}", e);
             }
         }
     }
@@ -2413,7 +2400,7 @@ mod tests {
             2
         );
         // Reading either segment again would lose its events. Both cached
-        // windows must survive alternating monitor and wider stats requests.
+        // windows must survive alternating narrow and wide stats requests.
         for segment in &segments {
             fs::write(&segment.path, b"not a zstd frame").unwrap();
         }
@@ -3116,7 +3103,7 @@ mod tests {
             appender_done_clone.store(true, Ordering::Relaxed);
         });
 
-        // Spawn tailer/monitor thread
+        // Spawn tailer thread
         let log_path_clone3 = log_path.clone();
         let running_clone3 = running.clone();
         let appender_done_clone2 = appender_done.clone();

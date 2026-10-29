@@ -846,7 +846,7 @@ pub(crate) fn seed(
                                 copied.fetch_add(1, Ordering::Relaxed);
                             }
                             Err(error) => {
-                                tracing::debug!(
+                                log::debug!(
                                     "did not seed {}-{}: {error}",
                                     unit.package,
                                     unit.hash

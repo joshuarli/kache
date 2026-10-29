@@ -302,10 +302,10 @@ pub(crate) fn idle_slice(config: &Config, trigger: Trigger<'_>) {
                 db.mark_cycle(unix_now());
             }
             if let Some(note) = share_note(report.replaced, report.matched_bytes) {
-                tracing::info!("{note}");
+                log::info!("{note}");
             }
         }
-        Err(error) => tracing::warn!("target dedup slice failed: {error:#}"),
+        Err(error) => log::warn!("target dedup slice failed: {error:#}"),
     }
 }
 
@@ -622,7 +622,7 @@ fn consider(
     let file_ends = match read_ends(path) {
         Ok(ends) => ends,
         Err(error) => {
-            tracing::debug!("skipping {}: {error}", path.display());
+            log::debug!("skipping {}: {error}", path.display());
             report.failed = report.failed.saturating_add(1);
             return Ok(Consider::Done);
         }
@@ -637,7 +637,7 @@ fn consider(
         let blob_ends = match cached_ends(ends_cache, blob) {
             Ok(ends) => ends,
             Err(error) => {
-                tracing::debug!("skipping blob {}: {error}", blob.path.display());
+                log::debug!("skipping blob {}: {error}", blob.path.display());
                 continue;
             }
         };
@@ -669,7 +669,7 @@ fn consider(
     let hash = match hash_file(path) {
         Ok(hash) => hash,
         Err(error) => {
-            tracing::debug!("could not hash {}: {error}", path.display());
+            log::debug!("could not hash {}: {error}", path.display());
             report.failed = report.failed.saturating_add(1);
             return Ok(Consider::Done);
         }
@@ -742,7 +742,7 @@ fn account_match(
             return;
         }
         Err(error) => {
-            tracing::debug!("could not lock {}: {error}", profile.display());
+            log::debug!("could not lock {}: {error}", profile.display());
             report.failed = report.failed.saturating_add(1);
             return;
         }
@@ -757,7 +757,7 @@ fn account_match(
             }
         }
         Err(error) => {
-            tracing::debug!("leaving {} in place: {error}", path.display());
+            log::debug!("leaving {} in place: {error}", path.display());
             report.failed = report.failed.saturating_add(1);
         }
     }

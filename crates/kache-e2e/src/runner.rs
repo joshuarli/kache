@@ -1334,10 +1334,10 @@ mod tests {
     use crate::phase::Phase;
     use std::path::{Path, PathBuf};
 
-    /// A realistic tracing line, so the `[key:` offset arithmetic is exercised
+    /// A realistic log line, so the `[key:` offset arithmetic is exercised
     /// against the prefix the real logger emits rather than a bare marker.
     fn keytrace_line(crate_name: &str, field: &str) -> String {
-        format!("  2026-08-18T09:00:00Z DEBUG kache::cache_key: [key:{crate_name}] {field}")
+        format!("DEBUG [key:{crate_name}] {field}")
     }
 
     fn fields(entries: &[(&str, &[&str])]) -> KeytraceFields {
@@ -1361,7 +1361,7 @@ mod tests {
             keytrace_line("serde_derive", "source:src/lib.rs=abc123"),
             keytrace_line("serde_derive", "env:CARGO_PKG_VERSION=1.0.0"),
             keytrace_line("syn", "source:src/lib.rs=def456"),
-            "  2026-08-18T09:00:00Z DEBUG kache::store: unrelated line".to_string(),
+            "DEBUG unrelated line".to_string(),
         ]
         .join("\n");
 

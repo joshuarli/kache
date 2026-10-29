@@ -464,7 +464,7 @@ fn materialize_blob_with_durability(
             if matches!(ingest.get(), StoreIngest::Hardlink)
                 && let Err(e) = set_blob_readonly_checked(tmp)
             {
-                tracing::debug!(
+                log::debug!(
                     "read-only guard failed on hardlinked blob temp ({e}); \
                      falling back to copy: {}",
                     source.display()
@@ -879,7 +879,7 @@ fn run_tmutil_addexclusion_bounded(dir: &str) {
         match child.try_wait() {
             Ok(Some(_)) => return,
             Ok(None) if started.elapsed() >= TMUTIL_TIMEOUT => {
-                tracing::debug!(
+                log::debug!(
                     "tmutil addexclusion still running after {}s (active backup?) — killing it; \
                      the exclusion will be retried on the next daemon start",
                     TMUTIL_TIMEOUT.as_secs()
@@ -1990,11 +1990,11 @@ fn recover_corrupt_index(db_path: &Path, err: &SqlError) -> Result<(Connection, 
 
     let quarantined = quarantine_corrupt_index(db_path)
         .with_context(|| format!("quarantining corrupt index {}", db_path.display()))?;
-    tracing::warn!(
-        path = %db_path.display(),
-        quarantined = %quarantined.display(),
+    log::warn!(
         "index database is corrupt ({err}); quarantined it and recreated an empty index. \
-         Rebuilding the entry rows from the store; run `kache doctor` to inspect."
+         Rebuilding the entry rows from the store; run `kache doctor` to inspect; path={} quarantined={}",
+        db_path.display(),
+        quarantined.display()
     );
     let db = try_open_index_db(db_path)
         .map_err(anyhow::Error::from)
@@ -2038,11 +2038,9 @@ fn try_open_index_db(db_path: &Path) -> std::result::Result<Connection, SqlError
                 if attempt < STORE_OPEN_MAX_ATTEMPTS && is_retryable_sqlite_open_error(&err) =>
             {
                 let delay = sqlite_open_retry_delay(attempt);
-                tracing::debug!(
-                    path = %db_path.display(),
-                    attempt,
-                    ?delay,
-                    "retrying transient SQLite open failure: {err}"
+                log::debug!(
+                    "retrying transient SQLite open failure: {err}; path={} attempt={attempt} delay={delay:?}",
+                    db_path.display()
                 );
                 last_error = Some(err);
                 std::thread::sleep(delay);
@@ -2253,15 +2251,15 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         if recovered {
             match store.rebuild_index_from_store() {
                 Ok(stats) if stats.entries_rebuilt > 0 || stats.entries_skipped > 0 => {
-                    tracing::warn!(
-                        rebuilt = stats.entries_rebuilt,
-                        skipped = stats.entries_skipped,
-                        blobs = stats.blobs_registered,
-                        "rebuilt the index from the store after corruption"
+                    log::warn!(
+                        "rebuilt the index from the store after corruption; rebuilt={} skipped={} blobs={}",
+                        stats.entries_rebuilt,
+                        stats.entries_skipped,
+                        stats.blobs_registered
                     );
                 }
                 Ok(_) => {}
-                Err(e) => tracing::warn!(
+                Err(e) => log::warn!(
                     "could not rebuild the index from the store after corruption: {e:#}"
                 ),
             }
@@ -2444,7 +2442,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         let _ = self.db.busy_timeout(std::time::Duration::from_millis(5000));
         if let Err(error) = written {
             let _ = self.db.execute_batch("ROLLBACK");
-            tracing::debug!("restored file hashes not memoised (index busy): {error}");
+            log::debug!("restored file hashes not memoised (index busy): {error}");
         }
     }
 
@@ -2517,7 +2515,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         // Lazy migration: if legacy artifacts still live in the entry dir, migrate them
         let needs_migration = meta.files.iter().any(|f| entry_dir.join(&f.name).exists());
         if needs_migration && let Err(e) = self.migrate_entry_to_blobs(&meta) {
-            tracing::warn!(
+            log::warn!(
                 "lazy migration failed for {}: {e}",
                 &cache_key[..16.min(cache_key.len())]
             );
@@ -2538,7 +2536,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         for cached_file in &meta.files {
             let blob = self.blob_path(&cached_file.hash);
             if let Err(error) = validate_blob_metadata(&blob, cached_file.size) {
-                tracing::warn!(
+                log::warn!(
                     "cache entry {} file {} has invalid blob metadata ({error:#}), evicting",
                     cache_key.get(..16).unwrap_or(cache_key),
                     cached_file.name,
@@ -2559,7 +2557,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                 match crate::file_hash::hash_file(&blob) {
                     Ok(actual) if actual == cached_file.hash => {}
                     Ok(actual) => {
-                        tracing::warn!(
+                        log::warn!(
                             "cache entry {} file {} content mismatch (expected {}, got {}), evicting",
                             cache_key.get(..16).unwrap_or(cache_key),
                             cached_file.name,
@@ -2570,7 +2568,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                         return Ok(None);
                     }
                     Err(e) => {
-                        tracing::warn!(
+                        log::warn!(
                             "cache entry {} file {} unreadable for verification ({e}), evicting",
                             cache_key.get(..16).unwrap_or(cache_key),
                             cached_file.name,
@@ -2623,7 +2621,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         };
         match self.get(cache_key)? {
             Some(meta) if meta.files.is_empty() => {
-                tracing::warn!("cache entry {cache_key} has no files, evicting before build");
+                log::warn!("cache entry {cache_key} has no files, evicting before build");
                 self.remove_entry(cache_key)?;
                 Ok(BuildClaim::Acquired(lock))
             }
@@ -3429,7 +3427,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             let files = match self.verified_entry_files(&key) {
                 Ok(files) => files,
                 Err(error) if drop_unverifiable => {
-                    tracing::warn!("removing an entry that failed verification: {error:#}");
+                    log::warn!("removing an entry that failed verification: {error:#}");
                     dropped.push(key);
                     continue;
                 }
@@ -3680,7 +3678,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             let entry = match entry {
                 Ok(e) => e,
                 Err(e) => {
-                    tracing::debug!("skipping unreadable store dir entry: {e}");
+                    log::debug!("skipping unreadable store dir entry: {e}");
                     continue;
                 }
             };
@@ -3710,7 +3708,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                 }
                 Ok(None) => stats.entries_skipped += 1,
                 Err(e) => {
-                    tracing::debug!(
+                    log::debug!(
                         "skipping entry {} during index rebuild: {e:#}",
                         &name[..16.min(name.len())]
                     );
@@ -4119,7 +4117,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         // `publish_rename` still handles sharing/delete-pending states.
         let outcome = publish_rename(rename, || publish_dest_state(blob), is_transient);
         if !matches!(outcome, Ok(PublishRename::Published)) {
-            tracing::debug!("{} not published by this put: {outcome:?}", blob.display());
+            log::debug!("{} not published by this put: {outcome:?}", blob.display());
             Self::discard_staged_blob(staged);
         }
         let outcome = outcome?;
@@ -4293,28 +4291,28 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         let locks = self
             .sweep_stale_key_locks(KEY_LOCK_SWEEP_GRACE, KEY_LOCK_SWEEP_CAP)
             .unwrap_or_else(|error| {
-                tracing::warn!("gc: key lock sweep failed: {error:#}");
+                log::warn!("gc: key lock sweep failed: {error:#}");
                 KeyLockSweepStats::default()
             });
         let predictions_pruned = self
             .file_hash_cache()
             .prune_input_predictions()
             .unwrap_or_else(|error| {
-                tracing::warn!("gc: input prediction pruning failed: {error}");
+                log::warn!("gc: input prediction pruning failed: {error}");
                 0
             });
         let file_hashes_pruned =
             self.file_hash_cache()
                 .prune_file_hashes()
                 .unwrap_or_else(|error| {
-                    tracing::warn!("gc: file hash pruning failed: {error}");
+                    log::warn!("gc: file hash pruning failed: {error}");
                     0
                 });
         // After the prune, so the one-time copy is as small as it gets.
         match self.file_hash_cache().rebuild_file_hashes_without_rowid() {
-            Ok(true) => tracing::info!("gc: rebuilt file_hashes without rowid"),
+            Ok(true) => log::info!("gc: rebuilt file_hashes without rowid"),
             Ok(false) => {}
-            Err(error) => tracing::warn!("gc: file hash table rebuild failed: {error}"),
+            Err(error) => log::warn!("gc: file hash table rebuild failed: {error}"),
         }
         HousekeepingStats {
             key_locks_removed: locks.removed,
@@ -4539,7 +4537,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         match checked {
             Ok(file) => Some((blob, file)),
             Err(error) => {
-                tracing::debug!(
+                log::debug!(
                     "cache entry {} blob {} remains pending: {error:#}",
                     cache_key.get(..16).unwrap_or(cache_key),
                     cached.name
@@ -4895,7 +4893,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                 ],
             )
         {
-            tracing::debug!(
+            log::debug!(
                 "could not record the new device of target root {}: {error:#}",
                 path.display()
             );
@@ -5014,7 +5012,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             }
 
             if !path.is_dir() {
-                tracing::warn!(
+                log::warn!(
                     "registered incremental path is not a directory, pruning: {}",
                     path.display()
                 );
@@ -5034,7 +5032,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                     cleaned += 1;
                 }
                 Err(e) => {
-                    tracing::warn!(
+                    log::warn!(
                         "failed to remove registered incremental dir {}: {}",
                         path.display(),
                         e
@@ -5209,9 +5207,9 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             }
             if durable_upload_keys.contains(key) {
                 stats.entries_pinned += 1;
-                tracing::debug!(
-                    key = key.as_str(),
-                    "gc: retaining entry that backs a durable upload intent"
+                log::debug!(
+                    "gc: retaining entry that backs a durable upload intent; key={}",
+                    key.as_str()
                 );
                 continue;
             }
@@ -5284,7 +5282,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                     // avoid leaking blob refcounts (#276); skip it and keep
                     // evicting the rest rather than aborting the whole sweep.
                     record_eviction_failure(&mut stats, &e);
-                    tracing::warn!("gc: skipping eviction of {key}: {e:#}");
+                    log::warn!("gc: skipping eviction of {key}: {e:#}");
                     if is_sqlite_contention(&e) {
                         std::thread::sleep(pacer.after_contention());
                     }
@@ -5343,12 +5341,11 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             .filter(|e| selected.contains(e.key.as_str()))
             .map(|e| e.compile_time_ms)
             .sum();
-        tracing::debug!(
-            policy = policy.name(),
-            candidates = candidates.len(),
-            selected = order.len(),
-            selected_compile_time_ms = cost_ms,
-            "gc: eviction selection"
+        log::debug!(
+            "gc: eviction selection; policy={} candidates={} selected={} selected_compile_time_ms={cost_ms}",
+            policy.name(),
+            candidates.len(),
+            order.len()
         );
         // Duplicate eviction has a byte budget too, but only the size pass
         // probes the whole store for external retainers.
@@ -5823,7 +5820,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             ],
         );
         if let Err(e) = result {
-            tracing::debug!("gc: could not record tombstone: {e}");
+            log::debug!("gc: could not record tombstone: {e}");
         }
     }
 
@@ -5862,7 +5859,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             tx.commit()
         })();
         if let Err(e) = result {
-            tracing::debug!("gc: could not record shadow victims: {e}");
+            log::debug!("gc: could not record shadow victims: {e}");
         }
     }
 
@@ -5966,11 +5963,11 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             params![cache_key],
         );
         match updated {
-            Ok(_) => tracing::debug!(
-                cache_key = &cache_key[..16.min(cache_key.len())],
-                "gc: evicted entry was demanded again"
+            Ok(_) => log::debug!(
+                "gc: evicted entry was demanded again; cache_key={}",
+                &cache_key[..16.min(cache_key.len())]
             ),
-            Err(e) => tracing::debug!("gc: could not record tombstone demand: {e}"),
+            Err(e) => log::debug!("gc: could not record tombstone demand: {e}"),
         }
     }
 

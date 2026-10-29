@@ -54,7 +54,7 @@ fn deliver(terminal: Option<impl Write>, stderr: Option<impl Write>, line: &str)
     {
         return Shown::Stderr;
     }
-    tracing::info!(target: "kache::notice", "{line}");
+    log::info!(target: "kache::notice", "{line}");
     Shown::Log
 }
 

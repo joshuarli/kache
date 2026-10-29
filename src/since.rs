@@ -1,5 +1,5 @@
-//! The `--since` lookback window shared by `kache stats`, `kache report`, and
-//! `kache monitor` (kunobi-ninja/kache#897).
+//! The `--since` lookback window shared by `kache stats` and `kache report`
+//! (kunobi-ninja/kache#897).
 //!
 //! The window used to be parsed straight to whole hours, so `--since 15m` did
 //! not parse, fell back to the 24h default, and was then labelled "last 24h".
@@ -61,14 +61,6 @@ impl SinceWindow {
             .find(|unit| secs > 0 && secs.is_multiple_of(unit.secs()))
             .unwrap_or(Unit::Secs);
         SinceWindow { secs, unit }
-    }
-
-    /// A whole-hour window for constants; the caller keeps `hours` small.
-    pub(crate) const fn whole_hours(hours: u64) -> Self {
-        SinceWindow {
-            secs: hours * 3600,
-            unit: Unit::Hours,
-        }
     }
 
     /// A whole-hour window. `None` on overflow.

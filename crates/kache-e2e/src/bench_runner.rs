@@ -46,8 +46,8 @@
 //! # Running the benchmark
 //!
 //! ```text
-//! just bench firefox               # full cold + warm
-//! just bench hk
+//! make bench PROFILE=firefox      # full cold + warm
+//! make bench PROFILE=hk
 //! kache-scenario --select suite:bench --profile firefox --retry
 //! kache-scenario --select suite:bench --profile firefox --skip-clone
 //! kache-scenario --select suite:bench --profile firefox --ref FIREFOX_152_0_RELEASE
@@ -84,7 +84,6 @@
 //! knobs, update the scenario's `[[file]]` / `[env]`, not this binary.
 
 use anyhow::{Context, Result, bail};
-use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
@@ -128,7 +127,7 @@ pub struct BenchRunConfig {
     pub warm_same_tree: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheBackend {
     Kache,
     Sccache,
@@ -136,6 +135,19 @@ pub enum CacheBackend {
     /// its `setup` installs, with its own C shims, so the scenario's build
     /// command runs unchanged.
     Mbx,
+}
+
+impl std::str::FromStr for CacheBackend {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw {
+            "kache" => Ok(CacheBackend::Kache),
+            "sccache" => Ok(CacheBackend::Sccache),
+            "mbx" => Ok(CacheBackend::Mbx),
+            _ => Err(format!("invalid cache backend '{raw}': expected kache, sccache, or mbx")),
+        }
+    }
 }
 
 impl CacheBackend {
@@ -1736,7 +1748,7 @@ fn retry_load_cold(
     for required in [&snapshot, &result_json, &report_cold] {
         if !required.exists() {
             bail!(
-                "--retry: required artifact missing — {} (run `just bench {profile_name}` once first)",
+                "--retry: required artifact missing — {} (run `make bench PROFILE={profile_name}` once first)",
                 required.display()
             );
         }
@@ -2253,7 +2265,7 @@ fn retry_load_sccache_cold(
     for required in [&snapshot, &result_json] {
         if !required.exists() {
             bail!(
-                "--retry: required artifact missing — {} (run `just bench-sccache {profile_name}` once first)",
+                "--retry: required artifact missing — {} (run `make bench-sccache PROFILE={profile_name}` once first)",
                 required.display()
             );
         }
@@ -3387,7 +3399,7 @@ fn retry_load_mbx_cold(
     for required in [&snapshot, &result_json] {
         if !required.exists() {
             bail!(
-                "--retry: required artifact missing — {} (run `just bench-mbx {profile_name}` once first)",
+                "--retry: required artifact missing — {} (run `make bench-mbx PROFILE={profile_name}` once first)",
                 required.display()
             );
         }

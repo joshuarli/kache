@@ -345,9 +345,8 @@ fn de_verbatim_leaves_unix_paths_untouched() {
 }
 
 #[test]
-fn parse_key_line_extracts_crate_and_payload_from_default_tracing_format() {
-    let line = "2026-05-24T16:45:23.123Z TRACE kache::cache_key: \
-                    [key:gkrust] env_dep:CARGO_MANIFEST_DIR=/abs/path";
+fn parse_key_line_extracts_crate_and_payload_from_logger_format() {
+    let line = "TRACE [key:gkrust] env_dep:CARGO_MANIFEST_DIR=/abs/path";
     let parsed = parse_key_line(line);
     assert_eq!(
         parsed,

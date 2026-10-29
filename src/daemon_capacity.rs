@@ -33,11 +33,9 @@ impl DaemonCapacity {
             requested.min(limit.saturating_sub(128).saturating_div(16).max(1))
         });
         if executions < requested {
-            tracing::warn!(
-                requested,
-                executions,
-                open_files,
-                "daemon pipeline capacity reduced by the open-file limit"
+            log::warn!(
+                "daemon pipeline capacity reduced by the open-file limit; requested={requested} executions={executions} open_files={}",
+                open_files.map_or_else(String::new, |limit| limit.to_string())
             );
         }
         Self {
@@ -148,30 +146,20 @@ mod tests {
 
     #[test]
     fn file_budget_warns_only_when_it_reduces_admission() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("warnings.log");
-        let subscriber = tracing_subscriber::fmt()
-            .without_time()
-            .with_ansi(false)
-            .with_max_level(tracing::Level::WARN)
-            .with_writer(std::sync::Mutex::new(std::fs::File::create(&path).unwrap()))
-            .finish();
+        let capture = kache_log::capture();
+        DaemonCapacity::for_resources(None, 6, None);
+        DaemonCapacity::for_resources(Some(32), 256, None);
+        // Exactly enough descriptors and excess headroom both keep the
+        // requested capacity, so neither should warn.
+        DaemonCapacity::for_resources(Some(32), 1, Some(640));
+        DaemonCapacity::for_resources(Some(32), 1, Some(656));
+        assert!(capture.records().is_empty());
 
-        tracing::subscriber::with_default(subscriber, || {
-            DaemonCapacity::for_resources(None, 6, None);
-            DaemonCapacity::for_resources(Some(32), 256, None);
-            // Exactly enough descriptors and excess headroom both keep the
-            // requested capacity, so neither should warn.
-            DaemonCapacity::for_resources(Some(32), 1, Some(640));
-            DaemonCapacity::for_resources(Some(32), 1, Some(656));
-            assert!(std::fs::read_to_string(&path).unwrap().is_empty());
+        let reduced = DaemonCapacity::for_resources(Some(32), 1, Some(624));
+        assert_eq!(reduced.executions, 31);
 
-            let reduced = DaemonCapacity::for_resources(Some(32), 1, Some(624));
-            assert_eq!(reduced.executions, 31);
-        });
-
-        let log = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(log.lines().count(), 1, "{log}");
+        let records = capture.records();
+        assert_eq!(records.len(), 1, "{records:?}");
         for expected in [
             "WARN",
             "daemon pipeline capacity reduced by the open-file limit",
@@ -179,7 +167,7 @@ mod tests {
             "executions=31",
             "open_files=624",
         ] {
-            assert!(log.contains(expected), "{expected} missing from {log}");
+            assert!(records[0].contains(expected), "{expected} missing from {records:?}");
         }
     }
 

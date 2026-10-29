@@ -193,7 +193,7 @@ fn observe_over_threshold(cache_dir: &Path, now: u64) -> Duration {
         && let Ok(json) = serde_json::to_vec(&OverThreshold { since })
         && let Err(error) = crate::atomic::atomic_replace(&state_path(cache_dir), &json)
     {
-        tracing::debug!("index compaction: could not record the threshold time: {error:#}");
+        log::debug!("index compaction: could not record the threshold time: {error:#}");
     }
     Duration::from_secs(now.saturating_sub(since))
 }
@@ -325,14 +325,14 @@ pub(crate) fn run(config: &Config, trigger: Trigger<'_>) -> Option<Outcome> {
     match attempt(config, trigger, unix_now_secs()) {
         Ok(outcome) => {
             if outcome.is_noteworthy() {
-                tracing::info!("{}", outcome.describe());
+                log::info!("{}", outcome.describe());
             } else {
-                tracing::debug!("{}", outcome.describe());
+                log::debug!("{}", outcome.describe());
             }
             Some(outcome)
         }
         Err(error) => {
-            tracing::warn!("index compaction failed: {error:#}");
+            log::warn!("index compaction failed: {error:#}");
             None
         }
     }

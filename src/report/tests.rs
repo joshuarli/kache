@@ -336,30 +336,14 @@ fn record_gc_run_keeps_only_the_last_run() {
 /// That has to show in the log rather than pass silently.
 #[test]
 fn unparseable_gc_stats_warns_before_it_is_replaced() {
-    struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-    impl std::io::Write for Capture {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join(GC_STATS_FILE), b"{\"totals\": ").unwrap();
-    let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let writer = std::sync::Arc::clone(&output);
-    let subscriber = tracing_subscriber::fmt()
-        .without_time()
-        .with_ansi(false)
-        .with_writer(move || Capture(std::sync::Arc::clone(&writer)))
-        .finish();
+    let capture = kache_log::capture();
 
-    let read = tracing::subscriber::with_default(subscriber, || read_gc_stats(dir.path()));
+    let read = read_gc_stats(dir.path());
 
     assert!(read.is_none());
-    let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    let log = capture.records().join("\n");
     assert!(log.contains("WARN"), "{log}");
     assert!(log.contains("the next GC run replaces it"), "{log}");
 }

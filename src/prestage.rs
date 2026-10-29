@@ -178,7 +178,7 @@ pub(crate) fn complete(
         Ok(())
     });
     if let Err(error) = result {
-        tracing::debug!(
+        log::debug!(
             "prestage retirement for {} failed: {error:#}",
             dest.display()
         );
@@ -388,7 +388,7 @@ pub(crate) fn remember(cache_dir: &Path, target_dir: &Path, dest: &Path, blob: &
             write_atomic(&latest, target)
         });
     if let Err(error) = written {
-        tracing::debug!(
+        log::debug!(
             "prestage record for {} not written: {error}",
             dest.display()
         );
@@ -515,11 +515,11 @@ pub(crate) fn stage(cache_dir: &Path, target_dir: &Path, blob_path: impl Fn(&str
         Ok(results) => {
             for (dest, result) in results {
                 if let Err(error) = result {
-                    tracing::debug!("not staging {}: {error:#}", dest.display());
+                    log::debug!("not staging {}: {error:#}", dest.display());
                 }
             }
         }
-        Err(error) => tracing::debug!("no staging pass for {}: {error}", target_dir.display()),
+        Err(error) => log::debug!("no staging pass for {}: {error}", target_dir.display()),
     }
 }
 

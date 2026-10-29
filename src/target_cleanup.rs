@@ -171,7 +171,7 @@ pub(crate) fn run(config: &Config, trigger: Trigger<'_>) -> bool {
     // A full volume refuses the record just when cleanup is needed most:
     // clean anyway, and keep this process hourly from memory instead.
     if let Err(error) = crate::atomic::atomic_replace(&record, now.to_string().as_bytes()) {
-        tracing::warn!(
+        log::warn!(
             "cannot record the target directory cleanup time, cleaning anyway: {error:#}"
         );
         unrecorded().insert(config.cache_dir.clone(), now);
@@ -179,14 +179,14 @@ pub(crate) fn run(config: &Config, trigger: Trigger<'_>) -> bool {
     match sweep(config, now) {
         Ok(swept) => {
             for (path, reason) in swept.removed {
-                tracing::info!(
+                log::info!(
                     "removed target directory {} because {}",
                     path.display(),
                     reason.describe()
                 );
             }
             for (path, pruned) in swept.pruned {
-                tracing::info!(
+                log::info!(
                     "removed {} unused build units ({}) from {}",
                     pruned.units,
                     bytesize::ByteSize(pruned.bytes),
@@ -194,14 +194,14 @@ pub(crate) fn run(config: &Config, trigger: Trigger<'_>) -> bool {
                 );
             }
             for (path, bytes) in swept.reclaimed {
-                tracing::info!(
+                log::info!(
                     "target recovery returned about {} of free space from {}",
                     bytesize::ByteSize(bytes),
                     path.display()
                 );
             }
         }
-        Err(error) => tracing::warn!("target directory cleanup failed: {error:#}"),
+        Err(error) => log::warn!("target directory cleanup failed: {error:#}"),
     }
     true
 }
@@ -301,7 +301,7 @@ pub(crate) fn sweep(config: &Config, now: u64) -> anyhow::Result<Swept> {
                 swept.removed.push((tracked.path, reason));
             }
             Ok(false) => {}
-            Err(error) => tracing::warn!(
+            Err(error) => log::warn!(
                 "could not remove target directory {}: {error}",
                 tracked.path.display()
             ),
@@ -337,7 +337,7 @@ fn recorded_since(store: &Store, path: &Path, last_seen: i64) -> bool {
 /// leaves is no reason to end the pass.
 fn forget(store: &Store, path: &Path, identity: crate::machine::PathIdentity) {
     if let Err(error) = store.forget_target_root_with_identity(path, identity) {
-        tracing::warn!(
+        log::warn!(
             "could not forget target directory {}: {error:#}",
             path.display()
         );
@@ -727,7 +727,7 @@ fn recover_under_pressure(
                 swept.removed.push((candidate.path, Reason::Pressure));
             }
             Ok(false) => {}
-            Err(error) => tracing::warn!(
+            Err(error) => log::warn!(
                 "could not recover target directory {}: {error}",
                 candidate.path.display()
             ),

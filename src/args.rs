@@ -409,7 +409,7 @@ impl RustcArgs {
             ),
             Ok(None) => (Cow::Borrowed(rustc_args), None, RustcArgfileState::None),
             Err(error) => {
-                tracing::debug!(
+                log::debug!(
                     "rustc response-file expansion failed; passing through uncached: {error:#}"
                 );
                 (

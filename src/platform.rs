@@ -104,7 +104,7 @@ fn is_single_process_pid(pid: u32) -> bool {
 /// down. Tests panic instead: a fixture that reaches here is the exact bug this
 /// module exists to prevent, and silently no-oping would let it pass green.
 fn refuse_unsafe_pid(pid: u32, what: &str) {
-    tracing::error!(pid, action = what, "refusing to signal a non-process PID");
+    log::error!("refusing to signal a non-process PID; pid={pid} action={what}");
 
     #[cfg(test)]
     panic!(

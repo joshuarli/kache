@@ -433,12 +433,11 @@ fn resolve_invocation_for(
         // matched. `stdout_lines` is worth recording too: a driver shim that
         // prints the resolved command to stdout leaves stderr empty, which is
         // otherwise indistinguishable from an unrecognised shape.
-        tracing::debug!(
-            compiler,
-            exit_code = ?output.status.code(),
-            stderr_lines = stderr.lines().count(),
-            stdout_lines = output.stdout.iter().filter(|b| **b == b'\n').count(),
-            "cc -### resolved no cc1 line; probe-captured flags will refuse. head:\n{}",
+        log::debug!(
+            "cc -### resolved no cc1 line; probe-captured flags will refuse; compiler={compiler} exit_code={:?} stderr_lines={} stdout_lines={} head:\n{}",
+            output.status.code(),
+            stderr.lines().count(),
+            output.stdout.iter().filter(|b| **b == b'\n').count(),
             probe_stderr_head(&stderr)
         );
     }

@@ -2,7 +2,7 @@
 
 A map of kache's user-facing features to the e2e scenarios that exercise them,
 and the gaps where a feature has no end-to-end scenario. The functional suite
-(`just e2e`, `suite:e2e`) currently has **44 scenarios** (the `bench-*` cases are
+(`make e2e`, `suite:e2e`) currently has **44 scenarios** (the `bench-*` cases are
 load benchmarks, not feature tests).
 
 This was produced by a cross-family audit (Claude + codex, independent passes):

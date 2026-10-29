@@ -28,7 +28,7 @@ pub fn try_execute(
     match exchange(socket, request, descriptors, &mut committed) {
         Ok(exit) => Ok(Some(exit)),
         Err(error) if !committed => {
-            tracing::debug!(%error, "daemon did not prepare compiler execution");
+            log::debug!("daemon did not prepare compiler execution: {error}");
             Ok(None)
         }
         Err(error) => Err(error.context(

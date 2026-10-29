@@ -169,7 +169,7 @@ fn volume_inventory_single_store_and_sort_orders() {
     assert_eq!(view.total_size, 10);
     assert!(view.entries.is_empty());
     let window = crate::since::SinceWindow::DEFAULT;
-    let snapshot = crate::cli::snapshot_from_direct_reads(&config, false, "name", window, false);
+    let snapshot = crate::cli::snapshot_from_direct_reads(&config, window, false);
     let lines = crate::cli::render_stats(&snapshot, &config, window);
     // One store: the summary row only, no per-store row.
     assert_eq!(
@@ -311,11 +311,10 @@ fn volume_inventory_reaches_direct_stats_daemon_stats_and_reports() {
     put(&shard, dir.path(), "common", 10);
     put(&shard, dir.path(), "shard-only", 30);
     let window = crate::since::SinceWindow::DEFAULT;
-    let snapshot = crate::cli::snapshot_from_direct_reads(&config, true, "size", window, false);
+    let snapshot = crate::cli::snapshot_from_direct_reads(&config, window, false);
     assert_eq!(snapshot.entry_count, 2);
     assert_eq!(snapshot.total_size, 50);
     assert_eq!(snapshot.max_size, 3000);
-    assert_eq!(snapshot.entries.len(), 2);
     let lines = crate::cli::render_stats(&snapshot, &config, window);
     assert!(
         lines
@@ -332,7 +331,10 @@ fn volume_inventory_reaches_direct_stats_daemon_stats_and_reports() {
     assert_eq!(stats.entry_count, 2);
     assert_eq!(stats.max_size, 3000);
     assert_eq!(stats.stores, snapshot.stores);
-    assert_eq!(stats.entries.unwrap(), snapshot.entries);
+    assert_eq!(
+        stats.entries.unwrap(),
+        read(&config, true, "size").unwrap().entries
+    );
     assert_eq!(stats.blob_stats, snapshot.blob_stats);
     let report = crate::report::generate_report(&config, window, 10).unwrap();
     assert_eq!(report.storage.logical_bytes, 50);

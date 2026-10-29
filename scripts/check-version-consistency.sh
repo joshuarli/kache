@@ -70,7 +70,7 @@ errors = []
 # (e.g. 0.5.0-rc4). crates.io is permanent and semver orders the no-dot form
 # LEXICALLY (rc.2 would sort after rc.10). Require the dotted form (-rc.N). This
 # runs in CI (version-consistency job) and at the publish floor, so it is
-# enforced even for a hand-pushed tag — not only the `just bump` local guard.
+# enforced even for a hand-pushed tag — not only the `make bump` local guard.
 m = re.search(r"-(rc|alpha|beta)[0-9]", kache_version)
 if m:
     errors.append(
@@ -115,7 +115,7 @@ if errors:
     for e in errors:
         print("  - " + e, file=sys.stderr)
     fix = tag_version or kache_version
-    print(f"Fix: run `just bump {fix}` so the manifests agree, then re-tag if needed.", file=sys.stderr)
+    print(f"Fix: run `make bump {fix}` so the manifests agree, then re-tag if needed.", file=sys.stderr)
     sys.exit(1)
 
 scope = f"tag {tag_version}" if tag_version else "workspace"

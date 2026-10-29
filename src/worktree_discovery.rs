@@ -73,12 +73,12 @@ pub(crate) fn run(config: &Config, trigger: Trigger<'_>) -> bool {
     // Recorded before the pass, so a pass that fails waits an hour too.
     LAST_RUN.store(now, std::sync::atomic::Ordering::Relaxed);
     if let Err(error) = crate::atomic::atomic_replace(&record, now.to_string().as_bytes()) {
-        tracing::warn!("cannot record the target discovery time: {error:#}");
+        log::warn!("cannot record the target discovery time: {error:#}");
     }
     match Store::open(config).and_then(|store| discover(&store, DISCOVERY_TIME, now)) {
         Ok(0) => {}
-        Ok(found) => tracing::info!("found {found} target directories in Git worktrees"),
-        Err(error) => tracing::warn!("target discovery failed: {error:#}"),
+        Ok(found) => log::info!("found {found} target directories in Git worktrees"),
+        Err(error) => log::warn!("target discovery failed: {error:#}"),
     }
     true
 }

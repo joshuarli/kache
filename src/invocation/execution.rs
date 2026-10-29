@@ -22,14 +22,14 @@ pub(crate) fn try_execute_with_trust(
     let (files, terminal) = match context.io.transfer_files() {
         Ok(files) => files,
         Err(error) => {
-            tracing::debug!(%error, "compiler streams cannot be transferred");
+            log::debug!("compiler streams cannot be transferred: {error}");
             return Ok(None);
         }
     };
     let executable = match crate::platform::frontend_executable() {
         Ok(path) => path,
         Err(error) => {
-            tracing::debug!(%error, "compiler client executable cannot be resolved");
+            log::debug!("compiler client executable cannot be resolved: {error}");
             return Ok(None);
         }
     };

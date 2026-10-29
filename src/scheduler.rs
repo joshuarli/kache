@@ -86,7 +86,7 @@ pub(crate) fn join_discovery_flight(cache_dir: &Path, identity: &str) -> Discove
     match acquire_discovery(&path, WAIT_TIMEOUT, POLL_INTERVAL) {
         Ok((lock, waited)) => DiscoveryFlight { lock, waited },
         Err(error) => {
-            tracing::debug!("discovery flight unavailable: {error:#}");
+            log::debug!("discovery flight unavailable: {error:#}");
             DiscoveryFlight {
                 lock: None,
                 waited: false,
@@ -137,7 +137,7 @@ pub fn default_pool_size() -> u32 {
     let available = std::thread::available_parallelism()
         .map(|n| n.get() as u32)
         .unwrap_or(1);
-    if tracing::enabled!(tracing::Level::DEBUG) {
+    if log::log_enabled!(log::Level::Debug) {
         ResourceSnapshot::discover().trace_diagnostics(available);
     }
     available
@@ -305,7 +305,7 @@ pub fn begin_miss(
     let scheduler = match Scheduler::open(cache_dir) {
         Ok(scheduler) => scheduler,
         Err(error) => {
-            tracing::debug!("scheduler unusable ({error:#}); compiling without a permit");
+            log::debug!("scheduler unusable ({error:#}); compiling without a permit");
             return BeginMiss::Compile(MissGuard::empty());
         }
     };
@@ -331,7 +331,7 @@ pub fn begin_keyless_compile(
     match Scheduler::open(cache_dir) {
         Ok(scheduler) => scheduler.keyless_compile(crate_name, is_link, lease),
         Err(error) => {
-            tracing::debug!("scheduler unusable ({error:#}); compiling without a permit");
+            log::debug!("scheduler unusable ({error:#}); compiling without a permit");
             MissGuard::empty()
         }
     }
@@ -429,11 +429,11 @@ impl Scheduler {
         match StoreLock::try_acquire(&path) {
             Ok(Some(lock)) => FlightJoin::Owner(lock),
             Ok(None) => {
-                tracing::debug!(
-                    compiler = %identity.compiler,
-                    crate_name = %identity.crate_name,
-                    output_kind = %identity.output_kind,
-                    "waiting for in-flight compile"
+                log::debug!(
+                    "waiting for in-flight compile; compiler={} crate_name={} output_kind={}",
+                    identity.compiler,
+                    identity.crate_name,
+                    identity.output_kind
                 );
                 let waited = std::time::Instant::now();
                 let _trace_wait = crate::phase_trace::phase("flight_wait");
@@ -442,14 +442,14 @@ impl Scheduler {
                 match outcome {
                     Ok(true) => FlightJoin::Waited,
                     Ok(false) => {
-                        tracing::debug!(
-                            crate_name = %identity.crate_name,
-                            "flight wait timed out; compiling without a permit"
+                        log::debug!(
+                            "flight wait timed out; compiling without a permit; crate_name={}",
+                            identity.crate_name
                         );
                         FlightJoin::FailOpen
                     }
                     Err(error) => {
-                        tracing::debug!(
+                        log::debug!(
                             "scheduler flight wait failed ({error:#}); compiling without a permit"
                         );
                         FlightJoin::FailOpen
@@ -457,7 +457,7 @@ impl Scheduler {
                 }
             }
             Err(error) => {
-                tracing::debug!(
+                log::debug!(
                     "scheduler flight lock failed ({error:#}); compiling without a permit"
                 );
                 FlightJoin::FailOpen
@@ -550,7 +550,7 @@ impl Scheduler {
         };
         let need = test_need(floor, self.pool_size);
         if need == 0 {
-            tracing::debug!("no test slots above the compile reserve; running without a lease");
+            log::debug!("no test slots above the compile reserve; running without a lease");
             return None;
         }
         let range = reserve_for(self.pool_size)..self.pool_size;
@@ -582,7 +582,7 @@ impl Scheduler {
             .ok()
             .flatten();
         if marker.is_none() {
-            tracing::debug!("test lease marker busy; running without a lease");
+            log::debug!("test lease marker busy; running without a lease");
         }
         marker
     }
@@ -683,7 +683,7 @@ pub fn acquire_test_lease(
     match Scheduler::open_with(cache_dir, pool, wait, POLL_INTERVAL) {
         Ok(scheduler) => scheduler.acquire_test_lease(want),
         Err(error) => {
-            tracing::debug!("scheduler unusable ({error:#}); running without a lease");
+            log::debug!("scheduler unusable ({error:#}); running without a lease");
             None
         }
     }
@@ -800,14 +800,14 @@ impl Scheduler {
             Ok(Collect::Ready(slots)) => WaitStep::Ready(slots),
             Ok(Collect::Busy(busy)) => {
                 if start.elapsed() >= self.wait_timeout {
-                    tracing::debug!("scheduler permit wait timed out; running without a permit");
+                    log::debug!("scheduler permit wait timed out; running without a permit");
                     WaitStep::Stop
                 } else {
                     WaitStep::Busy(busy)
                 }
             }
             Err(error) => {
-                tracing::debug!(
+                log::debug!(
                     "scheduler permit lock failed ({error:#}); running without a permit"
                 );
                 WaitStep::Stop
@@ -1137,24 +1137,27 @@ impl ResourceSnapshot {
 
     fn trace_diagnostics(&self, available: u32) {
         let events = self.current_memory_events.unwrap_or_default();
-        tracing::debug!(
-            available,
-            cpu_quota_us = self.cpu_limit.map(|limit| limit.quota_us),
-            cpu_period_us = self.cpu_limit.map(|limit| limit.period_us),
-            cpu_rounded_cpus = self.cpu_limit.map(CpuLimit::rounded_cpus),
-            cpuset_cpus = self.cpuset_cpus,
-            memory_limit_bytes = self.memory_limit_bytes,
-            memory_current_bytes = self.memory_current_bytes,
-            memory_headroom_bytes = self.memory_headroom_bytes,
-            ancestor_limits_complete = self.ancestor_limits_complete,
-            current_memory_events_known = self.current_memory_events.is_some(),
-            current_memory_low = events.low,
-            current_memory_high = events.high,
-            current_memory_max = events.max,
-            current_memory_oom = events.oom,
-            current_memory_oom_kill = events.oom_kill,
-            current_memory_oom_group_kill = events.oom_group_kill,
-            "scheduler resource snapshot; resource-aware admission is future work"
+        // Options render transparently (`Some(3)` as `3`), matching the
+        // previous subscriber's field formatting that the diagnostics test
+        // pins down.
+        let display = |value: Option<u64>| value.map(|v| v.to_string()).unwrap_or_default();
+        log::debug!(
+            "scheduler resource snapshot; resource-aware admission is future work; available={available} cpu_quota_us={} cpu_period_us={} cpu_rounded_cpus={} cpuset_cpus={} memory_limit_bytes={} memory_current_bytes={} memory_headroom_bytes={} ancestor_limits_complete={} current_memory_events_known={} current_memory_low={} current_memory_high={} current_memory_max={} current_memory_oom={} current_memory_oom_kill={} current_memory_oom_group_kill={}",
+            display(self.cpu_limit.map(|limit| limit.quota_us)),
+            display(self.cpu_limit.map(|limit| limit.period_us)),
+            display(self.cpu_limit.map(|limit| u64::from(limit.rounded_cpus()))),
+            display(self.cpuset_cpus.map(u64::from)),
+            display(self.memory_limit_bytes),
+            display(self.memory_current_bytes),
+            display(self.memory_headroom_bytes),
+            self.ancestor_limits_complete,
+            self.current_memory_events.is_some(),
+            events.low,
+            events.high,
+            events.max,
+            events.oom,
+            events.oom_kill,
+            events.oom_group_kill
         );
     }
 }
@@ -1535,20 +1538,6 @@ pub(crate) fn parse_memory_events(text: &str) -> Option<MemoryEvents> {
 mod tests {
     use super::*;
     use std::process::Command;
-    use std::sync::{Arc, Mutex};
-
-    struct TraceWriter(Arc<Mutex<Vec<u8>>>);
-
-    impl std::io::Write for TraceWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
 
     fn temp_cache() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
@@ -1877,19 +1866,10 @@ mod tests {
                 oom_group_kill: 6,
             }),
         };
-        let output = Arc::new(Mutex::new(Vec::new()));
-        let writer_output = Arc::clone(&output);
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .without_time()
-            .with_target(false)
-            .with_ansi(false)
-            .with_writer(move || TraceWriter(Arc::clone(&writer_output)))
-            .finish();
+        let capture = kache_log::capture();
+        snapshot.trace_diagnostics(8);
 
-        tracing::subscriber::with_default(subscriber, || snapshot.trace_diagnostics(8));
-
-        let rendered = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let rendered = capture.records().join("\n");
         for expected in [
             "scheduler resource snapshot; resource-aware admission is future work",
             "available=8",

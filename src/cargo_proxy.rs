@@ -137,9 +137,9 @@ fn run_with_source(cargo_args: Vec<OsString>) -> Result<()> {
                      running Cargo unchanged"
                 );
             } else {
-                tracing::info!(
-                    aliases = ?plan.duplicate_paths,
-                    "collapsing canonical duplicate Cargo rustflags source"
+                log::info!(
+                    "collapsing canonical duplicate Cargo rustflags source; aliases={:?}",
+                    plan.duplicate_paths
                 );
                 rustflags = Some(plan.rustflags);
             }
@@ -250,7 +250,7 @@ fn run_cargo_guarded(
         match start_cargo_stdout_reader() {
             Ok(reader) => Some(reader),
             Err(error) => {
-                tracing::warn!(%error, "target liveness stdout capture unavailable");
+                log::warn!("target liveness stdout capture unavailable: {error}");
                 capture = None;
                 None
             }
@@ -288,7 +288,7 @@ fn run_cargo_guarded(
     if let Some(capture) = capture
         && let Err(error) = capture.finish(status.success())
     {
-        tracing::warn!(%error, "target liveness receipt not recorded");
+        log::warn!("target liveness receipt not recorded: {error}");
     }
     std::process::exit(crate::test_runner::finish(
         crate::test_runner::exit_disposition(
@@ -375,19 +375,19 @@ fn drain_cargo_stdout(
                     output.push(&bytes, &mut |line| capture.observe(line), &mut writer)
                 {
                     capture.observe(INVALID_CARGO_STREAM);
-                    tracing::debug!(%error, "forwarding Cargo stdout failed");
+                    log::debug!("forwarding Cargo stdout failed: {error}");
                 }
             }
             Ok(CargoStdoutMessage::Finished) => {
                 if let Err(error) = output.finish(&mut |line| capture.observe(line), &mut writer) {
                     capture.observe(INVALID_CARGO_STREAM);
-                    tracing::debug!(%error, "forwarding Cargo stdout tail failed");
+                    log::debug!("forwarding Cargo stdout tail failed: {error}");
                 }
                 break;
             }
             Ok(CargoStdoutMessage::Failed(error)) => {
                 capture.observe(INVALID_CARGO_STREAM);
-                tracing::warn!(%error, "reading Cargo stdout failed");
+                log::warn!("reading Cargo stdout failed: {error}");
                 break;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -400,9 +400,9 @@ fn drain_cargo_stdout(
             capture.observe(INVALID_CARGO_STREAM);
             // Preserve the nonprotocol tail, but do not certify a partial stream.
             if let Err(error) = writer.write_all(&output.line) {
-                tracing::debug!(%error, "forwarding incomplete Cargo stdout failed");
+                log::debug!("forwarding incomplete Cargo stdout failed: {error}");
             }
-            tracing::warn!(
+            log::warn!(
                 "Cargo exited while a descendant retained its stdout; receipt not recorded"
             );
             break;
@@ -509,7 +509,7 @@ fn replay_rendered_cargo_diagnostic(line: &[u8]) {
     if let Some(rendered) = rendered_cargo_diagnostic(line)
         && let Err(error) = io::stderr().lock().write_all(rendered.as_bytes())
     {
-        tracing::debug!(%error, "forwarding rendered Cargo diagnostic failed");
+        log::debug!("forwarding rendered Cargo diagnostic failed: {error}");
     }
 }
 

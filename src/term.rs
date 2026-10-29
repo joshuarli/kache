@@ -74,7 +74,7 @@ impl Output {
             columns: terminal
                 .then(|| {
                     usable_columns(
-                        crossterm::terminal::size().ok().map(|(w, _)| w),
+                        terminal_columns(),
                         std::env::var("COLUMNS").ok().as_deref(),
                     )
                 })
@@ -112,6 +112,25 @@ impl Output {
 /// multiplexers and `script` report 0 columns without an error.
 const MIN_COLUMNS: usize = 20;
 
+/// The terminal's own width, when stdout is one and reports a real one.
+/// Only the non-test renderer queries it; snapshots pin their settings.
+#[cfg(not(test))]
+#[cfg(unix)]
+fn terminal_columns() -> Option<u16> {
+    // SAFETY: `ioctl` with `TIOCGWINSZ` only writes the winsize struct.
+    let mut size: libc::winsize = unsafe { std::mem::zeroed() };
+    if unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut size) } != 0 {
+        return None;
+    }
+    (size.ws_col != 0).then_some(size.ws_col)
+}
+
+#[cfg(not(test))]
+#[cfg(not(unix))]
+fn terminal_columns() -> Option<u16> {
+    None
+}
+
 /// The width to wrap at: the terminal's, then `$COLUMNS`, each only when it
 /// is at least [`MIN_COLUMNS`]. `None` means no wrapping.
 fn usable_columns(reported: Option<u16>, env_columns: Option<&str>) -> Option<usize> {
@@ -132,16 +151,6 @@ pub(crate) fn paint(text: impl AsRef<str>, style: Style) -> String {
 
 pub(crate) fn heading(text: impl AsRef<str>) -> String {
     paint(text, Style::Heading)
-}
-
-pub(crate) fn clap_styles() -> clap::builder::Styles {
-    use clap::builder::styling::AnsiColor;
-    clap::builder::Styles::styled()
-        .header(AnsiColor::Cyan.on_default().bold())
-        .usage(AnsiColor::Cyan.on_default().bold())
-        .literal(clap::builder::styling::Style::new().bold())
-        .placeholder(clap::builder::styling::Style::new())
-        .error(AnsiColor::Red.on_default().bold())
 }
 
 /// Each section gets a heading and its own columns. Long notes continue
@@ -398,7 +407,27 @@ fn home_path_in(path: &Path, home: Option<&Path>) -> String {
 }
 
 fn width(text: &str) -> usize {
-    ratatui::text::Span::raw(strip_sgr(text)).width()
+    strip_sgr(text).chars().map(char_width).sum()
+}
+
+/// The display width of one character: 2 for East Asian wide and fullwidth
+/// forms, 1 for everything else.
+fn char_width(c: char) -> usize {
+    match c {
+        '\u{1100}'..='\u{115f}'
+        | '\u{2e80}'..='\u{303e}'
+        | '\u{3041}'..='\u{33ff}'
+        | '\u{3400}'..='\u{4dbf}'
+        | '\u{4e00}'..='\u{9fff}'
+        | '\u{a000}'..='\u{a4cf}'
+        | '\u{ac00}'..='\u{d7a3}'
+        | '\u{f900}'..='\u{faff}'
+        | '\u{fe30}'..='\u{fe4f}'
+        | '\u{ff00}'..='\u{ff60}'
+        | '\u{ffe0}'..='\u{ffe6}'
+        | '\u{20000}'..='\u{3fffd}' => 2,
+        _ => 1,
+    }
 }
 
 fn pad(text: &str, to: usize) -> String {
@@ -477,20 +506,6 @@ mod tests {
     }
 
     #[test]
-    fn help_styles_use_the_shared_heading_color() {
-        use clap::builder::styling::{AnsiColor, Color};
-        let styles = clap_styles();
-        assert_eq!(
-            styles.get_header().get_fg_color(),
-            Some(Color::Ansi(AnsiColor::Cyan))
-        );
-        assert_eq!(
-            styles.get_usage().get_fg_color(),
-            Some(Color::Ansi(AnsiColor::Cyan))
-        );
-    }
-
-    #[test]
     fn a_zero_or_tiny_width_falls_back_to_columns_then_no_wrapping() {
         assert_eq!(usable_columns(Some(80), Some("120")), Some(80));
         assert_eq!(usable_columns(Some(20), None), Some(20));
@@ -501,6 +516,13 @@ mod tests {
         assert_eq!(usable_columns(Some(0), Some("19")), None);
         assert_eq!(usable_columns(Some(0), Some("wide")), None);
         assert_eq!(usable_columns(Some(0), None), None);
+    }
+
+    #[test]
+    fn wide_characters_count_double() {
+        assert_eq!(width("abc"), 3);
+        assert_eq!(width("日本語"), 6);
+        assert_eq!(width("ａｂ"), 4);
     }
 
     #[test]

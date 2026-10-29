@@ -1128,7 +1128,7 @@ pub(crate) fn digest(
     match resolve_snapshot(source_file, crate_name, is_primary, file_hasher, false) {
         Ok(snapshot) => snapshot.and_then(|snapshot| snapshot.digest),
         Err(error) => {
-            tracing::warn!("[key:{crate_name}] failed to resolve extra_inputs: {error:#}");
+            log::warn!("[key:{crate_name}] failed to resolve extra_inputs: {error:#}");
             None
         }
     }
@@ -1265,7 +1265,7 @@ fn resolve_snapshot(
         Err(error) if legacy_digest_mode(strict_watches) => {
             // Preserve the legacy digest API's unreadable-config no-op. The
             // strict snapshot API fails closed instead.
-            tracing::warn!(
+            log::warn!(
                 "[key:{crate_name}] cannot read {}: {error}",
                 config_path.display()
             );
@@ -1330,7 +1330,7 @@ fn resolve_snapshot(
             });
         }
         Err(error) => {
-            tracing::warn!(
+            log::warn!(
                 "[key:{crate_name}] {} is invalid ({error}); folding it as an opaque \
                  input so the crate rebuilds until fixed",
                 config_path.display()
@@ -1441,7 +1441,7 @@ fn resolve_declared_inputs(
     // tracked. Fold the raw declared patterns instead: the key is distinct
     // from no-config and any edit to `kache.toml` re-keys.
     if normalized_patterns.is_empty() {
-        tracing::warn!(
+        log::warn!(
             "[key:{crate_name}] every extra_inputs pattern was rejected; folding the raw \
              declaration so the crate stays distinct from an unconfigured one"
         );
@@ -1471,7 +1471,7 @@ fn resolve_declared_inputs(
     let watch_paths = match resolve_watch_paths(&crate_dir, &normalized) {
         Ok(paths) => paths,
         Err(error) if !strict_watches => {
-            tracing::warn!("[key:{crate_name}] unsafe Cargo extra_inputs watch: {error:#}");
+            log::warn!("[key:{crate_name}] unsafe Cargo extra_inputs watch: {error:#}");
             Vec::new()
         }
         Err(error) => return Err(error),
@@ -1522,7 +1522,7 @@ fn resolve_declared_inputs(
         // entire filesystem on every compile — almost never intended, and the
         // walk itself is the cost, so flag it before globbing.
         if walks_filesystem_root(&full) {
-            tracing::warn!(
+            log::warn!(
                 "[key:{crate_name}] extra_inputs pattern {pat:?} walks from the filesystem \
                  root — this enumerates the entire filesystem on every compile; narrow it"
             );
@@ -1534,7 +1534,7 @@ fn resolve_declared_inputs(
                 strict_input_error(strict_watches, error).with_context(|| {
                     format!("parsing active extra_inputs glob {pat:?} for {crate_name}")
                 })?;
-                tracing::warn!("[key:{crate_name}] bad extra_inputs glob {pat:?}: {rendered}");
+                log::warn!("[key:{crate_name}] bad extra_inputs glob {pat:?}: {rendered}");
                 continue;
             }
         };
@@ -1548,7 +1548,7 @@ fn resolve_declared_inputs(
                     strict_input_error(strict_watches, error).with_context(|| {
                         format!("enumerating active extra_inputs glob {pat:?} for {crate_name}")
                     })?;
-                    tracing::warn!(
+                    log::warn!(
                         "[key:{crate_name}] extra_inputs enumeration error at {rel:?}: {rendered}"
                     );
                     glob_errors.push(rel);
@@ -1582,7 +1582,7 @@ fn resolve_declared_inputs(
     // `target/`). Over-folding is fail-safe, but it busts the key on every
     // change and re-walks a large tree each compile, so surface it.
     if should_warn_over_broad_file_count(matched.len()) {
-        tracing::warn!(
+        log::warn!(
             "[key:{crate_name}] extra_inputs matched {} files — likely an over-broad glob; \
              it busts the key on every change and walks a large tree each compile. Narrow it.",
             matched.len()
@@ -1625,7 +1625,7 @@ fn resolve_declared_inputs(
                         path.display()
                     )
                 })?;
-                tracing::warn!("[key:{crate_name}] extra_input unreadable {rel:?}: {rendered}");
+                log::warn!("[key:{crate_name}] extra_input unreadable {rel:?}: {rendered}");
                 unreadable.push(rel);
             }
         }
@@ -1652,12 +1652,12 @@ fn resolve_declared_inputs(
 
     // The byte total is a debug-only convenience; don't pay a second `stat`
     // per matched file unless DEBUG is actually being recorded.
-    if tracing::enabled!(tracing::Level::DEBUG) {
+    if log::log_enabled!(log::Level::Debug) {
         let total_bytes: u64 = matched
             .iter()
             .filter_map(|p| std::fs::metadata(p).ok().map(|m| m.len()))
             .sum();
-        tracing::debug!(
+        log::debug!(
             "[key:{crate_name}] extra_inputs: {} pattern(s), {} file(s), {} unreadable, \
              {} glob-error(s), {} bytes",
             normalized.len(),
@@ -1670,7 +1670,7 @@ fn resolve_declared_inputs(
 
     // A single info!-level confirmation so a default-verbosity build shows the
     // feature is live for this crate (and `why-miss` guidance is actionable).
-    tracing::info!(
+    log::info!(
         "[key:{crate_name}] extra_inputs: folded {} file(s) from {} pattern(s)",
         readable.len(),
         normalized.len()
@@ -1757,7 +1757,7 @@ fn normalize_pattern_info(
     // regardless of the files the author meant to track. Warn so the missing
     // var is visible instead of presenting as a clean (but wrong) cache hit.
     if should_warn_unset_extra_input_vars(&unset_vars) {
-        tracing::warn!(
+        log::warn!(
             "[key:{crate_name}] extra_inputs pattern {pattern:?} references unset env var(s) \
              {unset_vars:?}; they stay literal and match nothing — set the var(s) or remove the \
              reference, otherwise this folds a replayable matches-nothing key"
@@ -1768,7 +1768,7 @@ fn normalize_pattern_info(
     // a crafted pattern cross the pattern/hash section boundary in the digest.
     // Reject it rather than fold an ambiguous byte stream.
     if normalized.contains('\x1f') {
-        tracing::warn!(
+        log::warn!(
             "[key:{crate_name}] extra_inputs pattern {pattern:?} contains a control \
              separator (\\x1f); skipping"
         );
@@ -1784,7 +1784,7 @@ fn normalize_pattern_info(
     // cache sharing, so flag it rather than silently degrade portability.
     let as_path = Path::new(&normalized);
     if pattern_reaches_outside_crate(as_path) {
-        tracing::warn!(
+        log::warn!(
             "[key:{crate_name}] extra_inputs pattern {pattern:?} reaches outside the crate \
              (absolute or `..`); folding it anyway, but this crate's key is now \
              host-/layout-specific and won't share across machines or worktrees"
@@ -2158,7 +2158,7 @@ fn merge_snapshot_dep_info_content(
     original: &str,
     compiler_cwd: &Path,
 ) -> Result<String> {
-    tracing::trace!(
+    log::trace!(
         "merging extra_inputs dep-info: {} normalized pattern(s), {} matched file(s), {} watch path(s)",
         snapshot.normalized_patterns.len(),
         snapshot.matched_files.len(),
@@ -2320,7 +2320,7 @@ fn unparseable_digest(crate_name: &str, config_path: &Path, raw: &[u8]) -> Strin
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"extra_inputs_unparseable:");
     hasher.update(raw);
-    tracing::debug!(
+    log::debug!(
         "[key:{crate_name}] folding {} as opaque (unparseable)",
         config_path.display()
     );

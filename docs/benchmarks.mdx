@@ -138,18 +138,18 @@ optional status; this workflow does not change branch protection.
 ## Local commands
 
 ```bash
-just bench                 # list Kache scenarios
-just bench hk --warm-same-tree
-just bench eza --warm-same-tree
-just bench-pr              # one Kache side of hk and eza
-just bench-short hk        # three tools, six warm samples each
-just bench-short eza
-just bench-sccache hk --warm-same-tree
-just bench-sccache eza --warm-same-tree
-just bench-mbx hk --warm-same-tree
-just bench-mbx eza --warm-same-tree
-just bench-mbx hk-pull
-just perf-gate-local       # HEAD against its merge base, with the gate's verdict
+make bench                                         # list Kache scenarios
+make bench PROFILE=hk ARGS="--warm-same-tree"
+make bench PROFILE=eza ARGS="--warm-same-tree"
+make bench-pr                                      # one Kache side of hk and eza
+make bench-short PROJECT=hk                        # three tools, six warm samples each
+make bench-short PROJECT=eza
+make bench-sccache PROFILE=hk ARGS="--warm-same-tree"
+make bench-sccache PROFILE=eza ARGS="--warm-same-tree"
+make bench-mbx PROFILE=hk ARGS="--warm-same-tree"
+make bench-mbx PROFILE=eza ARGS="--warm-same-tree"
+make bench-mbx PROFILE=hk-pull
+make perf-gate-local                               # HEAD against its merge base, with the gate's verdict
 ```
 
 The complete short suite runs on Linux. It measures mbx and sccache only when given `--mbx <binary>` or `--sccache <binary>`.
@@ -178,8 +178,8 @@ Both phases use the debug profile without Cargo incremental state. These are
 batch measurements; eza's isolated release build remains a separate case.
 
 ```bash
-just bench-contention --project hk --samples 3 --jobs-per-build 4 \
-  --output /tmp/hk-contention
+make bench-contention ARGS="--project hk --samples 3 --jobs-per-build 4 \
+  --output /tmp/hk-contention"
 
 # Compare two release binaries with identical settings and alternating order.
 python3 scripts/bench-contention.py --project hk --samples 3 \

@@ -2,7 +2,7 @@
 name     = "bench-firefox"
 # No `os:` tag: this scenario builds natively on whatever host runs it
 # (Linux or macOS in CI), so an `os:linux` discriminator would lie about the
-# build target. `just bench firefox` resolves to this scenario via exact-name
+# build target. `make bench PROFILE=firefox` resolves to this scenario via exact-name
 # disambiguation, not an OS tag (#458). The Windows variant is a separate
 # scenario reached by its fuller `firefox-windows` profile name.
 tags     = ["suite:bench", "project:firefox", "backend:kache", "lang:cc", "lang:cpp", "lang:rust"]

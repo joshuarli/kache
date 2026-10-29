@@ -23,8 +23,8 @@ pub struct SeedTargetRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StatsRequest {
     pub include_entries: bool,
-    /// Include the bounded recent session-summary tail. False for TUI/health
-    /// polling so they do not rescan the append-only summary log every tick.
+    /// Include the bounded recent session-summary tail. False for polling
+    /// so it does not rescan the append-only summary log every tick.
     #[serde(default)]
     pub include_summaries: bool,
     pub sort_by: Option<String>,
@@ -193,9 +193,8 @@ pub struct OpenFileLimits {
     pub hard: Option<u64>,
 }
 
-/// One in-flight compile as reported to stats consumers (`kache monitor`'s
-/// "In flight" panel). Elapsed/ETA are computed at snapshot time from the
-/// registry's wall-clock start.
+/// One in-flight compile as reported to stats consumers. Elapsed/ETA are
+/// computed at snapshot time from the registry's wall-clock start.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InFlightEntry {
     pub crate_name: String,

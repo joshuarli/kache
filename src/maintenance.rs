@@ -186,7 +186,7 @@ pub(crate) fn spawn_periodic(config: Config, clock: Arc<RequestClock>) -> Period
                     run(&config, Trigger::Periodic(&clock))
                 }));
                 if outcome.is_err() {
-                    tracing::warn!("store maintenance task panicked");
+                    log::warn!("store maintenance task panicked");
                 }
                 if sleep_while_running(&stopping, CHECK_INTERVAL) {
                     return;
@@ -234,7 +234,7 @@ pub(crate) fn run_at_shutdown(config: Config) {
         run(&config, Trigger::Shutdown)
     }));
     if outcome.is_err() {
-        tracing::warn!("store maintenance task panicked");
+        log::warn!("store maintenance task panicked");
     }
 }
 

@@ -132,7 +132,7 @@ The daemon owns delegated compilation and periodic maintenance:
 - flushing entries stored without an fsync, every two seconds
 - scheduled garbage collection
 - index upkeep, target-directory cleanup and target-file sharing when the machine is quiet
-- monitor statistics that require live transfer state
+- tracking in-flight compiles reported by wrappers
 
 The client connects through `<runtime_dir>/daemon.sock` on Unix or a named pipe
 on Windows. Before Commit, an unavailable daemon leaves the local engine

@@ -179,7 +179,7 @@ impl BenchProfile {
         // catches `bench-firefox-windows`. When several scenarios match but
         // exactly one carries the name the profile names (`<needle>` or
         // `bench-<needle>`), prefer that single scenario. This lets
-        // `just bench firefox` resolve unambiguously to `bench-firefox` without
+        // `make bench PROFILE=firefox` resolve unambiguously to `bench-firefox` without
         // an `os:`-flavored discriminator tag (#458). A genuinely ambiguous
         // substring with no exact hit is left untouched for the caller's
         // "matched multiple scenarios" guard to report.
@@ -914,7 +914,7 @@ setup_marker = "{}"
         // `name:firefox` is a SUBSTRING match, so it catches the
         // host-native (`bench-firefox`) cross-clone scenario plus its pull-scenario
         // variants. Discovery then disambiguates to the scenario whose exact name
-        // the profile names (`bench-firefox`), so `just bench firefox` resolves
+        // the profile names (`bench-firefox`), so `make bench PROFILE=firefox` resolves
         // to a single scenario without an `os:`-flavored discriminator tag (#458).
         let mut firefox_sel = base.to_vec();
         firefox_sel.push("name:firefox".to_string());
@@ -959,7 +959,7 @@ setup_marker = "{}"
         }
     }
 
-    /// `just bench-mbx firefox` must select the mbx arm, and that arm must
+    /// `make bench-mbx PROFILE=firefox` must select the mbx arm, and that arm must
     /// build the tree bench-firefox builds, through `mbx exec`.
     #[test]
     fn firefox_mbx_arm_builds_the_firefox_tree_through_mbx_exec() {

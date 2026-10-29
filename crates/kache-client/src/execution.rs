@@ -43,7 +43,7 @@ impl Execution<'_> {
         let prepared = match self.prepare(trusted_pipeline) {
             Ok(prepared) => prepared,
             Err(error) => {
-                tracing::debug!(%error, "compiler request cannot be transferred");
+                log::debug!("compiler request cannot be transferred: {error}");
                 return Ok(None);
             }
         };

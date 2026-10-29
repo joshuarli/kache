@@ -42,27 +42,6 @@ pub(crate) fn cargo_rustdoc_setting() -> Option<(String, PathBuf)> {
     )
 }
 
-pub(crate) fn wrapper_status_line() -> String {
-    match resolve_wrapper_setting() {
-        Some(WrapperSetting::Environment { value }) if value.contains("kache") => {
-            "RUSTC_WRAPPER=kache ✓".to_string()
-        }
-        Some(WrapperSetting::Environment { value }) => {
-            format!("RUSTC_WRAPPER={value} (not kache!)")
-        }
-        Some(WrapperSetting::CargoConfig { value, path }) if value.contains("kache") => {
-            format!("rustc-wrapper=kache via {} ✓", display_path(&path))
-        }
-        Some(WrapperSetting::CargoConfig { value, path }) => {
-            format!(
-                "rustc-wrapper={value} in {} (not kache!)",
-                display_path(&path)
-            )
-        }
-        None => "rustc-wrapper not configured ✗".to_string(),
-    }
-}
-
 pub(crate) fn display_path(path: &Path) -> String {
     if let Some(home) = dirs::home_dir()
         && let Ok(stripped) = path.strip_prefix(&home)

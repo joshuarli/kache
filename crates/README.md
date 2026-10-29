@@ -45,7 +45,7 @@ Extracting crates alone does not make that code safe to run concurrently.
 
 ## Validation
 
-`just check` tests the full workspace and checks the client crates separately so
+`make check` tests the full workspace and checks the client crates separately so
 feature unification cannot hide a dependency in the client-only configuration.
 
 Protocol tests cover older messages and prevent clients from supplying internal

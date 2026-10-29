@@ -109,7 +109,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         let cost = match read() {
             Ok(cost) => Some(cost),
             Err(error) => {
-                tracing::debug!(key = %candidate.key, %error, "compile-cost backfill deferred");
+                log::debug!("compile-cost backfill deferred; key={} error={error}", candidate.key);
                 None
             }
         };
@@ -211,7 +211,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                 break;
             }
         }
-        tracing::debug!(attempted, recovered, "compile-cost backfill pass");
+        log::debug!("compile-cost backfill pass; attempted={attempted} recovered={recovered}");
         Ok(recovered)
     }
 }

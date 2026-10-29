@@ -41,12 +41,7 @@ This needs a filesystem with copy-on-write clones. It never hardlinks, and it sk
 
 `kache targets share` reports the matches, and `kache targets share --apply` clones them now. See [Target directory cleanup](/docs/getting-started/configuration#target-directory-cleanup).
 
-## Monitor metrics
-
-The monitor's Store tab title shows the entries' logical size, the registered
-blob bytes, and the share of logical size that sharing saved. The Projects tab
-shows how much of each target directory is already cached, and says
-`scanning…` while it walks them.
+## Reported sizes
 
 In `kache stats`, Cache and Store show registered blob bytes; Limit is the
 registered blob budget. Dedup shows logical output bytes and the percentage

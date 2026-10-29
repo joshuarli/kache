@@ -1,10 +1,10 @@
-//! Build sessions and miss causes for the monitor.
+//! Build sessions and miss causes for `explain`, `report`, and `diff`.
 //!
 //! The event log is one flat stream across every workspace and every
-//! `cargo build` on the machine. A person watching it wants two things the
-//! stream does not give directly: "which build is this row from" and "why did
-//! that build miss". This module answers both as pure functions over the
-//! events the monitor already holds, so `tui` only renders.
+//! `cargo build` on the machine. A reader wants two things the stream does
+//! not give directly: "which build is this row from" and "why did that
+//! build miss". This module answers both as pure functions over the loaded
+//! events.
 //!
 //! # Sessions
 //!
@@ -22,8 +22,8 @@
 //! failure to act on. Below that, a recorded dependency cascade names the
 //! crate that actually changed (`miss_chain`), so forty downstream misses read
 //! as one line. Then the crate's own changed key groups, then "no earlier
-//! compile in the loaded history", and last "unexplained", which is what the
-//! monitor says when the wrapper recorded nothing it could reason from.
+//! compile in the loaded history", and last "unexplained", which is what
+//! the report says when the wrapper recorded nothing it could reason from.
 //!
 //! Everything here describes the loaded history, never more: with `--since`
 //! the history starts at the cutoff, and the wording says so.
@@ -34,34 +34,14 @@ use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
-/// How long after its last event a session with nothing in flight still
-/// counts as live. Long enough to bridge cargo's own gaps between compiles,
-/// short enough that a finished build stops claiming the top row.
-pub(crate) const LIVE_GRACE: Duration = Duration::from_secs(30);
-
 /// The most misses one session's cause analysis walks. The cascade walk is
 /// per miss and scans history, so a 3,000-crate cold build must not stall
-/// the draw loop; the analysis says when it was capped.
+/// the report; the analysis says when it was capped.
 pub(crate) const MAX_ANALYZED_MISSES: usize = 400;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SessionState {
-    Live,
-    Finished,
-}
-
-impl SessionState {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            SessionState::Live => "running",
-            SessionState::Finished => "done",
-        }
-    }
-}
-
-/// Per-session counts and timings. Everything a row or a cost strip shows.
-/// Sums saturate: a corrupt event with an absurd duration must not take the
-/// monitor down, and a saturated total is visibly wrong rather than wrapped.
+/// Per-session counts and timings. Sums saturate: a corrupt event with an
+/// absurd duration must not wrap, and a saturated total is visibly wrong
+/// rather than wrapped.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct Tally {
     pub hits: u64,
@@ -143,46 +123,21 @@ impl Tally {
         self.copied_bytes = self.copied_bytes.saturating_add(event.copied_bytes);
     }
 
-    /// Misses and dups together: compiles that entered the cache and lost.
-    pub(crate) fn compiled(&self) -> u64 {
-        self.misses.saturating_add(self.dups)
-    }
-
     /// Lookups that hit, over lookups alone. Passthroughs and probes never
     /// consulted the cache, so they are not in the denominator; folding them
     /// in would report a number no cache could move.
     #[cfg(test)]
     pub(crate) fn hit_rate(&self) -> Option<f64> {
-        let lookups = self.hits.saturating_add(self.compiled());
+        let lookups = self.hits.saturating_add(self.misses).saturating_add(self.dups);
         (lookups > 0).then(|| self.hits as f64 * 100.0 / lookups as f64)
-    }
-
-    pub(crate) fn restored_bytes(&self) -> u64 {
-        self.reflinked_bytes
-            .saturating_add(self.hardlinked_bytes)
-            .saturating_add(self.copied_bytes)
-    }
-
-    /// Share of restored bytes that were physically copied, as a percentage.
-    /// Anything much above zero on a CoW filesystem is worth a look.
-    pub(crate) fn copy_share(&self) -> Option<f64> {
-        let total = self.restored_bytes();
-        (total > 0).then(|| self.copied_bytes as f64 * 100.0 / total as f64)
-    }
-
-    /// kache's own time as a share of the lookups' summed invocation time,
-    /// as a percentage.
-    pub(crate) fn overhead_share(&self) -> Option<f64> {
-        (self.lookup_elapsed_ms > 0)
-            .then(|| self.overhead_ms as f64 * 100.0 / self.lookup_elapsed_ms as f64)
     }
 }
 
 /// One build, as far as the events show it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Session {
-    /// Stable identity across redraws: `id:<session_id>` for a recorded
-    /// session, `inferred:<root>:<ordinal>` for one grouped by idle gap. The
+    /// Stable identity: `id:<session_id>` for a recorded session,
+    /// `inferred:<root>:<ordinal>` for one grouped by idle gap. The
     /// prefixes keep the two from ever colliding.
     pub key: String,
     pub root: String,
@@ -190,35 +145,16 @@ pub(crate) struct Session {
     pub inferred: bool,
     pub started: DateTime<Utc>,
     pub last_activity: DateTime<Utc>,
-    /// Indices into the monitor's event list, in log order.
+    /// Indices into the event list, in log order.
     pub events: Vec<usize>,
     pub tally: Tally,
-    pub state: SessionState,
 }
 
 impl Session {
-    /// The last path component of the root, which is what a reader
-    /// recognizes; the whole root when there is no component to take.
-    pub(crate) fn workspace_name(&self) -> &str {
-        if self.root.is_empty() {
-            return "(unknown root)";
-        }
-        std::path::Path::new(&self.root)
-            .file_name()
-            .and_then(std::ffi::OsStr::to_str)
-            .filter(|name| !name.is_empty())
-            .unwrap_or(&self.root)
-    }
-
     /// The recorded session id behind the key.
     #[cfg(test)]
     pub(crate) fn recorded_id(&self) -> Option<&str> {
         self.key.strip_prefix("id:")
-    }
-
-    /// The newest event index, the tie-breaker for "newest first".
-    fn last_index(&self) -> usize {
-        self.events.last().copied().unwrap_or(0)
     }
 }
 
@@ -241,27 +177,8 @@ fn event_start(event: &BuildEvent) -> DateTime<Utc> {
         .unwrap_or(event.ts)
 }
 
-/// Group `events` into sessions, newest first with running builds on top.
-/// [`group`] and [`refresh_state`] in one call; the monitor calls the two
-/// apart so it can skip the regrouping on ticks where the log did not grow.
-#[cfg(test)]
-pub(crate) fn group_sessions(
-    events: &[BuildEvent],
-    now: DateTime<Utc>,
-    live_roots: &HashSet<String>,
-    idle_gap: Duration,
-) -> Vec<Session> {
-    let mut sessions = group(events, idle_gap);
-    refresh_state(&mut sessions, now, live_roots);
-    sessions
-}
-
-/// Group `events` into sessions, in order of first appearance and with no
-/// state yet. Depends on the events alone, so the caller can keep the result
-/// while the log does not grow and only [`refresh_state`] it each tick.
-///
 /// `idle_gap` splits inferred sessions; pass the wrapper's own session
-/// timeout so the monitor and `kache report` agree on what one build is.
+/// timeout so `kache report` and `kache explain` agree on what one build is.
 pub(crate) fn group(events: &[BuildEvent], idle_gap: Duration) -> Vec<Session> {
     let mut sessions: Vec<Session> = Vec::new();
     let mut by_id: HashMap<&str, usize> = HashMap::new();
@@ -279,7 +196,6 @@ pub(crate) fn group(events: &[BuildEvent], idle_gap: Duration) -> Vec<Session> {
                     last_activity: event.ts,
                     events: Vec::new(),
                     tally: Tally::default(),
-                    state: SessionState::Finished,
                 });
                 sessions.len() - 1
             })
@@ -307,7 +223,6 @@ pub(crate) fn group(events: &[BuildEvent], idle_gap: Duration) -> Vec<Session> {
                         last_activity: event.ts,
                         events: Vec::new(),
                         tally: Tally::default(),
-                        state: SessionState::Finished,
                     });
                     inferred_by_root.insert(event.root.as_str(), sessions.len() - 1);
                     sessions.len() - 1
@@ -326,54 +241,6 @@ pub(crate) fn group(events: &[BuildEvent], idle_gap: Duration) -> Vec<Session> {
         }
     }
     sessions
-}
-
-/// Decide which sessions are live and sort them: running builds first, then
-/// newest activity first, ties broken by log position.
-///
-/// `live_roots` are the build roots with a compile in flight right now (the
-/// daemon registry or tailed heartbeats). A root names a tree, not a build,
-/// so it can only keep the root's newest session live; it never revives an
-/// older build of the same tree. Only time between the last event and `now`
-/// counts as recent: an event stamped in the future is a clock problem, not
-/// a running build.
-pub(crate) fn refresh_state(
-    sessions: &mut [Session],
-    now: DateTime<Utc>,
-    live_roots: &HashSet<String>,
-) {
-    // Owned keys: the map outlives the shared borrow it is built from.
-    let mut newest_by_root: HashMap<String, usize> = HashMap::new();
-    for session in sessions.iter() {
-        if session.root.is_empty() {
-            continue;
-        }
-        let last = session.last_index();
-        newest_by_root
-            .entry(session.root.clone())
-            .and_modify(|newest| *newest = (*newest).max(last))
-            .or_insert(last);
-    }
-    let grace = chrono::Duration::from_std(LIVE_GRACE).unwrap_or(chrono::Duration::MAX);
-    for session in sessions.iter_mut() {
-        let age = now.signed_duration_since(session.last_activity);
-        let recent = age >= chrono::Duration::zero() && age < grace;
-        let compiling = live_roots.contains(&session.root)
-            && newest_by_root.get(&session.root) == Some(&session.last_index());
-        session.state = if recent || compiling {
-            SessionState::Live
-        } else {
-            SessionState::Finished
-        };
-    }
-    // The build somebody is watching is the reason they opened the monitor.
-    sessions.sort_by(|a, b| {
-        (a.state != SessionState::Live)
-            .cmp(&(b.state != SessionState::Live))
-            .then_with(|| b.last_activity.cmp(&a.last_activity))
-            .then_with(|| b.last_index().cmp(&a.last_index()))
-            .then_with(|| a.key.cmp(&b.key))
-    });
 }
 
 /// Why a miss missed, in `why-miss` precedence.
@@ -506,7 +373,7 @@ pub(crate) struct Analysis {
 
 /// Explain the selected session's misses and passthroughs.
 ///
-/// `events` is the monitor's whole list, in log order, because the cascade
+/// `events` is the whole loaded list, in log order, because the cascade
 /// walk and the history test both look at events before the session.
 /// `sessions` is every session, for the chronic-miss count.
 pub(crate) fn analyze_session(
@@ -938,10 +805,6 @@ mod tests {
         e
     }
 
-    fn no_live() -> HashSet<String> {
-        HashSet::new()
-    }
-
     fn gap() -> Duration {
         Duration::from_secs(300)
     }
@@ -1013,71 +876,6 @@ mod tests {
     }
 
     #[test]
-    fn state_labels_are_the_words_on_screen() {
-        assert_eq!(SessionState::Live.label(), "running");
-        assert_eq!(SessionState::Finished.label(), "done");
-    }
-
-    #[test]
-    fn recorded_ids_group_and_running_sessions_sort_first() {
-        let events = vec![
-            event("a", EventResult::Miss, 0, "/w/one", "s1"),
-            event("b", EventResult::LocalHit, 1, "/w/one", "s1"),
-            event("c", EventResult::Miss, 500, "/w/two", "s2"),
-            event("d", EventResult::Passthrough, 501, "/w/two", "s2"),
-        ];
-        // s1 is old and idle; s2 finished 100s ago but its root is compiling.
-        let live: HashSet<String> = ["/w/two".to_string()].into_iter().collect();
-        let sessions = group_sessions(&events, ts(601), &live, gap());
-        assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions[0].key, "id:s2");
-        assert_eq!(sessions[0].recorded_id(), Some("s2"));
-        assert_eq!(sessions[0].state, SessionState::Live);
-        assert_eq!(sessions[0].workspace_name(), "two");
-        assert_eq!(sessions[0].tally.passthroughs, 1);
-        assert_eq!(sessions[1].key, "id:s1");
-        assert_eq!(sessions[1].state, SessionState::Finished);
-        assert_eq!(sessions[1].tally.hits, 1);
-        assert_eq!(sessions[1].tally.misses, 1);
-        assert_eq!(sessions[1].tally.saved_ms, 5_000);
-        assert_eq!(sessions[1].tally.miss_ms, 1_000);
-        assert_eq!(sessions[1].tally.hit_rate(), Some(50.0));
-        assert_eq!(sessions[1].events, vec![0, 1]);
-    }
-
-    /// A root names a tree, not a build: activity there keeps only the
-    /// tree's newest session live, never an older build of the same tree.
-    #[test]
-    fn a_live_root_revives_only_its_newest_session() {
-        let events = vec![
-            event("a", EventResult::Miss, 0, "/w", "old"),
-            event("b", EventResult::Miss, 5_000, "/w", "new"),
-        ];
-        let live: HashSet<String> = ["/w".to_string()].into_iter().collect();
-        let sessions = group_sessions(&events, ts(10_000), &live, gap());
-        assert_eq!(sessions[0].key, "id:new");
-        assert_eq!(sessions[0].state, SessionState::Live);
-        assert_eq!(sessions[1].key, "id:old");
-        assert_eq!(sessions[1].state, SessionState::Finished);
-    }
-
-    #[test]
-    fn recent_activity_alone_keeps_a_session_live_but_the_future_does_not() {
-        let events = vec![event("a", EventResult::Miss, 0, "/w", "s1")];
-        let sessions = group_sessions(&events, ts(10), &no_live(), gap());
-        assert_eq!(sessions[0].state, SessionState::Live);
-        let sessions = group_sessions(&events, ts(30), &no_live(), gap());
-        assert_eq!(
-            sessions[0].state,
-            SessionState::Finished,
-            "the grace is exclusive"
-        );
-        // Stamped 10s in the future: a clock problem, not a running build.
-        let sessions = group_sessions(&events, ts(-10), &no_live(), gap());
-        assert_eq!(sessions[0].state, SessionState::Finished);
-    }
-
-    #[test]
     fn events_without_ids_split_by_idle_gap_per_root() {
         let events = vec![
             event("a", EventResult::Miss, 0, "/w", ""),
@@ -1089,7 +887,7 @@ mod tests {
             event("c", EventResult::LocalHit, 699, "/w", ""),
             event("d", EventResult::LocalHit, 700, "/w", ""),
         ];
-        let sessions = group_sessions(&events, ts(10_000), &no_live(), gap());
+        let sessions = group(&events, gap());
         assert_eq!(sessions.len(), 3);
         assert!(sessions.iter().all(|s| s.inferred));
         assert!(sessions.iter().all(|s| s.recorded_id().is_none()));
@@ -1099,61 +897,37 @@ mod tests {
             keys.iter().collect::<HashSet<_>>().len(),
             "keys are unique"
         );
-        assert_eq!(sessions[0].events, vec![4, 5], "newest first");
+        assert_eq!(sessions[0].events, vec![0, 1, 3], "first appearance order");
+        assert_eq!(sessions[1].events, vec![2], "last active at 150s");
+        assert_eq!(sessions[2].events, vec![4, 5], "split by the idle gap");
         assert_eq!(
-            sessions[0].started,
+            sessions[2].started,
             ts(699) - chrono::Duration::milliseconds(100)
         );
-        assert_eq!(sessions[1].events, vec![0, 1, 3], "last active at 399s");
-        assert_eq!(sessions[2].events, vec![2], "last active at 150s");
     }
 
     #[test]
-    fn keys_are_stable_as_the_log_grows_and_ties_follow_log_order() {
+    fn keys_are_stable_as_the_log_grows() {
         let mut events = vec![
             event("a", EventResult::Miss, 0, "/w", ""),
             event("x", EventResult::Miss, 1, "/other", ""),
         ];
-        let before: Vec<String> = group_sessions(&events, ts(2), &no_live(), gap())
-            .into_iter()
-            .map(|s| s.key)
-            .collect();
+        let before: Vec<String> = group(&events, gap()).into_iter().map(|s| s.key).collect();
         events.push(event("b", EventResult::Miss, 2, "/w", ""));
         events.push(event("c", EventResult::Miss, 900, "/w", ""));
-        let after: Vec<String> = group_sessions(&events, ts(901), &no_live(), gap())
-            .into_iter()
-            .map(|s| s.key)
-            .collect();
+        let after: Vec<String> = group(&events, gap()).into_iter().map(|s| s.key).collect();
         for key in &before {
             assert!(after.contains(key), "{key} vanished: {after:?}");
         }
         assert_eq!(after.len(), 3);
 
-        // Same timestamp, two sessions: the one that logged last is newest.
+        // Same timestamp, two sessions: first appearance order.
         let events = vec![
             event("a", EventResult::Miss, 5, "/w", "zzz"),
             event("b", EventResult::Miss, 5, "/w", "aaa"),
         ];
-        let sessions = group_sessions(&events, ts(10_000), &no_live(), gap());
-        assert_eq!(sessions[0].key, "id:aaa");
-    }
-
-    /// Regrouping only when the log grew, and refreshing state every tick,
-    /// gives the same answer as grouping from scratch.
-    #[test]
-    fn refresh_state_matches_a_fresh_grouping() {
-        let events = vec![
-            event("a", EventResult::Miss, 0, "/w", "s1"),
-            event("b", EventResult::Miss, 100, "/v", "s2"),
-        ];
-        let mut cached = group(&events, gap());
-        refresh_state(&mut cached, ts(101), &no_live());
-        assert_eq!(cached, group_sessions(&events, ts(101), &no_live(), gap()));
-        // Later, s1's root is compiling: it moves back to the top.
-        let live: HashSet<String> = ["/w".to_string()].into_iter().collect();
-        refresh_state(&mut cached, ts(5_000), &live);
-        assert_eq!(cached, group_sessions(&events, ts(5_000), &live, gap()));
-        assert_eq!(cached[0].key, "id:s1");
+        let sessions = group(&events, gap());
+        assert_eq!(sessions[0].key, "id:zzz");
     }
 
     #[test]
@@ -1168,35 +942,23 @@ mod tests {
         assert_eq!((t.probes, t.passthroughs), (1, 1));
         assert_eq!(t.hit_rate(), None, "no lookups, no rate");
         assert_eq!(t.overhead_ms, 0, "passthroughs are not overhead");
-        assert_eq!(t.overhead_share(), None);
-        let mut hit = event("a", EventResult::LocalHit, 0, "/w", "s");
-        hit.reflinked_bytes = 900;
-        hit.copied_bytes = 100;
-        t.add(&hit);
+        t.add(&event("a", EventResult::LocalHit, 0, "/w", "s"));
         t.add(&event("b", EventResult::Dup, 0, "/w", "s"));
         assert_eq!(t.hit_rate(), Some(50.0));
-        assert_eq!(t.copy_share(), Some(10.0));
-        assert_eq!(t.restored_bytes(), 1000);
         // A hit's whole elapsed time is overhead; the dup's 100ms elapsed
         // minus 1000ms compile clamps to zero.
         assert_eq!(t.overhead_ms, 100);
         assert_eq!(t.lookup_elapsed_ms, 200);
-        assert_eq!(t.overhead_share(), Some(50.0));
 
         let mut huge = event("z", EventResult::LocalHit, 0, "/w", "s");
         huge.compile_time_ms = u64::MAX;
         t.add(&huge);
         t.add(&huge);
         assert_eq!(t.saved_ms, u64::MAX, "saturated, not wrapped");
-        assert_eq!(
-            Tally::default().copy_share(),
-            None,
-            "nothing restored, no share"
-        );
     }
 
     fn analyze_one(events: &[BuildEvent]) -> Analysis {
-        let sessions = group_sessions(events, ts(1_000_000), &no_live(), gap());
+        let sessions = group(events, gap());
         let selected = sessions.iter().find(|s| s.key == "id:now").unwrap();
         analyze_session(events, selected, &sessions)
     }
@@ -1772,7 +1534,7 @@ mod tests {
                 "x",
             ));
         }
-        let sessions = group_sessions(&events, ts(1_000_000), &no_live(), gap());
+        let sessions = group(&events, gap());
         let selected = sessions.iter().find(|s| s.key == "id:s4").unwrap();
         let analysis = analyze_session(&events, selected, &sessions);
         let names: Vec<(&str, usize, usize, bool)> = analysis
@@ -1794,7 +1556,7 @@ mod tests {
         let mut rootless = event("r", EventResult::Miss, 1, "", "nr");
         rootless.root.clear();
         let events = vec![rootless];
-        let sessions = group_sessions(&events, ts(1_000_000), &no_live(), gap());
+        let sessions = group(&events, gap());
         assert!(
             analyze_session(&events, &sessions[0], &sessions)
                 .chronic

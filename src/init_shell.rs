@@ -32,12 +32,6 @@ pub(crate) const TEST_RUNNER_BLOCK: Block = Block {
     last: false,
 };
 
-pub(crate) const COMPLETIONS_BLOCK: Block = Block {
-    begin: "# >>> kache shell completions >>>",
-    end: "# <<< kache shell completions <<<",
-    last: false,
-};
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Shell {
     Zsh,
@@ -189,15 +183,6 @@ fn read_regular(path: &Path) -> Result<Option<String>> {
 }
 
 impl Edit {
-    pub fn plan_file(path: PathBuf, updated: String) -> Result<Self> {
-        let original = read_regular(&path)?;
-        Ok(Self {
-            path,
-            original,
-            updated,
-        })
-    }
-
     pub fn plan(path: PathBuf, activation: &str) -> Result<Self> {
         Self::plan_block(path, COMPILER_BLOCK, activation)
     }

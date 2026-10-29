@@ -419,8 +419,8 @@ pub struct Config {
     /// prevents zero-copy dedup — no copy-on-write on the volume, cache and
     /// build tree on different volumes, or an inconclusive capability probe —
     /// is surfaced as a deduplicated advisory with fix suggestions. CLI
-    /// commands print it on stderr; compiler wrappers send it to the tracing
-    /// log (`KACHE_LOG=warn`) so it never mixes with compiler output (#1067),
+    /// commands print it on stderr; compiler wrappers send it to the log
+    /// (`KACHE_LOG=warn`) so it never mixes with compiler output (#1067),
     /// and `kache doctor` and `kache report` show the copy reasons. Set
     /// `= false` when the layout is intentional and unfixable: the advisories
     /// drop to debug logging. Genuine clone *faults* (a large file failing to
@@ -702,7 +702,7 @@ pub fn normalize_key_env_vars(raw: impl IntoIterator<Item = String>, source: &st
             continue;
         }
         if trimmed.trim_end_matches('*').contains('*') {
-            tracing::warn!(
+            log::warn!(
                 target: "kache::config",
                 "{source}: pattern {trimmed:?} contains a `*` that is not the last character; \
                  only a trailing `*` is a prefix glob, so that earlier `*` is matched as a \
@@ -730,7 +730,7 @@ pub fn warn_inert_path_only_env_vars(entries: &[String], source: &str) -> Vec<St
     for entry in entries {
         let var = entry.split_once(':').map_or(entry.as_str(), |(_, var)| var);
         if crate::invocation::is_manifest_dir_var(var.trim()) {
-            tracing::warn!(
+            log::warn!(
                 target: "kache::config",
                 "{source}: entry {entry:?} is ignored. CARGO_MANIFEST_DIR is never \
                  path-only: rustc can embed it in crate metadata, and every crate's \
@@ -994,7 +994,7 @@ fn warn_ignored_env_overrides_for(invocation: &InvocationEnv) {
         .filter(|name| invocation.var_os(name).is_some())
         .collect();
     if !present.is_empty() {
-        tracing::warn!(
+        log::warn!(
             "[cache] ignore_env = true: ignoring set env override(s) {present:?} in favor of the \
              config file"
         );
@@ -1396,7 +1396,7 @@ impl Config {
                 .unwrap_or_default(),
         )?;
         for (index, path) in base_dirs.iter().enumerate() {
-            tracing::info!(
+            log::info!(
                 target: "kache::config",
                 "[paths].base_dirs[{index}] {} -> <BASE_DIR_{index}> / \
                  /kache/base-dir-{index}",
@@ -2359,7 +2359,7 @@ impl Config {
             .filter_map(|(volume, store)| {
                 let volume = Self::normalize_volume_root(volume)?;
                 if store.trim().is_empty() {
-                    tracing::warn!(
+                    log::warn!(
                         "[cache.volumes] entry for {volume} has an empty store dir; ignoring"
                     );
                     return None;
@@ -2379,7 +2379,7 @@ impl Config {
         for shard in shards {
             match deduped.last() {
                 Some(last) if last.volume == shard.volume => {
-                    tracing::warn!(
+                    log::warn!(
                         "[cache.volumes] volume {} is mapped twice; keeping {}",
                         shard.volume,
                         last.store.display()
@@ -2798,7 +2798,7 @@ fn parse_host_config(host: &HostConfigSnapshot) -> Result<toml::Table> {
     let mut table: toml::Table = toml::from_str(content).context("parsing host config")?;
     for (key, reason) in HOST_EXCLUDED_KEYS {
         if remove_config_key(&mut table, key) {
-            tracing::warn!(
+            log::warn!(
                 "host config {}: ignoring {}: {reason}",
                 host.path.display(),
                 key.join(".")
@@ -2832,7 +2832,7 @@ fn host_config_layer(host: Option<&HostConfigSnapshot>) -> Option<toml::Table> {
     match parse_host_config(host) {
         Ok(table) => Some(table),
         Err(error) => {
-            tracing::warn!("ignoring host config {}: {error:#}", host.path.display());
+            log::warn!("ignoring host config {}: {error:#}", host.path.display());
             None
         }
     }
@@ -3311,7 +3311,7 @@ pub fn config_file_path() -> PathBuf {
 fn resolve_socket_path_override(raw: Option<std::ffi::OsString>) -> Option<PathBuf> {
     let raw = raw?;
     if raw.is_empty() {
-        tracing::warn!(
+        log::warn!(
             "ignoring empty KACHE_SOCKET_PATH; falling back to <runtime_dir>/daemon.sock"
         );
         return None;
@@ -3321,9 +3321,9 @@ fn resolve_socket_path_override(raw: Option<std::ffi::OsString>) -> Option<PathB
     // Every non-root absolute path has a usable parent; roots and directories
     // are rejected by the existing-target type check below.
     if !path.is_absolute() || !existing_socket_target_is_usable(&path) {
-        tracing::warn!(
-            path = %path.display(),
-            "ignoring unusable KACHE_SOCKET_PATH; use an absolute socket filename in a private directory"
+        log::warn!(
+            "ignoring unusable KACHE_SOCKET_PATH; use an absolute socket filename in a private directory; path={}",
+            path.display()
         );
         return None;
     }
@@ -3553,7 +3553,7 @@ fn exclude_pattern_matches(pattern: &str, candidates: &[PathBuf]) -> bool {
 
 fn exclude_expanded_pattern_matches(expanded: &str, candidates: &[PathBuf]) -> bool {
     let Ok(pattern) = glob::Pattern::new(expanded) else {
-        tracing::warn!("ignoring invalid [cache].exclude glob pattern: {expanded}");
+        log::warn!("ignoring invalid [cache].exclude glob pattern: {expanded}");
         return false;
     };
     candidates
@@ -3611,7 +3611,7 @@ pub fn disk_share_note(total: u64) -> String {
 /// default applies.
 fn parse_local_max_size(value: &str, source: &str) -> Option<u64> {
     if value.trim().eq_ignore_ascii_case("none") {
-        tracing::warn!(
+        log::warn!(
             "{source}={value:?} is not allowed: the store must stay bounded. \
              Ignoring it and using the disk-share default"
         );
@@ -3631,7 +3631,7 @@ fn parse_local_max_size(value: &str, source: &str) -> Option<u64> {
 pub fn parse_size_checked(value: &str, source: &str) -> Option<u64> {
     let parsed = parse_size(value);
     if parsed.is_none() {
-        tracing::warn!(
+        log::warn!(
             "ignoring malformed size {value:?} from {source}: expected an integer with an \
              optional unit like `50GiB`, `512MiB`, or `1000000`; falling back to the next \
              configured source or the default"
@@ -3670,9 +3670,8 @@ fn isolate_cache_dir_for_trust_domain(base: PathBuf, domain: Option<&str>) -> Pa
         return base;
     };
     let Some(label) = sanitize_trust_domain(raw) else {
-        tracing::warn!(
-            domain = %raw,
-            "KACHE_TRUST_DOMAIN is not a single path-safe label; using the unscoped cache dir"
+        log::warn!(
+            "KACHE_TRUST_DOMAIN is not a single path-safe label; using the unscoped cache dir; domain={raw}"
         );
         return base;
     };
@@ -3680,10 +3679,9 @@ fn isolate_cache_dir_for_trust_domain(base: PathBuf, domain: Option<&str>) -> Pa
     match std::fs::create_dir_all(&isolated) {
         Ok(()) => isolated,
         Err(error) => {
-            tracing::warn!(
-                path = %isolated.display(),
-                %error,
-                "node-local trust-domain store is unusable; using the unscoped cache dir"
+            log::warn!(
+                "node-local trust-domain store is unusable; using the unscoped cache dir; path={} error={error}",
+                isolated.display()
             );
             base
         }

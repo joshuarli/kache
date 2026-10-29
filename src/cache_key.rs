@@ -393,7 +393,7 @@ pub(crate) fn apply_key_salt(base: String, salt: Option<&str>, label: &str) -> S
     match salt {
         Some(salt) if !salt.is_empty() => {
             let keyed = fold_labeled(base, "key_salt", salt);
-            tracing::trace!(
+            log::trace!(
                 "[key:{label}] key_salt={salt:?} -> {}",
                 &keyed[..keyed.len().min(16)]
             );
@@ -473,7 +473,7 @@ pub(crate) fn apply_key_env_vars_in(
     let keyed = fold_labeled(base, "key_env_vars", &key_env_digest(patterns, matched));
     // Names only, never values: a declared var may legitimately hold a token or
     // another secret, and the trace log is what users paste into bug reports.
-    tracing::trace!(
+    log::trace!(
         "[key:{label}] key_env_vars patterns={patterns:?} matched={matched_names:?} -> {}",
         &keyed[..keyed.len().min(16)]
     );
@@ -1668,14 +1668,22 @@ pub fn dep_info_provided() -> bool {
 /// The files of the closure [`provide_dep_info`] left for the next key,
 /// spelled as [`FileFingerprint`] records their paths.
 pub(crate) fn provided_dep_info_sources_for(
-    env: &InvocationEnv,
+    file_hasher: &FileHasher<'_>,
 ) -> Option<std::collections::HashSet<String>> {
     PROVIDED_DEP_INFO.with(|cell| {
         cell.borrow().as_ref().and_then(|(dep_info, _)| {
             dep_info
                 .source_files
                 .iter()
-                .map(|path| Some(env.resolve(path)?.to_string_lossy().into_owned()))
+                .map(|path| {
+                    Some(
+                        file_hasher
+                            .resolve_path(path)
+                            .ok()?
+                            .to_string_lossy()
+                            .into_owned(),
+                    )
+                })
                 .collect::<Option<_>>()
         })
     })
@@ -2881,7 +2889,7 @@ fn resolve_key_inputs(
     if let Some((provided, tree)) = PROVIDED_DEP_INFO.with(|cell| cell.borrow_mut().take()) {
         out.tree_guard = tree;
         crate::phase_trace::decision("prediction", "emitted");
-        tracing::trace!("[key:{}] inputs=emitted-dep-info", crate_name);
+        log::trace!("[key:{}] inputs=emitted-dep-info", crate_name);
         return Ok(Some(provided));
     }
     if args.source_file.is_some() {
@@ -2921,9 +2929,9 @@ fn resolve_key_inputs(
                         .as_ref()
                         .is_some_and(|discovered| closures_agree(&dep_info, discovered))
                     {
-                        tracing::trace!("[key:{}] inputs=predicted(verified)", crate_name);
+                        log::trace!("[key:{}] inputs=predicted(verified)", crate_name);
                     } else {
-                        tracing::warn!(
+                        log::warn!(
                             "[key:{}] input prediction disagreed with the dep-info pass; \
                              using the pass. Please report this with the crate and its \
                              dependencies (kunobi-ninja/kache).",
@@ -2933,7 +2941,7 @@ fn resolve_key_inputs(
                     }
                     return Ok(discovered);
                 }
-                tracing::trace!("[key:{}] inputs=predicted", crate_name);
+                log::trace!("[key:{}] inputs=predicted", crate_name);
                 out.used_prediction = true;
                 return Ok(Some(dep_info));
             }
@@ -2949,7 +2957,7 @@ fn resolve_key_inputs(
                     ) =>
             {
                 crate::phase_trace::decision("prediction", "deferred-new-crate");
-                tracing::trace!("[key:{}] inputs=deferred(new crate)", crate_name);
+                log::trace!("[key:{}] inputs=deferred(new crate)", crate_name);
                 return Err(anyhow::Error::new(DeferredDiscovery { miss_certain: true }));
             }
             Err(reason)
@@ -2958,7 +2966,7 @@ fn resolve_key_inputs(
                     && COMPILE_WHILE_KEYING.with(std::cell::Cell::get) =>
             {
                 crate::phase_trace::decision("prediction", reason.as_str());
-                tracing::trace!(
+                log::trace!(
                     "[key:{}] inputs=compile-while-keying({})",
                     crate_name,
                     reason.as_str()
@@ -2969,7 +2977,7 @@ fn resolve_key_inputs(
             }
             Err(reason) => {
                 crate::phase_trace::decision("prediction", reason.as_str());
-                tracing::trace!("[key:{}] inputs=dep-info({})", crate_name, reason.as_str())
+                log::trace!("[key:{}] inputs=dep-info({})", crate_name, reason.as_str())
             }
         }
     }
@@ -3065,7 +3073,7 @@ fn compute_key_into(
     hasher.update(b"key_version:");
     hasher.update(CACHE_KEY_VERSION.to_string().as_bytes());
     hasher.update(b"\n");
-    tracing::trace!("[key:{}] key_version={}", crate_name, CACHE_KEY_VERSION);
+    log::trace!("[key:{}] key_version={}", crate_name, CACHE_KEY_VERSION);
 
     // Older entries can carry arbitrary explicit-emit filenames under a default key.
     fold_field(&mut hasher, b"emit_placement.v1:", b"compiler-owned");
@@ -3081,7 +3089,7 @@ fn compute_key_into(
             b"configured_base_dirs.v1:",
             configured_base_dirs.to_string().as_bytes(),
         );
-        tracing::trace!(
+        log::trace!(
             "[key:{}] configured_base_dirs={}",
             crate_name,
             configured_base_dirs
@@ -3093,7 +3101,7 @@ fn compute_key_into(
     hasher.update(b"rustc_version:");
     hasher.update(rustc_version.as_bytes());
     hasher.update(b"\n");
-    tracing::trace!(
+    log::trace!(
         "[key:{}] rustc_version={}",
         crate_name,
         rustc_version.lines().next().unwrap_or("?")
@@ -3105,7 +3113,7 @@ fn compute_key_into(
     if args.is_clippy_chain() {
         let identity = clippy_identity_for(&args.rustc, env, invocation)?;
         fold_field(&mut hasher, b"clippy.v1:", identity.as_bytes());
-        tracing::trace!(
+        log::trace!(
             "[key:{}] clippy={}",
             crate_name,
             identity.lines().next().unwrap_or("?")
@@ -3124,7 +3132,7 @@ fn compute_key_into(
     hasher.update(b"target:");
     hasher.update(target.as_bytes());
     hasher.update(b"\n");
-    tracing::trace!("[key:{}] target={}", crate_name, target);
+    log::trace!("[key:{}] target={}", crate_name, target);
 
     // A `--target` value can be a path to a custom target JSON spec
     // (Firefox / embedded toolchains). That spec encodes data-layout,
@@ -3142,10 +3150,10 @@ fn compute_key_into(
                 hasher.update(b"target_spec:");
                 hasher.update(spec_hash.as_bytes());
                 hasher.update(b"\n");
-                tracing::trace!("[key:{}] target_spec={}", crate_name, &spec_hash[..16]);
+                log::trace!("[key:{}] target_spec={}", crate_name, &spec_hash[..16]);
             }
             Err(e) => {
-                tracing::warn!(
+                log::warn!(
                     "[key:{}] failed to hash target spec {}: {}",
                     crate_name,
                     target,
@@ -3161,7 +3169,7 @@ fn compute_key_into(
         hasher.update(b"crate_name:");
         hasher.update(name.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!("[key:{}] crate_name={}", crate_name, name);
+        log::trace!("[key:{}] crate_name={}", crate_name, name);
     }
 
     // crate types
@@ -3169,7 +3177,7 @@ fn compute_key_into(
         hasher.update(b"crate_type:");
         hasher.update(ct.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!("[key:{}] crate_type={}", crate_name, ct);
+        log::trace!("[key:{}] crate_type={}", crate_name, ct);
     }
 
     // edition
@@ -3177,7 +3185,7 @@ fn compute_key_into(
         hasher.update(b"edition:");
         hasher.update(edition.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!("[key:{}] edition={}", crate_name, edition);
+        log::trace!("[key:{}] edition={}", crate_name, edition);
     }
 
     hasher.set_group("args");
@@ -3196,7 +3204,7 @@ fn compute_key_into(
         hasher.update(b"emit:");
         hasher.update(kind.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!("[key:{}] emit:{}", crate_name, kind);
+        log::trace!("[key:{}] emit:{}", crate_name, kind);
     }
 
     // Codegen options grouped by name for determinism. This is a stable sort,
@@ -3226,9 +3234,9 @@ fn compute_key_into(
             // flag any leaked path so the field is identifiable.
             check_for_path_leak(v, &format!("codegen:{key}"));
             fold_field(&mut hasher, b"codegen_val:", v.as_bytes());
-            tracing::trace!("[key:{}] codegen:{}={}", crate_name, key, v);
+            log::trace!("[key:{}] codegen:{}={}", crate_name, key, v);
         } else {
-            tracing::trace!("[key:{}] codegen:{}", crate_name, key);
+            log::trace!("[key:{}] codegen:{}", crate_name, key);
         }
     }
 
@@ -3237,7 +3245,7 @@ fn compute_key_into(
         hasher.update(b"feature:");
         hasher.update(feat.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!("[key:{}] feature:{}", crate_name, feat);
+        log::trace!("[key:{}] feature:{}", crate_name, feat);
     }
 
     // cfg flags (non-feature, sorted)
@@ -3253,7 +3261,7 @@ fn compute_key_into(
         // generated paths. None go through PathNormalizer — flag leaks.
         check_for_path_leak(cfg, "cfg");
         fold_field(&mut hasher, b"cfg:", cfg.as_bytes());
-        tracing::trace!("[key:{}] cfg:{}", crate_name, cfg);
+        log::trace!("[key:{}] cfg:{}", crate_name, cfg);
     }
 
     let dep_info = resolve_key_inputs(args, file_hasher, crate_name, env, out)?;
@@ -3292,7 +3300,7 @@ fn compute_key_into(
         for (normalized_path, file_hash) in &hashed {
             fold_field(&mut hasher, b"source_path:", normalized_path);
             fold_field(&mut hasher, b"source_hash:", file_hash.as_bytes());
-            tracing::trace!(
+            log::trace!(
                 "[key:{}] source:{}={}",
                 crate_name,
                 String::from_utf8_lossy(normalized_path),
@@ -3318,7 +3326,7 @@ fn compute_key_into(
                     var.clone(),
                     blake3::hash(b"\0").to_hex()[..KEY_FIELD_HEX].to_string(),
                 );
-                tracing::trace!("[key:{}] env_dep:{} (unset)", crate_name, var);
+                log::trace!("[key:{}] env_dep:{} (unset)", crate_name, var);
                 continue;
             };
             let value = EnvDepValue::new(val);
@@ -3344,7 +3352,7 @@ fn compute_key_into(
                 b"env_dep_val:",
                 normalized_env_dep.value.as_bytes(),
             );
-            tracing::trace!(
+            log::trace!(
                 "[key:{}] env_dep:{}={} ({})",
                 crate_name,
                 var,
@@ -3387,7 +3395,7 @@ fn compute_key_into(
                             .unwrap_or(dep_hash.as_str())
                             .to_string(),
                     );
-                    tracing::trace!(
+                    log::trace!(
                         "[key:{}] extern:{}={}",
                         crate_name,
                         ext.name,
@@ -3402,7 +3410,7 @@ fn compute_key_into(
                     hasher.update(ext.name.as_bytes());
                     hasher.update(b"\n");
                     extern_digests.insert(ext.name.clone(), EXTERN_UNREADABLE.to_string());
-                    tracing::trace!("[key:{}] extern_unreadable:{}", crate_name, ext.name);
+                    log::trace!("[key:{}] extern_unreadable:{}", crate_name, ext.name);
                 }
             }
         }
@@ -3431,7 +3439,7 @@ fn compute_key_into(
         hasher.update(b"RUSTFLAGS:");
         hasher.update(normalized.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!("[key:{}] RUSTFLAGS={}", crate_name, normalized);
+        log::trace!("[key:{}] RUSTFLAGS={}", crate_name, normalized);
     }
 
     // CARGO_ENCODED_RUSTFLAGS (cargo's way of passing flags)
@@ -3444,7 +3452,7 @@ fn compute_key_into(
         hasher.update(b"CARGO_ENCODED_RUSTFLAGS:");
         hasher.update(normalized.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!(
+        log::trace!(
             "[key:{}] CARGO_ENCODED_RUSTFLAGS={}",
             crate_name,
             normalized
@@ -3464,7 +3472,7 @@ fn compute_key_into(
             b"argv_remap_path_prefix.v1:",
             normalized.as_bytes(),
         );
-        tracing::trace!(
+        log::trace!(
             "[key:{}] argv --remap-path-prefix={}",
             crate_name,
             normalized
@@ -3485,7 +3493,7 @@ fn compute_key_into(
         hasher.update(b"RUSTC_BOOTSTRAP:");
         hasher.update(bootstrap.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!("[key:{}] RUSTC_BOOTSTRAP={}", crate_name, bootstrap);
+        log::trace!("[key:{}] RUSTC_BOOTSTRAP={}", crate_name, bootstrap);
     }
 
     // Sysroot override (`--sysroot`). Selects which std/core/proc-macro
@@ -3499,7 +3507,7 @@ fn compute_key_into(
         hasher.update(b"sysroot:");
         hasher.update(normalized.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!("[key:{}] sysroot={}", crate_name, normalized);
+        log::trace!("[key:{}] sysroot={}", crate_name, normalized);
     }
 
     // Native link search paths (`-L [KIND=]PATH`). cargo's own
@@ -3552,7 +3560,7 @@ fn compute_key_into(
         }
         hasher.update(normalized.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!("[key:{}] link_search:{}", crate_name, normalized);
+        log::trace!("[key:{}] link_search:{}", crate_name, normalized);
     }
 
     // Native libraries to link (`-l`). The name alone (machine-independent;
@@ -3619,7 +3627,7 @@ fn compute_key_into(
     if needs_native_bundle_audit(args, &native_archives.dirs) {
         hasher.set_group("native_bundle_audit");
         fold_field(&mut hasher, b"native_bundle_audit.v2", b"");
-        tracing::trace!("[key:{}] native_bundle_audit", crate_name);
+        log::trace!("[key:{}] native_bundle_audit", crate_name);
     }
     out.native_archives = Some(native_archives);
 
@@ -3644,13 +3652,13 @@ fn compute_key_into(
                 b"codegen_backend_content.v1:",
                 content.as_bytes(),
             );
-            tracing::trace!("[key:{}] codegen_backend_content:{}", crate_name, content);
+            log::trace!("[key:{}] codegen_backend_content:{}", crate_name, content);
             continue;
         }
         hasher.update(b"unstable:");
         hasher.update(z.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!("[key:{}] unstable:{}", crate_name, z);
+        log::trace!("[key:{}] unstable:{}", crate_name, z);
     }
     // A backend selected by name (`cranelift`, `gcc`) is a library in the
     // toolchain that `rustc -vV` does not describe: a toolchain built from
@@ -3669,7 +3677,7 @@ fn compute_key_into(
                 b"codegen_backend_content.v1:",
                 content.as_bytes(),
             );
-            tracing::trace!(
+            log::trace!(
                 "[key:{}] codegen_backend_library:{} {}",
                 crate_name,
                 library,
@@ -3683,7 +3691,7 @@ fn compute_key_into(
     // applies repeated values last-wins.
     for jobs in &args.frontend_jobs {
         fold_field(&mut hasher, b"frontend_jobs.v1:", jobs.as_bytes());
-        tracing::trace!("[key:{}] frontend_jobs:{}", crate_name, jobs);
+        log::trace!("[key:{}] frontend_jobs:{}", crate_name, jobs);
     }
 
     // Residual argv tokens (kunobi-ninja/kache#324): flags kache does not model
@@ -3707,7 +3715,7 @@ fn compute_key_into(
         for tok in &residual {
             check_for_path_leak(tok, "residual_arg");
             fold_field(&mut hasher, b"residual_args.v1:", tok.as_bytes());
-            tracing::trace!("[key:{}] residual_arg:{}", crate_name, tok);
+            log::trace!("[key:{}] residual_arg:{}", crate_name, tok);
         }
         // Surface unmodeled ("exotic") rustc flags so it is visible which ones
         // appear in real builds (kunobi-ninja/kache#183). They are already folded
@@ -3719,7 +3727,7 @@ fn compute_key_into(
         let mut raw: Vec<&str> = args.residual_args.iter().map(String::as_str).collect();
         raw.sort_unstable();
         raw.dedup();
-        tracing::warn!(
+        log::warn!(
             "[key:{}] {} unmodeled rustc flag(s) folded into the cache key \
              (kache does not model these; keyed defensively so they cannot cause \
              a false hit, but model them for precise keying): {}",
@@ -3764,7 +3772,7 @@ fn compute_key_into(
             // The leak check is observability-only; it never rewrites the key.
             check_for_path_leak(tok, "outcome_lint");
             fold_field(&mut hasher, b"outcome_lint.v1:", tok.as_bytes());
-            tracing::trace!("[key:{}] outcome_lint:{}", crate_name, tok);
+            log::trace!("[key:{}] outcome_lint:{}", crate_name, tok);
         }
     }
 
@@ -3772,7 +3780,7 @@ fn compute_key_into(
     // environment iteration order is platform-defined and not stable)
     hasher.set_group("env_cfg");
     let cargo_cfgs = cargo_cfg_pairs(env.cargo_cfgs());
-    tracing::trace!("[key:{}] cargo_cfg_count={}", crate_name, cargo_cfgs.len());
+    log::trace!("[key:{}] cargo_cfg_count={}", crate_name, cargo_cfgs.len());
     for (key, value) in &cargo_cfgs {
         // Cargo derives CARGO_CFG_* from `--cfg` flags. Build scripts (and
         // mozbuild specifically) emit cfgs that can embed absolute paths;
@@ -3911,12 +3919,12 @@ fn compute_key_into(
         targets.dedup();
         format!("multi-prefix({})", targets.join(","))
     };
-    tracing::trace!("[key:{}] remap={}", crate_name, remap);
+    log::trace!("[key:{}] remap={}", crate_name, remap);
 
     let (hash, fields) = hasher.finalize_with_fields();
     out.fields = Some(fields);
     let key = hash.to_hex().to_string();
-    tracing::trace!("[key:{}] final={}", crate_name, &key[..16]);
+    log::trace!("[key:{}] final={}", crate_name, &key[..16]);
     complete_key(env, key)
 }
 
@@ -4117,6 +4125,32 @@ fn lexically_resolve_path(input: &str) -> String {
         (false, true) => anchor.to_string(),
         (false, false) => format!("{anchor}{joined}"),
     }
+}
+
+/// Collapse `.`, `..`, and repeated separators without asking the filesystem.
+/// Components follow the platform: on Unix `\\` is a filename character, so
+/// `a\\b.rs` stays one file. `..` that would climb past the root is dropped.
+fn collapse_lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut collapsed = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(
+                    collapsed.components().next_back(),
+                    Some(Component::Normal(_))
+                ) {
+                    collapsed.pop();
+                }
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                collapsed.push(component.as_os_str());
+            }
+        }
+    }
+    collapsed
 }
 
 /// Resolve a `-l` spec to a `static` archive in one of `search_dirs` and
@@ -4913,7 +4947,7 @@ fn fold_native_link_inputs<H: KeyFold>(
     let hash_archive = |path: &Path| {
         let usage = archive_use(path);
         let digest = file_hasher.hash_static_lib_for(path, usage)?;
-        tracing::trace!(
+        log::trace!(
             "[key:{}] native_archive:{}={} ({usage:?})",
             crate_name,
             path.display(),
@@ -5016,7 +5050,7 @@ fn fold_native_link_inputs<H: KeyFold>(
         hasher.update(b"link_lib:");
         hasher.update(lib.as_bytes());
         hasher.update(b"\n");
-        tracing::trace!("[key:{}] link_lib:{}", crate_name, lib);
+        log::trace!("[key:{}] link_lib:{}", crate_name, lib);
         let Some(&lib) = effective_libs.get(&index) else {
             continue;
         };
@@ -5071,7 +5105,7 @@ fn fold_native_link_inputs<H: KeyFold>(
             hasher.update(b"link_lib_content:");
             hasher.update(content_hash.as_bytes());
             hasher.update(b"\n");
-            tracing::trace!(
+            log::trace!(
                 "[key:{}] link_lib_content:{}={} ({})",
                 crate_name,
                 lib,
@@ -5098,7 +5132,7 @@ fn fold_native_link_inputs<H: KeyFold>(
             b"link_arg_input.v1:",
             format!("{index}={digest}").as_bytes(),
         );
-        tracing::trace!("[key:{}] link_arg_input:{}", crate_name, file.display());
+        log::trace!("[key:{}] link_arg_input:{}", crate_name, file.display());
     }
 
     // A `-Bstatic` in the link arguments can make the linker skip a shared
@@ -5118,7 +5152,7 @@ fn fold_native_link_inputs<H: KeyFold>(
                 b"link_arg_library.v1:",
                 format!("{index}={digest}").as_bytes(),
             );
-            tracing::trace!("[key:{}] link_arg_library:{}", crate_name, path.display());
+            log::trace!("[key:{}] link_arg_library:{}", crate_name, path.display());
             archives.push(path);
         }
     }
@@ -5779,7 +5813,7 @@ fn env_dep_source_decision(
                 return EnvDepNormalizationDecision::KeptAbsoluteRuntimeUse;
             }
             Err(e) => {
-                tracing::debug!(
+                log::debug!(
                     "keeping env dep {var} absolute: failed to inspect source {}: {}",
                     file.display(),
                     e
@@ -7285,7 +7319,7 @@ impl FileHasher<'static> {
                 own_dirs: Vec::new(),
             },
             Err(e) => {
-                tracing::debug!(
+                log::debug!(
                     "file hash cache disabled for {}: {e}",
                     index_db_path.display()
                 );
@@ -7334,7 +7368,7 @@ impl<'db> FileHasher<'db> {
         })();
         let _ = db.busy_timeout(std::time::Duration::from_millis(5000));
         if let Err(error) = written {
-            tracing::debug!(rows = pending.len(), "file hash memo not written: {error}");
+            log::debug!("file hash memo not written: {error}; rows={}", pending.len());
         }
     }
 
@@ -7384,10 +7418,37 @@ impl<'db> FileHasher<'db> {
     }
 
     fn resolve_path(&self, path: &Path) -> Result<PathBuf> {
-        self.invocation_env
+        let resolved = self
+            .invocation_env
             .resolve(path)
             .filter(|path| path.is_absolute())
-            .context("relative input requires the invocation working directory")
+            .context("relative input requires the invocation working directory")?;
+        Ok(self.collapse_out_dir_spelling(resolved))
+    }
+
+    /// One stored path for every spelling of a file under this invocation's
+    /// `OUT_DIR`. `Path` already equates `/out/./file` with `/out/file`, so the
+    /// recent-hash map has one entry and its fingerprint string is whichever
+    /// spelling was hashed. A later relocate then misses the other spelling.
+    /// Collapse `.`, `..`, and repeated separators by path component, and only
+    /// when the result is still under `OUT_DIR`. On Unix a backslash stays
+    /// part of the filename. A crate-relative `src/./init.js` is outside that
+    /// directory and stays spelled as rustc recorded it. This does not resolve
+    /// symlinks.
+    fn collapse_out_dir_spelling(&self, path: PathBuf) -> PathBuf {
+        let Some(out_dir) = self.invocation_env.var_os("OUT_DIR") else {
+            return path;
+        };
+        let Some(out_dir) = self.invocation_env.resolve(Path::new(&out_dir)) else {
+            return path;
+        };
+        let collapsed = collapse_lexical(&path);
+        let out = collapse_lexical(&out_dir);
+        if collapsed.starts_with(&out) {
+            collapsed
+        } else {
+            path
+        }
     }
 
     /// Let key computation derive its input set from a recorded closure
@@ -7599,7 +7660,7 @@ impl<'db> FileHasher<'db> {
         match cache.has_entry_for_unit(crate_name, unit) {
             Ok(present) => !present,
             Err(error) => {
-                tracing::debug!("crate presence lookup failed: {error}");
+                log::debug!("crate presence lookup failed: {error}");
                 false
             }
         }
@@ -7625,12 +7686,12 @@ impl<'db> FileHasher<'db> {
         let json = match serde_json::to_string(&record) {
             Ok(json) => json,
             Err(error) => {
-                tracing::debug!("input prediction encode failed: {error}");
+                log::debug!("input prediction encode failed: {error}");
                 return;
             }
         };
         if let Err(error) = cache.put_input_prediction(identity, record.schema, crate_name, &json) {
-            tracing::debug!("input prediction record failed: {error}");
+            log::debug!("input prediction record failed: {error}");
         }
     }
 
@@ -7646,7 +7707,7 @@ impl<'db> FileHasher<'db> {
         let (schema, json) = match cache.get_input_prediction(identity) {
             Ok(row) => row?,
             Err(error) => {
-                tracing::debug!("input prediction lookup failed: {error}");
+                log::debug!("input prediction lookup failed: {error}");
                 return None;
             }
         };
@@ -7657,7 +7718,7 @@ impl<'db> FileHasher<'db> {
             Ok(record) if record.schema == PREDICTION_SCHEMA => Some(record),
             Ok(_) => None,
             Err(error) => {
-                tracing::debug!("input prediction decode failed: {error}");
+                log::debug!("input prediction decode failed: {error}");
                 None
             }
         }
@@ -7677,12 +7738,12 @@ impl<'db> FileHasher<'db> {
         let json = match serde_json::to_string(record) {
             Ok(json) => json,
             Err(error) => {
-                tracing::debug!("portable prediction encode failed: {error}");
+                log::debug!("portable prediction encode failed: {error}");
                 return;
             }
         };
         if let Err(error) = cache.put_input_prediction(identity, record.schema, crate_name, &json) {
-            tracing::debug!("portable prediction record failed: {error}");
+            log::debug!("portable prediction record failed: {error}");
         }
     }
 
@@ -7694,7 +7755,7 @@ impl<'db> FileHasher<'db> {
         let (schema, json) = match cache.get_input_prediction(identity) {
             Ok(row) => row?,
             Err(error) => {
-                tracing::debug!("portable prediction lookup failed: {error}");
+                log::debug!("portable prediction lookup failed: {error}");
                 return None;
             }
         };
@@ -7705,7 +7766,7 @@ impl<'db> FileHasher<'db> {
             Ok(record) if record.schema == PORTABLE_PREDICTION_SCHEMA => Some(record),
             Ok(_) => None,
             Err(error) => {
-                tracing::debug!("portable prediction decode failed: {error}");
+                log::debug!("portable prediction decode failed: {error}");
                 None
             }
         }
@@ -7743,7 +7804,7 @@ impl<'db> FileHasher<'db> {
         let record = match cache.get_cc_preprocess_memo(memo_key) {
             Ok(record) => record?,
             Err(error) => {
-                tracing::debug!("cc preprocess memo lookup failed: {error}");
+                log::debug!("cc preprocess memo lookup failed: {error}");
                 return None;
             }
         };
@@ -7763,7 +7824,7 @@ impl<'db> FileHasher<'db> {
                         .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
             })
         {
-            tracing::debug!("cc preprocess memo hash is invalid");
+            log::debug!("cc preprocess memo hash is invalid");
             return None;
         }
         let inputs = record.inputs;
@@ -7785,7 +7846,7 @@ impl<'db> FileHasher<'db> {
         if record.needs_touch
             && let Err(error) = cache.touch_cc_preprocess_memo(memo_key)
         {
-            tracing::debug!("cc preprocess memo touch failed: {error}");
+            log::debug!("cc preprocess memo touch failed: {error}");
         }
         Some((record.preprocessed_hash, satisfied))
     }
@@ -7850,7 +7911,7 @@ impl<'db> FileHasher<'db> {
                 return Some(path.clone());
             }
         }
-        tracing::debug!(
+        log::debug!(
             "cc preprocess memo input {} matched none of {} candidate paths",
             expected.name,
             candidates.len()
@@ -7896,7 +7957,7 @@ impl<'db> FileHasher<'db> {
             let observed = match ObservedFingerprint::from_path(path) {
                 Ok(observed) => observed,
                 Err(error) => {
-                    tracing::debug!(
+                    log::debug!(
                         "cc preprocess memo input {} could not be fingerprinted: {error}",
                         path.display()
                     );
@@ -7913,7 +7974,7 @@ impl<'db> FileHasher<'db> {
             let content = match self.header_hash(path, &observed, &memoised) {
                 Ok(content) => content,
                 Err(error) => {
-                    tracing::debug!(
+                    log::debug!(
                         "cc preprocess memo input {} could not be hashed: {error}",
                         path.display()
                     );
@@ -7929,7 +7990,7 @@ impl<'db> FileHasher<'db> {
                 cache
                     .get_cc_mapped_hashes(maps_key, &contents)
                     .unwrap_or_else(|error| {
-                        tracing::debug!("cc mapped hash memo lookup failed: {error}");
+                        log::debug!("cc mapped hash memo lookup failed: {error}");
                         Default::default()
                     })
             }
@@ -7946,7 +8007,7 @@ impl<'db> FileHasher<'db> {
                     if read.raw != content {
                         // Written since it was hashed: the mapped hash is of
                         // other bytes than the content hash names.
-                        tracing::debug!(
+                        log::debug!(
                             "cc preprocess memo input {} changed while it was fingerprinted",
                             path.display()
                         );
@@ -7968,7 +8029,7 @@ impl<'db> FileHasher<'db> {
         if let Some(cache) = memo
             && let Err(error) = cache.put_cc_mapped_hashes(maps_key, &learned)
         {
-            tracing::debug!("cc mapped hash memo update failed: {error}");
+            log::debug!("cc mapped hash memo update failed: {error}");
         }
         inputs.sort_by(|a, b| a.name.cmp(&b.name));
         inputs.dedup_by(|a, b| a.name == b.name);
@@ -7990,8 +8051,9 @@ impl<'db> FileHasher<'db> {
         let mut known = std::collections::HashMap::new();
         for path in paths {
             let selected = {
+                let resolved = self.resolve_path(path)?;
                 let recent = self.recent_hashes.borrow();
-                recent.get(&absolute_path(path)).and_then(|recent| {
+                recent.get(&resolved).and_then(|recent| {
                     recent
                         .fingerprint
                         .as_ref()
@@ -8019,7 +8081,7 @@ impl<'db> FileHasher<'db> {
         if let Some(cache) = &self.cache {
             match cache.get_cc_header_scans(version, &missing) {
                 Ok(found) => known.extend(found),
-                Err(error) => tracing::debug!("cc header scan lookup failed: {error}"),
+                Err(error) => log::debug!("cc header scan lookup failed: {error}"),
             }
         }
         let mut learned = Vec::new();
@@ -8043,7 +8105,7 @@ impl<'db> FileHasher<'db> {
         if let Some(cache) = &self.cache
             && let Err(error) = cache.put_cc_header_scans(version, &learned)
         {
-            tracing::debug!("cc header scan update failed: {error}");
+            log::debug!("cc header scan update failed: {error}");
         }
         Ok(results)
     }
@@ -8069,7 +8131,7 @@ impl<'db> FileHasher<'db> {
             Some(cache) => {
                 let contents: Vec<&str> = inputs.iter().map(|i| i.content.as_str()).collect();
                 cache.get_cc_asm_scans(&contents).unwrap_or_else(|error| {
-                    tracing::debug!("cc assembler scan memo lookup failed: {error}");
+                    log::debug!("cc assembler scan memo lookup failed: {error}");
                     Default::default()
                 })
             }
@@ -8102,7 +8164,7 @@ impl<'db> FileHasher<'db> {
         if let Some(cache) = &self.cache
             && let Err(error) = cache.put_cc_asm_scans(&learned)
         {
-            tracing::debug!("cc assembler scan memo update failed: {error}");
+            log::debug!("cc assembler scan memo update failed: {error}");
         }
         found
     }
@@ -8150,7 +8212,7 @@ impl<'db> FileHasher<'db> {
         }
         if let Err(error) = cache.put_cc_preprocess_memo_inputs(memo_key, preprocessed_hash, inputs)
         {
-            tracing::debug!("cc preprocess memo update failed: {error}");
+            log::debug!("cc preprocess memo update failed: {error}");
         }
     }
 
@@ -8209,12 +8271,16 @@ impl<'db> FileHasher<'db> {
                     );
                 }
             }
-            Err(e) => tracing::debug!("daemon file hash prefetch failed: {e}"),
+            Err(e) => log::debug!("daemon file hash prefetch failed: {e}"),
         }
     }
 
     /// Hash a file's contents, using the persistent cache when available.
     pub fn hash(&self, path: &Path) -> Result<String> {
+        self.hash_and_record(path).map(|recent| recent.hash)
+    }
+
+    fn hash_and_record(&self, path: &Path) -> Result<RecentHash> {
         let _trace = crate::phase_trace::phase("input_hash");
         let resolved = self.resolve_path(path)?;
         let path = resolved.as_path();
@@ -8222,15 +8288,15 @@ impl<'db> FileHasher<'db> {
         if let Some(observed) = &observed {
             self.guard_input(observed);
         }
-        self.recent_hashes.borrow_mut().insert(
-            resolved.clone(),
-            RecentHash {
-                hash: hash.clone(),
-                fingerprint: observed.map(|observed| observed.fingerprint),
-                header_scan: None,
-            },
-        );
-        Ok(hash)
+        let recent = RecentHash {
+            hash,
+            fingerprint: observed.map(|observed| observed.fingerprint),
+            header_scan: None,
+        };
+        self.recent_hashes
+            .borrow_mut()
+            .insert(resolved, recent.clone());
+        Ok(recent)
     }
 
     /// Hash a file that is not a key input, such as one a tree guard reads,
@@ -8361,7 +8427,7 @@ impl<'db> FileHasher<'db> {
         let observed = match ObservedFingerprint::from_path(path) {
             Ok(observed) => observed,
             Err(e) => {
-                tracing::debug!(
+                log::debug!(
                     "file hash cache metadata lookup failed for {}: {e}",
                     path.display()
                 );
@@ -8400,7 +8466,7 @@ impl<'db> FileHasher<'db> {
             }
             Ok(None) => {}
             Err(e) => {
-                tracing::debug!("file hash cache lookup failed for {}: {e}", path.display());
+                log::debug!("file hash cache lookup failed for {}: {e}", path.display());
             }
         }
 
@@ -8462,22 +8528,14 @@ impl<'db> FileHasher<'db> {
     /// Decisions are keyed by the already-computed content hash, so warm key
     /// construction can reuse them without opening the source again (#557).
     fn env_dep_use(&self, path: &Path, var: &str) -> Result<SourceEnvDepUse> {
-        let absolute = self.resolve_path(path)?;
-        let path = absolute.as_path();
-        let recent = self.recent_hashes.borrow().get(&absolute).cloned();
+        let path = self.resolve_path(path)?;
+        let recent = self.recent_hashes.borrow().get(&path).cloned();
         let recent = match recent {
             Some(recent) => recent,
-            None => {
-                self.hash(path)?;
-                self.recent_hashes
-                    .borrow()
-                    .get(&absolute)
-                    .cloned()
-                    .expect("a successful hash records its fingerprint")
-            }
+            None => self.hash_and_record(&path)?,
         };
         if let Some(expected) = recent.fingerprint {
-            let current = FileFingerprint::from_path(path)
+            let current = FileFingerprint::from_path(&path)
                 .with_context(|| format!("revalidating {} before env-use scan", path.display()))?;
             if current != expected {
                 anyhow::bail!(
@@ -8485,12 +8543,12 @@ impl<'db> FileHasher<'db> {
                     path.display()
                 );
             }
-            return self.env_dep_use_for_hash(path, var, &recent.hash);
+            return self.env_dep_use_for_hash(&path, var, &recent.hash);
         }
 
         // Without a trustworthy fingerprint, bypass memo lookup. The scan
         // still verifies the content hash before recording a reusable result.
-        self.scan_env_dep_use(path, var, &recent.hash)
+        self.scan_env_dep_use(&path, var, &recent.hash)
     }
 
     fn env_dep_use_for_hash(
@@ -8516,7 +8574,7 @@ impl<'db> FileHasher<'db> {
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    tracing::debug!("env-use cache lookup failed: {error}");
+                    log::debug!("env-use cache lookup failed: {error}");
                 }
             }
         }
@@ -8567,7 +8625,7 @@ impl<'db> FileHasher<'db> {
                 result.memo_code(),
             )
         {
-            tracing::debug!("env-use cache update failed: {error}");
+            log::debug!("env-use cache update failed: {error}");
         }
         self.env_dep_uses.borrow_mut().insert(key, result);
         Ok(result)
@@ -8598,7 +8656,7 @@ impl<'db> FileHasher<'db> {
         } = match ObservedFingerprint::from_path(path) {
             Ok(observed) => observed,
             Err(e) => {
-                tracing::debug!(
+                log::debug!(
                     "static-lib hash metadata lookup failed for {}: {e}",
                     path.display()
                 );
@@ -8643,7 +8701,7 @@ impl<'db> FileHasher<'db> {
                 return Ok(hash);
             }
             Ok(None) => {}
-            Err(e) => tracing::debug!("static-lib hash cache lookup failed: {e}"),
+            Err(e) => log::debug!("static-lib hash cache lookup failed: {e}"),
         }
         let hash = compute_static_lib_hash_for(path, usage, &self.invocation_env)?;
         self.record_miss(size);
@@ -8668,7 +8726,7 @@ impl<'db> FileHasher<'db> {
         };
         let stamps: Vec<&FileFingerprint> = stamps.collect();
         cache.get_many(&stamps).unwrap_or_else(|error| {
-            tracing::debug!("file hash memo batch lookup failed: {error}");
+            log::debug!("file hash memo batch lookup failed: {error}");
             HashMap::new()
         })
     }
@@ -8958,7 +9016,7 @@ pub(crate) fn run_dep_info_pass_for(
         None
     };
 
-    tracing::trace!("dep-info pre-pass: {} arguments", dep_args.len());
+    log::trace!("dep-info pre-pass: {} arguments", dep_args.len());
 
     let spawned = std::time::Instant::now();
     let output = cmd
@@ -8996,7 +9054,7 @@ pub(crate) fn run_dep_info_pass_for(
     }
     let env_deps = parse_env_dep_info(&dep_content);
 
-    tracing::trace!(
+    log::trace!(
         "dep-info found {} source files, {} env deps for {}",
         source_files.len(),
         env_deps.len(),
@@ -10151,7 +10209,7 @@ where
         b"host_libc.v1:",
         format!("{}:{signature}", family.key_name()).as_bytes(),
     );
-    tracing::trace!(
+    log::trace!(
         "[key:{}] host_libc={}:{signature}",
         args.crate_name.as_deref().unwrap_or("unknown"),
         family.key_name()
@@ -10373,10 +10431,9 @@ fn driver_search_dirs_for(driver: &Path, line_prefix: &str, env: &InvocationEnv)
     {
         Ok(output) => output,
         Err(error) => {
-            tracing::debug!(
-                driver = %driver.display(),
-                %error,
-                "could not run the driver for -print-search-dirs"
+            log::debug!(
+                "could not run the driver for -print-search-dirs; driver={} error={error}",
+                driver.display()
             );
             return Vec::new();
         }
@@ -11111,7 +11168,7 @@ where
         let objects = crt_probe(&driver).context("determining native Linux CRT/libc identity")?;
         let encoded = encode_crt_objects(&objects);
         fold_field(hasher, b"host_crt.v1:", encoded.as_bytes());
-        tracing::trace!(
+        log::trace!(
             "[key:{}] host_crt={}",
             args.crate_name.as_deref().unwrap_or("unknown"),
             encoded.replace('\n', ",")
@@ -11121,7 +11178,7 @@ where
         let linker = linker_probe(&driver, &rustc_version)
             .context("identifying the linker the native Linux link runs")?;
         fold_field(hasher, b"host_linker.v1:", linker.as_bytes());
-        tracing::trace!(
+        log::trace!(
             "[key:{}] host_linker={}",
             args.crate_name.as_deref().unwrap_or("unknown"),
             linker
@@ -11133,14 +11190,14 @@ where
         let identity = sdk_probe(env.var("SDKROOT"))
             .context("determining macOS SDK identity for cache key")?;
         fold_field(hasher, b"host_sdk.v1:", identity.as_bytes());
-        tracing::trace!(
+        log::trace!(
             "[key:{}] host_sdk={}",
             args.crate_name.as_deref().unwrap_or("unknown"),
             identity
         );
         if let Some(target) = deployment_target.filter(|value| !value.is_empty()) {
             fold_field(hasher, b"host_deployment_target.v1:", target.as_bytes());
-            tracing::trace!(
+            log::trace!(
                 "[key:{}] host_deployment_target={}",
                 args.crate_name.as_deref().unwrap_or("unknown"),
                 target

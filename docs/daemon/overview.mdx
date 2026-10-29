@@ -18,7 +18,7 @@ compiler delegation is unavailable.
 - When the machine is quiet, at most once an hour, remove tracked target directories whose workspace was deleted, and build units no build has used for 30 days. See [Target directory cleanup](/docs/getting-started/configuration#target-directory-cleanup).
 - While the machine is idle, replace target files that are full copies of stored blobs with clones of those blobs.
 - Copy another checkout's registry and git dependency units into a new target directory before Cargo checks it. See [New checkouts](/docs/getting-started/configuration#new-checkouts).
-- Track running compiles for `kache monitor`.
+- Track running compiles reported by wrappers.
 - On macOS, exclude the cache directory from Spotlight and Time Machine.
 - Exit when its config file changes, so the next start loads the new settings.
 

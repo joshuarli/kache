@@ -813,10 +813,7 @@ pub(crate) fn is_kache_subcommand_or_flag(s: &str) -> bool {
     if s.starts_with('-') {
         return true;
     }
-    use clap::CommandFactory;
-    let mut cmd = crate::Cli::command();
-    cmd.build();
-    cmd.find_subcommand(s).is_some()
+    kache_client::engine_command_names().contains(&s)
 }
 
 /// Do these compiler args (argv after the program) form a pure version/info

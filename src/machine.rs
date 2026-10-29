@@ -1,8 +1,7 @@
 //! Machine-readable CLI output, and the store-vs-disk split that output uses.
 //!
-//! Interactive surfaces (`kache monitor`, `kache config`, the `clean` selector)
-//! stay human. Setup, reports, diagnostics and disk-management commands use
-//! one versioned document on stdout, including argument and command failures.
+//! Setup, reports, diagnostics and disk-management commands use one versioned
+//! document on stdout, including argument and command failures.
 
 use anyhow::Result;
 pub use kache_store::filesystem::*;
@@ -214,58 +213,13 @@ pub(crate) fn failure_exit(error: &anyhow::Error) -> Option<(&'static str, i32)>
 }
 
 /// The command tree lets scripts discover syntax without parsing help prose.
-fn help_document(mut command: clap::Command) -> impl Serialize {
-    #[derive(Serialize)]
-    struct Argument {
-        name: String,
-        long: Option<String>,
-        short: Option<char>,
-        required: bool,
-        description: Option<String>,
-        values: Vec<String>,
-    }
-    #[derive(Serialize)]
-    struct Command {
-        name: String,
-        description: Option<String>,
-        usage: String,
-        arguments: Vec<Argument>,
-        subcommands: Vec<Command>,
-    }
-    fn describe(command: &mut clap::Command) -> Command {
-        let usage = command.render_usage().to_string();
-        Command {
-            name: command.get_name().to_owned(),
-            description: command.get_about().map(ToString::to_string),
-            usage,
-            arguments: command
-                .get_arguments()
-                .filter(|arg| !arg.is_hide_set())
-                .map(|arg| Argument {
-                    name: arg.get_id().to_string(),
-                    long: arg.get_long().map(str::to_owned),
-                    short: arg.get_short(),
-                    required: arg.is_required_set(),
-                    description: arg.get_help().map(ToString::to_string),
-                    values: arg
-                        .get_possible_values()
-                        .into_iter()
-                        .filter(|value| !value.is_hide_set())
-                        .map(|value| value.get_name().to_owned())
-                        .collect(),
-                })
-                .collect(),
-            subcommands: command
-                .get_subcommands_mut()
-                .filter(|command| !command.is_hide_set())
-                .map(describe)
-                .collect(),
-        }
-    }
-    describe(&mut command)
+/// Built from the parser's static table, so it always matches what `kache`
+/// accepts.
+fn help_document() -> crate::cli_args::HelpCommand {
+    crate::cli_args::help_tree()
 }
 
-pub(crate) fn emit_help(command: clap::Command) -> Result<()> {
+pub(crate) fn emit_help() -> Result<()> {
     #[derive(Serialize)]
     struct Body<T> {
         cli: T,
@@ -273,7 +227,7 @@ pub(crate) fn emit_help(command: clap::Command) -> Result<()> {
     emit(
         "help",
         Body {
-            cli: help_document(command),
+            cli: help_document(),
         },
         Vec::new(),
     )
@@ -291,16 +245,6 @@ impl std::fmt::Display for Reported {
 }
 
 impl std::error::Error for Reported {}
-
-pub fn require_tty(is_tty: bool, command: &str, alternative: &str) -> Result<()> {
-    if is_tty {
-        Ok(())
-    } else {
-        anyhow::bail!(
-            "`kache {command}` needs a terminal. For scripts and agents, use {alternative}."
-        );
-    }
-}
 
 pub fn cloned_coverage() -> ClonedCoverage {
     if cfg!(target_os = "macos") {
@@ -592,49 +536,33 @@ mod tests {
     }
 
     #[test]
-    fn terminal_requirement_names_the_command_and_alternative() {
-        assert!(require_tty(true, "config", "the alternative").is_ok());
-        let error = require_tty(false, "config", "the alternative")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("kache config"), "{error}");
-        assert!(error.contains("the alternative"), "{error}");
-    }
-
-    #[test]
-    fn help_document_omits_hidden_arguments_commands_and_values() {
-        use clap::builder::{PossibleValue, PossibleValuesParser};
-        let command = clap::Command::new("fixture")
-            .disable_help_flag(true)
-            .disable_help_subcommand(true)
-            .arg(
-                clap::Arg::new("mode")
-                    .long("mode")
-                    .short('m')
-                    .help("Choose a mode")
-                    .required(true)
-                    .value_parser(PossibleValuesParser::new([
-                        PossibleValue::new("visible"),
-                        PossibleValue::new("secret").hide(true),
-                    ])),
-            )
-            .arg(clap::Arg::new("internal").long("internal").hide(true))
-            .subcommand(clap::Command::new("shown").about("Visible command"))
-            .subcommand(clap::Command::new("hidden").hide(true));
-        let doc = serde_json::to_value(help_document(command)).unwrap();
-        assert_eq!(doc["name"], "fixture");
-        assert!(doc["usage"].as_str().unwrap().contains("--mode"));
-        assert_eq!(doc["arguments"].as_array().unwrap().len(), 1);
-        let arg = &doc["arguments"][0];
-        assert_eq!(arg["name"], "mode");
-        assert_eq!(arg["long"], "mode");
-        assert_eq!(arg["short"], "m");
-        assert_eq!(arg["required"], true);
-        assert_eq!(arg["description"], "Choose a mode");
-        assert_eq!(arg["values"], serde_json::json!(["visible"]));
-        assert_eq!(doc["subcommands"].as_array().unwrap().len(), 1);
-        assert_eq!(doc["subcommands"][0]["name"], "shown");
-        assert_eq!(doc["subcommands"][0]["description"], "Visible command");
+    fn help_document_lists_visible_commands_in_help_order() {
+        let doc = serde_json::to_value(help_document()).unwrap();
+        assert_eq!(doc["name"], "kache");
+        assert!(
+            doc["usage"]
+                .as_str()
+                .unwrap()
+                .starts_with("Usage: kache")
+        );
+        let names: Vec<&str> = doc["subcommands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|command| command["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            ["init", "doctor", "config", "stats", "clean", "explain", "list", "daemon"]
+        );
+        let init = &doc["subcommands"][0];
+        assert!(
+            init["arguments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|arg| arg["long"] == "yes")
+        );
     }
 
     fn empty_view() -> DiskView {

@@ -35,10 +35,10 @@ pub(crate) fn shard_gc_configs(
         .iter()
         .partition(|shard| shard_has_index(&shard.store));
     for shard in absent {
-        tracing::info!(
-            volume = %shard.volume,
-            store = %shard.store.display(),
-            "gc: skipping volume shard with no index (missing or unmounted)"
+        log::info!(
+            "gc: skipping volume shard with no index (missing or unmounted); volume={} store={}",
+            shard.volume,
+            shard.store.display()
         );
     }
     sweepable
@@ -59,9 +59,9 @@ pub(crate) fn run_on_shards<T>(
         .filter_map(|shard| match sweep(&shard) {
             Ok(outcome) => Some((shard, outcome)),
             Err(error) => {
-                tracing::warn!(
-                    store = %shard.cache_dir.display(),
-                    "gc: volume shard sweep failed: {error:#}"
+                log::warn!(
+                    "gc: volume shard sweep failed: {error:#}; store={}",
+                    shard.cache_dir.display()
                 );
                 None
             }

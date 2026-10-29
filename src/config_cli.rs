@@ -1,54 +1,44 @@
 //! File-backed configuration commands. Environment and host overrides stay separate.
 
 use anyhow::{Context, Result, bail};
-use clap::{Args, Subcommand};
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
-#[derive(Args, Debug, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct Scope {
     /// Use the nearest project config, or create .kache.toml in this directory
-    #[arg(long, conflicts_with_all = ["global", "file"])]
-    project: bool,
+    pub(crate) project: bool,
     /// Use the user config, ignoring KACHE_CONFIG and project files
-    #[arg(long, conflicts_with = "file")]
-    global: bool,
+    pub(crate) global: bool,
     /// Use this configuration file
-    #[arg(long, value_name = "PATH")]
-    file: Option<PathBuf>,
+    pub(crate) file: Option<PathBuf>,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Debug)]
 pub(crate) enum Command {
     /// Read a value explicitly set in the selected file
     Get {
-        #[command(flatten)]
         scope: Scope,
         key: String,
     },
     /// List values explicitly set in the selected file
     List {
-        #[command(flatten)]
         scope: Scope,
     },
     /// Set a known configuration key; accepts TOML values or an unquoted string
     Set {
-        #[command(flatten)]
         scope: Scope,
         key: String,
-        #[arg(allow_hyphen_values = true)]
         value: String,
     },
     /// Remove a value from the selected file
     Unset {
-        #[command(flatten)]
         scope: Scope,
         key: String,
     },
     /// Print the selected file's path, even if it does not exist
     Path {
-        #[command(flatten)]
         scope: Scope,
     },
 }

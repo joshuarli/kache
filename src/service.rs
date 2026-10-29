@@ -469,7 +469,7 @@ pub(crate) fn manages_instance(config: &crate::config::Config) -> Result<bool> {
 }
 
 /// Where a daemon started for this instance writes the error that stops it
-/// from starting (kunobi-ninja/kache#1218). The tracing log is opened only
+/// from starting (kunobi-ninja/kache#1218). The log file is opened only
 /// once the daemon is up, so it never holds that error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StartupLog {

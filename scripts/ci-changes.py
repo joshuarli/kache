@@ -9,7 +9,7 @@ turns every group on without reading stdin (pushes, tags, API failures), so
 
 Groups:
   check  Check (Linux): clippy, coverage tests, helm lint, the perf gate
-         comparison tests, and everything else `just ci` runs.
+         comparison tests, and everything else `make check` runs.
   tests  the platform and hardening matrix: cargo test (macOS/Windows),
          mutation testing, Kani, dependency audit, CUDA and CoW jobs.
   e2e    the E2E smoke scenarios on the three platforms.

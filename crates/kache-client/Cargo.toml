@@ -13,7 +13,7 @@ kache-config = { version = "2.0.0-rc.2", path = "../kache-config" }
 kache-ipc = { version = "2.0.0-rc.2", path = "../kache-ipc" }
 kache-protocol = { version = "2.0.0-rc.2", path = "../kache-protocol" }
 anyhow = "1"
-tracing = { version = "0.1", default-features = false, features = ["std"] }
+log = "0.4"
 libc = "0.2"
 
 kache-shims = { version = "2.0.0-rc.2", path = "../kache-shims" }

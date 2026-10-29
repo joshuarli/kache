@@ -214,14 +214,14 @@ pub(crate) fn run_rustc(
     };
 
     if let Some(response) = &response_file {
-        tracing::debug!(
+        log::debug!(
             "running: {} @{} ({} expanded args)",
             rustc.display(),
             response.file.path().display(),
             compiler_args.len()
         );
     } else {
-        tracing::debug!(
+        log::debug!(
             "running: {} {}",
             rustc.display(),
             compiler_args
@@ -278,7 +278,7 @@ pub(crate) fn run_rustc(
             || stderr.contains("failed to create query cache")
             || stderr.contains("incremental"))
     {
-        tracing::warn!(
+        log::warn!(
             "[kache] incremental compilation failure detected for {} — \
              this is an APFS bug in git worktrees. \
              Run `cargo clean` in the affected project to recover.",
@@ -307,7 +307,7 @@ pub(crate) fn run_rustc(
         .flatten();
         crate::pe_pdb::add_named_pdbs(&mut from_json, executable_name.as_deref());
         if from_json.is_empty() {
-            tracing::debug!(
+            log::debug!(
                 "[kache] no rustc artifact notifications for {}; falling back to candidate path discovery",
                 crate_name.unwrap_or("unknown")
             );
@@ -323,7 +323,7 @@ pub(crate) fn run_rustc(
             crate::pe_pdb::add_named_pdbs(&mut discovered, executable_name.as_deref());
             ArtifactSet::from_output_files(discovered, classify_by_filename)
         } else {
-            tracing::debug!(
+            log::debug!(
                 "[kache] discovered {} output file(s) for {} from rustc artifact notifications",
                 from_json.len(),
                 crate_name.unwrap_or("unknown")
@@ -572,7 +572,7 @@ fn resolve_artifacts_in(artifacts: &[PathBuf], cwd: &Path) -> Vec<(PathBuf, Stri
             continue;
         };
         if !abs.exists() {
-            tracing::warn!(
+            log::warn!(
                 "[kache] rustc reported artifact missing on disk, skipping: {}",
                 abs.display()
             );
@@ -837,7 +837,7 @@ pub(crate) fn pre_clean_outputs(
         }
     } else {
         // Incomplete identity: refuse a mass sweep of out-dir (rio-build#51 / kache#242).
-        tracing::debug!(
+        log::debug!(
             "pre_clean_outputs: nothing to identify outputs by \
              (out_dir={out_dir:?}, crate_name={crate_name:?}); skipping read-only pre-clean — \
              a warm restore in this directory may block this compile"

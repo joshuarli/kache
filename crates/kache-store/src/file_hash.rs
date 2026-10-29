@@ -361,7 +361,7 @@ impl<'db> FileHashCache<'db> {
                 params![identity, now],
             )
         {
-            tracing::debug!("input prediction touch failed: {error}");
+            log::debug!("input prediction touch failed: {error}");
         }
         Ok(Some((schema, json)))
     }
@@ -760,7 +760,7 @@ impl FileHashCache<'_> {
         let fingerprint = match FileFingerprint::from_path(path) {
             Ok(fp) => fp,
             Err(e) => {
-                tracing::debug!(
+                log::debug!(
                     "file hash cache metadata lookup failed for {}: {e}",
                     path.display()
                 );
@@ -775,7 +775,7 @@ impl FileHashCache<'_> {
             Ok(None) => FileHashLookup::NeedsHash(fingerprint),
             Err(e) => {
                 // Treat a lookup error as a miss — recompute rather than fail.
-                tracing::debug!("file hash cache lookup failed for {}: {e}", path.display());
+                log::debug!("file hash cache lookup failed for {}: {e}", path.display());
                 FileHashLookup::NeedsHash(fingerprint)
             }
         }
@@ -785,7 +785,7 @@ impl FileHashCache<'_> {
     /// not propagated.
     pub fn record_cached(&self, fingerprint: &FileFingerprint, hash: &str) {
         if let Err(e) = self.put(fingerprint, hash) {
-            tracing::debug!("file hash cache update failed: {e}");
+            log::debug!("file hash cache update failed: {e}");
         }
     }
     /// Record a hash the caller already knows for `fingerprint` — without

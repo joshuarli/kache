@@ -522,16 +522,6 @@ fn store_unavailable_warning_dedups_within_session() {
 /// with the package and the reason.
 #[test]
 fn a_package_keyed_without_its_files_is_reported_once_a_session() {
-    struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
-    impl Write for Capture {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path().join("cache"));
     let profile = dir.path().join("target/debug");
@@ -552,21 +542,13 @@ fn a_package_keyed_without_its_files_is_reported_once_a_session() {
         &format!("build-script-package-{}", &package[..16]),
         &config.cache_dir,
     );
-    let output = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let writer = Arc::clone(&output);
-    let subscriber = tracing_subscriber::fmt()
-        .without_time()
-        .with_ansi(false)
-        .with_writer(move || Capture(Arc::clone(&writer)))
-        .finish();
-    tracing::subscriber::with_default(subscriber, || {
-        for _ in 0..2 {
-            warn_build_script_package_unkeyed(&config, &located, "it holds too many entries");
-        }
-    });
+    let capture = kache_log::capture();
+    for _ in 0..2 {
+        warn_build_script_package_unkeyed(&config, &located, "it holds too many entries");
+    }
     let marked = marker_is_fresh(&marker, 300);
     let _ = std::fs::remove_file(&marker);
-    let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    let log = capture.records().join("\n");
     assert_eq!(
         log.matches("app: its build script declares no inputs and it holds too many entries")
             .count(),
@@ -5085,6 +5067,7 @@ fn materialize_reports_a_mutating_external_action_as_not_exact() {
             &self,
             _binary: &Path,
             _staging_dir: &Path,
+            _split_debuginfo: Option<&str>,
         ) -> Result<Option<PathBuf>> {
             Ok(None)
         }
@@ -5200,6 +5183,7 @@ fn an_unproven_loadability_check_runs_on_every_restore() {
             &self,
             _binary: &Path,
             _staging_dir: &Path,
+            _split_debuginfo: Option<&str>,
         ) -> Result<Option<PathBuf>> {
             Ok(None)
         }
@@ -5532,7 +5516,7 @@ fn debug_bundle_round_trip_preserves_dwarf_uuid_on_macos() {
     use crate::compiler::platform::Platform as _;
     let staging = tempfile::tempdir().unwrap();
     let tar_path = crate::compiler::platform::MacOsPlatform::default()
-        .package_debug_bundle(&binary, staging.path())
+        .package_debug_bundle(&binary, staging.path(), Some("unpacked"))
         .unwrap()
         .expect("macOS host must package a bundle for a -g binary");
 

@@ -69,7 +69,6 @@ to see the workload, platform, and validation behind each result.
 ## Watch a build and explain a miss
 
 ```bash
-kache monitor             # live build and cache activity
 kache stats --last-build  # latest recorded build session
 kache explain             # why the latest build missed
 kache explain --all       # all recorded skips and passthroughs, by reason
@@ -80,8 +79,6 @@ Reports describe recorded builds. `Details missing` means those builds did
 not record enough information to explain a miss. Enable detailed recording
 before the next build with `kache config set cache.explain_miss true`;
 this cannot reconstruct details from earlier builds.
-
-[See the current dashboard and controls →](https://kunobi.ninja/docs/kache/monitor)
 
 ## Add it to CI
 

@@ -145,13 +145,13 @@ pub fn start_monitor(crate_name: &str, pid: u32) -> Option<CompileMonitor> {
     let (done_tx, done_rx) = mpsc::channel::<()>();
     let thread_stop = stop.clone();
     let io = crate::invocation::io::current().borrow_for_monitor();
-    let logging = tracing::dispatcher::get_default(Clone::clone);
+    let logging = kache_log::current();
     let crate_name = crate_name.to_string();
     let _ = std::thread::Builder::new()
         .name("kache-heartbeat".into())
         .spawn(move || {
             let _io = crate::invocation::io::InvocationIoScope::enter(io);
-            let _logging = tracing::dispatcher::set_default(&logging);
+            let _logging = kache_log::enter(&logging);
             monitor_loop(&ctx, &crate_name, pid, &thread_stop, &wake_rx);
             let _ = done_tx.send(());
         })
@@ -276,7 +276,7 @@ fn run_ticks(
             schema: HEARTBEAT_SCHEMA,
         };
         if let Err(e) = crate::events::log_heartbeat(&ctx.event_log, &hb) {
-            tracing::debug!("heartbeat event write failed: {e:#}");
+            log::debug!("heartbeat event write failed: {e:#}");
         }
         if stop.load(Ordering::Relaxed) {
             return;
@@ -296,7 +296,7 @@ fn run_ticks(
                         // Working again — restart the quiet window.
                         stuck_anchor = Some((now, cpu));
                     } else if wall >= STUCK_WINDOW {
-                        tracing::warn!(
+                        log::warn!(
                             "[kache] rustc for {} appears stuck (<1% CPU for {}s, PID {})",
                             crate_name,
                             wall.as_secs(),
