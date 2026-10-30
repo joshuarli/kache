@@ -2,13 +2,10 @@ use crate::term;
 use crate::term::human_println as println;
 use anyhow::{Context, Result};
 use std::io::IsTerminal;
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 
 use crate::config::Config;
 use crate::daemon;
 use crate::events;
-use crate::machine::{PathIdentity, directory_identity};
 use crate::since::SinceWindow;
 use crate::store::{STAGING_SWEEP_GRACE, Store};
 use kache_core::time::UtcTime;
@@ -418,43 +415,29 @@ pub(crate) struct VolumeView {
     recovery_floor_bytes: u64,
     /// Free space is below a recovery floor that is set.
     below_floor: bool,
-    /// Recovery also removes idle target directories
-    /// (`cache.auto_recover_targets`), not only cache entries.
-    recovers_targets: bool,
 }
 
 impl VolumeView {
-    fn new(usage: kache_fs::VolumeUsage, floor: u64, targets: bool) -> Self {
+    fn new(usage: kache_fs::VolumeUsage, floor: u64) -> Self {
         Self {
             total_bytes: usage.total,
             free_bytes: usage.free,
             recovery_floor_bytes: floor,
             below_floor: floor > 0 && usage.free < floor,
-            recovers_targets: floor > 0 && targets,
         }
     }
 }
 
 /// The cache volume, `None` where its usage cannot be read (not Unix).
 fn volume_view(config: &Config, daemon: Option<&daemon::EffectiveConfig>) -> Option<VolumeView> {
-    let (floor, targets) = recovery_in_effect(config, daemon);
-    kache_fs::volume_usage(&config.cache_dir).map(|usage| VolumeView::new(usage, floor, targets))
+    let floor = recovery_in_effect(config, daemon);
+    kache_fs::volume_usage(&config.cache_dir).map(|usage| VolumeView::new(usage, floor))
 }
 
-/// The recovery floor and target switch in effect: the daemon's, which is
-/// what evicts and removes, when it reports them; otherwise this process's.
-fn recovery_in_effect(config: &Config, daemon: Option<&daemon::EffectiveConfig>) -> (u64, bool) {
+fn recovery_in_effect(config: &Config, daemon: Option<&daemon::EffectiveConfig>) -> u64 {
     daemon
-        .and_then(|daemon| {
-            Some((
-                daemon.auto_recover_min_free_bytes?,
-                daemon.auto_recover_targets?,
-            ))
-        })
-        .unwrap_or((
-            config.auto_recover_min_free_bytes,
-            config.auto_recover_targets,
-        ))
+        .and_then(|daemon| daemon.auto_recover_min_free_bytes)
+        .unwrap_or(config.auto_recover_min_free_bytes)
 }
 
 fn volume_row(volume: &VolumeView) -> StatsRow {
@@ -464,11 +447,7 @@ fn volume_row(volume: &VolumeView) -> StatsRow {
     } else {
         (used as u128 * 100 / volume.total_bytes as u128) as u64
     };
-    let scope = if volume.recovers_targets {
-        "cache and idle targets"
-    } else {
-        "cache only"
-    };
+    let scope = "cache only";
     let recovery = if volume.recovery_floor_bytes == 0 {
         "free-space recovery off".to_string()
     } else if volume.below_floor {
@@ -1060,14 +1039,6 @@ pub(crate) fn config_mismatch_warnings(
         warnings.push(format!(
             "warning: {daemon_side} has auto_recover_min_free_bytes={floor}; {client_side} says {} — {remedy}",
             config.auto_recover_min_free_bytes
-        ));
-    }
-    if let Some(targets) = eff.auto_recover_targets
-        && targets != config.auto_recover_targets
-    {
-        warnings.push(format!(
-            "warning: {daemon_side} has auto_recover_targets={targets}; {client_side} says {} — {remedy}",
-            config.auto_recover_targets
         ));
     }
     warnings
@@ -2313,7 +2284,7 @@ pub(crate) fn describe_eviction(stats: &crate::store::GcStats, over_limit: bool)
         if stats.entries_unreclaimable > 0 {
             msg.push_str(&format!(
                 "\n  {} {}{} left in place because clones still hold their blocks. \
-                 Inspect stale outputs with `kache clean --stale 14d --dry-run`, then run it again.",
+                 Remove unneeded build outputs, then run it again.",
                 stats.entries_unreclaimable,
                 plural(stats.entries_unreclaimable),
                 held_bytes_note(stats.bytes_held),
@@ -2325,8 +2296,7 @@ pub(crate) fn describe_eviction(stats: &crate::store::GcStats, over_limit: bool)
     if stats.entries_unreclaimable > 0 {
         let mut msg = format!(
             "nothing reclaimable on disk.\n  {} {}{} cloned into build outputs \
-             (same bytes as target/, not extra).\n  Remove stale outputs with \
-             `kache clean --stale 14d --dry-run`, then run it again.",
+             (same bytes as target/, not extra).\n  Remove unneeded build outputs, then run it again.",
             stats.entries_unreclaimable,
             plural(stats.entries_unreclaimable),
             held_bytes_note(stats.bytes_held),
@@ -2371,619 +2341,6 @@ pub(crate) fn store_over_limit(total_size: Option<u64>, max_size: u64) -> bool {
 }
 
 // ── Project stats ──────────────────────────────────────────────────────────
-
-#[derive(Default)]
-struct ProjectStats {
-    total_bytes: u64,
-    cached_bytes: u64,
-    /// Scan-time estimate of bytes returned if this whole target/ disappears.
-    /// Unlike `cached_bytes`, this uses private extents and collapses hardlinks.
-    estimated_reclaimable_bytes: u64,
-    local_bytes: u64,
-    local_files: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProjectBucket {
-    Incremental,
-    BuildScripts,
-    Fingerprints,
-    Binaries,
-    Deps,
-    Other,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct FileIdentity {
-    device: u64,
-    inode: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct HardlinkObservation {
-    id: FileIdentity,
-    total_links: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct StorageObservation {
-    sharing: crate::sharing::Sharing,
-    hardlink: Option<HardlinkObservation>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct HardlinkGroup {
-    private_bytes: u64,
-    links_seen: u64,
-    total_links: u64,
-}
-
-/// Estimate physical reclaim without treating every shared file as wholly
-/// unreclaimable. Reflinks contribute their private extents; hardlinked paths
-/// are collapsed by inode and contribute once only when every link is inside
-/// this target/. If another hardlink remains elsewhere, deleting this target/
-/// cannot remove the inode and contributes zero.
-#[derive(Default)]
-struct ReclaimEstimator {
-    single_link_private_bytes: u64,
-    hardlinks: std::collections::HashMap<FileIdentity, HardlinkGroup>,
-}
-
-impl ReclaimEstimator {
-    fn record(&mut self, size: u64, observation: StorageObservation) {
-        let private_bytes = observation.sharing.private_bytes.min(size);
-        if let Some(link) = observation.hardlink {
-            let group = self.hardlinks.entry(link.id).or_insert(HardlinkGroup {
-                private_bytes,
-                links_seen: 0,
-                total_links: link.total_links.max(1),
-            });
-            // Metadata can change while the scan runs. The minimum private-byte
-            // answer and maximum link count are the conservative combination.
-            group.private_bytes = group.private_bytes.min(private_bytes);
-            group.links_seen = group.links_seen.saturating_add(1);
-            group.total_links = group.total_links.max(link.total_links.max(1));
-        } else {
-            self.single_link_private_bytes =
-                self.single_link_private_bytes.saturating_add(private_bytes);
-        }
-    }
-
-    fn estimated_reclaimable_bytes(&self) -> u64 {
-        self.hardlinks
-            .values()
-            .filter(|group| group.links_seen >= group.total_links)
-            .fold(self.single_link_private_bytes, |total, group| {
-                total.saturating_add(group.private_bytes)
-            })
-    }
-
-    fn hardlink_has_external_ref(&self, id: FileIdentity) -> bool {
-        self.hardlinks
-            .get(&id)
-            .is_some_and(|group| group.links_seen < group.total_links)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct CacheCandidate {
-    size: u64,
-    bucket: ProjectBucket,
-    reflink_shared: bool,
-    hardlink_id: Option<FileIdentity>,
-}
-
-fn clamp_private_bytes(size: u64, private_bytes: u64, allocated_bytes: Option<u64>) -> u64 {
-    let private_bytes = private_bytes.min(size);
-    allocated_bytes.map_or(private_bytes, |allocated| {
-        private_bytes.min(allocated.min(size))
-    })
-}
-
-fn observe_storage(path: &std::path::Path, meta: &std::fs::Metadata) -> StorageObservation {
-    let size = meta.len();
-    let mut sharing = crate::sharing::probe(path, size);
-    sharing.private_bytes = clamp_private_bytes(
-        size,
-        sharing.private_bytes,
-        Some(meta.blocks().saturating_mul(512)),
-    );
-    let hardlink = (meta.nlink() > 1).then_some(HardlinkObservation {
-        id: FileIdentity {
-            device: meta.dev(),
-            inode: meta.ino(),
-        },
-        total_links: meta.nlink(),
-    });
-    StorageObservation { sharing, hardlink }
-}
-
-/// Reconstruct Windows' 64-bit file index from the two DWORDs returned by
-/// `GetFileInformationByHandle`. Kept platform-neutral so the Linux mutation
-/// lane can exercise the packing rule that the Windows syscall wrapper uses.
-#[allow(dead_code)]
-fn windows_file_identity_from_parts(
-    volume_serial: u32,
-    file_index_high: u32,
-    file_index_low: u32,
-) -> FileIdentity {
-    FileIdentity {
-        device: u64::from(volume_serial),
-        inode: (u64::from(file_index_high) << 32).saturating_add(u64::from(file_index_low)),
-    }
-}
-
-/// Turn a successful or failed Windows identity query into conservative
-/// reclaim evidence. This is pure so every link-count boundary remains covered
-/// on the Linux mutation workers as well as by the hosted Windows tests.
-#[allow(dead_code)]
-fn windows_storage_observation(
-    size: u64,
-    identity: Option<(FileIdentity, u64)>,
-) -> StorageObservation {
-    match identity {
-        Some((id, total_links)) => StorageObservation {
-            sharing: crate::sharing::Sharing::unknown_for(size),
-            hardlink: (total_links > 1).then_some(HardlinkObservation { id, total_links }),
-        },
-        None => StorageObservation {
-            // Without a stable identity we cannot rule out an external
-            // hardlink, so claiming the file's full length would overstate
-            // physical reclaim. Omit it from the estimate instead.
-            sharing: crate::sharing::Sharing {
-                shared: false,
-                private_bytes: 0,
-                snapshot_bytes: 0,
-            },
-            hardlink: None,
-        },
-    }
-}
-
-/// Conservative fallback for targets without a native sharing/identity probe.
-/// The pure helper keeps the actual fallback value visible to mutation
-/// testing.
-#[allow(dead_code)]
-fn unsupported_storage_observation(size: u64) -> StorageObservation {
-    StorageObservation {
-        sharing: crate::sharing::Sharing::unknown_for(size),
-        hardlink: None,
-    }
-}
-
-fn add_local_bytes(
-    stats: &mut ProjectStats,
-    breakdown: &mut CategoryBreakdown,
-    bucket: ProjectBucket,
-    size: u64,
-) {
-    stats.local_bytes = stats.local_bytes.saturating_add(size);
-    stats.local_files = stats.local_files.saturating_add(1);
-    match bucket {
-        ProjectBucket::Incremental => {
-            breakdown.incremental = breakdown.incremental.saturating_add(size)
-        }
-        ProjectBucket::BuildScripts => {
-            breakdown.build_scripts = breakdown.build_scripts.saturating_add(size)
-        }
-        ProjectBucket::Fingerprints => {
-            breakdown.fingerprints = breakdown.fingerprints.saturating_add(size)
-        }
-        ProjectBucket::Binaries => breakdown.binaries = breakdown.binaries.saturating_add(size),
-        ProjectBucket::Deps => breakdown.deps_local = breakdown.deps_local.saturating_add(size),
-        ProjectBucket::Other => breakdown.other = breakdown.other.saturating_add(size),
-    }
-}
-
-fn record_scanned_file(
-    stats: &mut ProjectStats,
-    breakdown: &mut CategoryBreakdown,
-    reclaim: &mut ReclaimEstimator,
-    cache_candidates: &mut Vec<CacheCandidate>,
-    size: u64,
-    bucket: ProjectBucket,
-    cache_eligible: bool,
-    observation: StorageObservation,
-) {
-    stats.total_bytes = stats.total_bytes.saturating_add(size);
-    reclaim.record(size, observation);
-    if cache_eligible {
-        cache_candidates.push(CacheCandidate {
-            size,
-            bucket,
-            reflink_shared: observation.sharing.shared,
-            hardlink_id: observation.hardlink.map(|link| link.id),
-        });
-    } else {
-        add_local_bytes(stats, breakdown, bucket, size);
-    }
-}
-
-fn finalize_cache_candidates(
-    stats: &mut ProjectStats,
-    breakdown: &mut CategoryBreakdown,
-    reclaim: &ReclaimEstimator,
-    candidates: &[CacheCandidate],
-) {
-    for candidate in candidates {
-        // A hardlink is useful evidence of cache backing only when another link
-        // survives outside this target/. Links wholly inside the target are a
-        // local link group, not evidence that kache's store retains the inode.
-        let cache_backed = candidate.reflink_shared
-            || candidate
-                .hardlink_id
-                .is_some_and(|id| reclaim.hardlink_has_external_ref(id));
-        if cache_backed {
-            stats.cached_bytes = stats.cached_bytes.saturating_add(candidate.size);
-        } else {
-            add_local_bytes(stats, breakdown, candidate.bucket, candidate.size);
-        }
-    }
-}
-
-fn walk_project_dir(
-    dir: &std::path::Path,
-    bucket: ProjectBucket,
-    cache_eligible: bool,
-    stats: &mut ProjectStats,
-    breakdown: &mut CategoryBreakdown,
-    reclaim: &mut ReclaimEstimator,
-    cache_candidates: &mut Vec<CacheCandidate>,
-) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        // Never follow a target/ symlink into storage that clean itself will
-        // not recursively remove. Omitting the link's tiny allocation keeps the
-        // estimate conservative and, more importantly, bounded to this tree.
-        if file_type.is_symlink() {
-            continue;
-        }
-        if file_type.is_dir() {
-            walk_project_dir(
-                &path,
-                bucket,
-                cache_eligible,
-                stats,
-                breakdown,
-                reclaim,
-                cache_candidates,
-            );
-            continue;
-        }
-        if !file_type.is_file() {
-            continue;
-        }
-        let Ok(meta) = std::fs::metadata(&path) else {
-            continue;
-        };
-        let observation = observe_storage(&path, &meta);
-        record_scanned_file(
-            stats,
-            breakdown,
-            reclaim,
-            cache_candidates,
-            meta.len(),
-            bucket,
-            cache_eligible,
-            observation,
-        );
-    }
-}
-
-/// Count a profile's `build` directory. Before Cargo 1.100 it holds build
-/// scripts and their `OUT_DIR`s. From 1.100 it holds every unit as
-/// `<pkg>/<hash>/`, with the unit's `fingerprint/`, the `out/` rustc or a
-/// build script wrote, and a build-script run's `run/`. Anything else counts
-/// as build scripts, as the whole directory did before.
-fn walk_build_dir(
-    dir: &std::path::Path,
-    stats: &mut ProjectStats,
-    breakdown: &mut CategoryBreakdown,
-    reclaim: &mut ReclaimEstimator,
-    cache_candidates: &mut Vec<CacheCandidate>,
-) {
-    for (package, is_dir) in real_entries(dir) {
-        let name = package.file_name().unwrap_or_default().to_string_lossy();
-        if !is_dir || crate::cargo_layout::legacy_unit_package(&name).is_some() {
-            count_path(
-                &package,
-                is_dir,
-                ProjectBucket::BuildScripts,
-                false,
-                stats,
-                breakdown,
-                reclaim,
-                cache_candidates,
-            );
-            continue;
-        }
-        for (unit, is_dir) in real_entries(&package) {
-            let name = unit.file_name().unwrap_or_default().to_string_lossy();
-            if !is_dir || !crate::cargo_layout::is_unit_hash(&name) {
-                count_path(
-                    &unit,
-                    is_dir,
-                    ProjectBucket::BuildScripts,
-                    false,
-                    stats,
-                    breakdown,
-                    reclaim,
-                    cache_candidates,
-                );
-                continue;
-            }
-            let out_bucket = per_unit_out_bucket(&unit);
-            for (part, is_dir) in real_entries(&unit) {
-                let (bucket, cache_eligible) = match part.file_name().and_then(|name| name.to_str())
-                {
-                    Some("fingerprint") => (ProjectBucket::Fingerprints, false),
-                    Some("out") => out_bucket,
-                    _ => (ProjectBucket::BuildScripts, false),
-                };
-                count_path(
-                    &part,
-                    is_dir,
-                    bucket,
-                    cache_eligible,
-                    stats,
-                    breakdown,
-                    reclaim,
-                    cache_candidates,
-                );
-            }
-        }
-    }
-}
-
-/// `dir`'s entries that are regular files or real directories, with whether
-/// each is a directory. Symlinks are skipped, as [`walk_project_dir`] skips
-/// them.
-fn real_entries(dir: &std::path::Path) -> Vec<(std::path::PathBuf, bool)> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let kind = entry.file_type().ok()?;
-            (kind.is_dir() || kind.is_file()).then(|| (entry.path(), kind.is_dir()))
-        })
-        .collect()
-}
-
-/// Count one file, or everything below one directory, in `bucket`.
-#[allow(clippy::too_many_arguments)]
-fn count_path(
-    path: &std::path::Path,
-    is_dir: bool,
-    bucket: ProjectBucket,
-    cache_eligible: bool,
-    stats: &mut ProjectStats,
-    breakdown: &mut CategoryBreakdown,
-    reclaim: &mut ReclaimEstimator,
-    cache_candidates: &mut Vec<CacheCandidate>,
-) {
-    if is_dir {
-        walk_project_dir(
-            path,
-            bucket,
-            cache_eligible,
-            stats,
-            breakdown,
-            reclaim,
-            cache_candidates,
-        );
-        return;
-    }
-    let Ok(meta) = std::fs::metadata(path) else {
-        return;
-    };
-    let observation = observe_storage(path, &meta);
-    record_scanned_file(
-        stats,
-        breakdown,
-        reclaim,
-        cache_candidates,
-        meta.len(),
-        bucket,
-        cache_eligible,
-        observation,
-    );
-}
-
-/// The bucket a per-unit `out` counts in. A build script's binary and a
-/// run's `OUT_DIR` count as build scripts, as they do in the legacy layout;
-/// every other unit's outputs count as deps.
-fn per_unit_out_bucket(unit_dir: &std::path::Path) -> (ProjectBucket, bool) {
-    let compiled_build_script = std::fs::read_dir(unit_dir.join("out")).is_ok_and(|entries| {
-        entries.flatten().any(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("build_script_")
-        })
-    });
-    if unit_dir.join("run").is_dir() || compiled_build_script {
-        (ProjectBucket::BuildScripts, false)
-    } else {
-        (ProjectBucket::Deps, true)
-    }
-}
-
-/// Analyze a project's target/ directory: which files share storage with kache's
-/// store (reflinked or hardlinked) vs local-only, with per-category breakdown.
-fn compute_project_stats(target_dir: &std::path::Path) -> (ProjectStats, CategoryBreakdown) {
-    let mut stats = ProjectStats {
-        total_bytes: 0,
-        cached_bytes: 0,
-        estimated_reclaimable_bytes: 0,
-        local_bytes: 0,
-        local_files: 0,
-    };
-    let mut breakdown = CategoryBreakdown::default();
-    let mut reclaim = ReclaimEstimator::default();
-    let mut cache_candidates = Vec::new();
-
-    for (_, profile_dir) in profile_dirs(target_dir) {
-        let Ok(entries) = std::fs::read_dir(&profile_dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-
-            if file_type.is_symlink() {
-                continue;
-            }
-
-            if file_type.is_dir() {
-                match name_str.as_ref() {
-                    "incremental" => {
-                        walk_project_dir(
-                            &path,
-                            ProjectBucket::Incremental,
-                            false,
-                            &mut stats,
-                            &mut breakdown,
-                            &mut reclaim,
-                            &mut cache_candidates,
-                        );
-                    }
-                    ".fingerprint" => {
-                        walk_project_dir(
-                            &path,
-                            ProjectBucket::Fingerprints,
-                            false,
-                            &mut stats,
-                            &mut breakdown,
-                            &mut reclaim,
-                            &mut cache_candidates,
-                        );
-                    }
-                    "build" => {
-                        walk_build_dir(
-                            &path,
-                            &mut stats,
-                            &mut breakdown,
-                            &mut reclaim,
-                            &mut cache_candidates,
-                        );
-                    }
-                    "deps" => {
-                        walk_project_dir(
-                            &path,
-                            ProjectBucket::Deps,
-                            true,
-                            &mut stats,
-                            &mut breakdown,
-                            &mut reclaim,
-                            &mut cache_candidates,
-                        );
-                    }
-                    _ => {
-                        walk_project_dir(
-                            &path,
-                            ProjectBucket::Other,
-                            false,
-                            &mut stats,
-                            &mut breakdown,
-                            &mut reclaim,
-                            &mut cache_candidates,
-                        );
-                    }
-                }
-            } else if file_type.is_file() {
-                let Ok(meta) = std::fs::metadata(&path) else {
-                    continue;
-                };
-                let size = meta.len();
-                let binary = is_binary_artifact(&path);
-                let bucket = if binary {
-                    ProjectBucket::Binaries
-                } else {
-                    ProjectBucket::Other
-                };
-                let observation = observe_storage(&path, &meta);
-                record_scanned_file(
-                    &mut stats,
-                    &mut breakdown,
-                    &mut reclaim,
-                    &mut cache_candidates,
-                    size,
-                    bucket,
-                    !binary,
-                    observation,
-                );
-            }
-        }
-    }
-
-    // Files directly in target/ (CACHEDIR.TAG, .rustc_info.json, etc.)
-    if let Ok(entries) = std::fs::read_dir(target_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if entry.file_type().is_ok_and(|file_type| file_type.is_file())
-                && let Ok(meta) = std::fs::metadata(&path)
-            {
-                let observation = observe_storage(&path, &meta);
-                record_scanned_file(
-                    &mut stats,
-                    &mut breakdown,
-                    &mut reclaim,
-                    &mut cache_candidates,
-                    meta.len(),
-                    ProjectBucket::Other,
-                    false,
-                    observation,
-                );
-            }
-        }
-    }
-
-    finalize_cache_candidates(&mut stats, &mut breakdown, &reclaim, &cache_candidates);
-    stats.estimated_reclaimable_bytes = reclaim.estimated_reclaimable_bytes();
-    (stats, breakdown)
-}
-
-/// Physical-byte estimate used by daemon target recovery. The CLI's target
-/// preview and the daemon must rank candidates from the same measurement.
-pub(crate) fn target_reclaimable_bytes(target_dir: &std::path::Path) -> u64 {
-    compute_project_stats(target_dir)
-        .0
-        .estimated_reclaimable_bytes
-}
-
-/// Whether a file in `target/` is a binary-shaped artifact (executable
-/// or dynamic library) for stats bucketing purposes.
-///
-/// Delegates to [`crate::compiler::classify_by_filename`] so the rustc
-/// extension table lives in one place. The extensionless case is treated
-/// as a binary because in target/ scans (the only context this is called
-/// from) the rustc convention is that bin output has no extension on Unix.
-fn is_binary_artifact(path: &std::path::Path) -> bool {
-    use crate::compiler::{ArtifactKind, classify_by_filename};
-    use crate::link::LinkStrategy;
-
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    let kind = classify_by_filename(name);
-    match kind {
-        // Mutable runtime-loaded artifacts: bin, dylib, etc.
-        kind if kind.link_strategy() == LinkStrategy::Copy => true,
-        // Convention: extensionless file in target/ = bin output on Unix.
-        ArtifactKind::Other("extensionless") => true,
-        _ => false,
-    }
-}
 
 /// List all cached entries, or show details for a specific crate.
 pub fn list(
@@ -4006,93 +3363,6 @@ pub fn purge(config: &Config, crate_filter: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, deser::Serialize)]
-struct CleanSkipped {
-    path: String,
-    reason: String,
-    /// The directory no longer exists, so there is nothing to measure; its
-    /// registry entry is forgotten.
-    missing: bool,
-}
-
-#[derive(Debug, Clone, deser::Serialize)]
-struct CleanFailed {
-    path: String,
-    reason: String,
-}
-
-impl CleanFailed {
-    fn new(path: &std::path::Path, reason: &str) -> Self {
-        Self {
-            path: path.display().to_string(),
-            reason: reason.to_string(),
-        }
-    }
-}
-
-pub(crate) const DEFAULT_TRACKED_STALE_HOURS: u64 = 336;
-
-/// Which target directories `kache clean` looks at.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CleanScope {
-    /// The ones kache tracks, filtered.
-    Tracked(TrackedSelection),
-    /// `target/` directories found under this directory.
-    Scan(std::path::PathBuf),
-}
-
-/// `14d`, `36h`: a window in whole days when it is one.
-fn window_label(hours: u64) -> String {
-    if hours > 0 && hours.is_multiple_of(24) {
-        format!("{}d", hours / 24)
-    } else {
-        format!("{hours}h")
-    }
-}
-
-/// The window a tracked clean can widen to, when it selects less than that.
-const WIDER_STALE_HOURS: u64 = 7 * 24;
-
-/// Whether `--stale 7d` would select more than `selection` does.
-fn can_widen(selection: TrackedSelection) -> bool {
-    match selection {
-        TrackedSelection::Orphaned => true,
-        TrackedSelection::StaleOrOrphaned(hours) => hours > WIDER_STALE_HOURS,
-    }
-}
-
-/// How a tracked clean preview ends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PlanEnd {
-    /// `--dry-run`: names the command that removes what it selected.
-    DryRun,
-    /// A clean that found nothing to remove.
-    NothingRemoved,
-}
-
-/// Whether a tracked clean reads every target kache knows. A preview, or a
-/// clean that selected nothing, shows what it keeps, so it answers "what is
-/// using my disk" too; a clean that removes something does not need it.
-fn builds_plan(preview: bool, selected: usize) -> bool {
-    preview || selected == 0
-}
-
-/// The tracked selection a clean builds its plan for, if it builds one: a
-/// scan of a named directory has none.
-fn plan_selection(
-    selection: Option<TrackedSelection>,
-    preview: bool,
-    selected: usize,
-) -> Option<TrackedSelection> {
-    selection.filter(|_| builds_plan(preview, selected))
-}
-
-/// Whether that view is printed as text: `--dry-run`, or a clean with
-/// nothing to remove. JSON prints the same plan; otherwise it asks once.
-fn prints_plan(json: bool, dry_run: bool, selected: usize) -> bool {
-    !json && (dry_run || selected == 0)
-}
-
 /// What `kache clean --cache` or `--crate` removes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CacheClean {
@@ -4280,6 +3550,15 @@ fn removal_words(what: &CacheClean, entries: usize, bytes: u64) -> String {
     }
 }
 
+/// `14d`, `36h`: a window in whole days when it is one.
+fn window_label(hours: u64) -> String {
+    if hours > 0 && hours.is_multiple_of(24) {
+        format!("{}d", hours / 24)
+    } else {
+        format!("{hours}h")
+    }
+}
+
 /// What a cache clean would do, for `--dry-run`. Pure.
 fn cache_preview(what: &CacheClean, entries: usize, bytes: u64) -> String {
     match what {
@@ -4314,6 +3593,25 @@ fn confirm_removal_with(
         return Err(no_terminal("nothing removed", &command_args(), true));
     }
     prompt(question)
+}
+
+fn shell_line(argv: &[String]) -> String {
+    let plain = |word: &str| {
+        !word.is_empty()
+            && word
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_./:=@%+,".contains(c))
+    };
+    argv.iter()
+        .map(|word| {
+            if plain(word) {
+                word.clone()
+            } else {
+                format!("'{}'", word.replace('\'', r"'\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `argv` as one line a POSIX shell reads back as the same words.
@@ -4356,1673 +3654,6 @@ fn retry_with_yes(outcome: &str, why: &str, args: &[String], preview: bool) -> a
         "{outcome}: {why}. Run `{}` to go ahead without asking{preview}.",
         command_line(&argv)
     )
-}
-
-/// Whether nothing is at `path` any more. A lookup that fails another way,
-/// such as a permission error, does not say the directory is gone.
-fn path_was_removed(path: &std::path::Path) -> bool {
-    std::fs::symlink_metadata(path).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-}
-
-#[derive(deser::Serialize)]
-struct UnitCleanRow {
-    path: String,
-    workspace: String,
-    plan: crate::target_liveness::Plan,
-    removed: crate::unit_prune::Pruned,
-}
-
-fn unit_target_matches(
-    root: &crate::store::TrackedTargetRoot,
-    selected: Option<&std::path::Path>,
-) -> bool {
-    selected.is_none_or(|path| path == root.path || path == root.workspace_root)
-}
-
-fn unit_target_intact(root: &crate::store::TrackedTargetRoot) -> bool {
-    root.workspace_root.is_dir()
-        && crate::machine::target_root_is_safe(&root.path, &root.workspace_root)
-        && crate::machine::directory_identity(&root.path) == Some(root.identity)
-}
-
-fn unit_cleanup_roots(
-    roots: Vec<crate::store::TrackedTargetRoot>,
-    selected: Option<&std::path::Path>,
-) -> Vec<crate::store::TrackedTargetRoot> {
-    roots
-        .into_iter()
-        .filter(|root| unit_target_matches(root, selected) && unit_target_intact(root))
-        .collect()
-}
-
-fn unit_cleanup_ready(
-    root: &crate::store::TrackedTargetRoot,
-    plan: &crate::target_liveness::Plan,
-) -> bool {
-    plan.status == "ready" && unit_target_intact(root)
-}
-
-fn unit_preview(dry_run: bool, yes: bool, json: bool) -> bool {
-    dry_run || (json && !yes)
-}
-
-fn unit_cleanup_needs_confirmation(preview: bool, units: usize) -> bool {
-    !preview && units > 0
-}
-
-fn render_unit_plan(path: &str, plan: &crate::target_liveness::Plan) -> String {
-    if plan.status == "ready" {
-        format!(
-            "{path}: {} ({}), {} live and {} unknown units kept",
-            term::counted(plan.units as u64, "obsolete unit", "obsolete units"),
-            kache_core::size::format_bytes(plan.bytes),
-            plan.protected,
-            plan.unknown
-        )
-    } else {
-        format!(
-            "{path}: {}; everything kept. Capture a receipt with KACHE_TARGET_LIVENESS=1 kache cargo check",
-            plan.status
-        )
-    }
-}
-
-/// Remove only units excluded by an intact receipt for the recorded Cargo command.
-pub(crate) fn clean_units(
-    config: &Config,
-    path: Option<std::path::PathBuf>,
-    dry_run: bool,
-    yes: bool,
-    json: bool,
-) -> Result<()> {
-    clean_units_with_output(config, path, dry_run, yes, json, &mut |line| {
-        println!("{line}")
-    })
-}
-
-fn clean_units_with_output(
-    config: &Config,
-    path: Option<std::path::PathBuf>,
-    dry_run: bool,
-    yes: bool,
-    json: bool,
-    human_output: &mut impl FnMut(String),
-) -> Result<()> {
-    let selected = path
-        .map(|path| {
-            std::fs::canonicalize(&path)
-                .with_context(|| format!("cannot select {}", path.display()))
-        })
-        .transpose()?;
-    let store = Store::open(config)?;
-    let roots = unit_cleanup_roots(store.tracked_target_roots(0)?, selected.as_deref());
-    let mut rows: Vec<_> = roots
-        .iter()
-        .map(|root| UnitCleanRow {
-            path: root.path.display().to_string(),
-            workspace: root.workspace_root.display().to_string(),
-            plan: crate::target_liveness::preview(config, &root.path, &root.workspace_root),
-            removed: Default::default(),
-        })
-        .collect();
-    let units: usize = rows.iter().map(|row| row.plan.units).sum();
-    let preview = unit_preview(dry_run, yes, json);
-    if !json {
-        if rows.is_empty() {
-            human_output("No intact tracked target matches. Capture one with KACHE_TARGET_LIVENESS=1 kache cargo check.".into());
-        }
-        for row in &rows {
-            human_output(render_unit_plan(&row.path, &row.plan));
-        }
-    }
-    let answer = if unit_cleanup_needs_confirmation(preview, units) {
-        Some(confirm_removal_with(
-            &format!("Remove {units} obsolete build units?"),
-            yes,
-            std::io::stdin().is_terminal(),
-            |question| prompt_yes_no(question, false, false),
-        )?)
-    } else {
-        None
-    };
-    if answer == Some(true) {
-        for (root, row) in roots.iter().zip(&mut rows) {
-            if unit_cleanup_ready(root, &row.plan) {
-                row.removed = crate::target_liveness::prune(
-                    config,
-                    &root.path,
-                    &root.workspace_root,
-                    None,
-                    std::time::SystemTime::now(),
-                )?;
-            }
-        }
-    }
-    if json {
-        #[derive(deser::Serialize)]
-        struct Body {
-            preview: bool,
-            targets: Vec<UnitCleanRow>,
-        }
-        return crate::machine::emit(
-            "clean",
-            Body {
-                preview,
-                targets: rows,
-            },
-            Vec::new(),
-        );
-    }
-    let removed: usize = rows.iter().map(|row| row.removed.units).sum();
-    let bytes: u64 = rows.iter().map(|row| row.removed.bytes).sum();
-    if let Some(line) = unit_clean_summary(preview, answer, removed, bytes) {
-        human_output(line);
-    }
-    Ok(())
-}
-
-/// The last line of a unit clean, after the answer to its question if it
-/// asked one: none for a preview.
-fn unit_clean_summary(
-    preview: bool,
-    answer: Option<bool>,
-    removed: usize,
-    bytes: u64,
-) -> Option<String> {
-    if preview {
-        return None;
-    }
-    if answer == Some(false) {
-        return Some("Nothing removed.".into());
-    }
-    Some(format!(
-        "Removed {} ({}).",
-        term::counted(removed as u64, "obsolete unit", "obsolete units"),
-        kache_core::size::format_bytes(bytes)
-    ))
-}
-
-/// Find and remove target directories, either below cwd or from the bounded
-/// machine-local registry populated by the compiler wrapper.
-pub fn clean(
-    config: &Config,
-    dry_run: bool,
-    yes: bool,
-    json: bool,
-    scope: CleanScope,
-) -> Result<()> {
-    let terminal = std::io::stdout().is_terminal();
-    clean_with_terminal(config, dry_run, yes, json, scope, terminal)
-}
-
-fn clean_with_terminal(
-    config: &Config,
-    dry_run: bool,
-    yes: bool,
-    json: bool,
-    scope: CleanScope,
-    terminal: bool,
-) -> Result<()> {
-    // Without flags nothing is removed: refuse before scanning or forgetting
-    // anything.
-    if !dry_run && !yes && !json && !terminal {
-        return Err(no_terminal("nothing removed", &command_args(), true));
-    }
-    let (root, selection) = match &scope {
-        CleanScope::Scan(dir) => {
-            if !dir.is_dir() {
-                anyhow::bail!("{} is not a directory", dir.display());
-            }
-            (std::path::absolute(dir)?, None)
-        }
-        CleanScope::Tracked(selection) => (std::env::current_dir()?, Some(*selection)),
-    };
-    let preview = dry_run || (json && !yes);
-    let (mut targets, skipped, orphans) = {
-        let _ticker = term::Ticker::start("Measuring target directories");
-        if let Some(selection) = selection {
-            tracked_target_entries(config, selection, preview)?
-        } else {
-            let mut targets = Vec::new();
-            find_target_dirs_in(&root, &mut targets);
-            (targets, Vec::new(), std::collections::HashSet::new())
-        }
-    };
-    // Sort by size descending
-    targets.sort_by_key(|entry| std::cmp::Reverse(entry.size));
-
-    let plan = plan_selection(selection, preview, targets.len())
-        .map(|selection| {
-            let now = kache_store::markers::now_epoch_secs() as i64;
-            TrackedPlan::new(config, selection, &targets, preview, now)
-        })
-        .transpose()?;
-    if let Some(plan) = plan
-        .as_ref()
-        .filter(|_| prints_plan(json, dry_run, targets.len()))
-    {
-        let end = if dry_run {
-            PlanEnd::DryRun
-        } else {
-            PlanEnd::NothingRemoved
-        };
-        let notes = if dry_run {
-            let paths: Vec<&std::path::Path> = plan
-                .removed
-                .iter()
-                .map(|row| std::path::Path::new(&row.path))
-                .collect();
-            removal_notes(&config.cache_dir, &paths)
-        } else {
-            Vec::new()
-        };
-        for line in plan_lines(plan, &skipped, &notes, end) {
-            println!("{line}");
-        }
-        return Ok(());
-    }
-    if targets.is_empty() && !json {
-        println!("No target/ directories under {}.", root.display());
-        return Ok(());
-    }
-
-    let emit_clean_json = |targets: &[TargetEntry],
-                           skipped: &[CleanSkipped],
-                           waiting: &[crate::target_use::Holder],
-                           failed: &[CleanFailed],
-                           removed_paths: Vec<String>,
-                           reclaimed: u64| {
-        #[derive(deser::Serialize)]
-        struct TargetBody {
-            path: String,
-            apparent_bytes: u64,
-            cached_bytes: u64,
-            estimated_reclaimable_bytes: u64,
-            /// The workspace this target was built from no longer exists.
-            orphaned: bool,
-        }
-        #[derive(deser::Serialize)]
-        struct Body<'a> {
-            targets: Vec<TargetBody>,
-            /// Tracked targets this clean leaves, in a preview or when it
-            /// removes nothing: the rows the text shows under Keep.
-            #[deser(skip_serializing_if = Option::is_none)]
-            kept: Option<&'a [TargetRow]>,
-            skipped: Vec<CleanSkipped>,
-            /// Running commands that keep clean from deleting now.
-            #[deser(skip_serializing_if = Vec::is_empty)]
-            waiting_for: Vec<WaitingFor>,
-            /// Targets this clean tried and failed to remove.
-            failed: Vec<CleanFailed>,
-            removed_paths: Vec<String>,
-            changed: bool,
-            estimated_reclaimed_bytes: u64,
-        }
-        #[derive(deser::Serialize)]
-        struct WaitingFor {
-            pid: u32,
-            command: String,
-            running_seconds: u64,
-        }
-        let now = kache_store::markers::now_epoch_secs();
-        let body = Body {
-            kept: plan.as_ref().map(|plan| plan.kept.as_slice()),
-            targets: targets
-                .iter()
-                .map(|t| TargetBody {
-                    path: t.path.display().to_string(),
-                    apparent_bytes: t.size,
-                    cached_bytes: t.cached_bytes,
-                    estimated_reclaimable_bytes: t.estimated_reclaimable_bytes,
-                    orphaned: orphans.contains(&t.path),
-                })
-                .collect(),
-            skipped: skipped.to_vec(),
-            waiting_for: waiting
-                .iter()
-                .map(|holder| WaitingFor {
-                    pid: holder.pid,
-                    command: holder.what.clone(),
-                    running_seconds: now.saturating_sub(holder.since),
-                })
-                .collect(),
-            failed: failed.to_vec(),
-            changed: !removed_paths.is_empty(),
-            removed_paths,
-            estimated_reclaimed_bytes: reclaimed,
-        };
-        let next = plan
-            .as_ref()
-            .map(|plan| plan.next.clone())
-            .unwrap_or_default();
-        crate::machine::emit_outcome("clean", removal_failure(failed).as_deref(), body, next)
-    };
-
-    // `--json` without `--yes`, or with `--dry-run`, is a preview.
-    if json && preview {
-        let waiting = crate::target_use::blockers(&config.cache_dir).unwrap_or_default();
-        return emit_clean_json(&targets, &skipped, &waiting, &[], Vec::new(), 0);
-    }
-
-    // `--dry-run` takes precedence over `--yes`: preview only, never delete.
-    if dry_run {
-        for line in render_clean_dry_run(&targets, &root, &orphans) {
-            println!("{line}");
-        }
-        let paths: Vec<&std::path::Path> = targets.iter().map(|t| t.path.as_path()).collect();
-        for note in removal_notes(&config.cache_dir, &paths) {
-            println!("{note}");
-        }
-        for item in &skipped {
-            println!("Skipped {}: {}", item.path, item.reason);
-        }
-        return Ok(());
-    }
-
-    // `--yes`: non-interactive, remove every discovered target/ dir. Meant for
-    // scripts and cron where the interactive selector cannot run.
-    if yes {
-        let to_remove: Vec<_> = targets.iter().map(RemovalTarget::from_entry).collect();
-        let mut skipped = skipped.clone();
-        let mut waiting = Vec::new();
-        let mut failed = Vec::new();
-        let (removed, estimated_reclaimed, apparent_gap) = remove_targets(
-            &to_remove,
-            &root,
-            &config.cache_dir,
-            json,
-            &mut skipped,
-            &mut waiting,
-            &mut failed,
-        );
-        let removed_paths: Vec<String> = deleted_targets(&to_remove, &failed, &skipped)
-            .map(|target| target.path.display().to_string())
-            .collect();
-        forget_removed_targets(config, &to_remove, &failed, &skipped)?;
-        if json {
-            emit_clean_json(
-                &targets,
-                &skipped,
-                &waiting,
-                &failed,
-                removed_paths,
-                estimated_reclaimed,
-            )?;
-            return removal_outcome(&failed);
-        }
-        println!(
-            "\n{}",
-            removal_summary(removed, estimated_reclaimed, apparent_gap)
-        );
-        return removal_outcome(&failed);
-    }
-
-    // A terminal without flags: list what would go and ask once.
-    for line in render_clean_dry_run(&targets, &root, &orphans)
-        .into_iter()
-        .take_while(|line| !line.starts_with("Dry run,"))
-    {
-        println!("{line}");
-    }
-    if !prompt_yes_no(
-        &format!(
-            "Remove {} target director{}?",
-            targets.len(),
-            if targets.len() == 1 { "y" } else { "ies" }
-        ),
-        false,
-        false,
-    )? {
-        println!("Cancelled.");
-        return Ok(());
-    }
-    let to_remove: Vec<_> = targets.iter().map(RemovalTarget::from_entry).collect();
-    let mut skipped = skipped.clone();
-    let mut failed = Vec::new();
-    let (removed, estimated_reclaimed, apparent_gap) = remove_targets(
-        &to_remove,
-        &root,
-        &config.cache_dir,
-        false,
-        &mut skipped,
-        &mut Vec::new(),
-        &mut failed,
-    );
-    forget_removed_targets(config, &to_remove, &failed, &skipped)?;
-    println!(
-        "\n{}",
-        removal_summary(removed, estimated_reclaimed, apparent_gap)
-    );
-    removal_outcome(&failed)
-}
-
-/// Forget the registry rows of the targets that are gone, whether this
-/// clean found them through the registry or under a directory. A row goes
-/// only while it records the directory this clean removed: a build may
-/// have recorded a new one at the same path since.
-/// The targets this clean deleted: gone now, and neither skipped nor failed.
-/// A target that failed or was skipped but is gone was moved by someone else.
-fn deleted_targets<'a>(
-    to_remove: &'a [RemovalTarget],
-    failed: &'a [CleanFailed],
-    skipped: &'a [CleanSkipped],
-) -> impl Iterator<Item = &'a RemovalTarget> {
-    to_remove.iter().filter(move |target| {
-        let path = target.path.display().to_string();
-        path_was_removed(&target.path)
-            && !failed.iter().any(|item| item.path == path)
-            && !skipped.iter().any(|item| item.path == path)
-    })
-}
-
-fn forget_removed_targets(
-    config: &Config,
-    to_remove: &[RemovalTarget],
-    failed: &[CleanFailed],
-    skipped: &[CleanSkipped],
-) -> Result<()> {
-    let mut removed = deleted_targets(to_remove, failed, skipped)
-        .filter_map(|target| target.scanned_identity)
-        .peekable();
-    if removed.peek().is_none() {
-        return Ok(());
-    }
-    let store = Store::open(config)?;
-    for identity in removed {
-        store.forget_target_roots_with_identity(identity)?;
-    }
-    Ok(())
-}
-
-/// `could not remove 2 target directories`, when any removal failed.
-fn removal_failure(failed: &[CleanFailed]) -> Option<String> {
-    (!failed.is_empty()).then(|| {
-        format!(
-            "could not remove {} target director{}",
-            failed.len(),
-            if failed.len() == 1 { "y" } else { "ies" }
-        )
-    })
-}
-
-/// A clean that failed to remove a target fails, after saying what it did.
-fn removal_outcome(failed: &[CleanFailed]) -> Result<()> {
-    match removal_failure(failed) {
-        Some(message) => Err(crate::machine::Reported(message).into()),
-        None => Ok(()),
-    }
-}
-
-#[derive(Debug)]
-struct RemovalTarget {
-    path: std::path::PathBuf,
-    scanned_identity: Option<PathIdentity>,
-    estimated_reclaimable: u64,
-    apparent_gap: u64,
-}
-
-impl RemovalTarget {
-    fn from_entry(entry: &TargetEntry) -> Self {
-        Self {
-            path: entry.path.clone(),
-            scanned_identity: entry.scan_identity,
-            estimated_reclaimable: entry.estimated_reclaimable_bytes,
-            apparent_gap: entry.size.saturating_sub(entry.estimated_reclaimable_bytes),
-        }
-    }
-}
-
-/// Delete each validated target/ dir,
-/// printing a per-directory `removed` / `failed` line (paths shown relative to
-/// `root`). A failure on one directory is reported and skipped, never aborting
-/// the rest. Returns the scan-time estimates only for directories whose
-/// `remove_dir_all` completed successfully. The actual filesystem delta can
-/// differ after a concurrent change or a partially-completed failed removal.
-fn remove_targets(
-    to_remove: &[RemovalTarget],
-    root: &std::path::Path,
-    cache_dir: &std::path::Path,
-    quiet: bool,
-    skipped: &mut Vec<CleanSkipped>,
-    waiting: &mut Vec<crate::target_use::Holder>,
-    failed: &mut Vec<CleanFailed>,
-) -> (usize, u64, u64) {
-    let mut estimated_reclaimed = 0u64;
-    let mut apparent_gap = 0u64;
-    let mut removed = 0usize;
-    let reservation = crate::target_use::try_exclusive(cache_dir).unwrap_or_else(|error| {
-        log::warn!("cannot check running Cargo commands before clean: {error}");
-        None
-    });
-    // Without the reservation nothing can go, whatever each target's state:
-    // say once what clean waits for, rather than blame every target.
-    let held = reservation.is_none().then(|| {
-        *waiting = crate::target_use::holders(cache_dir);
-        held_reason(waiting, kache_store::markers::now_epoch_secs())
-    });
-    for target in to_remove {
-        let rel = target.path.strip_prefix(root).unwrap_or(&target.path);
-        let current_identity = directory_identity(&target.path);
-        if target.scanned_identity.is_none() || current_identity != target.scanned_identity {
-            const CHANGED: &str = "directory changed since scan; refusing to remove";
-            if human_clean_output(quiet) {
-                println!("  failed  {} — {CHANGED}", rel.display());
-            }
-            failed.push(CleanFailed::new(&target.path, CHANGED));
-            continue;
-        }
-        if let Some(reason) = &held {
-            skipped.push(CleanSkipped {
-                path: target.path.display().to_string(),
-                reason: reason.clone(),
-                missing: false,
-            });
-            continue;
-        }
-        if target_in_use(&target.path) {
-            if human_clean_output(quiet) {
-                println!("  skipped {} — {TARGET_IN_USE}", rel.display());
-            }
-            skipped.push(CleanSkipped {
-                path: target.path.display().to_string(),
-                reason: TARGET_IN_USE.to_string(),
-                missing: false,
-            });
-            continue;
-        }
-        let removal = {
-            let _ticker = human_clean_output(quiet)
-                .then(|| term::Ticker::start(format!("Removing {}", rel.display())));
-            std::fs::remove_dir_all(&target.path)
-        };
-        match removal {
-            Ok(()) => {
-                estimated_reclaimed =
-                    estimated_reclaimed.saturating_add(target.estimated_reclaimable);
-                apparent_gap = apparent_gap.saturating_add(target.apparent_gap);
-                removed += 1;
-                if human_clean_output(quiet) {
-                    println!("  removed {}", rel.display());
-                }
-            }
-            Err(e) => {
-                if human_clean_output(quiet) {
-                    println!("  failed  {} — {e}", rel.display());
-                }
-                failed.push(CleanFailed::new(&target.path, &e.to_string()));
-            }
-        }
-    }
-    if let Some(line) = held_summary(held.as_deref(), skipped).filter(|_| human_clean_output(quiet))
-    {
-        println!("{line}");
-    }
-    (removed, estimated_reclaimed, apparent_gap)
-}
-
-/// The one line `--yes` prints for the targets it skipped because a running
-/// command held the lock: those in `skipped` with `held` as their reason.
-fn held_summary(held: Option<&str>, skipped: &[CleanSkipped]) -> Option<String> {
-    let held = held?;
-    let count = skipped.iter().filter(|item| item.reason == held).count();
-    (count > 0).then(|| format!("  skipped {} — {held}", target_count(count)))
-}
-
-/// Why clean skips every target now: the commands holding Kache's target
-/// lock, by name and how long they have run, or a plain reason when none
-/// left a record.
-fn held_reason(holders: &[crate::target_use::Holder], now: u64) -> String {
-    let named: Vec<String> = holders
-        .iter()
-        .map(|holder| {
-            let running = now.saturating_sub(holder.since).saturating_mul(1000);
-            format!(
-                "`{}` (pid {}, running {})",
-                holder.what,
-                holder.pid,
-                term::duration_ms(running)
-            )
-        })
-        .collect();
-    match named.as_slice() {
-        [] => {
-            "another kache cleanup or a running Cargo command holds kache's target lock".to_owned()
-        }
-        [one] => format!("waiting for {one} to exit"),
-        [rest @ .., last] => format!("waiting for {} and {last} to exit", rest.join(", ")),
-    }
-}
-
-/// What a dry run adds under the targets it would remove when `--yes` could
-/// not remove them right now, so the preview matches the real run.
-fn removal_notes(cache_dir: &std::path::Path, paths: &[&std::path::Path]) -> Vec<String> {
-    if paths.is_empty() {
-        return Vec::new();
-    }
-    if let Some(holders) = crate::target_use::blockers(cache_dir) {
-        let reason = held_reason(&holders, kache_store::markers::now_epoch_secs());
-        return vec![format!(
-            "Not now: {reason}; until then `kache clean --yes` skips them."
-        )];
-    }
-    let in_use = paths.iter().filter(|path| target_in_use(path)).count();
-    if in_use == 0 {
-        return Vec::new();
-    }
-    vec![format!(
-        "Not now: {} {TARGET_IN_USE}.",
-        target_count(in_use)
-    )]
-}
-
-fn human_clean_output(quiet: bool) -> bool {
-    !quiet
-}
-
-const TARGET_IN_USE: &str = "in use by a running Cargo command or test";
-
-/// Whether a Cargo process holds one of `target`'s build locks. Cargo takes
-/// an exclusive lock on `<profile>/.cargo-lock` (and
-/// `<triple>/<profile>/.cargo-lock`) for the length of a build, so failing to
-/// take it here means a build is writing into this directory now.
-pub(crate) fn target_in_use(target: &std::path::Path) -> bool {
-    cargo_lock_files(target, 3)
-        .iter()
-        .any(|lock| std::fs::File::open(lock).is_ok_and(|file| held_elsewhere(&file)))
-}
-
-/// Whether someone else holds `file`'s lock. A lock the probe takes is
-/// released explicitly: closing alone leaves it held while a child forked
-/// meanwhile still has the descriptor, and the next probe or Cargo itself
-/// would find it taken.
-fn held_elsewhere(file: &std::fs::File) -> bool {
-    match file.try_lock() {
-        Ok(()) => {
-            let _ = file.unlock();
-            false
-        }
-        Err(std::fs::TryLockError::WouldBlock) => true,
-        Err(std::fs::TryLockError::Error(_)) => false,
-    }
-}
-
-/// `.cargo-lock` files at most `depth` directories below `dir`. Symlinks
-/// are not followed.
-fn cargo_lock_files(dir: &std::path::Path, depth: usize) -> Vec<std::path::PathBuf> {
-    let mut locks = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return locks;
-    };
-    for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_file() && entry.file_name() == ".cargo-lock" {
-            locks.push(entry.path());
-        } else if file_type.is_dir() && depth > 0 {
-            locks.extend(cargo_lock_files(&entry.path(), depth - 1));
-        }
-    }
-    locks
-}
-
-/// Explain the gap between apparent size and estimated physical reclaim without
-/// pretending every shared extent belongs to kache or survives the selected
-/// deletion set. The gap can also contain sparse holes and duplicate hardlinks.
-/// `Removed 2 target directories, about 1.2 GiB freed.`
-fn removal_summary(removed: usize, freed: u64, apparent_gap: u64) -> String {
-    format!(
-        "Removed {removed} target director{}, about {} freed.{}",
-        if removed == 1 { "y" } else { "ies" },
-        term::bytes(freed),
-        if apparent_gap > 0 {
-            format!(
-                " Another {} of their size was shared, sparse, or duplicate.",
-                term::bytes(apparent_gap)
-            )
-        } else {
-            String::new()
-        }
-    )
-}
-
-fn render_clean_dry_run(
-    targets: &[TargetEntry],
-    root: &std::path::Path,
-    orphans: &std::collections::HashSet<std::path::PathBuf>,
-) -> Vec<String> {
-    use term::Align::{Left, Right};
-    let total_size: u64 = targets.iter().map(|t| t.size).sum();
-    let estimated_reclaimable: u64 = targets.iter().map(|t| t.estimated_reclaimable_bytes).sum();
-    let mut lines = vec![format!(
-        "Remove   {} target director{} under {} · {} on disk · {} freeable",
-        targets.len(),
-        if targets.len() == 1 { "y" } else { "ies" },
-        term::home_path(root),
-        term::bytes(total_size),
-        term::bytes(estimated_reclaimable),
-    )];
-    let body: Vec<Vec<String>> = targets
-        .iter()
-        .map(|t| {
-            let mut path = t
-                .path
-                .strip_prefix(root)
-                .unwrap_or(&t.path)
-                .display()
-                .to_string();
-            if !t.profiles.is_empty() {
-                path.push_str(&format!("  [{}]", t.profiles.join(", ")));
-            }
-            if orphans.contains(&t.path) {
-                path.push_str("  (worktree deleted)");
-            }
-            vec![
-                term::bytes(t.estimated_reclaimable_bytes),
-                term::bytes(t.size),
-                term::bytes(t.cached_bytes),
-                path,
-            ]
-        })
-        .collect();
-    lines.extend(term::table(
-        &["FREEABLE", "ON DISK", "CACHED", "PATH"],
-        &[Right, Right, Right, Left],
-        &body,
-    ));
-    lines.push(String::new());
-    lines.push(format!(
-        "Dry run, nothing removed. `kache clean {} --yes` removes them.",
-        term::home_path(root)
-    ));
-    lines
-}
-
-#[derive(Default)]
-pub(crate) struct CategoryBreakdown {
-    pub incremental: u64,
-    pub build_scripts: u64,
-    pub fingerprints: u64,
-    pub binaries: u64,
-    pub deps_local: u64,
-    pub other: u64,
-}
-
-pub(crate) struct TargetEntry {
-    pub path: std::path::PathBuf,
-    pub size: u64,
-    pub cached_bytes: u64,
-    pub estimated_reclaimable_bytes: u64,
-    pub(crate) scan_identity: Option<PathIdentity>,
-    pub profiles: Vec<String>,
-}
-
-/// Whether the worktree a tracked target was built from is still there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, deser::Serialize)]
-#[deser(rename_all = "snake_case")]
-pub(crate) enum TargetState {
-    Live,
-    WorktreeDeleted,
-}
-
-/// One tracked target directory, as `kache targets` reports it.
-#[derive(Debug, Clone, PartialEq, Eq, deser::Serialize)]
-pub(crate) struct TargetRow {
-    path: String,
-    workspace: String,
-    state: TargetState,
-    /// Seconds since a build last used it, unknown for Git discoveries.
-    idle_seconds: Option<u64>,
-    /// Git found this target, but kache has not observed a build using it.
-    discovered: bool,
-    /// What the daemon's next quiet pass would do to this target.
-    next_pass: crate::target_cleanup::Plan,
-    unit_cleanup: crate::target_liveness::Plan,
-    profiles: Vec<String>,
-    /// Bytes its files add up to, counting shared blocks in full.
-    apparent_bytes: u64,
-    /// Estimated bytes deleting it would give back: its private extents,
-    /// with hardlinks and blocks shared with the store left out.
-    reclaimable_bytes: u64,
-    /// Bytes restored from kache's store.
-    cached_bytes: u64,
-}
-
-/// Every tracked target directory that still exists, the most freeable
-/// first. Missing ones are left for `kache clean --tracked` to forget.
-fn target_rows(config: &Config, now: i64) -> Result<Vec<TargetRow>> {
-    let store = Store::open(config)?;
-    let tracked: Vec<_> = store
-        .tracked_target_roots(0)?
-        .into_iter()
-        .filter(|tracked| {
-            tracked.path.is_dir()
-                && crate::machine::directory_identity(&tracked.path) == Some(tracked.identity)
-        })
-        .collect();
-    // Each scan walks a whole target and probes extents; they are independent
-    // and bound by the filesystem, so run several at once.
-    let workers = std::thread::available_parallelism()
-        .map_or(4, std::num::NonZeroUsize::get)
-        .clamp(1, 8);
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let scanned = std::sync::Mutex::new(Vec::with_capacity(tracked.len()));
-    std::thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| {
-                loop {
-                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let Some(root) = tracked.get(index) else {
-                        break;
-                    };
-                    let stats = compute_project_stats(&root.path).0;
-                    let profiles = detect_profiles(&root.path);
-                    let plan = crate::target_cleanup::plan(config, root, now.max(0) as u64);
-                    if let Ok(mut scanned) = scanned.lock() {
-                        scanned.push((index, stats, profiles, plan));
-                    }
-                }
-            });
-        }
-    });
-    let scanned = scanned
-        .into_inner()
-        .unwrap_or_else(|error| error.into_inner());
-    let mut rows = Vec::with_capacity(scanned.len());
-    for (index, stats, profiles, next_pass) in scanned {
-        let tracked = &tracked[index];
-        rows.push(TargetRow {
-            path: tracked.path.display().to_string(),
-            workspace: tracked.workspace_root.display().to_string(),
-            state: if workspace_is_gone(&tracked.workspace_root) {
-                TargetState::WorktreeDeleted
-            } else {
-                TargetState::Live
-            },
-            idle_seconds: crate::target_cleanup::idle_secs(config, tracked, now)
-                .map(|idle| idle as u64),
-            discovered: tracked.discovered,
-            next_pass,
-            // Receipts exist only for builds with target_liveness on, and
-            // validating one reads every fingerprint, so skip it otherwise.
-            unit_cleanup: if config.target_liveness {
-                crate::target_liveness::preview(config, &tracked.path, &tracked.workspace_root)
-            } else {
-                crate::target_liveness::Plan {
-                    status: "off".into(),
-                    ..Default::default()
-                }
-            },
-            profiles,
-            apparent_bytes: stats.total_bytes,
-            reclaimable_bytes: stats.estimated_reclaimable_bytes,
-            cached_bytes: stats.cached_bytes,
-        });
-    }
-    sort_target_rows(&mut rows);
-    Ok(rows)
-}
-
-fn sort_target_rows(rows: &mut [TargetRow]) {
-    rows.sort_by_key(|row| std::cmp::Reverse(row.reclaimable_bytes));
-}
-
-/// `3d`, `5h`, `12m`, `40s`: the largest whole unit.
-fn format_idle(seconds: u64) -> String {
-    match seconds {
-        s if s >= 86_400 => format!("{}d", s / 86_400),
-        s if s >= 3_600 => format!("{}h", s / 3_600),
-        s if s >= 60 => format!("{}m", s / 60),
-        s => format!("{s}s"),
-    }
-}
-
-fn unit_cleanup_note(plan: &crate::target_liveness::Plan) -> String {
-    match plan.status.as_str() {
-        "" | "off" => String::new(),
-        "ready" if plan.units > 0 => format!(
-            "  ({}: `kache clean --units --dry-run`)",
-            term::counted(plan.units as u64, "obsolete unit", "obsolete units")
-        ),
-        "ready" => String::new(),
-        status => format!("  (unit cleanup: {status})"),
-    }
-}
-
-fn render_targets(rows: &[TargetRow], auto_orphans: bool) -> Vec<String> {
-    let apparent: u64 = rows.iter().map(|row| row.apparent_bytes).sum();
-    let reclaimable: u64 = rows.iter().map(|row| row.reclaimable_bytes).sum();
-    let mut lines = vec![format!(
-        "{} tracked target director{}: {} on disk, {} freeable\n",
-        rows.len(),
-        if rows.len() == 1 { "y" } else { "ies" },
-        kache_core::size::format_bytes(apparent),
-        kache_core::size::format_bytes(reclaimable)
-    )];
-    lines.push(format!(
-        "  {:>10}  {:>10}  {:>5}  TARGET",
-        "FREEABLE", "ON DISK", "IDLE"
-    ));
-    for row in rows {
-        let deleted = if row.state == TargetState::WorktreeDeleted {
-            "  (worktree deleted)"
-        } else {
-            ""
-        };
-        let discovered = if row.discovered {
-            "  (found through Git)"
-        } else {
-            ""
-        };
-        let next_pass = next_pass_note(&row.next_pass);
-        let units = unit_cleanup_note(&row.unit_cleanup);
-        lines.push(format!(
-            "  {:>10}  {:>10}  {:>5}  {}{deleted}{discovered}{next_pass}{units}",
-            kache_core::size::format_bytes(row.reclaimable_bytes),
-            kache_core::size::format_bytes(row.apparent_bytes),
-            row.idle_seconds
-                .map(format_idle)
-                .unwrap_or_else(|| "?".into()),
-            // The target, not its workspace: one workspace can hold several.
-            term::home_path(std::path::Path::new(&row.path))
-        ));
-    }
-    let orphans = recorded_orphans(rows);
-    if orphans > 0 {
-        let them = if orphans == 1 { "it" } else { "them" };
-        let when = if auto_orphans { " now" } else { "" };
-        lines.push(format!(
-            "\n{}. To remove {them}{when}: `kache clean --orphans --yes`",
-            orphan_note(orphans, auto_orphans)
-        ));
-    }
-    lines
-}
-
-/// Targets a build recorded whose worktree is gone: the ones the daemon's
-/// orphan rule and `kache clean --orphans` act on.
-fn recorded_orphans(rows: &[TargetRow]) -> usize {
-    rows.iter()
-        .filter(|row| !row.discovered && row.state == TargetState::WorktreeDeleted)
-        .count()
-}
-
-/// `2 targets belong to deleted worktrees; the daemon removes them a day
-/// after their last build`, or only the first half when `auto` (the
-/// `auto_clean_orphaned_targets` setting) is off.
-fn orphan_note(orphans: usize, auto: bool) -> String {
-    let (subject, them, their) = if orphans == 1 {
-        (
-            "1 target belongs to a deleted worktree".to_string(),
-            "it",
-            "its",
-        )
-    } else {
-        (
-            format!(
-                "{} targets belong to deleted worktrees",
-                term::count(orphans as u64)
-            ),
-            "them",
-            "their",
-        )
-    };
-    if auto {
-        format!("{subject}; the daemon removes {them} a day after {their} last build")
-    } else {
-        subject
-    }
-}
-
-/// A tracked clean's view of every target kache knows: the ones it removes,
-/// the ones it keeps with what the daemon will do to them, the cache, and
-/// what to run next. The text preview and the JSON report both read it, so
-/// they show the same facts.
-struct TrackedPlan {
-    selection: TrackedSelection,
-    /// Tracked targets this clean removes.
-    removed: Vec<TargetRow>,
-    /// Tracked targets it leaves.
-    kept: Vec<TargetRow>,
-    cache: CacheLine,
-    /// The commands it suggests, in the order the text shows them.
-    next: Vec<crate::machine::NextAction>,
-}
-
-impl TrackedPlan {
-    /// Reads the registry and the store; removes nothing.
-    fn new(
-        config: &Config,
-        selection: TrackedSelection,
-        remove: &[TargetEntry],
-        preview: bool,
-        now: i64,
-    ) -> Result<Self> {
-        let rows = target_rows(config, now)?;
-        let store = Store::open(config)?;
-        let cache = CacheLine {
-            bytes: store.physical_size()?,
-            limit: config.max_size,
-            entries: store.entry_count()? as u64,
-        };
-        let remove: std::collections::HashSet<String> = remove
-            .iter()
-            .map(|entry| entry.path.display().to_string())
-            .collect();
-        Ok(Self::from_parts(
-            selection,
-            rows,
-            &remove,
-            preview,
-            cache,
-            &names_its_target,
-        ))
-    }
-
-    /// The plan from its parts. Pure apart from `nameable`, which says
-    /// whether naming a row's workspace reaches its target.
-    fn from_parts(
-        selection: TrackedSelection,
-        rows: Vec<TargetRow>,
-        remove: &std::collections::HashSet<String>,
-        preview: bool,
-        cache: CacheLine,
-        nameable: &dyn Fn(&TargetRow) -> bool,
-    ) -> Self {
-        let (removed, kept): (Vec<TargetRow>, Vec<TargetRow>) =
-            rows.into_iter().partition(|row| remove.contains(&row.path));
-        let next = clean_next_actions(selection, preview, removed.len(), &kept, nameable);
-        Self {
-            selection,
-            removed,
-            kept,
-            cache,
-            next,
-        }
-    }
-}
-
-/// What a tracked clean suggests next: the command that removes what a
-/// preview selected, a wider window when nothing matched, and, for targets
-/// found through Git, which no rule removes, a preview of the largest one.
-fn clean_next_actions(
-    selection: TrackedSelection,
-    preview: bool,
-    removable: usize,
-    kept: &[TargetRow],
-    nameable: &dyn Fn(&TargetRow) -> bool,
-) -> Vec<crate::machine::NextAction> {
-    let argv = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
-    let mut next = Vec::new();
-    if preview && removable > 0 {
-        next.push(crate::machine::NextAction {
-            argv: clean_argv(selection),
-            why: format!("removes the {} above", target_count(removable)),
-        });
-    }
-    if removable == 0 && can_widen(selection) {
-        next.push(crate::machine::NextAction {
-            argv: argv(&["kache", "clean", "--stale", "7d", "--dry-run"]),
-            why: "also selects targets no build used for 7 days".to_string(),
-        });
-    }
-    let found: Vec<&TargetRow> = kept
-        .iter()
-        .filter(|row| row.discovered && row.reclaimable_bytes > 0)
-        .collect();
-    if let Some(largest) = found
-        .iter()
-        .filter(|row| nameable(row))
-        .max_by_key(|row| row.reclaimable_bytes)
-    {
-        next.push(crate::machine::NextAction {
-            argv: argv(&["kache", "clean", &largest.workspace, "--dry-run"]),
-            why: format!(
-                "previews the largest of {} found through Git ({} freeable). kache never saw a build use them, so it removes one only when you name it",
-                target_count(found.len()),
-                term::bytes(found.iter().map(|row| row.reclaimable_bytes).sum())
-            ),
-        });
-    }
-    next
-}
-
-/// Whether `kache clean <workspace>` reaches `row`'s target: naming a
-/// directory finds the `target/` beside a Cargo.toml, nothing else.
-fn names_its_target(row: &TargetRow) -> bool {
-    let workspace = std::path::Path::new(&row.workspace);
-    std::path::Path::new(&row.path) == workspace.join("target")
-        && workspace.join("Cargo.toml").is_file()
-}
-
-/// `argv` as one line a POSIX shell reads back as the same words.
-fn shell_line(argv: &[String]) -> String {
-    let plain = |word: &str| {
-        !word.is_empty()
-            && word
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "-_./:=@%+,".contains(c))
-    };
-    argv.iter()
-        .map(|word| {
-            if plain(word) {
-                word.clone()
-            } else {
-                format!("'{}'", word.replace('\'', r"'\''"))
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// `1 target`, `2 targets`.
-fn target_count(n: usize) -> String {
-    format!("{n} target{}", if n == 1 { "" } else { "s" })
-}
-
-/// The cache's size for the last line of a clean preview.
-struct CacheLine {
-    bytes: u64,
-    limit: u64,
-    entries: u64,
-}
-
-/// What a tracked clean selects, in words.
-fn selection_words(selection: TrackedSelection) -> String {
-    match selection {
-        TrackedSelection::Orphaned => "worktree gone".to_string(),
-        TrackedSelection::StaleOrOrphaned(hours) => {
-            format!("worktree gone, or no build in {}", window_label(hours))
-        }
-    }
-}
-
-/// The command that removes what a tracked preview selected.
-fn clean_argv(selection: TrackedSelection) -> Vec<String> {
-    let mut argv = vec!["kache".to_string(), "clean".to_string()];
-    match selection {
-        TrackedSelection::Orphaned => argv.push("--orphans".to_string()),
-        TrackedSelection::StaleOrOrphaned(DEFAULT_TRACKED_STALE_HOURS) => {}
-        TrackedSelection::StaleOrOrphaned(hours) => {
-            argv.extend(["--stale".to_string(), window_label(hours)]);
-        }
-    }
-    argv.push("--yes".to_string());
-    argv
-}
-
-/// The tracked clean view, from its plan. Pure.
-fn plan_lines(
-    plan: &TrackedPlan,
-    skipped: &[CleanSkipped],
-    notes: &[String],
-    end: PlanEnd,
-) -> Vec<String> {
-    let selection = plan.selection;
-    let removed: Vec<&TargetRow> = plan.removed.iter().collect();
-    let kept: Vec<&TargetRow> = plan.kept.iter().collect();
-    let cache = &plan.cache;
-    let freeable = |rows: &[&TargetRow]| rows.iter().map(|row| row.reclaimable_bytes).sum::<u64>();
-    let count = target_count;
-    let mut lines = Vec::new();
-    if removed.is_empty() {
-        lines.push(format!(
-            "Remove   nothing: no target matches ({})",
-            selection_words(selection)
-        ));
-    } else {
-        lines.push(format!(
-            "Remove   {} · {} freeable · {}",
-            count(removed.len()),
-            term::bytes(freeable(&removed)),
-            selection_words(selection)
-        ));
-        lines.extend(target_table(&removed));
-        lines.extend(notes.iter().map(|note| format!("  {note}")));
-    }
-    if !kept.is_empty() {
-        let (listed, empty): (Vec<&TargetRow>, Vec<&TargetRow>) =
-            kept.iter().partition(|row| row.reclaimable_bytes > 0);
-        lines.push(String::new());
-        lines.push(format!(
-            "Keep     {} · {} freeable",
-            count(kept.len()),
-            term::bytes(freeable(&kept))
-        ));
-        if !listed.is_empty() {
-            lines.extend(target_table(&listed));
-        }
-        if !empty.is_empty() {
-            lines.push(format!("  + {} more with nothing to free", empty.len()));
-        }
-    }
-    // A directory that no longer exists has nothing to show but its path:
-    // count those, and list the skips that say something.
-    let (missing, other): (Vec<&CleanSkipped>, Vec<&CleanSkipped>) =
-        skipped.iter().partition(|item| item.missing);
-    if !other.is_empty() {
-        lines.push(String::new());
-        lines.push("Skipped".to_string());
-        for item in other {
-            lines.push(format!(
-                "  {}   {}",
-                term::home_path(std::path::Path::new(&item.path)),
-                item.reason
-            ));
-        }
-    }
-    if !missing.is_empty() {
-        let entries = format!(
-            "{} registry entr{} for directories that no longer exist",
-            missing.len(),
-            if missing.len() == 1 { "y" } else { "ies" }
-        );
-        lines.push(String::new());
-        lines.push(match end {
-            PlanEnd::DryRun => format!("Forget   {entries} (`kache clean` forgets them)"),
-            PlanEnd::NothingRemoved => format!("Forgot   {entries}"),
-        });
-    }
-    lines.push(String::new());
-    lines.push(format!(
-        "Cache    {} of {} · {} · kept under its limit automatically; `kache clean --cache` empties it",
-        term::bytes(cache.bytes),
-        term::bytes(cache.limit),
-        term::counted(cache.entries, "entry", "entries")
-    ));
-    lines.push(String::new());
-    lines.push(match end {
-        PlanEnd::DryRun => "Dry run, nothing removed.".to_string(),
-        PlanEnd::NothingRemoved => "Nothing removed.".to_string(),
-    });
-    for action in &plan.next {
-        lines.push(format!("`{}` {}.", shell_line(&action.argv), action.why));
-    }
-    lines
-}
-
-/// FREEABLE, ON DISK, IDLE and PATH for tracked targets, with what makes a
-/// row special after its path.
-fn target_table(rows: &[&TargetRow]) -> Vec<String> {
-    use term::Align::{Left, Right};
-    let body: Vec<Vec<String>> = rows
-        .iter()
-        .map(|row| {
-            let mut path = term::home_path(std::path::Path::new(&row.path));
-            if row.state == TargetState::WorktreeDeleted {
-                path.push_str("  (worktree deleted)");
-            }
-            if row.discovered {
-                path.push_str("  (found through Git)");
-            }
-            path.push_str(&next_pass_note(&row.next_pass));
-            vec![
-                term::bytes(row.reclaimable_bytes),
-                term::bytes(row.apparent_bytes),
-                row.idle_seconds
-                    .map(format_idle)
-                    .unwrap_or_else(|| "?".into()),
-                path,
-            ]
-        })
-        .collect();
-    term::table(
-        &["FREEABLE", "ON DISK", "IDLE", "PATH"],
-        &[Right, Right, Right, Left],
-        &body,
-    )
-}
-
-/// What the daemon's next quiet pass would do to a target, as a suffix.
-fn next_pass_note(plan: &crate::target_cleanup::Plan) -> String {
-    let mut steps = Vec::new();
-    if plan.units.units > 0 {
-        steps.push(format!(
-            "prunes {} unused unit{} ({})",
-            plan.units.units,
-            if plan.units.units == 1 { "" } else { "s" },
-            kache_core::size::format_bytes(plan.units.bytes)
-        ));
-    }
-    match plan.remove {
-        Some(crate::target_cleanup::Reason::Pressure) => {
-            steps.push("removes it if the volume is still below the free-space floor".into());
-        }
-        Some(reason) => steps.push(format!("removes it: {}", reason.describe())),
-        None => {}
-    }
-    if steps.is_empty() {
-        return String::new();
-    }
-    format!("  (next pass {})", steps.join(", then "))
-}
-
-/// The clean that removes deleted worktrees' targets, when there are any.
-fn targets_next_actions(rows: &[TargetRow], auto_orphans: bool) -> Vec<crate::machine::NextAction> {
-    let orphans = recorded_orphans(rows);
-    if orphans == 0 {
-        return Vec::new();
-    }
-    let note = orphan_note(orphans, auto_orphans);
-    let them = if orphans == 1 { "it" } else { "them" };
-    vec![crate::machine::NextAction {
-        argv: ["kache", "clean", "--orphans", "--yes"]
-            .map(String::from)
-            .to_vec(),
-        why: if auto_orphans {
-            format!("{note}. This removes {them} now")
-        } else {
-            format!("{note}; automatic removal is off")
-        },
-    }]
-}
-
-/// Show every tracked target directory with what deleting it would free
-/// and whether its worktree still exists.
-pub fn targets(config: &Config, json: bool) -> Result<()> {
-    let rows = target_rows(config, kache_store::markers::now_epoch_secs() as i64)?;
-    if json {
-        #[derive(deser::Serialize)]
-        struct Body {
-            targets: Vec<TargetRow>,
-            apparent_bytes: u64,
-            reclaimable_bytes: u64,
-        }
-        let next = targets_next_actions(&rows, config.auto_clean_orphaned_targets);
-        return crate::machine::emit(
-            "targets",
-            Body {
-                apparent_bytes: rows.iter().map(|row| row.apparent_bytes).sum(),
-                reclaimable_bytes: rows.iter().map(|row| row.reclaimable_bytes).sum(),
-                targets: rows,
-            },
-            next,
-        );
-    }
-    if rows.is_empty() {
-        println!("No tracked target directories. Builds through kache register theirs.");
-        return Ok(());
-    }
-    for line in render_targets(&rows, config.auto_clean_orphaned_targets) {
-        println!("{line}");
-    }
-    Ok(())
-}
-
-/// Which tracked targets a clean considers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TrackedSelection {
-    /// Not seen for this many hours, or orphaned.
-    StaleOrOrphaned(u64),
-    /// Only targets whose workspace is gone.
-    Orphaned,
-}
-
-impl TrackedSelection {
-    fn includes(self, orphaned: bool, idle_seconds: i64) -> bool {
-        match self {
-            Self::Orphaned => orphaned,
-            Self::StaleOrOrphaned(hours) => {
-                orphaned || idle_seconds >= hours.saturating_mul(3600).min(i64::MAX as u64) as i64
-            }
-        }
-    }
-}
-
-/// A workspace is gone when looking it up finds nothing while the
-/// directory holding it still exists. The parent check keeps an unmounted
-/// volume or a network share that is offline from reading as a deleted
-/// worktree.
-pub(crate) fn workspace_is_gone(workspace_root: &std::path::Path) -> bool {
-    // Only a lookup that finds nothing counts: a permission or I/O error on
-    // a network share is not a deleted worktree.
-    let missing = std::fs::symlink_metadata(workspace_root)
-        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
-    missing && workspace_root.parent().is_some_and(std::path::Path::is_dir)
-}
-
-fn tracked_target_entries(
-    config: &Config,
-    selection: TrackedSelection,
-    preview: bool,
-) -> Result<(
-    Vec<TargetEntry>,
-    Vec<CleanSkipped>,
-    std::collections::HashSet<std::path::PathBuf>,
-)> {
-    let store = Store::open(config)?;
-    // Both explicit dry runs and JSON previews keep registry rows.
-    let forget = |path: &std::path::Path| {
-        if preview {
-            Ok(())
-        } else {
-            store.forget_target_root(path)
-        }
-    };
-    let registry_action = if preview {
-        "would be removed"
-    } else {
-        "removed"
-    };
-    // Every tracked root: an orphan qualifies however recently it was seen.
-    let tracked = store.tracked_target_roots(0)?;
-    let now = kache_store::markers::now_epoch_secs() as i64;
-    let cwd = std::env::current_dir()?;
-    let mut targets = Vec::new();
-    let mut skipped = Vec::new();
-    let mut orphans = std::collections::HashSet::new();
-
-    for tracked in tracked {
-        let display = tracked.path.display().to_string();
-        let skip = |reason: &str| CleanSkipped {
-            path: display.clone(),
-            reason: reason.to_string(),
-            missing: false,
-        };
-        // A directory that is gone has nothing left to remove, whatever the
-        // selection; a build, or Git discovery, records it again if it
-        // comes back.
-        if std::fs::symlink_metadata(&tracked.path)
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-        {
-            skipped.push(CleanSkipped {
-                missing: true,
-                ..skip(&format!(
-                    "path no longer exists; registry entry {registry_action}"
-                ))
-            });
-            // A build that recreated it since the registry was read keeps its
-            // new row, which records another directory.
-            if !preview {
-                store.forget_target_root_with_identity(&tracked.path, tracked.identity)?;
-            }
-            continue;
-        }
-        let orphaned = workspace_is_gone(&tracked.workspace_root);
-        if !selection.includes(orphaned, now.saturating_sub(tracked.last_seen)) {
-            continue;
-        }
-        if tracked.discovered {
-            skipped.push(skip(
-                "found through Git: kache never saw a build use it, so it removes it only when you name it",
-            ));
-            continue;
-        }
-        if cwd.starts_with(&tracked.workspace_root) {
-            skipped.push(skip("belongs to the current workspace"));
-            continue;
-        }
-        if !crate::machine::target_root_is_safe(&tracked.path, &tracked.workspace_root) {
-            skipped.push(skip("path is no longer a safe derived target directory"));
-            forget(&tracked.path)?;
-            continue;
-        }
-        if crate::machine::directory_identity(&tracked.path) != Some(tracked.identity) {
-            skipped.push(skip(&format!(
-                "directory identity changed; registry entry {registry_action}"
-            )));
-            forget(&tracked.path)?;
-            continue;
-        }
-
-        let Some(scan_identity) = directory_identity(&tracked.path) else {
-            skipped.push(skip("directory identity is unavailable"));
-            continue;
-        };
-        let (stats, _) = compute_project_stats(&tracked.path);
-        if directory_identity(&tracked.path) != Some(scan_identity) {
-            skipped.push(skip("directory changed while it was scanned"));
-            continue;
-        }
-        let profiles = detect_profiles(&tracked.path);
-        if orphaned {
-            orphans.insert(tracked.path.clone());
-        }
-        targets.push(TargetEntry {
-            path: tracked.path,
-            size: stats.total_bytes,
-            cached_bytes: stats.cached_bytes,
-            estimated_reclaimable_bytes: stats.estimated_reclaimable_bytes,
-            scan_identity: Some(scan_identity),
-            profiles,
-        });
-    }
-
-    Ok((targets, skipped, orphans))
-}
-
-/// Walk directories to find Cargo.toml + target/ pairs.
-/// Hidden directories that hold worktrees, scanned for targets anyway.
-const WORKTREE_CONTAINERS: [&str; 2] = [".worktrees", ".claude"];
-
-/// Scan the directory the user named for Cargo.toml + target/ pairs.
-pub(crate) fn find_target_dirs_in(dir: &std::path::Path, results: &mut Vec<TargetEntry>) {
-    walk_target_dirs(dir, results);
-}
-
-fn walk_target_dirs(dir: &std::path::Path, results: &mut Vec<TargetEntry>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-
-    let mut has_cargo_toml = false;
-    let mut subdirs = Vec::new();
-
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-
-        // Skip hidden dirs, node_modules, .git. `.worktrees` and `.claude`
-        // are where worktree tools and coding agents put their checkouts.
-        if (name_str.starts_with('.') && !WORKTREE_CONTAINERS.contains(&name_str.as_ref()))
-            || name_str == "node_modules"
-        {
-            continue;
-        }
-
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if name_str == "Cargo.toml" && file_type.is_file() {
-            has_cargo_toml = true;
-        }
-
-        if file_type.is_dir() {
-            subdirs.push((name_str.to_string(), entry.path()));
-        }
-    }
-
-    if has_cargo_toml
-        && let Some(target) = subdirs.iter().find(|(n, _)| n == "target")
-        && let Some(scan_identity) = directory_identity(&target.1)
-    {
-        let (ps, _) = compute_project_stats(&target.1);
-        // Do not publish estimates for a directory that was replaced while
-        // it was being scanned. Deletion checks the same identity again.
-        if ps.total_bytes > 0 && directory_identity(&target.1) == Some(scan_identity) {
-            let profiles = detect_profiles(&target.1);
-            results.push(TargetEntry {
-                path: target.1.clone(),
-                size: ps.total_bytes,
-                cached_bytes: ps.cached_bytes,
-                estimated_reclaimable_bytes: ps.estimated_reclaimable_bytes,
-                scan_identity: Some(scan_identity),
-                profiles,
-            });
-        }
-    }
-
-    // Recurse into subdirs (but not into target/ itself)
-    for (name, path) in &subdirs {
-        if name != "target" {
-            walk_target_dirs(path, results);
-        }
-    }
-}
-
-/// Detect which build profiles exist in a target/ directory.
-fn detect_profiles(target_dir: &std::path::Path) -> Vec<String> {
-    profile_dirs(target_dir)
-        .into_iter()
-        .map(|(label, _)| label)
-        .collect()
-}
-
-/// Profile names every Cargo target directory can hold, recognised even
-/// before Cargo has written into them.
-const KNOWN_PROFILES: [&str; 4] = ["debug", "release", "profiling", "coverage"];
-
-/// The profile directories of a target directory, labelled by their path
-/// below it: a known profile name, any directory Cargo has built a profile
-/// into (custom `[profile.ci]`), and `<triple>/<profile>` when `--target`
-/// was given. Symlinks are never followed.
-fn profile_dirs(target_dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
-    fn real_dirs(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return Vec::new();
-        };
-        let mut dirs: Vec<_> = entries
-            .flatten()
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-            .map(|entry| {
-                (
-                    entry.file_name().to_string_lossy().into_owned(),
-                    entry.path(),
-                )
-            })
-            .collect();
-        dirs.sort();
-        dirs
-    }
-    fn is_profile(name: &str, dir: &std::path::Path) -> bool {
-        KNOWN_PROFILES.contains(&name)
-            || [".cargo-lock", ".fingerprint", "deps"]
-                .iter()
-                .any(|marker| std::fs::symlink_metadata(dir.join(marker)).is_ok())
-    }
-    let mut profiles = Vec::new();
-    for (name, path) in real_dirs(target_dir) {
-        if is_profile(&name, &path) {
-            profiles.push((name, path));
-            continue;
-        }
-        for (inner, inner_path) in real_dirs(&path) {
-            if is_profile(&inner, &inner_path) {
-                profiles.push((format!("{name}/{inner}"), inner_path));
-            }
-        }
-    }
-    // Known profiles first, in their usual order, then the rest by name.
-    profiles.sort_by_key(|(label, _)| {
-        (
-            KNOWN_PROFILES
-                .iter()
-                .position(|known| known == label)
-                .unwrap_or(KNOWN_PROFILES.len()),
-            label.clone(),
-        )
-    });
-    profiles
 }
 
 fn fallback_is_sccache(config: Option<&crate::config::Config>) -> bool {
@@ -6622,7 +4253,7 @@ fn cargo_output_dir_from(
 ) -> Option<std::path::PathBuf> {
     let workspace = cargo_workspace_root(cwd)?;
     let cargo_home = cargo_home_dir_from(env, cwd);
-    let output = crate::target_seed::configured_output_dir(
+    let output = cargo_output_resolve(
         cwd,
         &workspace,
         &cargo_home,
@@ -6699,6 +4330,85 @@ fn closest_existing(path: std::path::PathBuf) -> Option<std::path::PathBuf> {
     let existing = path.ancestors().find(|candidate| candidate.exists())?;
     existing.is_dir().then(|| existing.to_path_buf())
 }
+
+/// Resolve Cargo's output directory from config files and environment.
+/// File paths are relative to the directory above `.cargo`; unknown templates
+/// and includes resolve to nothing.
+fn cargo_output_resolve(
+    cwd: &std::path::Path,
+    workspace: &std::path::Path,
+    cargo_home: &std::path::Path,
+    target_env: Option<&std::ffi::OsStr>,
+    build_env: Option<&std::ffi::OsStr>,
+) -> Option<std::path::PathBuf> {
+    let mut target = workspace.join("target");
+    let mut build = None;
+    let mut directories = vec![cargo_home.to_path_buf()];
+    directories.extend(
+        cwd.ancestors()
+            .map(|path| path.join(".cargo"))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev(),
+    );
+    for directory in directories {
+        let legacy = directory.join("config");
+        let path = if legacy.is_file() {
+            legacy
+        } else {
+            directory.join("config.toml")
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return None,
+        };
+        let table: deser_value::Map = deser_toml::from_str(&text).ok()?;
+        if table.contains_key("include") {
+            return None;
+        }
+        let Some(settings) = table.get("build") else {
+            continue;
+        };
+        let settings = settings.as_map()?;
+        let base = directory.parent()?;
+        if let Some(value) = settings.get("target-dir") {
+            target = base.join(value.as_str().filter(|value| !value.is_empty())?);
+        }
+        if let Some(value) = settings.get("build-dir") {
+            build = Some(cargo_output_expand(base, value.as_str()?, workspace, cargo_home)?);
+        }
+    }
+    if let Some(value) = target_env {
+        if value.is_empty() {
+            return None;
+        }
+        target = cwd.join(value);
+    }
+    if let Some(value) = build_env {
+        build = Some(cargo_output_expand(cwd, value.to_str()?, workspace, cargo_home)?);
+    }
+    Some(build.unwrap_or(target))
+}
+
+fn cargo_output_expand(
+    base: &std::path::Path,
+    value: &str,
+    workspace: &std::path::Path,
+    cargo_home: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    if value.is_empty() {
+        return None;
+    }
+    let value = value
+        .replace("{workspace-root}", workspace.to_str()?)
+        .replace("{cargo-cache-home}", cargo_home.to_str()?);
+    if value.contains(['{', '}']) {
+        return None;
+    }
+    Some(base.join(value))
+}
+
 
 fn doctor_link_layout(config: &Config, build_dir: &std::path::Path) -> Check {
     let routed = config.routed_for_path(build_dir);
@@ -8335,9 +6045,6 @@ struct SetupFacts {
     shell_changes: Vec<(std::path::PathBuf, bool)>,
     test_runner: Option<SetupStep>,
     test_changes: Vec<(std::path::PathBuf, bool)>,
-    /// The `free_space_recovery` step's action.
-    recovery: &'static str,
-    recovery_path: std::path::PathBuf,
     /// The `login_service` step's action; `None` with `--no-service`.
     service: Option<&'static str>,
     service_path: Option<std::path::PathBuf>,
@@ -8368,11 +6075,6 @@ fn setup_steps(facts: &SetupFacts) -> Vec<SetupStep> {
     for (path, exists) in &facts.test_changes {
         steps.extend(backup_step(&mut created, path, *exists));
     }
-    steps.push(SetupStep::new(
-        "free_space_recovery",
-        facts.recovery,
-        vec![facts.recovery_path],
-    ));
     if let Some(action) = facts.service {
         steps.push(SetupStep::new(
             "login_service",
@@ -8392,7 +6094,6 @@ struct RunOutcome {
     /// have written the same startup files.
     test_runner: Option<SetupStep>,
     test_changes: Vec<(std::path::PathBuf, bool)>,
-    recovery: &'static str,
     /// Whether the login service was installed or updated now.
     service_installed_now: bool,
 }
@@ -8412,7 +6113,6 @@ fn run_facts(plan: &SetupFacts, outcome: RunOutcome) -> SetupFacts {
         cargo,
         test_runner: outcome.test_runner,
         test_changes: outcome.test_changes,
-        recovery: outcome.recovery,
         service,
         ..plan.clone()
     }
@@ -8470,216 +6170,6 @@ fn service_action(
     }
 }
 
-/// `init`'s offer to let free-space recovery remove idle target directories
-/// too, not only cache entries. It concerns the user's own config file (see
-/// [`crate::config::user_config_path`]): the one a login daemon reads. The
-/// decision is [`recovery_offer`] and the write [`save_target_recovery`];
-/// this only reads the process's environment and stdin, and prints. A
-/// preview says it would ask instead of asking. Returns the
-/// `free_space_recovery` step's action.
-fn offer_target_recovery(yes: bool, check: bool) -> Result<&'static str> {
-    let (offer, path, existing) = target_recovery_offer(yes)?;
-    let mut action = recovery_action(&offer);
-    match offer {
-        RecoveryOffer::Nothing => {}
-        RecoveryOffer::FromEnv(on) => println!(
-            "  • Free-space recovery: KACHE_AUTO_RECOVER_TARGETS {} idle targets",
-            if on { "includes" } else { "leaves out" }
-        ),
-        RecoveryOffer::Explain(floor) => println!(
-            "  • Free-space recovery: cache entries below {} free; `auto_recover_targets = true` adds idle targets",
-            term::bytes(floor)
-        ),
-        RecoveryOffer::Ask(floor) if check => println!(
-            "  → Free-space recovery: would ask whether targets no build used for a day go too below {} free",
-            term::bytes(floor)
-        ),
-        RecoveryOffer::Ask(floor) => {
-            action = "keep";
-            let question = format!(
-                "Below {} free, also remove target directories no build used for a day?",
-                term::bytes(floor)
-            );
-            if !prompt_yes_no(&question, false, false)? {
-                println!("  • Free-space recovery: cache entries only");
-            } else if save_target_recovery(&path, &existing)? {
-                action = "configure";
-                println!(
-                    "  ✓ Free-space recovery: cache entries and idle targets ({})",
-                    term::home_path(&path)
-                );
-            } else {
-                println!(
-                    "  → Free-space recovery: add `auto_recover_targets = true` under [cache] in {}",
-                    term::home_path(&path)
-                );
-            }
-        }
-    }
-    Ok(action)
-}
-
-/// The `free_space_recovery` step for an offer: `ask` when init asks.
-fn recovery_action(offer: &RecoveryOffer) -> &'static str {
-    match offer {
-        RecoveryOffer::Ask(_) => "ask",
-        _ => "keep",
-    }
-}
-
-/// [`recovery_offer`] for this process, with the user config file it is
-/// about and that file's text. `--check` does not count as unattended: a
-/// preview reports the question an interactive run would ask.
-fn target_recovery_offer(yes: bool) -> Result<(RecoveryOffer, std::path::PathBuf, String)> {
-    let path = crate::config::user_config_path();
-    let existing = read_config_text(&path)?;
-    let env = |name: &str| std::env::var(name).ok();
-    let settings = RecoverySettings::of(&existing, &env, crate::policy::running_in_ci_with(env));
-    let unattended = yes || !std::io::stdin().is_terminal();
-    Ok((recovery_offer(&settings, unattended), path, existing))
-}
-
-/// What `init` does about target recovery.
-#[derive(Debug, PartialEq, Eq)]
-enum RecoveryOffer {
-    /// The file already decides, or recovery is off.
-    Nothing,
-    /// `KACHE_AUTO_RECOVER_TARGETS` decides, on or off.
-    FromEnv(bool),
-    /// Nobody to ask: say what the default does below this floor.
-    Explain(u64),
-    /// Ask whether idle targets go too below this floor.
-    Ask(u64),
-}
-
-/// The offer for `settings`; `unattended` when `--yes` or a script runs
-/// `init`, which keep the default rather than turn it on.
-fn recovery_offer(settings: &RecoverySettings, unattended: bool) -> RecoveryOffer {
-    if let Some(on) = settings.targets_from_env {
-        return RecoveryOffer::FromEnv(on);
-    }
-    if settings.file_decides_targets || settings.floor == 0 {
-        return RecoveryOffer::Nothing;
-    }
-    if unattended {
-        RecoveryOffer::Explain(settings.floor)
-    } else {
-        RecoveryOffer::Ask(settings.floor)
-    }
-}
-
-/// A config file's text, empty when there is none yet.
-fn read_config_text(path: &std::path::Path) -> Result<String> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(error) => Err(error).context("read kache configuration"),
-    }
-}
-
-/// Turn target recovery on in the file at `path`, which read as `existing`
-/// before the question. `false`, writing nothing, when the file changed
-/// meanwhile or its `[cache]` table cannot be edited safely. The file is
-/// replaced atomically and keeps its permissions.
-fn save_target_recovery(path: &std::path::Path, existing: &str) -> Result<bool> {
-    let Some(updated) = enable_target_recovery(existing) else {
-        return Ok(false);
-    };
-    if read_config_text(path)? != existing {
-        return Ok(false);
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let permissions = std::fs::metadata(path).ok().map(|meta| meta.permissions());
-    crate::atomic::atomic_replace(path, updated.as_bytes()).context("save kache configuration")?;
-    if let Some(permissions) = permissions {
-        std::fs::set_permissions(path, permissions)
-            .context("keep the configuration's permissions")?;
-    }
-    Ok(true)
-}
-
-/// What a user config file, with the environment, says about recovery.
-#[derive(Debug, PartialEq, Eq)]
-struct RecoverySettings {
-    /// The floor in effect: the environment's, the file's, or the default.
-    floor: u64,
-    /// `KACHE_AUTO_RECOVER_TARGETS`, when it overrides the file.
-    targets_from_env: Option<bool>,
-    /// The file sets `auto_recover_targets` either way.
-    file_decides_targets: bool,
-}
-
-impl RecoverySettings {
-    fn of(text: &str, env: &dyn Fn(&str) -> Option<String>, in_ci: bool) -> Self {
-        let cache = deser_toml::from_str::<deser_value::Value>(text)
-            .ok()
-            .and_then(|value| value.get("cache").cloned());
-        let file = |key: &str| cache.as_ref().and_then(|cache| cache.get(key).cloned());
-        let ignore_env = file("ignore_env").and_then(|value| value.as_bool()) == Some(true);
-        let env = |name: &str| if ignore_env { None } else { env(name) };
-        let floor = env("KACHE_AUTO_RECOVER_MIN_FREE_BYTES")
-            .and_then(|value| value.parse().ok())
-            .or_else(|| {
-                file("auto_recover_min_free_bytes")?
-                    .as_i64()?
-                    .try_into()
-                    .ok()
-            })
-            .unwrap_or_else(|| crate::config::default_recovery_floor(in_ci));
-        Self {
-            floor,
-            targets_from_env: env("KACHE_AUTO_RECOVER_TARGETS")
-                .map(|value| value == "1" || value.eq_ignore_ascii_case("true")),
-            file_decides_targets: sets_target_recovery(text),
-        }
-    }
-}
-
-/// Whether `text` sets `auto_recover_targets` in its `[cache]` table, either
-/// way: then the choice is already made.
-fn sets_target_recovery(text: &str) -> bool {
-    deser_toml::from_str::<deser_value::Value>(text).is_ok_and(|value| {
-        value
-            .get("cache")
-            .and_then(|cache| cache.get("auto_recover_targets"))
-            .is_some()
-    })
-}
-
-/// `text` with `[cache] auto_recover_targets = true` added and everything
-/// else kept as written: under an existing `[cache]` header, or in a new
-/// table at the end. `None` when the result would not parse to exactly that,
-/// as when the table is spelled some other way.
-fn enable_target_recovery(text: &str) -> Option<String> {
-    const LINE: &str = "auto_recover_targets = true";
-    let updated = match text.lines().position(|line| line.trim() == "[cache]") {
-        Some(header) => {
-            let mut lines: Vec<&str> = text.lines().collect();
-            lines.insert(header + 1, LINE);
-            let mut updated = lines.join("\n");
-            if text.ends_with('\n') {
-                updated.push('\n');
-            }
-            updated
-        }
-        None => {
-            let mut updated = text.to_string();
-            if !updated.is_empty() {
-                if !updated.ends_with('\n') {
-                    updated.push('\n');
-                }
-                updated.push('\n');
-            }
-            updated.push_str(&format!("[cache]\n{LINE}\n"));
-            updated
-        }
-    };
-    let parsed: deser_value::Value = deser_toml::from_str(&updated).ok()?;
-    (parsed.get("cache")?.get("auto_recover_targets")?.as_bool() == Some(true)).then_some(updated)
-}
-
 pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<()> {
     println!("{}\n", term::heading("kache · setup"));
 
@@ -8721,7 +6211,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
         (None, Vec::new(), None, Vec::new())
     };
     let (shell, shell_changes, test_runner, test_changes) = shell_facts;
-    let (recovery, recovery_path, _) = target_recovery_offer(yes)?;
     // Asking runs the service manager, which --no-service must not touch.
     let service_available = !no_service && crate::service::login_service_available();
     let service_path = crate::service::service_file_path();
@@ -8738,8 +6227,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
         shell_changes,
         test_runner,
         test_changes,
-        recovery: recovery_action(&recovery),
-        recovery_path,
         service: service_action(
             no_service,
             service_available,
@@ -8772,7 +6259,7 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
             plan_rows.push((
                 "Shell",
                 "new terminals".into(),
-                "C/C++ caching, Cargo target protection and test pacing".into(),
+                "C/C++ caching and test pacing".into(),
             ));
             for step in steps.iter().filter(|step| step.component == "shell") {
                 for path in &step.paths {
@@ -8876,8 +6363,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
     #[cfg(not(unix))]
     let (shell_pending, tests_pending, tests_done, tests_changes) =
         (false, false, None, Vec::new());
-
-    let recovery_done = offer_target_recovery(yes, check)?;
 
     // ── Step 2: daemon service ───────────────────────────────────
     let mut service_action_taken = false;
@@ -9008,7 +6493,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
                         cargo_applied,
                         test_runner: tests_done,
                         test_changes: tests_changes,
-                        recovery: recovery_done,
                         service_installed_now: service_action_taken,
                     },
                 )),
@@ -9060,7 +6544,7 @@ fn backup_step(
     (exists && !made_here).then(|| SetupStep::new("backup", "create", vec![path.to_owned()]))
 }
 
-/// What `kache init` plans for Cargo target protection and C/C++ caching:
+/// What `kache init` plans for C/C++ caching:
 /// the compiler shims and the shell block that puts them first on PATH.
 #[cfg(unix)]
 enum CompilerPlan {
@@ -9170,16 +6654,16 @@ fn init_compiler_setup(
 ) -> Result<bool> {
     let (shell, shim_dir, edits, extra, shims_ready) = match plan {
         CompilerPlan::Skipped => {
-            println!("  • Cargo target protection and C/C++ caching: skipped (--no-shell)");
+            println!("  • C/C++ caching: skipped (--no-shell)");
             return Ok(false);
         }
         CompilerPlan::NoHome => {
-            println!("  • Cargo target protection and C/C++ caching: skipped (no home directory)");
+            println!("  • C/C++ caching: skipped (no home directory)");
             return Ok(false);
         }
         CompilerPlan::Unsupported(shim_dir) => {
             println!(
-                "  • Cargo target protection and C/C++ caching: shell not supported for automatic setup"
+                "  • C/C++ caching: shell not supported for automatic setup"
             );
             println!(
                 "    Use kache init --shims, then add {} to your shell's PATH.",
@@ -9189,7 +6673,7 @@ fn init_compiler_setup(
         }
         CompilerPlan::Manual(error) => {
             println!(
-                "  • Cargo target protection and C/C++ caching: shell config needs manual attention"
+                "  • C/C++ caching: shell config needs manual attention"
             );
             println!("    {error}");
             println!("    No shell files were changed.");
@@ -9205,7 +6689,7 @@ fn init_compiler_setup(
     };
     let needs_edit = edits.iter().any(|edit| edit.changed());
     if !shims_ready || needs_edit {
-        println!("  Cargo target protection and C/C++ caching in new terminals");
+        println!("  C/C++ caching in new terminals");
         for edit in edits.iter().filter(|edit| edit.changed()) {
             println!(
                 "    Shell config: {}",
@@ -9227,10 +6711,10 @@ fn init_compiler_setup(
         apply_shell_edits(&edits, created)?;
     }
     if crate::compiler::shim::live_shim_status().is_active() {
-        println!("  ✓ Cargo target protection and C/C++ caching: active");
+        println!("  ✓ C/C++ caching: active");
         Ok(false)
     } else {
-        println!("  ✓ Cargo target protection and C/C++ caching: configured for new terminals");
+        println!("  ✓ C/C++ caching: configured for new terminals");
         println!("    For this terminal, run:");
         println!("    {}", shell.command(&shim_dir)?);
         Ok(true)
@@ -9700,8 +7184,7 @@ fn install_report_lines(
             .into(),
     );
     lines.push(
-        "Cargo commands on PATH also run through kache, which keeps target directories \
-         until the command exits. The command remains cargo build/test/run."
+        "Cargo commands on PATH also run through kache. The command remains cargo build/test/run."
             .into(),
     );
     if linux {

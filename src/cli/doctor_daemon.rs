@@ -115,12 +115,6 @@ mod tests {
                 .contains("auto_recover_min_free_bytes")
         );
         daemon.auto_recover_min_free_bytes = Some(config.auto_recover_min_free_bytes);
-        daemon.auto_recover_targets = Some(!config.auto_recover_targets);
-        assert!(
-            checks(&config, &provenance, Some(&daemon))[0]
-                .detail
-                .contains("auto_recover_targets")
-        );
         assert_eq!(checks(&config, &provenance, None).len(), 1);
     }
 

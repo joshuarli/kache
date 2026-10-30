@@ -12,14 +12,6 @@ pub struct PrestageRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SeedTargetRequest {
-    pub target_dir: String,
-    pub workspace_root: String,
-    /// `rustc -vV` from the compiler Cargo is probing.
-    pub rustc_version: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StatsRequest {
     pub include_entries: bool,
     /// Include the bounded recent session-summary tail. False for polling
@@ -172,10 +164,6 @@ pub struct EffectiveConfig {
     /// predate the field.
     #[deser(default)]
     pub auto_recover_min_free_bytes: Option<u64>,
-    /// Whether the daemon's recovery also removes idle targets. `None` from
-    /// daemons that predate the field.
-    #[deser(default)]
-    pub auto_recover_targets: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

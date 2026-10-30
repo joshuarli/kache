@@ -506,7 +506,7 @@ fn compile_started_wire_tags_and_stats_default() {
                                         socket_path: "/c/daemon.sock".into(),
             started_at_ms: 1,
             auto_recover_min_free_bytes: None,
-            auto_recover_targets: None,
+
         }),
     })
     .unwrap();
@@ -709,14 +709,11 @@ pub(super) fn test_config(dir: &Path) -> Config {
         project_rules: crate::config::ProjectRules::default(),
         auto_gc: true,
         index_auto_compact: true,
-        auto_clean_orphaned_targets: false,
-        auto_share_target_files: false,
-        auto_clean_idle_targets_days: 0,
+
         auto_recover_min_free_bytes: 0,
-        auto_recover_targets: false,
+
         scheduler_memory_pressure: true,
-        auto_clean_unused_units_days: 0,
-        seed_new_targets: false,
+
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
@@ -736,7 +733,7 @@ pub(super) fn test_config(dir: &Path) -> Config {
         cache_executables: false,
         cache_cc_links: false,
         trust_codegen_backends: false,
-        target_liveness: false,
+
         clean_incremental: false,
         preserve_incremental: false,
         adaptive_incremental: true,

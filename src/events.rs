@@ -59,56 +59,6 @@ pub const HEARTBEAT_EVENT_TAG: &str = "heartbeat";
 /// Current [`HeartbeatEvent::schema`] version.
 pub const HEARTBEAT_SCHEMA: u32 = 1;
 
-pub const CLEANUP_EVENT_TAG: &str = "target-cleanup";
-pub const CLEANUP_SCHEMA: u32 = 1;
-
-/// A completed target cleanup. Separate from compiler events so maintenance
-/// work cannot count as a compile, cache miss or build-time saving.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CleanupEvent {
-    pub event: String,
-    pub schema: u32,
-    pub ts: UtcTime,
-    pub target: String,
-    pub root: String,
-    pub removed_paths: Vec<String>,
-    pub removed_units: u64,
-    pub removed_bytes: u64,
-    pub reason: String,
-}
-
-impl CleanupEvent {
-    pub fn new(
-        target: String,
-        root: String,
-        removed_paths: Vec<String>,
-        removed_units: u64,
-        removed_bytes: u64,
-        reason: String,
-    ) -> Self {
-        Self {
-            event: CLEANUP_EVENT_TAG.to_string(),
-            schema: CLEANUP_SCHEMA,
-            ts: UtcTime::now(),
-            target,
-            root,
-            removed_paths,
-            removed_units,
-            removed_bytes,
-            reason,
-        }
-    }
-}
-
-/// Append maintenance evidence with the same lock as compiler events.
-pub fn log_cleanup(event_log_path: &Path, event: &CleanupEvent) -> Result<()> {
-    append_log_line(
-        event_log_path,
-        deser_json::to_string(event).context("serializing cleanup event")?,
-        LogLock::Build,
-    )
-}
-
 /// One parsed line of the event log, for the rotation tests' tail reader.
 /// Existing [`BuildEvent`]-only readers keep their narrow view and skip
 /// heartbeat lines by parse failure.
@@ -3162,45 +3112,6 @@ mod tests {
 #[cfg(test)]
 mod cleanup_and_rebuild_tests {
     use super::*;
-
-    #[test]
-    fn cleanup_round_trip_does_not_count_as_a_build() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("events.jsonl");
-        let cleanup = CleanupEvent::new(
-            "/work/target".into(),
-            "/work".into(),
-            vec!["/work/target/debug/deps/stale.rlib".into()],
-            2,
-            4097,
-            "unreachable".into(),
-        );
-        log_cleanup(&path, &cleanup).unwrap();
-        let raw = fs::read_to_string(&path).unwrap();
-        let json: deser_value::Value = deser_json::from_str(raw.trim()).unwrap();
-        assert_eq!(json["event"], "target-cleanup");
-        assert_eq!(json["schema"], 1);
-        assert_eq!(json["target"], "/work/target");
-        assert_eq!(json["root"], "/work");
-        assert_eq!(json["removed_units"], 2);
-        assert_eq!(json["removed_bytes"], 4097);
-        assert_eq!(json["reason"], "unreachable");
-        assert_eq!(
-            json["removed_paths"][0],
-            "/work/target/debug/deps/stale.rlib"
-        );
-        assert_eq!(
-            deser_json::from_str::<CleanupEvent>(raw.trim()).unwrap(),
-            cleanup
-        );
-        assert!(deser_json::from_str::<BuildEvent>(raw.trim()).is_err());
-        assert!(parse_event_line(raw.trim()).is_none());
-        assert!(read_events(&path).unwrap().is_empty());
-        let build = BuildEvent::new_for_test("current", EventResult::LocalHit);
-        log_event(&path, &build).unwrap();
-        assert_eq!(read_events(&path).unwrap(), vec![build]);
-        assert_eq!(fs::read_to_string(path).unwrap().lines().count(), 2);
-    }
 
     #[test]
     fn legacy_build_event_omits_rebuilt_claims_and_new_fields_round_trip() {

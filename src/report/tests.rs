@@ -560,15 +560,11 @@ fn write_test_events(dir: &std::path::Path) -> Config {
         project_rules: crate::config::ProjectRules::default(),
         auto_gc: true,
         index_auto_compact: true,
-        auto_clean_orphaned_targets: false,
-        auto_share_target_files: false,
-        auto_clean_idle_targets_days: 0,
+
         auto_recover_min_free_bytes: 0,
-        auto_recover_targets: false,
+
         scheduler_memory_pressure: true,
-        auto_clean_unused_units_days: 0,
-        target_liveness: false,
-        seed_new_targets: false,
+
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
@@ -1929,15 +1925,11 @@ fn test_missing_transfer_data() {
         project_rules: crate::config::ProjectRules::default(),
         auto_gc: true,
         index_auto_compact: true,
-        auto_clean_orphaned_targets: false,
-        auto_share_target_files: false,
-        auto_clean_idle_targets_days: 0,
+
         auto_recover_min_free_bytes: 0,
-        auto_recover_targets: false,
+
         scheduler_memory_pressure: true,
-        auto_clean_unused_units_days: 0,
-        target_liveness: false,
-        seed_new_targets: false,
+
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
@@ -2009,15 +2001,11 @@ fn test_suggestion_high_miss_share() {
         project_rules: crate::config::ProjectRules::default(),
         auto_gc: true,
         index_auto_compact: true,
-        auto_clean_orphaned_targets: false,
-        auto_share_target_files: false,
-        auto_clean_idle_targets_days: 0,
+
         auto_recover_min_free_bytes: 0,
-        auto_recover_targets: false,
+
         scheduler_memory_pressure: true,
-        auto_clean_unused_units_days: 0,
-        target_liveness: false,
-        seed_new_targets: false,
+
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
@@ -2098,15 +2086,11 @@ fn test_suggestion_high_hit_overhead() {
         project_rules: crate::config::ProjectRules::default(),
         auto_gc: true,
         index_auto_compact: true,
-        auto_clean_orphaned_targets: false,
-        auto_share_target_files: false,
-        auto_clean_idle_targets_days: 0,
+
         auto_recover_min_free_bytes: 0,
-        auto_recover_targets: false,
+
         scheduler_memory_pressure: true,
-        auto_clean_unused_units_days: 0,
-        target_liveness: false,
-        seed_new_targets: false,
+
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
@@ -2188,15 +2172,11 @@ fn test_suggestion_network_download_failures_and_fanout() {
         project_rules: crate::config::ProjectRules::default(),
         auto_gc: true,
         index_auto_compact: true,
-        auto_clean_orphaned_targets: false,
-        auto_share_target_files: false,
-        auto_clean_idle_targets_days: 0,
+
         auto_recover_min_free_bytes: 0,
-        auto_recover_targets: false,
+
         scheduler_memory_pressure: true,
-        auto_clean_unused_units_days: 0,
-        target_liveness: false,
-        seed_new_targets: false,
+
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
@@ -2283,15 +2263,11 @@ fn test_suggestion_network_latency_thresholds() {
         project_rules: crate::config::ProjectRules::default(),
         auto_gc: true,
         index_auto_compact: true,
-        auto_clean_orphaned_targets: false,
-        auto_share_target_files: false,
-        auto_clean_idle_targets_days: 0,
+
         auto_recover_min_free_bytes: 0,
-        auto_recover_targets: false,
+
         scheduler_memory_pressure: true,
-        auto_clean_unused_units_days: 0,
-        target_liveness: false,
-        seed_new_targets: false,
+
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
@@ -2779,15 +2755,11 @@ fn test_empty_report() {
         project_rules: crate::config::ProjectRules::default(),
         auto_gc: true,
         index_auto_compact: true,
-        auto_clean_orphaned_targets: false,
-        auto_share_target_files: false,
-        auto_clean_idle_targets_days: 0,
+
         auto_recover_min_free_bytes: 0,
-        auto_recover_targets: false,
+
         scheduler_memory_pressure: true,
-        auto_clean_unused_units_days: 0,
-        target_liveness: false,
-        seed_new_targets: false,
+
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
@@ -3236,15 +3208,11 @@ fn report_counts_each_download_transfer_format() {
         project_rules: crate::config::ProjectRules::default(),
         auto_gc: true,
         index_auto_compact: true,
-        auto_clean_orphaned_targets: false,
-        auto_share_target_files: false,
-        auto_clean_idle_targets_days: 0,
+
         auto_recover_min_free_bytes: 0,
-        auto_recover_targets: false,
+
         scheduler_memory_pressure: true,
-        auto_clean_unused_units_days: 0,
-        target_liveness: false,
-        seed_new_targets: false,
+
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,

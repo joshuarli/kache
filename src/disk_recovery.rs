@@ -1,6 +1,6 @@
 //! Background store eviction when the filesystem runs short of space.
 //! Wrapper hints and post-upload checks run this without waiting for idle
-//! builds. Target cleanup keeps its separate quiet-machine rules.
+//! builds.
 
 use crate::config::Config;
 use crate::store::Store;

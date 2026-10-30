@@ -3,7 +3,7 @@ pub use kache_protocol::{
     CompileFinishedRequest, CompileStartedRequest,
     DaemonHealth, EffectiveConfig, EventStatsResponse, GcPolicyOutcome, HashFileRequest,
     HashFileResult, HashFilesRequest, InFlightEntry,
-    PrestageRequest, SeedTargetRequest, StatsEntry,
+    PrestageRequest, StatsEntry,
     StatsRequest, TransferDirection, TransferEvent,
 };
 pub use kache_protocol::{
@@ -448,7 +448,7 @@ fn effective_config(
         socket_path: config.socket_path().display().to_string(),
         started_at_ms: unix_time_ms(),
         auto_recover_min_free_bytes: Some(config.auto_recover_min_free_bytes),
-        auto_recover_targets: Some(config.auto_recover_targets),
+
     }
 }
 
@@ -621,9 +621,8 @@ impl Daemon {
             Request::ExecuteV1(_)
             | Request::ExecutionStatus { .. }
             | Request::PublishCc(_)
-            | Request::Prestage(_)
-            | Request::SeedTarget(_) => {
-                Response::err("execute/publish_cc/prestage/seed_target need a connection")
+            | Request::Prestage(_) => {
+                Response::err("execute/publish_cc/prestage need a connection")
             }
             Request::Shutdown => Response::ok(),
         }
@@ -2143,7 +2142,6 @@ fn handle_connection_started_at(
             Ok(Request::Gc(req) | Request::GcV2(req)) => daemon.handle_gc(&req),
             Ok(Request::GcHint) => daemon.handle_gc_hint(),
             Ok(Request::Prestage(req)) => daemon.handle_prestage(&req),
-            Ok(Request::SeedTarget(req)) => handle_seed_target(&daemon.config, &req),
             Ok(Request::Health) => daemon.handle_health(),
             Ok(Request::Stats(req)) => daemon.handle_stats(&req),
             Ok(Request::HashFiles(req)) => daemon.handle_hash_files(&req),
@@ -2384,61 +2382,6 @@ fn hash_files_results_from_response_line(resp_str: &str) -> Result<Vec<HashFileR
         );
     }
     Ok(resp.hash_results.unwrap_or_default())
-}
-
-/// Seed a new target directory from the most recently used tracked targets
-/// (see [`crate::target_seed`]), within [`crate::target_seed::SEED_DEADLINE`].
-fn handle_seed_target(config: &Config, req: &SeedTargetRequest) -> Response {
-    let deadline = std::time::Instant::now() + crate::target_seed::SEED_DEADLINE;
-    let target = crate::target_seed::NewTarget {
-        target_dir: PathBuf::from(&req.target_dir),
-        workspace_root: PathBuf::from(&req.workspace_root),
-    };
-    let tracked = Store::open(config).and_then(|store| store.tracked_target_roots(0));
-    let donors: Vec<_> = match tracked {
-        Ok(tracked) => tracked
-            .into_iter()
-            .filter(|root| !root.discovered)
-            .rev()
-            .map(|root| crate::target_seed::Donor {
-                target_dir: root.path,
-                workspace_root: root.workspace_root,
-                rustc: root.rustc,
-            })
-            .collect(),
-        Err(error) => return Response::err(format!("reading tracked targets: {error:#}")),
-    };
-    let seeded = crate::target_seed::seed(
-        &target,
-        &req.rustc_version,
-        &donors,
-        &config.cache_dir,
-        deadline,
-    );
-    if let Some(donor) = &seeded.donor {
-        log::info!(
-            "seeded {} registry units into {} from {}",
-            seeded.units,
-            target.target_dir.display(),
-            donor.display()
-        );
-    }
-    Response::ok()
-}
-
-/// Ask the daemon to seed a target directory Cargo has not built, and wait
-/// until it has, up to the seeding deadline. Never starts the daemon: a
-/// build without one simply is not seeded.
-pub fn send_seed_target(config: &Config, target: &crate::target_seed::NewTarget, version: &str) {
-    let req = Request::SeedTarget(SeedTargetRequest {
-        target_dir: target.target_dir.to_string_lossy().into_owned(),
-        workspace_root: target.workspace_root.to_string_lossy().into_owned(),
-        rustc_version: version.to_owned(),
-    });
-    let wait = crate::target_seed::seed_wait();
-    if let Err(e) = send_request_with_timeout(&config.socket_path(), &req, wait) {
-        log::debug!("seed request: daemon unreachable or slow ({e}), building unseeded");
-    }
 }
 
 /// Hint the daemon to stage `target_dir`'s recorded executables.

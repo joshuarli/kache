@@ -55,6 +55,7 @@ pub(crate) fn frontend_selection() -> Result<kache_shims::Selection, kache_shims
     kache_shims::select_frontend(&env, FRONTEND_IMAGE.get(), &kache_shims::RealFs)
 }
 
+#[cfg(test)]
 pub(crate) fn host_spawn(
     command: &mut std::process::Command,
 ) -> std::io::Result<std::process::Child> {

@@ -240,18 +240,12 @@ fn test_runner_passes_the_exit_code_through() {
 #[test]
 fn removal_without_a_terminal_names_yes_once() {
     let e = env();
-    let dir = TempDir::new().unwrap();
-    let dir_arg = dir.path().to_str().unwrap();
     for (args, retry) in [
         (
             vec!["clean", "--cache"],
             "kache clean --cache --yes".to_string(),
         ),
         (vec!["clean"], "kache clean --yes".to_string()),
-        (
-            vec!["clean", dir_arg],
-            format!("kache clean {dir_arg} --yes"),
-        ),
     ] {
         let output = e.cmd().args(&args).output().unwrap();
         assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
@@ -327,9 +321,20 @@ fn argument_errors_exit_two() {
 fn stale_takes_the_since_forms() {
     let e = env();
     e.cmd()
-        .args(["clean", "--stale", "30m", "--dry-run"])
+        .args(["clean", "--cache", "--stale", "30m", "--dry-run"])
         .assert()
         .success();
+}
+
+#[test]
+fn clean_rejects_target_directories_without_removing_them() {
+    let e = env();
+    let dir = TempDir::new().unwrap();
+    let target = dir.path().join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    let output = e.cmd().arg("clean").arg(dir.path()).arg("--yes").output().unwrap();
+    assert!(!output.status.success());
+    assert!(target.is_dir());
 }
 
 /// `kache --json --help | head -c 10`: a reader that stops early is not an
@@ -759,7 +764,7 @@ fn init_check_steps_follow_the_plans() {
     assert!(step("login_service").is_none());
     let shell = step("shell").unwrap();
     assert_eq!(shell["action"], "configure");
-    assert!(step("free_space_recovery").is_some());
+    assert!(step("free_space_recovery").is_none());
     // Nothing exists yet, so nothing needs a backup.
     assert!(step("backup").is_none(), "{steps:?}");
     assert_eq!(plan["shell_activation_required"], true);
@@ -1057,50 +1062,6 @@ fn terminal_session(
     )
 }
 
-/// A preview reports the free-space question an interactive run would ask;
-/// `--yes` and a run without a terminal keep the default.
-#[cfg(unix)]
-#[test]
-fn init_preview_reports_the_recovery_question_a_terminal_run_asks() {
-    let e = env();
-    let recovery = |args: &[&str], stdin_terminal: bool| {
-        let mut command = kache_process_as(Path::new(KACHE_BIN), &e.home, &e.cache);
-        command
-            .args(["init", "--check", "--no-service", "--no-shell", "--json"])
-            .args(args)
-            .env("KACHE_AUTO_RECOVER_MIN_FREE_BYTES", "1000000000")
-            .env_remove("KACHE_AUTO_RECOVER_TARGETS")
-            .env("NO_COLOR", "1");
-        let (text, stderr, status) = terminal_session(command, 200, stdin_terminal);
-        assert!(status.success(), "{text}{stderr}");
-        let start = text.find('{').unwrap();
-        let body: deser_value::Value = deser_json::from_str(&text[start..]).unwrap();
-        let step = body["steps"]
-            .as_seq()
-            .unwrap()
-            .iter()
-            .find(|step| step["component"] == "free_space_recovery")
-            .unwrap()
-            .clone();
-        (step["action"].as_str().unwrap().to_string(), stderr)
-    };
-    let (action, stderr) = recovery(&[], true);
-    assert_eq!(action, "ask", "{stderr}");
-    assert!(
-        stderr.contains("Free-space recovery: would ask"),
-        "{stderr}"
-    );
-    assert_eq!(recovery(&["--yes"], true).0, "keep");
-    assert_eq!(recovery(&[], false).0, "keep");
-    // A file that already decides leaves nothing to ask.
-    std::fs::write(
-        e.cache.join("config.toml"),
-        "[cache]\nauto_recover_targets = false\n",
-    )
-    .unwrap();
-    assert_eq!(recovery(&[], true).0, "keep");
-}
-
 #[cfg(unix)]
 #[test]
 fn terminal_color_policy_and_wrapping_match_the_actual_command() {
@@ -1168,7 +1129,7 @@ fn report_json_on_empty_cache_is_valid_json() {
         .stdout
         .clone();
     let v: deser_value::Value = deser_json::from_slice(&out).expect("valid json");
-    assert_eq!(v["schema_version"].as_u64(), Some(1));
+    assert_eq!(v["schema_version"].as_u64(), Some(2));
     assert_eq!(v["summary"]["misses"].as_u64(), Some(0));
     assert_eq!(v["summary"]["local_hits"].as_u64(), Some(0));
 
@@ -1176,7 +1137,7 @@ fn report_json_on_empty_cache_is_valid_json() {
     let schema: deser_value::Value = deser_json::from_str(schema_text).expect("valid schema json");
     assert_eq!(
         schema["properties"]["schema_version"]["enum"],
-        deser_value::value!([1])
+        deser_value::value!([2])
     );
 }
 
@@ -1477,8 +1438,7 @@ fn machine_readable_commands_emit_one_json_document() {
         &["report", "--json"],
         &["init", "--check", "--no-service", "--no-shell", "--json"],
         &["--json", "gc"],
-        &["--json", "clean"],
-        &["--json", "targets"],
+        &["--json", "clean", "--cache", "--dry-run"],
         &["--json", "doctor"],
         &["--json", "why-miss", "serde"],
         &["--json", "daemon", "status"],
@@ -1713,251 +1673,6 @@ fn json_help_and_version_are_machine_readable() {
     let version: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
     assert_eq!(version["command"], "version");
     assert!(version["version"].is_str());
-}
-
-#[test]
-fn tracked_clean_previews_and_removes_only_the_remembered_target() {
-    let e = env();
-    let project = scaffold_lib("trackedclean", "pub fn value() -> u8 { 1 }\n");
-    let external = TempDir::new().unwrap();
-    let target = external.path().join("cargo-output");
-    let build = e.wrapper_build(project.path(), &target);
-    assert!(
-        build.status.success(),
-        "wrapper build failed: {}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-    assert!(target.is_dir());
-
-    let elsewhere = TempDir::new().unwrap();
-    let preview = e
-        .cmd()
-        .current_dir(elsewhere.path())
-        .args(["--json", "clean", "--tracked", "--stale", "0h"])
-        .output()
-        .expect("preview tracked clean");
-    assert!(preview.status.success());
-    let preview: deser_value::Value = deser_json::from_slice(&preview.stdout).unwrap();
-    assert_eq!(preview["changed"], false);
-    assert_eq!(preview["targets"][0]["path"], target.display().to_string());
-
-    let clean = e
-        .cmd()
-        .current_dir(elsewhere.path())
-        .args(["--json", "clean", "--tracked", "--stale", "0h", "--yes"])
-        .output()
-        .expect("run tracked clean");
-    assert!(clean.status.success());
-    let clean: deser_value::Value = deser_json::from_slice(&clean.stdout).unwrap();
-    assert_eq!(clean["changed"], true);
-    assert!(!target.exists(), "tracked target should be removed");
-    assert!(
-        project.path().join("Cargo.toml").is_file(),
-        "tracked cleanup must not remove the source workspace"
-    );
-
-    let after = e
-        .cmd()
-        .current_dir(elsewhere.path())
-        .args(["--json", "clean", "--tracked", "--stale", "0h"])
-        .output()
-        .expect("recheck tracked clean");
-    assert!(after.status.success());
-    let after: deser_value::Value = deser_json::from_slice(&after.stdout).unwrap();
-    assert_eq!(after["targets"].as_seq().unwrap().len(), 0);
-}
-
-#[test]
-fn targets_lists_a_tracked_target_and_flags_its_deleted_worktree() {
-    let e = env();
-    let project = scaffold_lib("ledger", "pub fn value() -> u8 { 1 }\n");
-    let external = TempDir::new().unwrap();
-    let target = external.path().join("cargo-output");
-    let build = e.wrapper_build(project.path(), &target);
-    assert!(
-        build.status.success(),
-        "wrapper build failed: {}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-    let elsewhere = TempDir::new().unwrap();
-    let targets = || {
-        let output = e
-            .cmd()
-            .current_dir(elsewhere.path())
-            .args(["--json", "targets"])
-            .output()
-            .expect("run kache targets");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        deser_json::from_slice::<deser_value::Value>(&output.stdout).unwrap()
-    };
-
-    let live = targets();
-    assert_eq!(live["command"], "targets");
-    assert_eq!(live["targets"][0]["path"], target.display().to_string());
-    assert_eq!(live["targets"][0]["state"], "live");
-    assert!(live["apparent_bytes"].as_u64().unwrap() > 0, "{live:?}");
-    assert!(live.get("next").is_none(), "{live:?}");
-    let text = e
-        .cmd()
-        .current_dir(elsewhere.path())
-        .arg("targets")
-        .output()
-        .expect("run kache targets");
-    assert!(
-        String::from_utf8_lossy(&text.stdout).contains("1 tracked target directory"),
-        "{}",
-        String::from_utf8_lossy(&text.stdout)
-    );
-
-    // Windows keeps the daemon's working directory open until it exits.
-    stop_daemon(
-        kache_process_as(Path::new(KACHE_BIN), &e.home, &e.cache).args(["daemon", "stop"]),
-        &e.cache,
-    );
-    std::fs::remove_dir_all(project.path()).unwrap();
-    let orphaned = targets();
-    assert_eq!(orphaned["targets"][0]["state"], "worktree_deleted");
-    assert_eq!(orphaned["next"][0]["argv"][2], "--orphans", "{orphaned:?}");
-}
-
-#[test]
-fn clean_dry_run_reports_no_targets_in_empty_dir() {
-    let e = env();
-    // Nothing tracked, and nothing under an empty directory.
-    let workdir = TempDir::new().unwrap();
-    e.cmd()
-        .current_dir(workdir.path())
-        .args(["clean", "--dry-run"])
-        .assert()
-        .success()
-        .stdout(predicates::str::starts_with(
-            "Remove   nothing: no target matches",
-        ));
-    e.cmd()
-        .arg("clean")
-        .arg(workdir.path())
-        .arg("--dry-run")
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("No target/ directories under"));
-}
-
-// A directory named to `clean` is scanned even under a macOS-protected
-// prefix, which is where every macOS temp dir lives.
-#[test]
-fn clean_dry_run_reports_a_populated_target_dir() {
-    // A cargo project with a non-empty target/ exercises the populated
-    // branch of find_target_dirs -> compute_project_stats -> walk_project_dir ->
-    // detect_profiles, plus the dry-run size reporting.
-    let e = env();
-    let project = TempDir::new().unwrap();
-    let root = project.path();
-    std::fs::write(root.join("Cargo.toml"), "[package]\nname=\"p\"\n").unwrap();
-    for profile in ["debug", "release"] {
-        let deps = root.join("target").join(profile).join("deps");
-        std::fs::create_dir_all(&deps).unwrap();
-        std::fs::write(deps.join("libfoo.rlib"), vec![0u8; 4096]).unwrap();
-        std::fs::write(deps.join("libfoo.rmeta"), vec![0u8; 1024]).unwrap();
-        std::fs::write(deps.join("foo.d"), b"foo.o: foo.rs\n").unwrap();
-    }
-
-    e.cmd()
-        .arg("clean")
-        .arg(root)
-        .arg("--dry-run")
-        .assert()
-        .success()
-        .stdout(predicates::str::starts_with(
-            "Remove   1 target directory under",
-        ))
-        // Plain copies: everything on disk is freeable.
-        .stdout(predicates::str::contains(
-            " · 10.0 KiB on disk · 10.0 KiB freeable",
-        ))
-        .stdout(predicates::str::contains("target  [debug, release]"));
-}
-
-#[cfg(unix)]
-#[test]
-fn a_clean_that_cannot_remove_a_target_says_so_and_fails() {
-    use std::os::unix::fs::PermissionsExt;
-    if unsafe { libc::geteuid() } == 0 {
-        eprintln!("skipping: running as root, mode 0555 does not deny removal");
-        return;
-    }
-    let e = env();
-    let project = TempDir::new().unwrap();
-    let root = project.path();
-    std::fs::write(root.join("Cargo.toml"), "[package]\nname=\"p\"\n").unwrap();
-    let locked = root.join("target/debug/build");
-    std::fs::create_dir_all(&locked).unwrap();
-    std::fs::write(locked.join("out.rlib"), vec![0u8; 4096]).unwrap();
-    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
-
-    let output = e
-        .cmd()
-        .args(["--json", "clean"])
-        .arg(root)
-        .arg("--yes")
-        .output()
-        .unwrap();
-    let human = e
-        .cmd()
-        .arg("clean")
-        .arg(root)
-        .arg("--yes")
-        .output()
-        .unwrap();
-    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    assert_eq!(output.status.code(), Some(1));
-    let value: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["success"], false);
-    // cli.schema.json: a failed document carries `error`.
-    assert_eq!(
-        value["error"],
-        deser_value::value!({
-            "code": "command_failed",
-            "message": "could not remove 1 target directory",
-            "causes": [],
-        })
-    );
-    assert_eq!(
-        value["failed"][0]["path"],
-        root.join("target").display().to_string()
-    );
-    assert!(value["removed_paths"].as_seq().unwrap().is_empty());
-    assert_eq!(human.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&human.stdout).contains("  failed  "));
-}
-
-#[cfg(unix)]
-#[test]
-fn clean_dry_run_collapses_hardlinks_wholly_inside_target() {
-    let e = env();
-    let project = TempDir::new().unwrap();
-    let root = project.path();
-    std::fs::write(root.join("Cargo.toml"), "[package]\nname=\"p\"\n").unwrap();
-    let deps = root.join("target/debug/deps");
-    std::fs::create_dir_all(&deps).unwrap();
-    let first = deps.join("libfoo.rlib");
-    let second = deps.join("libfoo-copy.rlib");
-    std::fs::write(&first, vec![0u8; 4096]).unwrap();
-    std::fs::hard_link(&first, &second).unwrap();
-
-    e.cmd()
-        .arg("clean")
-        .arg(root)
-        .arg("--dry-run")
-        .assert()
-        .success()
-        .stdout(predicates::str::contains(
-            " · 8.0 KiB on disk · 4.0 KiB freeable",
-        ));
 }
 
 #[test]
@@ -3213,7 +2928,7 @@ fn init_repairs_each_half_of_terminal_setup_and_reports_activation() {
         .assert()
         .success()
         .stdout(predicates::str::contains(
-            "Cargo target protection and C/C++ caching: active",
+            "C/C++ caching: active",
         ))
         .stdout(predicates::str::contains("Open a new terminal to activate C/C++ caching.").not());
 
@@ -3654,7 +3369,7 @@ fn commands_operate_on_a_populated_cache() {
         .stdout
         .clone();
     let v: deser_value::Value = deser_json::from_slice(&out).expect("valid json");
-    assert_eq!(v["schema_version"].as_u64(), Some(1));
+    assert_eq!(v["schema_version"].as_u64(), Some(2));
     // The clean+rebuild produced exactly one cache miss (cold) and one local
     // hit (warm) for our crate, with the artifact blobs stored.
     assert_eq!(v["summary"]["local_hits"].as_u64(), Some(1), "report: {v:?}");
@@ -4672,167 +4387,6 @@ fn daemon_start_needs_no_more_path_than_its_own_socket() {
     assert!(bound, "the daemon must have bound its socket: {stderr}");
 }
 
-/// Cargo's first call for a target directory it has not built is its
-/// target-info probe. Sent through the wrapper, it has the daemon copy the
-/// registry units another checkout built (see `src/target_seed.rs`) before
-/// the probe returns.
-#[test]
-fn the_target_info_probe_seeds_a_new_checkout() {
-    let e = env();
-    e.cmd().args(["daemon", "start"]).assert().success();
-    let root = TempDir::new().unwrap();
-    // A checkout built through kache: the daemon now tracks its target.
-    let donor = root.path().join("donor");
-    std::fs::create_dir_all(donor.join("src")).unwrap();
-    let manifest = "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
-    std::fs::write(donor.join("Cargo.toml"), manifest).unwrap();
-    std::fs::write(donor.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
-    let donor_target = donor.join("target");
-    let built = e.wrapper_build(&donor, &donor_target);
-    assert!(built.status.success(), "{built:?}");
-    // A registry unit, as the toolchain lays it out.
-    let profile = donor_target.join("debug");
-    let hash = "0123456789abcdef";
-    let per_unit = !profile.join(".fingerprint").is_dir();
-    let marker = |target: &Path| {
-        if per_unit {
-            target.join("debug/build/dep").join(hash)
-        } else {
-            target
-                .join("debug/.fingerprint")
-                .join(format!("dep-{hash}"))
-        }
-    };
-    let donor_marker = marker(&donor_target);
-    std::fs::create_dir_all(donor_marker.join("fingerprint")).unwrap();
-    std::fs::write(donor_marker.join("fingerprint/lib"), "fp").unwrap();
-    // The new checkout's lockfile names the registry package.
-    let lock = "[[package]]\nname = \"app\"\nversion = \"0.1.0\"\n\n\
-                [[package]]\nname = \"dep\"\nversion = \"1.0.0\"\n\
-                source = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
-    let probe = |checkout: &Path, seed: &str| {
-        std::fs::create_dir_all(checkout).unwrap();
-        std::fs::write(checkout.join("Cargo.toml"), manifest).unwrap();
-        std::fs::write(checkout.join("Cargo.lock"), lock).unwrap();
-        e.cmd()
-            .current_dir(checkout)
-            .env("KACHE_SEED_NEW_TARGETS", seed)
-            .env_remove("CARGO_TARGET_DIR")
-            .env_remove("CARGO_BUILD_TARGET_DIR")
-            .env_remove("CARGO_BUILD_BUILD_DIR")
-            .args(["rustc", "-", "--crate-name", "___", "--print=file-names"])
-            .args(["--crate-type", "lib"])
-            .write_stdin("")
-            .assert()
-            .success();
-    };
-    let seeded = root.path().join("seeded");
-    probe(&seeded, "1");
-    if !marker(&seeded.join("target")).is_dir() {
-        // Seeding needs a tracked donor built by the compiler the probe
-        // reports; name both so a failure says which one differed.
-        let recorded = std::fs::read_to_string(donor_target.join(".rustc_info.json"))
-            .unwrap_or_else(|error| format!("unreadable: {error}"));
-        let probed = std::process::Command::new("rustc")
-            .arg("-vV")
-            .current_dir(&seeded)
-            .env("HOME", &e.home)
-            .env("CARGO_HOME", e.home.join(".cargo"))
-            .output()
-            .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
-            .unwrap_or_else(|error| format!("failed: {error}"));
-        let tracked = e.cmd().args(["targets", "--json"]).output().unwrap();
-        panic!(
-            "the unit was not copied\n\
-             donor .rustc_info.json: {recorded}\n\
-             probe rustc -vV: {probed}\n\
-             tracked targets: {}",
-            String::from_utf8_lossy(&tracked.stdout)
-        );
-    }
-    for (name, configuration, intermediate) in [
-        (
-            "configured-target",
-            "[build]\ntarget-dir='custom'\n",
-            "custom",
-        ),
-        (
-            "configured-build",
-            "[build]\ntarget-dir='outputs'\nbuild-dir='{workspace-root}/intermediate'\n",
-            "intermediate",
-        ),
-    ] {
-        let checkout = root.path().join(name);
-        std::fs::create_dir_all(checkout.join(".cargo")).unwrap();
-        std::fs::write(checkout.join(".cargo/config.toml"), configuration).unwrap();
-        probe(&checkout, "1");
-        assert!(
-            marker(&checkout.join(intermediate)).is_dir(),
-            "{name} was not seeded"
-        );
-        assert!(
-            !checkout.join("target").exists(),
-            "{name} seeded the default target"
-        );
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{PermissionsExt, symlink};
-        // A fake Cargo preserves the lockfile and invokes the real wrapper's
-        // probe. This tests the Cargo-to-wrapper transport, not Cargo itself.
-        let fake = root.path().join("fake-cargo");
-        std::fs::write(&fake, "#!/bin/sh\nif [ \"$1\" = -V ]; then echo 'cargo 1.99.0'; exit 0; fi\nexec \"$KACHE_TEST_BINARY\" rustc - --crate-name ___ --print=file-names --crate-type lib\n").unwrap();
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let shim = root.path().join("shim/cargo");
-        std::fs::create_dir_all(shim.parent().unwrap()).unwrap();
-        symlink(KACHE_BIN, &shim).unwrap();
-        for (name, program, prefix, intermediate) in [
-            ("cargo-shim-target", shim.as_path(), vec![], "custom"),
-            (
-                "cargo-proxy-build",
-                Path::new(KACHE_BIN),
-                vec!["cargo", "--"],
-                "target",
-            ),
-        ] {
-            let checkout = root.path().join(name);
-            std::fs::create_dir_all(&checkout).unwrap();
-            std::fs::write(checkout.join("Cargo.toml"), manifest).unwrap();
-            std::fs::write(checkout.join("Cargo.lock"), lock).unwrap();
-            let command = kache_process_as(program, &e.home, &e.cache);
-            let mut command = Command::from_std(command);
-            command
-                .current_dir(&checkout)
-                .env("KACHE_REAL_CARGO", &fake)
-                .env("KACHE_TEST_BINARY", KACHE_BIN)
-                .env_remove("CARGO_TARGET_DIR")
-                .env_remove("CARGO_BUILD_TARGET_DIR")
-                .env_remove("CARGO_BUILD_BUILD_DIR")
-                .args(prefix)
-                .args(["check", "--target-dir=custom"])
-                .write_stdin("")
-                .assert()
-                .success();
-            assert!(
-                marker(&checkout.join(intermediate)).is_dir(),
-                "{name} was not seeded"
-            );
-            let unused = if intermediate == "custom" {
-                "target"
-            } else {
-                "custom"
-            };
-            assert!(
-                !checkout.join(unused).exists(),
-                "{name} seeded the output directory instead of intermediates"
-            );
-        }
-    }
-    let off = root.path().join("off");
-    probe(&off, "0");
-    assert!(!off.join("target").exists());
-}
-
 #[test]
 fn daemon_readiness_channel_precedes_a_fresh_running_status() {
     use kunobi_daemon::launch::DaemonCommand;
@@ -5121,8 +4675,6 @@ fn explain_json_distinguishes_uncached_compiles_hits_and_compiler_queries() {
     for (result, reason, expected) in [
         ("passthrough", "store unavailable: fixture", "not_cached"),
         ("local_hit", "", "all_hits"),
-        ("remote_hit", "", "all_hits"),
-        ("prefetch_hit", "", "all_hits"),
         (
             "passthrough",
             "not-a-compile|--print cfg",

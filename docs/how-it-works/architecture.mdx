@@ -124,11 +124,10 @@ The daemon owns delegated compilation and periodic maintenance:
 
 - concurrent cache pipelines for delegated compiler invocations
 - storing finished C/C++ compiles that wrappers hand over (`cache.daemon_publish`)
-- seeding a new checkout's target directory with registry units another checkout built (`cache.seed_new_targets`)
 - copying large executables beside their destinations while the rest of a build runs
 - flushing entries stored without an fsync, every two seconds
 - scheduled garbage collection
-- index upkeep, target-directory cleanup and target-file sharing when the machine is quiet
+- index upkeep when the machine is quiet
 - tracking in-flight compiles reported by wrappers
 
 The client connects through `<runtime_dir>/daemon.sock` on Unix or a named pipe

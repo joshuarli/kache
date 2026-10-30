@@ -26,7 +26,7 @@
       "enum": [
         2
       ],
-      "description": "Report schema version (currently 1). Incremented on breaking changes."
+      "description": "Report schema version (currently 2). Incremented on breaking changes."
     },
     "meta": {
       "type": "object",

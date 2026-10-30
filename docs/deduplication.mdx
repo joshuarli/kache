@@ -33,14 +33,6 @@ Upgrading does not rewrite outputs Cargo already considers fresh. If older read-
 
 Reflinks have independent inodes. A later write copies changed blocks instead of modifying the store blob.
 
-## Sharing existing target files
-
-A large compiler output in a target directory can be a byte-for-byte copy of a blob the store already holds, for example when another worktree compiled the same artifact. With `cache.auto_share_target_files` on (the default), the daemon replaces such files with clones of the blob, a little at a time while the machine is idle. Each file keeps its path, mode and modification time, so Cargo still sees it as fresh.
-
-This needs a filesystem with copy-on-write clones. It never hardlinks, and it skips files on a different volume from the store. Only files of 64 KiB or more with an `.rlib`, `.rmeta`, `.so`, `.dylib`, `.a`, `.o`, `.dll`, `.lib`, `.exe` or `.pdb` extension are compared.
-
-`kache targets share` reports the matches, and `kache targets share --apply` clones them now. See [Target directory cleanup](/docs/getting-started/configuration#target-directory-cleanup).
-
 ## Reported sizes
 
 In `kache stats`, Cache and Store show registered blob bytes; Limit is the
@@ -55,9 +47,7 @@ hardlinks, or filesystem snapshots still hold some, `kache stats` adds an
 `target/` directories, and the part only snapshots hold. Clone detection is
 reliable on macOS and depends on the filesystem on Linux.
 
-For obsolete units inside an active target, record a successful command with `KACHE_TARGET_LIVENESS=1 kache cargo check`, then preview `kache clean --units target --dry-run`. Cleanup keeps that command's live and Fresh artifacts; missing or changed evidence preserves the units. See [Recorded-command cleanup](/docs/getting-started/configuration#recorded-command-cleanup).
-
-Run `kache clean --dry-run` to see what deleting each target directory frees and which ones a clean would remove.
+Run `cargo clean` in a project to remove its build outputs.
 
 ## `dup` build events
 

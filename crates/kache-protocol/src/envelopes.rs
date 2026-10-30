@@ -49,11 +49,6 @@ pub enum Request {
     /// Fire-and-forget; older daemons reject the unknown variant and the
     /// restore copies as before.
     Prestage(PrestageRequest),
-    /// Cargo is probing a target directory it has not built: copy another
-    /// checkout's registry units into it before Cargo checks freshness (see
-    /// `target_seed`). The wrapper waits for the answer; older
-    /// daemons reject the unknown variant and nothing is copied.
-    SeedTarget(SeedTargetRequest),
     Shutdown,
 }
 

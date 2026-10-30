@@ -353,52 +353,6 @@ fn gc_max_age_is_opt_in_and_obeys_env_precedence() {
 }
 
 #[test]
-fn target_liveness_is_opt_in_with_file_env_and_ignore_env_precedence() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&config_path);
-    let _missing = NamedEnvGuard::remove("KACHE_TARGET_LIVENESS");
-    assert!(!Config::load().unwrap().target_liveness);
-    std::fs::write(&config_path, "[cache]\ntarget_liveness = true\n").unwrap();
-    assert!(Config::load().unwrap().target_liveness);
-    for value in ["0", "false", "FALSE", "garbage"] {
-        let _override = NamedEnvGuard::set("KACHE_TARGET_LIVENESS", value);
-        assert!(!Config::load().unwrap().target_liveness, "{value}");
-    }
-    std::fs::write(&config_path, "[cache]\ntarget_liveness = false\n").unwrap();
-    for value in ["1", "true", "TRUE"] {
-        let _override = NamedEnvGuard::set("KACHE_TARGET_LIVENESS", value);
-        assert!(Config::load().unwrap().target_liveness, "{value}");
-    }
-    let _override = NamedEnvGuard::set("KACHE_TARGET_LIVENESS", "1");
-    std::fs::write(
-        &config_path,
-        "[cache]\nignore_env = true\ntarget_liveness = false\n",
-    )
-    .unwrap();
-    assert!(!Config::load().unwrap().target_liveness);
-    std::fs::write(
-        &config_path,
-        "[cache]\nignore_env = true\ntarget_liveness = true\n",
-    )
-    .unwrap();
-    let _disabled = NamedEnvGuard::set("KACHE_TARGET_LIVENESS", "0");
-    assert!(Config::load().unwrap().target_liveness);
-}
-
-#[test]
-fn target_liveness_is_a_typed_file_key_alongside_unknown_keys() {
-    let file: FileConfig =
-        deser_toml::from_str("[cache]\ntarget_liveness = true\nfuture_setting = 4\n").unwrap();
-    assert_eq!(file.cache.as_ref().unwrap().target_liveness, Some(true));
-    let roundtrip: FileConfig = deser_toml::from_str(&deser_toml::to_string(&file).unwrap()).unwrap();
-    assert_eq!(roundtrip.cache.unwrap().target_liveness, Some(true));
-    assert!(deser_toml::from_str::<FileConfig>("[cache]\ntarget_liveness = 'yes'\n").is_err());
-    assert!(ENV_FILE_KEYS.contains(&("KACHE_TARGET_LIVENESS", "cache.target_liveness")));
-}
-
-#[test]
 fn gc_evict_shared_is_opt_in_and_obeys_env_precedence() {
     let _lock = config_path_lock();
     let dir = tempfile::tempdir().unwrap();
@@ -459,131 +413,28 @@ fn index_auto_compact_is_on_by_default_and_obeys_env_precedence() {
 }
 
 #[test]
-fn target_cleanup_defaults_and_env_precedence() {
+fn recovery_floor_obeys_file_environment_and_ci_defaults() {
     let _lock = config_path_lock();
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
     let _config = set_kache_config_for_test(&config_path);
-    let _orphans = NamedEnvGuard::remove("KACHE_AUTO_CLEAN_ORPHANED_TARGETS");
-    let _idle = NamedEnvGuard::remove("KACHE_AUTO_CLEAN_IDLE_TARGETS_DAYS");
     let _floor = NamedEnvGuard::remove("KACHE_AUTO_RECOVER_MIN_FREE_BYTES");
-    let _recover_targets = NamedEnvGuard::remove("KACHE_AUTO_RECOVER_TARGETS");
-    let _units = NamedEnvGuard::remove("KACHE_AUTO_CLEAN_UNUSED_UNITS_DAYS");
-    // The default differs in CI, which this suite may itself run in.
     let _ci = NamedEnvGuard::remove("CI");
     let _gha = NamedEnvGuard::remove("GITHUB_ACTIONS");
     let _gitlab = NamedEnvGuard::remove("GITLAB_CI");
-
-    let config = Config::load().unwrap();
-    assert!(config.auto_clean_orphaned_targets);
-    assert_eq!(config.auto_clean_idle_targets_days, 0);
-    assert_eq!(
-        config.auto_recover_min_free_bytes, DEFAULT_RECOVERY_FLOOR,
-        "builds evict cache entries below 10 GiB free"
-    );
-    assert!(
-        !config.auto_recover_targets,
-        "removing targets to recover space is opt-in"
-    );
+    assert_eq!(Config::load().unwrap().auto_recover_min_free_bytes, DEFAULT_RECOVERY_FLOOR);
     {
         let _in_ci = NamedEnvGuard::set("GITHUB_ACTIONS", "true");
-        assert_eq!(
-            Config::load().unwrap().auto_recover_min_free_bytes,
-            0,
-            "a CI runner's disk lasts one job"
-        );
+        assert_eq!(Config::load().unwrap().auto_recover_min_free_bytes, 0);
     }
-
-    std::fs::write(
-        &config_path,
-        "[cache]\nauto_recover_min_free_bytes = 0\nauto_recover_targets = true\n",
-    )
-    .unwrap();
-    let config = Config::load().unwrap();
-    assert_eq!(
-        config.auto_recover_min_free_bytes, 0,
-        "0 turns recovery off"
-    );
-    assert!(config.auto_recover_targets);
-    for (value, on) in [("1", true), ("TRUE", true), ("0", false), ("yes", false)] {
-        let _env = NamedEnvGuard::set("KACHE_AUTO_RECOVER_TARGETS", value);
-        assert_eq!(Config::load().unwrap().auto_recover_targets, on, "{value}");
-    }
-
-    std::fs::write(
-        &config_path,
-        "[cache]\nauto_clean_orphaned_targets = false\nauto_clean_idle_targets_days = 30\nauto_recover_min_free_bytes = 1073741824\n",
-    )
-    .unwrap();
-    let config = Config::load().unwrap();
-    assert!(!config.auto_clean_orphaned_targets);
-    assert_eq!(config.auto_clean_idle_targets_days, 30);
-    assert_eq!(config.auto_recover_min_free_bytes, 1 << 30);
-
-    let _on = NamedEnvGuard::set("KACHE_AUTO_CLEAN_ORPHANED_TARGETS", "1");
-    let _days = NamedEnvGuard::set("KACHE_AUTO_CLEAN_IDLE_TARGETS_DAYS", "7");
-    let _floor_override = NamedEnvGuard::set("KACHE_AUTO_RECOVER_MIN_FREE_BYTES", "2147483648");
-    let config = Config::load().unwrap();
-    assert!(config.auto_clean_orphaned_targets);
-    assert_eq!(config.auto_clean_idle_targets_days, 7);
-    assert_eq!(config.auto_recover_min_free_bytes, 2 << 30);
-    drop((_on, _days, _floor_override));
-
-    std::fs::write(
-        &config_path,
-        "[cache]\nauto_clean_orphaned_targets = true\n",
-    )
-    .unwrap();
-    for off in ["0", "false", "FALSE"] {
-        let _override = NamedEnvGuard::set("KACHE_AUTO_CLEAN_ORPHANED_TARGETS", off);
-        assert!(
-            !Config::load().unwrap().auto_clean_orphaned_targets,
-            "{off}"
-        );
-    }
-    let _garbage = NamedEnvGuard::set("KACHE_AUTO_CLEAN_IDLE_TARGETS_DAYS", "soon");
-    assert_eq!(Config::load().unwrap().auto_clean_idle_targets_days, 0);
-    drop(_garbage);
-
-    std::fs::write(
-        &config_path,
-        "[cache]\nignore_env = true\nauto_clean_idle_targets_days = 3\nauto_recover_min_free_bytes = 1048576\n",
-    )
-    .unwrap();
-    let _ignored = NamedEnvGuard::set("KACHE_AUTO_CLEAN_ORPHANED_TARGETS", "0");
-    let _ignored_days = NamedEnvGuard::set("KACHE_AUTO_CLEAN_IDLE_TARGETS_DAYS", "9");
-    let _ignored_floor = NamedEnvGuard::set("KACHE_AUTO_RECOVER_MIN_FREE_BYTES", "5242880");
-    let config = Config::load().unwrap();
-    assert!(config.auto_clean_orphaned_targets);
-    assert_eq!(config.auto_clean_idle_targets_days, 3);
-    assert_eq!(config.auto_recover_min_free_bytes, 1 << 20);
-}
-
-#[test]
-fn target_seeding_is_on_by_default_and_obeys_env_precedence() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&config_path);
-    let _missing = NamedEnvGuard::remove("KACHE_SEED_NEW_TARGETS");
-    assert!(Config::load().unwrap().seed_new_targets);
-    std::fs::write(&config_path, "[cache]\nseed_new_targets = false\n").unwrap();
-    assert!(!Config::load().unwrap().seed_new_targets);
-    let _on = NamedEnvGuard::set("KACHE_SEED_NEW_TARGETS", "1");
-    assert!(Config::load().unwrap().seed_new_targets);
-    drop(_on);
-    std::fs::write(&config_path, "[cache]\nseed_new_targets = true\n").unwrap();
-    for off in ["0", "false", "FALSE"] {
-        let _off = NamedEnvGuard::set("KACHE_SEED_NEW_TARGETS", off);
-        assert!(!Config::load().unwrap().seed_new_targets, "{off}");
-    }
-    std::fs::write(
-        &config_path,
-        "[cache]\nignore_env = true\nseed_new_targets = true\n",
-    )
-    .unwrap();
-    let _ignored = NamedEnvGuard::set("KACHE_SEED_NEW_TARGETS", "0");
-    assert!(Config::load().unwrap().seed_new_targets);
+    std::fs::write(&config_path, "[cache]\nauto_recover_min_free_bytes = 1073741824\n").unwrap();
+    assert_eq!(Config::load().unwrap().auto_recover_min_free_bytes, 1 << 30);
+    let override_floor = NamedEnvGuard::set("KACHE_AUTO_RECOVER_MIN_FREE_BYTES", "2147483648");
+    assert_eq!(Config::load().unwrap().auto_recover_min_free_bytes, 2 << 30);
+    drop(override_floor);
+    std::fs::write(&config_path, "[cache]\nignore_env = true\nauto_recover_min_free_bytes = 1048576\n").unwrap();
+    let _ignored = NamedEnvGuard::set("KACHE_AUTO_RECOVER_MIN_FREE_BYTES", "5242880");
+    assert_eq!(Config::load().unwrap().auto_recover_min_free_bytes, 1 << 20);
 }
 
 #[test]
@@ -611,31 +462,6 @@ fn hermetic_build_scripts_are_off_by_default_and_obey_env_precedence() {
     .unwrap();
     let _ignored = NamedEnvGuard::set("KACHE_BUILD_SCRIPT_HERMETIC", "0");
     assert!(Config::load().unwrap().build_script_hermetic);
-}
-
-#[test]
-fn unused_unit_cleanup_defaults_to_thirty_days() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&config_path);
-    let _missing = NamedEnvGuard::remove("KACHE_AUTO_CLEAN_UNUSED_UNITS_DAYS");
-    assert_eq!(Config::load().unwrap().auto_clean_unused_units_days, 30);
-    std::fs::write(&config_path, "[cache]\nauto_clean_unused_units_days = 0\n").unwrap();
-    assert_eq!(Config::load().unwrap().auto_clean_unused_units_days, 0);
-    let _env = NamedEnvGuard::set("KACHE_AUTO_CLEAN_UNUSED_UNITS_DAYS", "7");
-    assert_eq!(Config::load().unwrap().auto_clean_unused_units_days, 7);
-    drop(_env);
-    let _garbage = NamedEnvGuard::set("KACHE_AUTO_CLEAN_UNUSED_UNITS_DAYS", "soon");
-    assert_eq!(Config::load().unwrap().auto_clean_unused_units_days, 0);
-    drop(_garbage);
-    std::fs::write(
-        &config_path,
-        "[cache]\nignore_env = true\nauto_clean_unused_units_days = 3\n",
-    )
-    .unwrap();
-    let _ignored = NamedEnvGuard::set("KACHE_AUTO_CLEAN_UNUSED_UNITS_DAYS", "9");
-    assert_eq!(Config::load().unwrap().auto_clean_unused_units_days, 3);
 }
 
 #[test]
@@ -2218,14 +2044,11 @@ fn test_file_config_roundtrip() {
             daemon_execution_concurrency: None,
             auto_gc: None,
             index_auto_compact: None,
-            auto_clean_orphaned_targets: None,
-            auto_share_target_files: None,
-            auto_clean_idle_targets_days: None,
+
             auto_recover_min_free_bytes: None,
-            auto_recover_targets: None,
+
             scheduler_memory_pressure: None,
-            auto_clean_unused_units_days: None,
-            seed_new_targets: None,
+
             build_script_hermetic: None,
             gc_evict_shared: None,
             storage_layout_advice: None,
@@ -2243,7 +2066,7 @@ fn test_file_config_roundtrip() {
             cache_executables: Some(true),
             cache_cc_links: None,
             trust_codegen_backends: None,
-            target_liveness: Some(true),
+
             clean_incremental: Some(false),
             preserve_incremental: Some(true),
             adaptive_incremental: Some(false),
@@ -2816,14 +2639,11 @@ fn test_config_store_dir() {
         project_rules: ProjectRules::default(),
         auto_gc: true,
         index_auto_compact: true,
-        auto_clean_orphaned_targets: true,
-        auto_share_target_files: true,
-        auto_clean_idle_targets_days: 0,
+
         auto_recover_min_free_bytes: 0,
-        auto_recover_targets: false,
+
         scheduler_memory_pressure: true,
-        auto_clean_unused_units_days: 0,
-        seed_new_targets: false,
+
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
@@ -2843,7 +2663,7 @@ fn test_config_store_dir() {
         cache_executables: false,
         cache_cc_links: false,
         trust_codegen_backends: false,
-        target_liveness: false,
+
         clean_incremental: true,
         preserve_incremental: false,
         adaptive_incremental: true,
@@ -2886,14 +2706,11 @@ fn test_config_index_db_path() {
         project_rules: ProjectRules::default(),
         auto_gc: true,
         index_auto_compact: true,
-        auto_clean_orphaned_targets: true,
-        auto_share_target_files: true,
-        auto_clean_idle_targets_days: 0,
+
         auto_recover_min_free_bytes: 0,
-        auto_recover_targets: false,
+
         scheduler_memory_pressure: true,
-        auto_clean_unused_units_days: 0,
-        seed_new_targets: false,
+
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
@@ -2913,7 +2730,7 @@ fn test_config_index_db_path() {
         cache_executables: false,
         cache_cc_links: false,
         trust_codegen_backends: false,
-        target_liveness: false,
+
         clean_incremental: true,
         preserve_incremental: false,
         adaptive_incremental: true,
@@ -2952,14 +2769,11 @@ fn test_config_event_log_path() {
         project_rules: ProjectRules::default(),
         auto_gc: true,
         index_auto_compact: true,
-        auto_clean_orphaned_targets: true,
-        auto_share_target_files: true,
-        auto_clean_idle_targets_days: 0,
+
         auto_recover_min_free_bytes: 0,
-        auto_recover_targets: false,
+
         scheduler_memory_pressure: true,
-        auto_clean_unused_units_days: 0,
-        seed_new_targets: false,
+
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
@@ -2979,7 +2793,7 @@ fn test_config_event_log_path() {
         cache_executables: false,
         cache_cc_links: false,
         trust_codegen_backends: false,
-        target_liveness: false,
+
         clean_incremental: true,
         preserve_incremental: false,
         adaptive_incremental: true,
@@ -3033,14 +2847,11 @@ fn test_config_socket_path() {
         project_rules: ProjectRules::default(),
         auto_gc: true,
         index_auto_compact: true,
-        auto_clean_orphaned_targets: true,
-        auto_share_target_files: true,
-        auto_clean_idle_targets_days: 0,
+
         auto_recover_min_free_bytes: 0,
-        auto_recover_targets: false,
+
         scheduler_memory_pressure: true,
-        auto_clean_unused_units_days: 0,
-        seed_new_targets: false,
+
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
@@ -3060,7 +2871,7 @@ fn test_config_socket_path() {
         cache_executables: false,
         cache_cc_links: false,
         trust_codegen_backends: false,
-        target_liveness: false,
+
         clean_incremental: true,
         preserve_incremental: false,
         adaptive_incremental: true,
@@ -3721,14 +3532,11 @@ fn test_save_and_load_file_config() {
             daemon_execution_concurrency: None,
             auto_gc: None,
             index_auto_compact: None,
-            auto_clean_orphaned_targets: None,
-            auto_share_target_files: None,
-            auto_clean_idle_targets_days: None,
+
             auto_recover_min_free_bytes: None,
-            auto_recover_targets: None,
+
             scheduler_memory_pressure: None,
-            auto_clean_unused_units_days: None,
-            seed_new_targets: None,
+
             build_script_hermetic: None,
             gc_evict_shared: None,
             storage_layout_advice: None,
@@ -3746,7 +3554,7 @@ fn test_save_and_load_file_config() {
             cache_executables: Some(true),
             cache_cc_links: None,
             trust_codegen_backends: None,
-            target_liveness: None,
+
             clean_incremental: None,
             preserve_incremental: None,
             adaptive_incremental: None,
@@ -4203,33 +4011,6 @@ fn test_normalize_cc_flags_trims_dedupes_and_drops_empty() {
 
 
 
-
-
-#[test]
-fn target_file_sharing_is_on_unless_turned_off() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&config_path);
-    let _share = NamedEnvGuard::remove("KACHE_AUTO_SHARE_TARGET_FILES");
-    assert!(Config::load().unwrap().auto_share_target_files);
-
-    std::fs::write(&config_path, "[cache]\nauto_share_target_files = false\n").unwrap();
-    assert!(!Config::load().unwrap().auto_share_target_files);
-    let on = NamedEnvGuard::set("KACHE_AUTO_SHARE_TARGET_FILES", "1");
-    assert!(Config::load().unwrap().auto_share_target_files, "env wins");
-    drop(on);
-
-    std::fs::write(&config_path, "[cache]\nauto_share_target_files = true\n").unwrap();
-    for off in ["0", "false", "FALSE"] {
-        let _off = NamedEnvGuard::set("KACHE_AUTO_SHARE_TARGET_FILES", off);
-        assert!(!Config::load().unwrap().auto_share_target_files, "{off}");
-    }
-
-    std::fs::write(&config_path, "[cache]\nignore_env = true\n").unwrap();
-    let _ignored = NamedEnvGuard::set("KACHE_AUTO_SHARE_TARGET_FILES", "0");
-    assert!(Config::load().unwrap().auto_share_target_files);
-}
 
 
 #[test]

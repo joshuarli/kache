@@ -66,9 +66,6 @@ fn absolutize_volume_path(path: &Path) -> PathBuf {
 /// 20,000 of the usual 1.4 KB (kunobi-ninja/kache#1209).
 pub const DEFAULT_EVENT_LOG_MAX_SIZE: u64 = 64 * 1024 * 1024;
 
-/// Default for [`Config::auto_clean_unused_units_days`].
-pub const DEFAULT_UNUSED_UNITS_DAYS: u64 = 30;
-
 /// The free-space floor below which builds evict cache entries, unless
 /// `cache.auto_recover_min_free_bytes` says otherwise.
 pub const DEFAULT_RECOVERY_FLOOR: u64 = 10 << 30;
@@ -111,9 +108,6 @@ pub struct Config {
     /// file only, not libraries it loads at run time.
     /// `KACHE_TRUST_CODEGEN_BACKENDS` or `[cache] trust_codegen_backends`.
     pub trust_codegen_backends: bool,
-    /// Capture Cargo liveness receipts for exact-scope unit cleanup. Off by default.
-    /// `KACHE_TARGET_LIVENESS` or `[cache] target_liveness`.
-    pub target_liveness: bool,
     pub clean_incremental: bool,
     /// Keep rustc incremental compilation for Cargo mutation workloads by
     /// bypassing artifact caching and isolating their incremental state.
@@ -363,51 +357,16 @@ pub struct Config {
     /// false` to disable. `kache doctor --repair` does both on demand either
     /// way.
     pub index_auto_compact: bool,
-    /// Let the daemon remove tracked target directories whose workspace has
-    /// been deleted, on a quiet machine at most once an hour. On by default.
-    /// Set via `KACHE_AUTO_CLEAN_ORPHANED_TARGETS=0`/`=false` or `[cache]
-    /// auto_clean_orphaned_targets = false` to disable.
-    pub auto_clean_orphaned_targets: bool,
-    /// Let the daemon replace, on a quiet machine, target files that are full
-    /// copies of blobs the store already holds with clones of those blobs.
-    /// On by default. Set via `KACHE_AUTO_SHARE_TARGET_FILES=0`/`=false` or
-    /// `[cache] auto_share_target_files = false` to disable. `kache targets
-    /// share --apply` works either way.
-    pub auto_share_target_files: bool,
-    /// Let the daemon also remove tracked target directories no build has
-    /// used for this many days (default `0`, disabled). Set via
-    /// `KACHE_AUTO_CLEAN_IDLE_TARGETS_DAYS` or `[cache]
-    /// auto_clean_idle_targets_days`.
-    pub auto_clean_idle_targets_days: u64,
     /// Minimum free bytes on the store's volume. Below it, builds have
-    /// auto-GC evict eligible store entries. With
-    /// [`Config::auto_recover_targets`] on, quiet target cleanup also removes
-    /// units unused for a day, then targets idle for a day, on a volume below
-    /// it. Default 10 GiB; `0` disables. Set via
+    /// auto-GC evict eligible store entries. Default 10 GiB; `0` disables. Set via
     /// `KACHE_AUTO_RECOVER_MIN_FREE_BYTES` or `[cache]
     /// auto_recover_min_free_bytes`.
     pub auto_recover_min_free_bytes: u64,
-    /// Let free-space recovery also remove idle target directories, not only
-    /// cache entries. Off by default: it deletes build output in worktrees,
-    /// some of which no build through Kache has used. Set via
-    /// `KACHE_AUTO_RECOVER_TARGETS=1`/`=true` or `[cache]
-    /// auto_recover_targets = true`; `kache init` offers it.
-    pub auto_recover_targets: bool,
     /// Under memory pressure, admit a compile only when no other compile
     /// holds a scheduler slot. On by default. Set via
     /// `KACHE_SCHEDULER_MEMORY_PRESSURE=0`/`=false` or `[cache]
     /// scheduler_memory_pressure = false` to disable.
     pub scheduler_memory_pressure: bool,
-    /// Let the daemon remove, from target directories still in use, build
-    /// units no build has read for this many days (default `30`; `0`
-    /// disables it). Set via `KACHE_AUTO_CLEAN_UNUSED_UNITS_DAYS` or
-    /// `[cache] auto_clean_unused_units_days`.
-    pub auto_clean_unused_units_days: u64,
-    /// Copy another checkout's registry build units into a target directory
-    /// Cargo has not built yet, before Cargo checks freshness. On by
-    /// default. Set via `KACHE_SEED_NEW_TARGETS=0`/`=false` or `[cache]
-    /// seed_new_targets = false` to disable.
-    pub seed_new_targets: bool,
     /// Run cached build scripts with `OUT_DIR` in a shared directory named by
     /// their inputs, so a run is shared across target directories (Unix).
     /// Off by default. Set via `KACHE_BUILD_SCRIPT_HERMETIC=1`/`=true` or
@@ -530,22 +489,10 @@ pub struct CacheFileConfig {
     pub auto_gc: Option<bool>,
     /// Daemon index compaction toggle. See [`Config::index_auto_compact`].
     pub index_auto_compact: Option<bool>,
-    /// See [`Config::auto_clean_orphaned_targets`].
-    pub auto_clean_orphaned_targets: Option<bool>,
-    /// See [`Config::auto_share_target_files`].
-    pub auto_share_target_files: Option<bool>,
-    /// See [`Config::auto_clean_idle_targets_days`].
-    pub auto_clean_idle_targets_days: Option<u64>,
     /// See [`Config::auto_recover_min_free_bytes`].
     pub auto_recover_min_free_bytes: Option<u64>,
-    /// See [`Config::auto_recover_targets`].
-    pub auto_recover_targets: Option<bool>,
     /// See [`Config::scheduler_memory_pressure`].
     pub scheduler_memory_pressure: Option<bool>,
-    /// See [`Config::auto_clean_unused_units_days`].
-    pub auto_clean_unused_units_days: Option<u64>,
-    /// See [`Config::seed_new_targets`].
-    pub seed_new_targets: Option<bool>,
     /// See [`Config::build_script_hermetic`].
     pub build_script_hermetic: Option<bool>,
     /// Namespace-first GC compatibility mode. See [`Config::gc_evict_shared`].
@@ -562,7 +509,6 @@ pub struct CacheFileConfig {
     pub cache_executables: Option<bool>,
     pub cache_cc_links: Option<bool>,
     pub trust_codegen_backends: Option<bool>,
-    pub target_liveness: Option<bool>,
     pub clean_incremental: Option<bool>,
     pub preserve_incremental: Option<bool>,
     pub adaptive_incremental: Option<bool>,
@@ -807,7 +753,6 @@ const IGNORE_ENV_GATED_VARS: &[&str] = &[
     "KACHE_CACHE_EXECUTABLES",
     "KACHE_CACHE_CC_LINKS",
     "KACHE_TRUST_CODEGEN_BACKENDS",
-    "KACHE_TARGET_LIVENESS",
     "KACHE_CLEAN_INCREMENTAL",
     "KACHE_PRESERVE_INCREMENTAL",
     "KACHE_ADAPTIVE_INCREMENTAL",
@@ -837,14 +782,8 @@ const IGNORE_ENV_GATED_VARS: &[&str] = &[
     "KACHE_DEFERRED_DURABILITY",
     "KACHE_AUTO_GC",
     "KACHE_INDEX_AUTO_COMPACT",
-    "KACHE_AUTO_CLEAN_ORPHANED_TARGETS",
-    "KACHE_AUTO_SHARE_TARGET_FILES",
-    "KACHE_AUTO_CLEAN_IDLE_TARGETS_DAYS",
     "KACHE_AUTO_RECOVER_MIN_FREE_BYTES",
-    "KACHE_AUTO_RECOVER_TARGETS",
     "KACHE_SCHEDULER_MEMORY_PRESSURE",
-    "KACHE_AUTO_CLEAN_UNUSED_UNITS_DAYS",
-    "KACHE_SEED_NEW_TARGETS",
     "KACHE_BUILD_SCRIPT_HERMETIC",
     "KACHE_STORAGE_LAYOUT_ADVICE",
     "KACHE_HEARTBEAT_SECS",
@@ -868,7 +807,6 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
         "KACHE_TRUST_CODEGEN_BACKENDS",
         "cache.trust_codegen_backends",
     ),
-    ("KACHE_TARGET_LIVENESS", "cache.target_liveness"),
     ("KACHE_CLEAN_INCREMENTAL", "cache.clean_incremental"),
     ("KACHE_PRESERVE_INCREMENTAL", "cache.preserve_incremental"),
     ("KACHE_ADAPTIVE_INCREMENTAL", "cache.adaptive_incremental"),
@@ -912,31 +850,13 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
     ("KACHE_AUTO_GC", "cache.auto_gc"),
     ("KACHE_INDEX_AUTO_COMPACT", "cache.index_auto_compact"),
     (
-        "KACHE_AUTO_CLEAN_ORPHANED_TARGETS",
-        "cache.auto_clean_orphaned_targets",
-    ),
-    (
-        "KACHE_AUTO_SHARE_TARGET_FILES",
-        "cache.auto_share_target_files",
-    ),
-    (
-        "KACHE_AUTO_CLEAN_IDLE_TARGETS_DAYS",
-        "cache.auto_clean_idle_targets_days",
-    ),
-    (
         "KACHE_AUTO_RECOVER_MIN_FREE_BYTES",
         "cache.auto_recover_min_free_bytes",
     ),
-    ("KACHE_AUTO_RECOVER_TARGETS", "cache.auto_recover_targets"),
     (
         "KACHE_SCHEDULER_MEMORY_PRESSURE",
         "cache.scheduler_memory_pressure",
     ),
-    (
-        "KACHE_AUTO_CLEAN_UNUSED_UNITS_DAYS",
-        "cache.auto_clean_unused_units_days",
-    ),
-    ("KACHE_SEED_NEW_TARGETS", "cache.seed_new_targets"),
     ("KACHE_BUILD_SCRIPT_HERMETIC", "cache.build_script_hermetic"),
     ("KACHE_STORAGE_LAYOUT_ADVICE", "cache.storage_layout_advice"),
     ("KACHE_HEARTBEAT_SECS", "cache.heartbeat_secs"),
@@ -1152,17 +1072,6 @@ impl Config {
                         .and_then(|c| c.trust_codegen_backends)
                         .unwrap_or(false)
                 });
-
-        let target_liveness = env_or_ignored_for(invocation, "KACHE_TARGET_LIVENESS", ignore_env)
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or_else(|_| {
-                file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|c| c.cache.as_ref())
-                    .and_then(|c| c.target_liveness)
-                    .unwrap_or(false)
-            });
 
         let clean_incremental =
             env_or_ignored_for(invocation, "KACHE_CLEAN_INCREMENTAL", ignore_env)
@@ -1436,20 +1345,10 @@ impl Config {
         let project_rules = ProjectRules::from_file_config(&file_config);
         let auto_gc = Self::auto_gc_enabled_for(invocation, &file_config);
         let index_auto_compact = Self::index_auto_compact_enabled_for(invocation, &file_config);
-        let auto_clean_orphaned_targets =
-            Self::auto_clean_orphaned_targets_enabled_for(invocation, &file_config);
-        let auto_share_target_files =
-            Self::auto_share_target_files_enabled_for(invocation, &file_config);
-        let auto_clean_idle_targets_days =
-            Self::auto_clean_idle_targets_days_for(invocation, &file_config);
         let auto_recover_min_free_bytes =
             Self::auto_recover_min_free_bytes_for(invocation, &file_config);
-        let auto_recover_targets = Self::auto_recover_targets_enabled_for(invocation, &file_config);
         let scheduler_memory_pressure =
             Self::scheduler_memory_pressure_enabled_for(invocation, &file_config);
-        let auto_clean_unused_units_days =
-            Self::auto_clean_unused_units_days_for(invocation, &file_config);
-        let seed_new_targets = Self::seed_new_targets_enabled_for(invocation, &file_config);
         let build_script_hermetic =
             Self::build_script_hermetic_enabled_for(invocation, &file_config);
         let gc_evict_shared = Self::gc_evict_shared_enabled_for(invocation, &file_config);
@@ -1509,14 +1408,8 @@ impl Config {
             project_rules,
             auto_gc,
             index_auto_compact,
-            auto_clean_orphaned_targets,
-            auto_share_target_files,
-            auto_clean_idle_targets_days,
             auto_recover_min_free_bytes,
-            auto_recover_targets,
             scheduler_memory_pressure,
-            auto_clean_unused_units_days,
-            seed_new_targets,
             build_script_hermetic,
             gc_evict_shared,
             storage_layout_advice,
@@ -1528,7 +1421,6 @@ impl Config {
             cache_executables,
             cache_cc_links,
             trust_codegen_backends,
-            target_liveness,
             clean_incremental,
             preserve_incremental,
             adaptive_incremental,
@@ -1971,64 +1863,6 @@ impl Config {
             .unwrap_or(true)
     }
 
-    /// Orphaned-target cleanup, on by default.
-    /// `KACHE_AUTO_CLEAN_ORPHANED_TARGETS=0`/`=false` (env wins), else
-    /// `[cache] auto_clean_orphaned_targets`, else on.
-    fn auto_clean_orphaned_targets_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) =
-            env_or_ignored_for(invocation, "KACHE_AUTO_CLEAN_ORPHANED_TARGETS", ignore_env)
-        {
-            return v != "0" && !v.eq_ignore_ascii_case("false");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.auto_clean_orphaned_targets)
-            .unwrap_or(true)
-    }
-
-    /// Target-file sharing, on by default.
-    /// `KACHE_AUTO_SHARE_TARGET_FILES=0`/`=false` (env wins), else
-    /// `[cache] auto_share_target_files`, else on.
-    fn auto_share_target_files_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_AUTO_SHARE_TARGET_FILES", ignore_env) {
-            return v != "0" && !v.eq_ignore_ascii_case("false");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.auto_share_target_files)
-            .unwrap_or(true)
-    }
-
-    /// Target seeding, on by default. `KACHE_SEED_NEW_TARGETS=0`/`=false`
-    /// (env wins), else `[cache] seed_new_targets`, else on.
-    fn seed_new_targets_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_SEED_NEW_TARGETS", ignore_env) {
-            return v != "0" && !v.eq_ignore_ascii_case("false");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.seed_new_targets)
-            .unwrap_or(true)
-    }
-
     /// Hermetic build-script runs, off by default.
     /// `KACHE_BUILD_SCRIPT_HERMETIC=1`/`=true` turns them on and any other
     /// value off (env wins), else `[cache] build_script_hermetic`, else off.
@@ -2046,27 +1880,6 @@ impl Config {
             .and_then(|c| c.cache.as_ref())
             .and_then(|c| c.build_script_hermetic)
             .unwrap_or(false)
-    }
-
-    /// Unused-unit cleanup age in days, `30` by default.
-    /// `KACHE_AUTO_CLEAN_UNUSED_UNITS_DAYS` (env wins), else `[cache]
-    /// auto_clean_unused_units_days`.
-    fn auto_clean_unused_units_days_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> u64 {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        env_or_ignored_for(invocation, "KACHE_AUTO_CLEAN_UNUSED_UNITS_DAYS", ignore_env)
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .or_else(|| {
-                file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|c| c.cache.as_ref())
-                    .and_then(|c| c.auto_clean_unused_units_days)
-            })
-            .unwrap_or(DEFAULT_UNUSED_UNITS_DAYS)
     }
 
     /// Memory-pressure admission, on by default.
@@ -2087,27 +1900,6 @@ impl Config {
             .and_then(|c| c.cache.as_ref())
             .and_then(|c| c.scheduler_memory_pressure)
             .unwrap_or(true)
-    }
-
-    /// Idle-target cleanup age in days, `0` (off) by default.
-    /// `KACHE_AUTO_CLEAN_IDLE_TARGETS_DAYS` (env wins), else `[cache]
-    /// auto_clean_idle_targets_days`.
-    fn auto_clean_idle_targets_days_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> u64 {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        env_or_ignored_for(invocation, "KACHE_AUTO_CLEAN_IDLE_TARGETS_DAYS", ignore_env)
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .or_else(|| {
-                file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|c| c.cache.as_ref())
-                    .and_then(|c| c.auto_clean_idle_targets_days)
-            })
-            .unwrap_or(0)
     }
 
     /// Free-space threshold for store and target recovery, `0` (off) by
@@ -2133,25 +1925,6 @@ impl Config {
                     invocation.var(name).ok()
                 }))
             })
-    }
-
-    /// Target removal under the free-space floor, off by default.
-    /// `KACHE_AUTO_RECOVER_TARGETS=1`/`=true` (env wins), else `[cache]
-    /// auto_recover_targets`, else off.
-    fn auto_recover_targets_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_AUTO_RECOVER_TARGETS", ignore_env) {
-            return v == "1" || v.eq_ignore_ascii_case("true");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.auto_recover_targets)
-            .unwrap_or(false)
     }
 
     /// Preserve externally retained entries by default. The opt-in restores

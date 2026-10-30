@@ -35,15 +35,8 @@ pub(crate) enum Commands {
         crate_name: Option<String>,
     },
 
-    /// Free disk space: remove old target directories, or empty the cache
+    /// Remove cache entries
     Clean {
-        /// Look for target/ directories under this directory instead of using
-        /// the ones kache tracks
-        path: Option<PathBuf>,
-
-        /// Remove obsolete units in live targets using a recorded Cargo command
-        units: bool,
-
         /// Show what would be removed and what kache keeps, and remove nothing
         dry_run: bool,
 
@@ -51,17 +44,12 @@ pub(crate) enum Commands {
         /// --dry-run
         yes: bool,
 
-        /// Targets no build used for this long, and targets whose worktree
-        /// is gone (default 14d)
+        /// With --cache, remove entries older than this age.
         stale: Option<String>,
 
         /// Empty the cache instead. Asks first. The daemon already keeps it
         /// under its size limit
         cache: bool,
-
-        /// Only targets whose worktree or workspace was deleted, however
-        /// recently they were built
-        orphans: bool,
 
         /// With --cache: the same, kept for older scripts
         all: bool,
@@ -71,15 +59,6 @@ pub(crate) enum Commands {
 
         /// With --cache, remove entries from old or unrecorded cache-key schemas
         stale_schema: bool,
-
-        /// Accepted for older scripts: tracked targets are the default now
-        tracked: bool,
-    },
-
-    /// Show tracked target directories. Kept for scripts; `kache clean
-    /// --dry-run` shows the same targets
-    Targets {
-        command: Option<TargetCommands>,
     },
 
     /// Set up caching for Cargo and C/C++ builds

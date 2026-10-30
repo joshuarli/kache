@@ -7,7 +7,7 @@
 
 use crate::config_cli;
 use crate::machine;
-use crate::{BenchPhase, Commands, DaemonCommands, ListSort, TargetCommands, TelemetryCommands};
+use crate::{BenchPhase, Commands, DaemonCommands, ListSort, TelemetryCommands};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -29,12 +29,6 @@ impl Cli {
             Some(Commands::Gc { .. }) => names.push("gc"),
             Some(Commands::Purge { .. }) => names.push("purge"),
             Some(Commands::Clean { .. }) => names.push("clean"),
-            Some(Commands::Targets { command }) => {
-                names.push("targets");
-                if let Some(TargetCommands::Share { .. }) = command {
-                    names.push("share");
-                }
-            }
             Some(Commands::Init { .. }) => names.push("init"),
             Some(Commands::Doctor { .. }) => names.push("doctor"),
             Some(Commands::Daemon { command }) => {
@@ -103,7 +97,6 @@ fn dispatch(name: &str, parser: &mut lexopt::Parser, json: bool) -> ParseResult 
         "gc" => parse_gc(parser, json),
         "purge" => parse_purge(parser, json),
         "clean" => parse_clean(parser, json),
-        "targets" => parse_targets(parser, json),
         "init" => parse_init(parser, json),
         "doctor" => parse_doctor(parser, json),
         "daemon" => parse_daemon(parser, json),
@@ -310,17 +303,13 @@ fn parse_purge(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
 }
 
 fn parse_clean(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
-    let mut path = None;
-    let mut units = false;
     let mut dry_run = false;
     let mut yes = false;
     let mut stale = None;
     let mut cache = false;
-    let mut orphans = false;
     let mut all = false;
     let mut crate_name = None;
     let mut stale_schema = false;
-    let mut tracked = false;
     loop {
         let Some(arg) = parser.next().map_err(|error| lexopt_error(error, json))? else {
             break;
@@ -339,10 +328,6 @@ fn parse_clean(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
-            lexopt::Arg::Long("units") | lexopt::Arg::Long("artifacts") => {
-                no_value(&mut *parser, "units", json)?;
-                units = true;
-            }
             lexopt::Arg::Short('n') | lexopt::Arg::Long("dry-run") => {
                 no_value(&mut *parser, "dry-run", json)?;
                 dry_run = true;
@@ -356,10 +341,6 @@ fn parse_clean(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
                 no_value(&mut *parser, "cache", json)?;
                 cache = true;
             }
-            lexopt::Arg::Long("orphans") => {
-                no_value(&mut *parser, "orphans", json)?;
-                orphans = true;
-            }
             lexopt::Arg::Long("all") => {
                 no_value(&mut *parser, "all", json)?;
                 all = true;
@@ -371,15 +352,8 @@ fn parse_clean(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
                 no_value(&mut *parser, "stale-schema", json)?;
                 stale_schema = true;
             }
-            lexopt::Arg::Long("tracked") => {
-                no_value(&mut *parser, "tracked", json)?;
-                tracked = true;
-            }
             lexopt::Arg::Value(value) => {
-                if path.is_some() {
-                    return Err(fail(json, "unexpected argument: clean takes at most one directory"));
-                }
-                path = Some(PathBuf::from(value));
+                return Err(fail(json, format!("unexpected argument '{}'", value.to_string_lossy())));
             }
             lexopt::Arg::Short(flag) => {
                 return Err(fail(json, format!("unrecognized flag '-{flag}'")));
@@ -388,128 +362,40 @@ fn parse_clean(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
                 return Err(fail(json, format!("unrecognized option '--{flag}'")));
             },
         }
-    }
-    if path.is_some() && cache {
-        return Err(conflict(json, "'<DIR>'", "'--cache'"));
-    }
-    if path.is_some() && crate_name.is_some() {
-        return Err(conflict(json, "'<DIR>'", "'--crate'"));
-    }
-    if path.is_some() && stale.is_some() {
-        return Err(conflict(json, "'<DIR>'", "'--stale'"));
-    }
-    if path.is_some() && orphans {
-        return Err(conflict(json, "'<DIR>'", "'--orphans'"));
-    }
-    if units && cache {
-        return Err(conflict(json, "'--units'", "'--cache'"));
-    }
-    if units && crate_name.is_some() {
-        return Err(conflict(json, "'--units'", "'--crate'"));
-    }
-    if units && stale.is_some() {
-        return Err(conflict(json, "'--units'", "'--stale'"));
-    }
-    if units && orphans {
-        return Err(conflict(json, "'--units'", "'--orphans'"));
-    }
-    if units && stale_schema {
-        return Err(conflict(json, "'--units'", "'--stale-schema'"));
-    }
-    if orphans && stale.is_some() {
-        return Err(conflict(json, "'--orphans'", "'--stale'"));
-    }
-    if orphans && cache {
-        return Err(conflict(json, "'--orphans'", "'--cache'"));
-    }
-    if orphans && crate_name.is_some() {
-        return Err(conflict(json, "'--orphans'", "'--crate'"));
     }
     if all && !cache {
         return Err(requires(json, "'--all'", "'--cache'"));
     }
-    if all && stale.is_some() {
-        return Err(conflict(json, "'--all'", "'--stale'"));
-    }
     if all && stale_schema {
         return Err(conflict(json, "'--all'", "'--stale-schema'"));
+    }
+    if stale.is_some() && !cache {
+        return Err(requires(json, "'--stale'", "'--cache'"));
+    }
+    if stale.is_some() && all {
+        return Err(conflict(json, "'--stale'", "'--all'"));
+    }
+    if stale.is_some() && stale_schema {
+        return Err(conflict(json, "'--stale'", "'--stale-schema'"));
     }
     if crate_name.is_some() && cache {
         return Err(conflict(json, "'--crate'", "'--cache'"));
     }
-    if crate_name.is_some() && stale.is_some() {
-        return Err(conflict(json, "'--crate'", "'--stale'"));
-    }
     if stale_schema && !cache {
         return Err(requires(json, "'--stale-schema'", "'--cache'"));
-    }
-    if stale_schema && stale.is_some() {
-        return Err(conflict(json, "'--stale-schema'", "'--stale'"));
     }
     run(
         json,
         Commands::Clean {
-            path,
-            units,
             dry_run,
             yes,
             stale,
             cache,
-            orphans,
             all,
             crate_name,
             stale_schema,
-            tracked,
         },
     )
-}
-
-fn parse_targets(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
-    let mut shared = false;
-    let mut apply = false;
-    let mut paths = Vec::new();
-    loop {
-        let Some(arg) = parser.next().map_err(|error| lexopt_error(error, json))? else {
-            break;
-        };
-        match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
-                return Ok(ParseOutcome::Help {
-                    text: if shared { targets_share_help } else { targets_help }(),
-                    json,
-                });
-            }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
-                return Ok(ParseOutcome::Version { json });
-            }
-            lexopt::Arg::Long("json") => {
-                no_value(&mut *parser, "json", json)?;
-                json = true;
-            },
-            lexopt::Arg::Value(value) if !shared => {
-                if value.to_string_lossy() != "share" {
-                    return Err(fail(
-                        json,
-                        format!("unrecognized targets subcommand '{}'", value.to_string_lossy()),
-                    ));
-                }
-                shared = true;
-            }
-            lexopt::Arg::Value(value) => paths.push(PathBuf::from(value)),
-            lexopt::Arg::Long("apply") if shared => {
-                no_value(&mut *parser, "apply", json)?;
-                apply = true;
-            }
-            lexopt::Arg::Short(flag) => {
-                return Err(fail(json, format!("unrecognized flag '-{flag}'")));
-            }
-            lexopt::Arg::Long(flag) => {
-                return Err(fail(json, format!("unrecognized option '--{flag}'")));
-            },
-        }
-    }
-    let command = shared.then_some(TargetCommands::Share { apply, paths });
-    run(json, Commands::Targets { command })
 }
 
 fn parse_init(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
@@ -1208,7 +1094,7 @@ Commands:
   doctor       Diagnose setup issues and verify cache integrity
   config       Inspect or change configuration values
   stats        Show hit rate, time saved and cache size [alias: status]
-  clean        Free disk space: remove old target directories, or empty the cache
+  clean        Remove cache entries
   explain      Explain why a crate, or the latest build, missed the cache
   list         List cache entries, or one crate's entries in detail
   daemon       Show the background daemon's status, or start, stop or install it
@@ -1227,12 +1113,12 @@ Use `kache stats` for a summary.
 
 fn cargo_help() -> String {
     "\
-Run Cargo with canonical duplicate Cargo-home rustflags collapsed once
+Run Cargo with Kache as its Rust compiler wrapper
 
 Usage: kache cargo [ARGS]...
 
 Arguments:
-  [ARGS]...  Built-in build/check arguments passed verbatim to Cargo (use `--` first)
+  [ARGS]...  Arguments passed verbatim to Cargo (use `--` first)
 "
     .to_owned()
 }
@@ -1287,55 +1173,16 @@ Options:
 
 fn clean_help() -> String {
     "\
-Free disk space: remove old target directories, or empty the cache
+Remove cache entries
 
-Usage: kache clean [OPTIONS] [DIR]
-
-Arguments:
-  [DIR]  Look for target/ directories under this directory instead of using the ones kache tracks
+Usage: kache clean [OPTIONS]
 
 Options:
-  --units              Remove obsolete units in live targets using a recorded Cargo command [alias: --artifacts]
   -n, --dry-run        Show what would be removed and what kache keeps, and remove nothing
   -y, --yes            Remove without asking. For scripts and cron; preview first with --dry-run
-  --stale <DURATION>   Targets no build used for this long, and targets whose worktree is gone (default 14d)
   --cache              Empty the cache instead. Asks first. The daemon already keeps it under its size limit
-  --orphans            Only targets whose worktree or workspace was deleted, however recently they were built
   --json               Machine-readable JSON on stdout
   -h, --help           Print help
-"
-    .to_owned()
-}
-
-fn targets_help() -> String {
-    "\
-Show tracked target directories. Kept for scripts; `kache clean
---dry-run` shows the same targets
-
-Usage: kache targets [COMMAND]
-
-Commands:
-  share  Share target files with blobs the store already holds
-
-Options:
-  --json      Machine-readable JSON on stdout
-  -h, --help  Print help
-"
-    .to_owned()
-}
-
-fn targets_share_help() -> String {
-    "\
-Share target files with blobs the store already holds
-
-Usage: kache targets share [OPTIONS] [TARGET]...
-
-Arguments:
-  [TARGET]...  Target directories to read. Defaults to tracked directories
-
-Options:
-  --apply     Clone each match from the stored blob. Without this, only report
-  -h, --help  Print help
 "
     .to_owned()
 }
@@ -1586,7 +1433,6 @@ fn command_help(name: &str, json: bool) -> Result<String, ParseFail> {
         "gc" => Ok(gc_help()),
         "purge" => Ok(purge_help()),
         "clean" => Ok(clean_help()),
-        "targets" => Ok(targets_help()),
         "init" => Ok(init_help()),
         "doctor" => Ok(doctor_help()),
         "daemon" => Ok(daemon_help()),
@@ -1602,7 +1448,6 @@ fn command_help(name: &str, json: bool) -> Result<String, ParseFail> {
 
 fn subcommand_help(command: &str, subcommand: &str, json: bool) -> Result<String, ParseFail> {
     match (command, subcommand) {
-        ("targets", "share") => Ok(targets_share_help()),
         ("daemon", sub) => Ok(format!(
             "\
 {about}
@@ -1822,16 +1667,12 @@ pub(crate) fn help_tree() -> HelpCommand {
             },
             HelpCommand {
                 name: "clean",
-                description: Some("Free disk space: remove old target directories, or empty the cache"),
-                usage: "Usage: kache clean [OPTIONS] [DIR]",
+                description: Some("Remove cache entries"),
+                usage: "Usage: kache clean [OPTIONS]",
                 arguments: vec![
-                    arg("path", None, None, false, "Look for target/ directories under this directory", &[]),
-                    flag("units", "units", "Remove obsolete units in live targets"),
                     flag_short("dry-run", "dry-run", 'n', "Show what would be removed and remove nothing"),
                     flag_short("yes", "yes", 'y', "Remove without asking"),
-                    arg("stale", Some("stale"), None, false, "Targets no build used for this long", &[]),
                     flag("cache", "cache", "Empty the cache instead"),
-                    flag("orphans", "orphans", "Only targets whose worktree or workspace was deleted"),
                     json_arg(),
                 ],
                 subcommands: vec![],

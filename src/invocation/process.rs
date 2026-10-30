@@ -71,6 +71,7 @@ impl CancellationScope {
     }
     /// Route a request into a joined helper thread without ending it when
     /// that helper finishes. The calling invocation retains completion ownership.
+    #[cfg(test)]
     pub(crate) fn borrow(cancellation: Option<Cancellation>) -> Self {
         let mut scope = Self::enter(cancellation);
         scope.cancel_on_drop = false;

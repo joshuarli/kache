@@ -45,14 +45,11 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
         project_rules: crate::config::ProjectRules::default(),
         auto_gc: true,
         index_auto_compact: true,
-        auto_clean_orphaned_targets: false,
-        auto_share_target_files: false,
-        auto_clean_idle_targets_days: 0,
+
         auto_recover_min_free_bytes: 0,
-        auto_recover_targets: false,
+
         scheduler_memory_pressure: true,
-        auto_clean_unused_units_days: 0,
-        seed_new_targets: false,
+
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
@@ -72,7 +69,7 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
         cache_executables: false,
         cache_cc_links: false,
         trust_codegen_backends: false,
-        target_liveness: false,
+
         clean_incremental: true,
         preserve_incremental: false,
         adaptive_incremental: true,

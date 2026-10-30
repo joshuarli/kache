@@ -44,7 +44,6 @@ mod path_normalizer;
 mod pe_pdb;
 mod phase_trace;
 mod platform;
-mod policy;
 mod prestage;
 mod probe;
 mod probe_memo;
@@ -54,21 +53,9 @@ mod savings;
 mod scheduler;
 mod service;
 mod since;
-// Both callers (`clean`'s classifier and `compute_link_stats`) are `cfg(unix)`,
-// because `nlink` is the signal they combine with. Windows ReFS block-cloning
-// has no read-side query to implement this against — `FSCTL_DUPLICATE_EXTENTS`
-// is write-only — so the module compiles to its unknown-answer stub there and
-// would otherwise read as dead code in non-test builds.
-#[cfg_attr(not(unix), allow(dead_code))]
-use kache_store::sharing;
 mod compiler_store;
 use compiler_store as store;
 mod store_view;
-mod target_cleanup;
-mod target_dedup;
-mod target_liveness;
-mod target_seed;
-mod target_use;
 mod term;
 mod test_runner;
 #[cfg(test)]
@@ -78,10 +65,8 @@ use kache_ipc as transport;
 mod tree_stamp;
 mod sessions;
 mod cli_args;
-mod unit_prune;
 mod verify_compare;
 mod volume_gc;
-mod worktree_discovery;
 mod wrapper;
 mod wrapper_config;
 
@@ -146,17 +131,6 @@ impl BenchPhase {
     }
 }
 
-pub(crate) enum TargetCommands {
-    /// Share target files with blobs the store already holds
-    Share {
-        /// Clone each match from the stored blob. Without this, only report.
-        apply: bool,
-
-        /// Target directories to read. Defaults to tracked directories.
-        paths: Vec<PathBuf>,
-    },
-}
-
 pub(crate) enum DaemonCommands {
     /// Show daemon status (also bare `kache daemon`)
     Status,
@@ -200,7 +174,6 @@ fn command_supports_json(command: &Option<Commands>) -> bool {
         Commands::List { .. }
         | Commands::Gc { .. }
         | Commands::Clean { .. }
-        | Commands::Targets { .. }
         | Commands::Doctor { .. }
         | Commands::Stats { .. }
         | Commands::Explain { .. }
@@ -699,41 +672,25 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
         }
         Some(Commands::Purge { crate_name }) => cli::purge(&config, crate_name.as_deref()),
         Some(Commands::Clean {
-            path,
             dry_run,
             yes,
             stale,
-            orphans,
             cache,
             all,
             crate_name,
             stale_schema,
-            units,
-            tracked: _,
         }) => {
-            if units {
-                return cli::clean_units(&config, path, dry_run, yes, json);
-            }
-            let stale_hours = stale
-                .as_deref()
-                .map(|value| parse_age_hours("--stale", value))
-                .transpose()?;
             if let Some(name) = crate_name {
                 return cli::clean_cache(&config, cli::CacheClean::Crate(name), dry_run, yes, json);
             }
-            if cache {
-                // `--all` is what `--cache` does now; it stays for scripts.
-                let _ = all;
-                let what = cache_clean_choice(stale_schema, stale_hours);
-                return cli::clean_cache(&config, what, dry_run, yes, json);
-            }
-            let scope = clean_scope(path, orphans, stale_hours);
-            cli::clean(&config, dry_run, yes, json, scope)
+            let _ = (cache, all);
+            let hours = stale
+                .as_deref()
+                .map(|value| parse_age_hours("--stale", value))
+                .transpose()?;
+            let what = cache_clean_choice(stale_schema, hours);
+            cli::clean_cache(&config, what, dry_run, yes, json)
         }
-        Some(Commands::Targets { command: None }) => cli::targets(&config, json),
-        Some(Commands::Targets {
-            command: Some(TargetCommands::Share { apply, paths }),
-        }) => target_dedup::run(&config, &paths, apply, json),
         #[cfg(unix)]
         Some(Commands::Init {
             shims: Some(dir),
@@ -1471,9 +1428,6 @@ fn run_compiler_invocation_inner(
     };
     let exit_code = match wrapper_target(adapter) {
         Some(WrapperTarget::Rustc) => {
-            // Cargo's first call for a target directory it has not built:
-            // let the daemon copy registry units in before Cargo looks.
-            target_seed::before_probe_for(&config, args, &env);
             // Started here so the trace also covers the OUT_DIR alias check.
             let trace = phase_trace::start_for("rustc", args, &env);
             let exit = match out_dir_alias::apply_for(&config, args, &mut env) {
@@ -1499,17 +1453,6 @@ fn cache_clean_choice(stale_schema: bool, stale_hours: Option<u64>) -> cli::Cach
         _ if stale_schema => cli::CacheClean::StaleSchema,
         Some(hours) => cli::CacheClean::OlderThan(hours),
         None => cli::CacheClean::All,
-    }
-}
-
-/// Which target directories `kache clean` looks at.
-fn clean_scope(path: Option<PathBuf>, orphans: bool, stale_hours: Option<u64>) -> cli::CleanScope {
-    match path {
-        Some(dir) => cli::CleanScope::Scan(dir),
-        None if orphans => cli::CleanScope::Tracked(cli::TrackedSelection::Orphaned),
-        None => cli::CleanScope::Tracked(cli::TrackedSelection::StaleOrOrphaned(
-            stale_hours.unwrap_or(cli::DEFAULT_TRACKED_STALE_HOURS),
-        )),
     }
 }
 
@@ -2499,104 +2442,42 @@ mod tests {
     }
 
     #[test]
-    fn targets_share_is_a_subcommand() {
-        let list = parse(&["kache", "targets"]);
-        assert!(matches!(
-            list.command,
-            Some(Commands::Targets { command: None })
-        ));
-        let share =
-            parse(&["kache", "targets", "share", "--apply", "target"]);
-        assert!(matches!(
-            share.command,
-            Some(Commands::Targets {
-                command: Some(TargetCommands::Share { apply: true, ref paths })
-            }) if paths == &vec![PathBuf::from("target")]
-        ));
-        assert!(parsed(&["kache", "targets-dedup"]).is_err());
-    }
-
-    #[test]
     fn clean_flags_keep_targets_and_cache_apart() {
         assert!(parsed(&["kache", "clean", "--cache"]).is_ok());
         assert!(
             parsed(&["kache", "clean", "--cache", "--all"]).is_ok(),
             "older scripts still parse"
         );
-        assert!(parsed(&["kache", "clean", "--cache", "--stale", "7d"]).is_ok());
         assert!(parsed(&["kache", "clean", "--crate", "serde", "--yes"]).is_ok());
-        assert!(parsed(&["kache", "clean", "some/dir", "--dry-run"]).is_ok());
-        assert!(parsed(&["kache", "clean", "--tracked"]).is_ok(), "older scripts still parse");
+        assert!(parsed(&["kache", "clean", "--cache", "--stale", "7d"]).is_ok());
+        assert!(parsed(&["kache", "clean", "some/dir", "--dry-run"]).is_err());
         assert!(parsed(&["kache", "clean", "--all"]).is_err(), "--all needs --cache");
         assert!(
             parsed(&["kache", "clean", "--stale-schema"]).is_err(),
             "--stale-schema needs --cache"
         );
         assert!(parsed(&["kache", "clean", "some/dir", "--cache"]).is_err());
-        for selection in [&["--stale", "30d"][..], &["--orphans"]] {
-            let mut argv = vec!["kache", "clean", "some/dir", "--dry-run"];
-            argv.extend(selection);
-            let error = parse_err(&argv);
-            assert!(is_invalid_arguments(&error), "{error:#}");
-            assert!(error.to_string().contains("cannot be used with"), "{error:#}");
+        for removed in ["--units", "--artifacts", "--stale", "--orphans", "--tracked"] {
+            assert!(
+                parsed(&["kache", "clean", "some/dir", removed]).is_err(),
+                "{removed} is gone"
+            );
         }
-        assert!(parsed(&["kache", "clean", "--orphans", "--stale", "7d"]).is_err());
         assert!(parsed(&["kache", "clean", "--crate", "serde", "--cache"]).is_err());
-        assert!(parsed(&["kache", "clean", "--cache", "--all", "--stale", "7d"]).is_err());
-        for hidden in ["gc", "purge", "targets", "report"] {
+        for hidden in ["gc", "purge", "report"] {
             assert!(parsed(&["kache", hidden]).is_ok(), "{hidden}");
         }
     }
 
     #[test]
-    fn clean_units_accepts_preview_and_apply_but_rejects_other_scopes() {
-        for spelling in ["--units", "--artifacts"] {
-            let invocation = parse(&["kache", "clean", spelling, "target", "--dry-run", "--json"]);
-            assert!(
-                matches!(invocation.command, Some(Commands::Clean { units: true, dry_run: true, ref path, .. }) if path == &Some(PathBuf::from("target")))
-            );
-            assert!(parsed(&["kache", "clean", spelling, "--yes"]).is_ok());
-            for arguments in [
-                vec!["--cache"],
-                vec!["--crate", "serde"],
-                vec!["--stale", "1d"],
-                vec!["--orphans"],
-                vec!["--cache", "--stale-schema"],
-            ] {
-                let mut argv = vec!["kache", "clean", spelling];
-                argv.extend(arguments);
-                assert!(parsed(&argv).is_err());
-            }
-        }
-    }
-
-    #[test]
     fn clean_flags_pick_what_to_remove() {
-        use cli::{CacheClean, CleanScope, TrackedSelection};
+        use cli::CacheClean;
         assert_eq!(cache_clean_choice(false, None), CacheClean::All);
         assert_eq!(
             cache_clean_choice(false, Some(24)),
             CacheClean::OlderThan(24)
         );
         assert_eq!(cache_clean_choice(true, None), CacheClean::StaleSchema);
-        assert_eq!(
-            clean_scope(None, false, None),
-            CleanScope::Tracked(TrackedSelection::StaleOrOrphaned(
-                cli::DEFAULT_TRACKED_STALE_HOURS
-            ))
-        );
-        assert_eq!(
-            clean_scope(None, false, Some(48)),
-            CleanScope::Tracked(TrackedSelection::StaleOrOrphaned(48))
-        );
-        assert_eq!(
-            clean_scope(None, true, None),
-            CleanScope::Tracked(TrackedSelection::Orphaned)
-        );
-        assert_eq!(
-            clean_scope(Some(PathBuf::from("d")), true, None),
-            CleanScope::Scan(PathBuf::from("d"))
-        );
     }
 
     #[test]
@@ -2755,15 +2636,6 @@ mod tests {
     #[test]
     fn json_support_is_limited_to_machine_readable_commands() {
         assert!(command_supports_json(&Some(Commands::Diff { root: None })));
-        assert!(command_supports_json(&Some(Commands::Targets {
-            command: None
-        })));
-        assert!(command_supports_json(&Some(Commands::Targets {
-            command: Some(TargetCommands::Share {
-                apply: false,
-                paths: Vec::new(),
-            }),
-        })));
         assert!(command_supports_json(&Some(Commands::Stats {
             since: "24h".to_string(),
             last_build: false,
