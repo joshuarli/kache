@@ -75,9 +75,32 @@ pub(super) fn permits_delegation_with_trust(
             return Ok(false);
         }
     }
-    let host_label = std::fs::read(host.join("attr/current"))?;
-    let peer_label = std::fs::read(peer.join("attr/current"))?;
-    Ok(host_label == peer_label)
+    let host_label = std::fs::read(host.join("attr/current"));
+    let peer_label = std::fs::read(peer.join("attr/current"));
+    match (host_label, peer_label) {
+        (Ok(host_label), Ok(peer_label)) => Ok(host_label == peer_label),
+        // No label infrastructure on either side (the file is missing or
+        // the kernel provides no LSM to answer) means neither side carries
+        // a MAC domain, so there is nothing to escape. One labeled side
+        // against an unlabeled one stays fatal below, as does any other
+        // read error: an uninspectable peer keeps the local path.
+        (Err(host_error), Err(peer_error))
+            if is_missing_label(&host_error) && is_missing_label(&peer_error) =>
+        {
+            Ok(true)
+        }
+        (Err(error), _) | (_, Err(error)) => Err(error),
+    }
+}
+
+/// Whether the label read failed for lack of label infrastructure rather
+/// than a real inspection failure: the file is absent, or the kernel has
+/// no LSM to answer and rejects the read.
+fn is_missing_label(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(code) if code == libc::ENOENT || code == libc::EINVAL
+    )
 }
 
 #[cfg(test)]
@@ -159,6 +182,21 @@ mod tests {
                 true
             ));
         }
+    }
+
+    #[test]
+    fn hosts_and_peers_without_label_infrastructure_still_match() {
+        let root = fixture();
+        for side in ["self", "42"] {
+            std::fs::remove_file(root.path().join(side).join("attr/current")).unwrap();
+        }
+        // Neither side carries a MAC domain, so there is nothing to escape.
+        assert!(permits_delegation_with_trust(root.path(), 42, true).unwrap());
+        assert!(permits_delegation(root.path(), 42).unwrap());
+        // Distinct labels still mismatch once the infrastructure answers.
+        std::fs::write(root.path().join("self/attr/current"), b"one\n").unwrap();
+        std::fs::write(root.path().join("42/attr/current"), b"two\n").unwrap();
+        assert!(!permits_delegation_with_trust(root.path(), 42, true).unwrap());
     }
 
     fn fixture() -> tempfile::TempDir {
