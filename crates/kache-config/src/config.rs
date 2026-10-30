@@ -66,6 +66,9 @@ fn absolutize_volume_path(path: &Path) -> PathBuf {
 /// 20,000 of the usual 1.4 KB (kunobi-ninja/kache#1209).
 pub const DEFAULT_EVENT_LOG_MAX_SIZE: u64 = 64 * 1024 * 1024;
 
+/// Default `[cache] event_log_keep_lines`.
+pub const DEFAULT_EVENT_LOG_KEEP_LINES: usize = 1000;
+
 /// The free-space floor below which builds evict cache entries, unless
 /// `cache.auto_recover_min_free_bytes` says otherwise.
 pub const DEFAULT_RECOVERY_FLOOR: u64 = 10 << 30;
@@ -97,10 +100,6 @@ pub struct Config {
     pub max_size: u64,
     pub disabled: bool,
     pub cache_executables: bool,
-    pub event_log_max_size: u64,
-    pub event_log_keep_lines: usize,
-    /// Zstd compression level (1-19, default 3). Lower = faster, higher = smaller.
-    pub compression_level: i32,
     /// An opaque string folded into every cache key. Lets a project
     /// force a cold cache on a change kache cannot otherwise observe —
     /// e.g. a cross-target libc/sysroot change, a toolchain-closure bump
@@ -171,25 +170,17 @@ pub struct Config {
     /// Disabled unless `KACHE_TRUST_DAEMON_EXECUTION=1` or
     /// `[cache] trust_daemon_execution = true` is set on both peers.
     pub trust_daemon_execution: bool,
-    /// Concurrent daemon pipeline requests. None selects a CPU-based default.
-    /// Zero in the file or environment selects automatic sizing too.
-    /// The daemon can lower this to fit its open-file limit.
-    pub daemon_execution_concurrency: Option<usize>,
     /// The project's `[cache] exclude` and `bypass_*` rule lists, read once
     /// with the rest of the file. Every wrapper invocation consults them
     /// before any key work; re-reading the file for each list cost a C
     /// compile four config parses.
     pub project_rules: ProjectRules,
     /// Minimum free bytes on the store's volume. Below it, builds have
-    /// auto-GC evict eligible store entries. Default 10 GiB; `0` disables. Set via
-    /// `KACHE_AUTO_RECOVER_MIN_FREE_BYTES` or `[cache]
-    /// auto_recover_min_free_bytes`.
+    /// auto-GC evict eligible store entries: [`DEFAULT_RECOVERY_FLOOR`],
+    /// or none in CI.
     pub auto_recover_min_free_bytes: u64,
-    /// Under memory pressure, admit a compile only when no other compile
-    /// holds a scheduler slot. On by default. Set via
-    /// `KACHE_SCHEDULER_MEMORY_PRESSURE=0`/`=false` or `[cache]
-    /// scheduler_memory_pressure = false` to disable.
-    pub scheduler_memory_pressure: bool,
+    // Under memory pressure, admit a compile only when no other compile
+    // holds a scheduler slot.
     // Storage-layout advisories (kunobi-ninja/kache#551) are always on: a
     // cache hit restored by COPY because the storage *layout* prevents
     // zero-copy dedup is surfaced as a deduplicated advisory with fix
@@ -235,12 +226,6 @@ pub struct CacheFileConfig {
     /// volume roots (`"D:"`, `"/mnt/biglake"`), values shard store dirs.
     pub volumes: Option<HashMap<String, String>>,
     pub trust_daemon_execution: Option<bool>,
-    /// See [`Config::daemon_execution_concurrency`].
-    pub daemon_execution_concurrency: Option<usize>,
-    /// See [`Config::auto_recover_min_free_bytes`].
-    pub auto_recover_min_free_bytes: Option<u64>,
-    /// See [`Config::scheduler_memory_pressure`].
-    pub scheduler_memory_pressure: Option<bool>,
     /// Ignore `KACHE_*` env overrides for file-backed settings. File-only by
     /// design (env must not re-enable env). See [`Config::ignore_env_enabled`].
     pub ignore_env: Option<bool>,
@@ -253,9 +238,6 @@ pub struct CacheFileConfig {
     pub bypass_env: Option<Vec<String>>,
     pub bypass_argv: Option<Vec<String>>,
     pub bypass_crates: Option<Vec<String>>,
-    pub event_log_max_size: Option<String>,
-    pub event_log_keep_lines: Option<usize>,
-    pub compression_level: Option<i32>,
     /// Opaque cache-key salt. See [`Config::key_salt`].
     pub key_salt: Option<String>,
     /// Path-only env-var allowlist. See [`Config::path_only_env_vars`].
@@ -431,16 +413,12 @@ const IGNORE_ENV_GATED_VARS: &[&str] = &[
     "KACHE_MAX_SIZE",
     "KACHE_CACHE_EXECUTABLES",
 
-    "KACHE_COMPRESSION_LEVEL",
     "KACHE_KEY_SALT",
     "KACHE_CC_EXTRA_ALLOWLIST_FLAGS",
     "KACHE_PATH_ONLY_ENV_VARS",
 
     "KACHE_KEY_ENV_VARS",
     "KACHE_TRUST_DAEMON_EXECUTION",
-    "KACHE_DAEMON_EXECUTION_CONCURRENCY",
-    "KACHE_AUTO_RECOVER_MIN_FREE_BYTES",
-    "KACHE_SCHEDULER_MEMORY_PRESSURE",
     "KACHE_HEARTBEAT_SECS",
 ];
 
@@ -454,7 +432,6 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
     ("KACHE_MAX_SIZE", "cache.local_max_size"),
     ("KACHE_CACHE_EXECUTABLES", "cache.cache_executables"),
 
-    ("KACHE_COMPRESSION_LEVEL", "cache.compression_level"),
     ("KACHE_KEY_SALT", "cache.key_salt"),
     ("KACHE_CC_EXTRA_ALLOWLIST_FLAGS", "cc.extra_allowlist_flags"),
     ("KACHE_PATH_ONLY_ENV_VARS", "cache.path_only_env_vars"),
@@ -463,18 +440,6 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
     (
         "KACHE_TRUST_DAEMON_EXECUTION",
         "cache.trust_daemon_execution",
-    ),
-    (
-        "KACHE_DAEMON_EXECUTION_CONCURRENCY",
-        "cache.daemon_execution_concurrency",
-    ),
-    (
-        "KACHE_AUTO_RECOVER_MIN_FREE_BYTES",
-        "cache.auto_recover_min_free_bytes",
-    ),
-    (
-        "KACHE_SCHEDULER_MEMORY_PRESSURE",
-        "cache.scheduler_memory_pressure",
     ),
 ];
 
@@ -638,35 +603,6 @@ impl Config {
                         .unwrap_or(default_cache_executables())
                 });
 
-        let event_log_max_size = file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.event_log_max_size.as_ref())
-            .and_then(|s| parse_size_checked(s, "[cache] event_log_max_size"))
-            .unwrap_or(DEFAULT_EVENT_LOG_MAX_SIZE);
-
-        let event_log_keep_lines = file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.event_log_keep_lines)
-            .unwrap_or(1000);
-
-        let compression_level =
-            env_or_ignored_for(invocation, "KACHE_COMPRESSION_LEVEL", ignore_env)
-                .ok()
-                .and_then(|s| s.parse::<i32>().ok())
-                .or_else(|| {
-                    file_config
-                        .as_ref()
-                        .ok()
-                        .and_then(|c| c.cache.as_ref())
-                        .and_then(|c| c.compression_level)
-                })
-                .unwrap_or(3)
-                .clamp(1, 22);
-
         // Cache-key salt. Env wins over the file; an empty / whitespace
         // value is treated as unset so it never silently shifts the key.
         let key_salt = env_or_ignored_for(invocation, "KACHE_KEY_SALT", ignore_env)
@@ -758,13 +694,7 @@ impl Config {
         }
 
         let trust_daemon_execution = Self::trust_daemon_execution_for(invocation, &file_config);
-        let daemon_execution_concurrency =
-            Self::daemon_execution_concurrency_for(invocation, &file_config)?;
         let project_rules = ProjectRules::from_file_config(&file_config);
-        let auto_recover_min_free_bytes =
-            Self::auto_recover_min_free_bytes_for(invocation, &file_config);
-        let scheduler_memory_pressure =
-            Self::scheduler_memory_pressure_enabled_for(invocation, &file_config);
         let mut volume_stores = Self::load_volume_stores(&file_config, explicit_max_size);
         for shard in &mut volume_stores {
             shard.store = resolve_invocation_path(invocation, &shard.store)?;
@@ -776,15 +706,12 @@ impl Config {
             max_size,
             disabled,
             trust_daemon_execution,
-            daemon_execution_concurrency,
             project_rules,
-            auto_recover_min_free_bytes,
-            scheduler_memory_pressure,
+            auto_recover_min_free_bytes: default_recovery_floor(
+                crate::policy::running_in_ci_with(|name| invocation.var(name).ok()),
+            ),
             volume_stores,
             cache_executables,
-            event_log_max_size,
-            event_log_keep_lines,
-            compression_level,
             key_salt,
             path_only_env_vars,
             key_env_vars,
@@ -941,34 +868,6 @@ impl Config {
             .unwrap_or(false)
     }
 
-    fn daemon_execution_concurrency_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> Result<Option<usize>> {
-        let configured =
-            match env_or_ignored_for(
-                invocation,
-                "KACHE_DAEMON_EXECUTION_CONCURRENCY",
-                Self::ignore_env_enabled(file_config),
-            ) {
-                Ok(value) => Some(value.parse::<usize>().context(
-                    "KACHE_DAEMON_EXECUTION_CONCURRENCY must be a non-negative integer",
-                )?),
-                Err(_) => file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|config| config.cache.as_ref())
-                    .and_then(|cache| cache.daemon_execution_concurrency),
-            };
-        // Four RPC handlers per pipeline must fit Tokio's semaphore limit
-        // (usize::MAX >> 3), including on 32-bit clients.
-        anyhow::ensure!(
-            configured.is_none_or(|value| value <= usize::MAX >> 5),
-            "cache.daemon_execution_concurrency is too large"
-        );
-        Ok(configured.filter(|value| *value != 0))
-    }
-
     fn trust_daemon_execution_for(
         invocation: &InvocationEnv,
         file_config: &Result<FileConfig>,
@@ -986,51 +885,6 @@ impl Config {
             .and_then(|config| config.cache.as_ref())
             .and_then(|cache| cache.trust_daemon_execution)
             .unwrap_or(false)
-    }
-
-    /// Memory-pressure admission, on by default.
-    /// `KACHE_SCHEDULER_MEMORY_PRESSURE=0`/`=false` (env wins), else
-    /// `[cache] scheduler_memory_pressure`, else on.
-    fn scheduler_memory_pressure_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_SCHEDULER_MEMORY_PRESSURE", ignore_env)
-        {
-            return v != "0" && !v.eq_ignore_ascii_case("false");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.scheduler_memory_pressure)
-            .unwrap_or(true)
-    }
-
-    /// Free-space threshold for store and target recovery, `0` (off) by
-    /// default. `KACHE_AUTO_RECOVER_MIN_FREE_BYTES` (env wins), else
-    /// `[cache] auto_recover_min_free_bytes`.
-    fn auto_recover_min_free_bytes_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> u64 {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        env_or_ignored_for(invocation, "KACHE_AUTO_RECOVER_MIN_FREE_BYTES", ignore_env)
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .or_else(|| {
-                file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|c| c.cache.as_ref())
-                    .and_then(|c| c.auto_recover_min_free_bytes)
-            })
-            .unwrap_or_else(|| {
-                default_recovery_floor(crate::policy::running_in_ci_with(|name| {
-                    invocation.var(name).ok()
-                }))
-            })
     }
 
     pub fn store_dir(&self) -> PathBuf {

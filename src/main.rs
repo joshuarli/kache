@@ -1224,8 +1224,7 @@ fn run_compiler_invocation_inner(
         Some(config) => config,
         None => config::Config::load_for(&env)?,
     };
-    let _pressure =
-        scheduler::pressure::InvocationPressureScope::enter(config.scheduler_memory_pressure);
+    let _pressure = scheduler::pressure::InvocationPressureScope::enter(true);
 
     if config.disabled {
         return run_compiler_directly_for(&config, args, &env);

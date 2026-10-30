@@ -1331,7 +1331,6 @@ fn an_unwritable_stamp_drops_the_check_only_without_a_floor() {
         !auto_gc_wanted(&cfg, &store),
         "no floor: dropped, as before"
     );
-
     cfg.auto_recover_min_free_bytes = 1;
     assert!(auto_gc_wanted(&cfg, &store));
     assert!(

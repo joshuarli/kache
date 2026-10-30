@@ -411,12 +411,10 @@ fn write_test_events(dir: &std::path::Path) -> Config {
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: crate::config::ProjectRules::default(),
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
+
 
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -427,9 +425,6 @@ fn write_test_events(dir: &std::path::Path) -> Config {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 10 * 1024 * 1024,
-        event_log_keep_lines: 1000,
-        compression_level: 3,
     };
 
     // Write build events
@@ -1346,7 +1341,7 @@ fn write_phase_events(dir: &std::path::Path) -> Config {
 #[test]
 fn a_report_says_when_rotation_cut_its_build_short() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = write_test_events(dir.path());
+    let config = write_test_events(dir.path());
     let log = config.event_log_path();
     events::clear_events(&log).unwrap();
     let mut event = test_event("c", EventResult::LocalHit, 40, 250, 10, "k-c");
@@ -1361,7 +1356,6 @@ fn a_report_says_when_rotation_cut_its_build_short() {
         .unwrap()
         .len() as u64
         + 1;
-    config.event_log_max_size = line * 20;
     let notice = |config: &Config| {
         generate_report(config, SinceWindow::DEFAULT, 10)
             .unwrap()
@@ -1371,7 +1365,7 @@ fn a_report_says_when_rotation_cut_its_build_short() {
     };
     assert!(!notice(&config), "nothing rotated yet");
 
-    events::rotate_if_needed(&log, config.event_log_max_size, 5).unwrap();
+    events::rotate_if_needed(&log, line * 20, 5).unwrap();
     assert!(notice(&config), "the build lost its earliest events");
 
     // A later build that fits leaves no notice for itself.
@@ -1588,12 +1582,10 @@ fn test_missing_transfer_data() {
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: crate::config::ProjectRules::default(),
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
+
 
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -1604,9 +1596,6 @@ fn test_missing_transfer_data() {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 10 * 1024 * 1024,
-        event_log_keep_lines: 1000,
-        compression_level: 3,
     };
 
     // Only write build events, no transfers
@@ -1632,12 +1621,10 @@ fn test_suggestion_high_miss_share() {
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: crate::config::ProjectRules::default(),
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
+
 
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -1648,9 +1635,6 @@ fn test_suggestion_high_miss_share() {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 10 * 1024 * 1024,
-        event_log_keep_lines: 1000,
-        compression_level: 3,
     };
 
     // Mostly misses — should trigger high miss share suggestion
@@ -1685,12 +1669,10 @@ fn test_suggestion_high_hit_overhead() {
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: crate::config::ProjectRules::default(),
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
+
 
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -1701,9 +1683,6 @@ fn test_suggestion_high_hit_overhead() {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 10 * 1024 * 1024,
-        event_log_keep_lines: 1000,
-        compression_level: 3,
     };
 
     // Several hits, each with a high elapsed time -> avg overhead > 50ms
@@ -1739,12 +1718,10 @@ fn test_suggestion_network_download_failures_and_fanout() {
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: crate::config::ProjectRules::default(),
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
+
 
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -1755,9 +1732,6 @@ fn test_suggestion_network_download_failures_and_fanout() {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 10 * 1024 * 1024,
-        event_log_keep_lines: 1000,
-        compression_level: 3,
     };
 
     // One OK download (test_transfer sets request_count=4 -> 4 GETs for 1 hit,
@@ -1798,12 +1772,10 @@ fn test_suggestion_network_latency_thresholds() {
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: crate::config::ProjectRules::default(),
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
+
 
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -1814,9 +1786,6 @@ fn test_suggestion_network_latency_thresholds() {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 10 * 1024 * 1024,
-        event_log_keep_lines: 1000,
-        compression_level: 3,
     };
 
     let slow = TransferEvent {
@@ -2258,12 +2227,10 @@ fn test_empty_report() {
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: crate::config::ProjectRules::default(),
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
+
 
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -2274,9 +2241,6 @@ fn test_empty_report() {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 10 * 1024 * 1024,
-        event_log_keep_lines: 1000,
-        compression_level: 3,
     };
 
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
@@ -2679,12 +2643,10 @@ fn report_counts_each_download_transfer_format() {
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: crate::config::ProjectRules::default(),
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
+
 
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -2695,9 +2657,6 @@ fn report_counts_each_download_transfer_format() {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 10 * 1024 * 1024,
-        event_log_keep_lines: 1000,
-        compression_level: 3,
     };
     for fmt in ["v1", "v2", "weird-future-format"] {
         let t = test_transfer(fmt, TransferDirection::Download, fmt, 500, 40, true);
@@ -3924,7 +3883,7 @@ fn markdown_headlines_count_passthrough_compiles() {
 #[test]
 fn a_windowed_report_counts_archived_events_without_claiming_they_are_lost() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = write_test_events(dir.path());
+    let config = write_test_events(dir.path());
     let log = config.event_log_path();
     events::clear_events(&log).unwrap();
     let mut hit = test_event(
@@ -3939,8 +3898,7 @@ fn a_windowed_report_counts_archived_events_without_claiming_they_are_lost() {
     for _ in 0..40 {
         events::log_event(&log, &hit).unwrap();
     }
-    config.event_log_max_size = std::fs::metadata(&log).unwrap().len() / 2;
-    events::rotate_events_if_needed(&log, config.event_log_max_size, 5, &config.cache_dir).unwrap();
+    events::rotate_events_if_needed(&log, std::fs::metadata(&log).unwrap().len() / 2, 5, &config.cache_dir).unwrap();
     assert!(events::read_events(&log).unwrap().len() < 40);
 
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();

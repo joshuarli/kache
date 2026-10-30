@@ -5,8 +5,7 @@ use std::sync::atomic::AtomicU64;
 #[test]
 fn compiler_request_capacity_handles_bursts_and_recovers_after_drop() {
     let root = tempfile::tempdir().unwrap();
-    let mut config = test_config(root.path());
-    config.daemon_execution_concurrency = Some(32);
+    let config = test_config(root.path());
     let provenance = crate::config::ConfigFileProvenance::current();
     let capacity = DaemonCapacity::for_resources(Some(32), 1, Some(640));
     let daemon = Daemon::new_with_provenance(config, &provenance, capacity);
@@ -694,12 +693,10 @@ pub(super) fn test_config(dir: &Path) -> Config {
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: crate::config::ProjectRules::default(),
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
+
 
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -710,9 +707,6 @@ pub(super) fn test_config(dir: &Path) -> Config {
         max_size: 50 * 1024 * 1024, // 50 MiB
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 10 * 1024 * 1024,
-        event_log_keep_lines: 1000,
-        compression_level: 3,
     }
 }
 
@@ -872,7 +866,7 @@ fn server_main_binds_socket_and_handles_shutdown() {
             &provenance,
             coord,
             None,
-            DaemonCapacity::discover(server_config.daemon_execution_concurrency),
+            DaemonCapacity::discover(None),
         )
     });
 

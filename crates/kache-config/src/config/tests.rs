@@ -203,16 +203,9 @@ fn test_default_cache_dir() {
     assert!(dir.to_string_lossy().contains("kache"));
 }
 #[test]
-fn the_event_log_rotates_at_64_mib_by_default() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&config_path);
-
-    assert_eq!(Config::load().unwrap().event_log_max_size, 67_108_864);
-
-    std::fs::write(&config_path, "[cache]\nevent_log_max_size = \"8MiB\"\n").unwrap();
-    assert_eq!(Config::load().unwrap().event_log_max_size, 8 * 1024 * 1024);
+fn the_event_log_rotates_at_64_mib() {
+    assert_eq!(DEFAULT_EVENT_LOG_MAX_SIZE, 67_108_864);
+    assert_eq!(DEFAULT_EVENT_LOG_KEEP_LINES, 1000);
 }
 #[test]
 fn recovery_floor_obeys_file_environment_and_ci_defaults() {
@@ -229,43 +222,7 @@ fn recovery_floor_obeys_file_environment_and_ci_defaults() {
         let _in_ci = NamedEnvGuard::set("GITHUB_ACTIONS", "true");
         assert_eq!(Config::load().unwrap().auto_recover_min_free_bytes, 0);
     }
-    std::fs::write(&config_path, "[cache]\nauto_recover_min_free_bytes = 1073741824\n").unwrap();
-    assert_eq!(Config::load().unwrap().auto_recover_min_free_bytes, 1 << 30);
-    let override_floor = NamedEnvGuard::set("KACHE_AUTO_RECOVER_MIN_FREE_BYTES", "2147483648");
-    assert_eq!(Config::load().unwrap().auto_recover_min_free_bytes, 2 << 30);
-    drop(override_floor);
-    std::fs::write(&config_path, "[cache]\nignore_env = true\nauto_recover_min_free_bytes = 1048576\n").unwrap();
-    let _ignored = NamedEnvGuard::set("KACHE_AUTO_RECOVER_MIN_FREE_BYTES", "5242880");
-    assert_eq!(Config::load().unwrap().auto_recover_min_free_bytes, 1 << 20);
 }
-
-#[test]
-fn memory_pressure_admission_is_on_by_default_and_obeys_env_precedence() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&config_path);
-    let _missing = NamedEnvGuard::remove("KACHE_SCHEDULER_MEMORY_PRESSURE");
-    assert!(Config::load().unwrap().scheduler_memory_pressure);
-    std::fs::write(&config_path, "[cache]\nscheduler_memory_pressure = false\n").unwrap();
-    assert!(!Config::load().unwrap().scheduler_memory_pressure);
-    let _on = NamedEnvGuard::set("KACHE_SCHEDULER_MEMORY_PRESSURE", "1");
-    assert!(Config::load().unwrap().scheduler_memory_pressure);
-    drop(_on);
-    std::fs::write(&config_path, "[cache]\nscheduler_memory_pressure = true\n").unwrap();
-    for off in ["0", "false", "FALSE"] {
-        let _off = NamedEnvGuard::set("KACHE_SCHEDULER_MEMORY_PRESSURE", off);
-        assert!(!Config::load().unwrap().scheduler_memory_pressure, "{off}");
-    }
-    std::fs::write(
-        &config_path,
-        "[cache]\nignore_env = true\nscheduler_memory_pressure = true\n",
-    )
-    .unwrap();
-    let _ignored = NamedEnvGuard::set("KACHE_SCHEDULER_MEMORY_PRESSURE", "0");
-    assert!(Config::load().unwrap().scheduler_memory_pressure);
-}
-
 
 #[test]
 fn test_shellexpand() {
@@ -1373,90 +1330,6 @@ fn absolutize_volume_path_keeps_absolute_and_joins_relative() {
 }
 
 #[test]
-fn daemon_execution_concurrency_respects_environment_file_and_automatic_mode() {
-    let root = tempfile::tempdir().unwrap();
-    let file = |text| Ok(deser_toml::from_str::<FileConfig>(text).unwrap());
-    let invocation = |value: Option<&str>| {
-        InvocationEnv::from_parts(
-            value
-                .into_iter()
-                .map(|value| ("KACHE_DAEMON_EXECUTION_CONCURRENCY", value))
-                .chain(std::iter::once((
-                    "KACHE_CACHE_DIR",
-                    root.path().to_str().unwrap(),
-                ))),
-            Some(root.path().to_owned()),
-            None,
-            root.path().to_owned(),
-        )
-    };
-    for (text, expected) in [
-        ("", None),
-        ("[cache]\ndaemon_execution_concurrency = 0", None),
-        ("[cache]\ndaemon_execution_concurrency = 24", Some(24)),
-        ("[cache]\ndaemon_execution_concurrency = 1024", Some(1024)),
-    ] {
-        assert_eq!(
-            Config::daemon_execution_concurrency_for(&invocation(None), &file(text)).unwrap(),
-            expected
-        );
-        assert_eq!(
-            Config::load_resolved_for(&invocation(None), file(text))
-                .unwrap()
-                .daemon_execution_concurrency,
-            expected,
-        );
-        for (value, expected) in [("0", None), ("1", Some(1)), ("1024", Some(1024))] {
-            assert_eq!(
-                Config::daemon_execution_concurrency_for(&invocation(Some(value)), &file(text))
-                    .unwrap(),
-                expected
-            );
-        }
-        for value in ["", "-1", "1.5", "auto", "invalid", "18446744073709551616"] {
-            assert!(
-                Config::daemon_execution_concurrency_for(&invocation(Some(value)), &file(text))
-                    .is_err()
-            );
-        }
-    }
-    assert_eq!(
-        Config::daemon_execution_concurrency_for(
-            &invocation(Some("invalid")),
-            &file("[cache]\nignore_env = true\ndaemon_execution_concurrency = 64")
-        )
-        .unwrap(),
-        Some(64)
-    );
-    let maximum = (usize::MAX >> 5).to_string();
-    assert_eq!(
-        Config::daemon_execution_concurrency_for(&invocation(Some(&maximum)), &file("")).unwrap(),
-        maximum.parse::<usize>().ok()
-    );
-    let too_large = ((usize::MAX >> 5) + 1).to_string();
-    assert!(
-        Config::daemon_execution_concurrency_for(&invocation(Some(&too_large)), &file("")).is_err()
-    );
-    assert!(
-        Config::daemon_execution_concurrency_for(
-            &invocation(None),
-            &file(&format!(
-                "[cache]\ndaemon_execution_concurrency = {too_large}"
-            ))
-        )
-        .is_err()
-    );
-    assert_eq!(
-        Config::daemon_execution_concurrency_for(
-            &invocation(None),
-            &Err(anyhow::anyhow!("no file"))
-        )
-        .unwrap(),
-        None
-    );
-}
-
-#[test]
 fn trusted_daemon_execution_requires_an_explicit_setting() {
     let file = |text| Ok(deser_toml::from_str::<FileConfig>(text).unwrap());
     let invocation = |value: Option<&str>| {
@@ -1529,11 +1402,8 @@ fn test_file_config_roundtrip() {
             bypass_crates: None,
             volumes: None,
             trust_daemon_execution: None,
-            daemon_execution_concurrency: None,
 
-            auto_recover_min_free_bytes: None,
 
-            scheduler_memory_pressure: None,
 
             ignore_env: None,
             key_salt: None,
@@ -1544,9 +1414,6 @@ fn test_file_config_roundtrip() {
             local_max_size: Some("50GiB".to_string()),
             cache_executables: Some(true),
             exclude: Some(vec!["vendor/problem/**".to_string()]),
-            event_log_max_size: Some("10MiB".to_string()),
-            event_log_keep_lines: Some(500),
-            compression_level: Some(3),
         }),
     };
     let serialized = deser_toml::to_string(&config).unwrap();
@@ -1818,12 +1685,10 @@ fn test_config_store_dir() {
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: ProjectRules::default(),
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
+
 
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -1834,9 +1699,6 @@ fn test_config_store_dir() {
         max_size: 1024,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 1024,
-        event_log_keep_lines: 100,
-        compression_level: 3,
     };
     assert_eq!(config.store_dir(), PathBuf::from("/tmp/kache/store"));
     assert_eq!(
@@ -1852,12 +1714,10 @@ fn test_config_index_db_path() {
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: ProjectRules::default(),
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
+
 
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -1868,9 +1728,6 @@ fn test_config_index_db_path() {
         max_size: 1024,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 1024,
-        event_log_keep_lines: 100,
-        compression_level: 3,
     };
     assert_eq!(config.index_db_path(), PathBuf::from("/tmp/kache/index.db"));
 }
@@ -1882,12 +1739,10 @@ fn test_config_event_log_path() {
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: ProjectRules::default(),
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
+
 
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -1898,9 +1753,6 @@ fn test_config_event_log_path() {
         max_size: 1024,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 1024,
-        event_log_keep_lines: 100,
-        compression_level: 3,
     };
     assert_eq!(
         config.event_log_path(),
@@ -1927,12 +1779,10 @@ fn test_config_socket_path() {
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: ProjectRules::default(),
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
+
 
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -1943,9 +1793,6 @@ fn test_config_socket_path() {
         max_size: 1024,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 1024,
-        event_log_keep_lines: 100,
-        compression_level: 3,
     };
     assert_eq!(
         config.socket_path(),
@@ -2522,11 +2369,8 @@ fn test_save_and_load_file_config() {
             bypass_crates: None,
             volumes: None,
             trust_daemon_execution: None,
-            daemon_execution_concurrency: None,
 
-            auto_recover_min_free_bytes: None,
 
-            scheduler_memory_pressure: None,
 
             ignore_env: None,
             key_salt: None,
@@ -2537,9 +2381,6 @@ fn test_save_and_load_file_config() {
             local_max_size: Some("10GiB".to_string()),
             cache_executables: Some(true),
             exclude: None,
-            event_log_max_size: None,
-            event_log_keep_lines: None,
-            compression_level: Some(5),
         }),
     };
 
@@ -2552,7 +2393,6 @@ fn test_save_and_load_file_config() {
         loaded.cache.as_ref().unwrap().local_store.as_deref(),
         Some("/tmp/my-cache")
     );
-    assert_eq!(loaded.cache.as_ref().unwrap().compression_level, Some(5));
     assert_eq!(
         loaded.cache.as_ref().unwrap().runtime_dir.as_deref(),
         Some("/tmp/my-runtime")

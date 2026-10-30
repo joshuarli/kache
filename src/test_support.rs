@@ -30,11 +30,9 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: crate::config::ProjectRules::default(),
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
 
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -45,9 +43,6 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 10 * 1024 * 1024,
-        event_log_keep_lines: 1000,
-        compression_level: 3,
     }
 }
 

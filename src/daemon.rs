@@ -558,7 +558,7 @@ impl Daemon {
     #[cfg(test)]
     pub fn new(config: Config) -> Self {
         let provenance = crate::config::ConfigFileProvenance::current();
-        let capacity = DaemonCapacity::discover(config.daemon_execution_concurrency);
+        let capacity = DaemonCapacity::discover(None);
         Self::new_with_provenance(config, &provenance, capacity)
     }
 
@@ -1474,7 +1474,7 @@ pub fn run_server(
         .context("writing daemon coordinator state")?;
     let _coord_guard = DaemonCoordGuard::new(coord.path.clone());
 
-    let capacity = DaemonCapacity::discover(config.daemon_execution_concurrency);
+    let capacity = DaemonCapacity::discover(None);
     log::info!(
         "daemon request capacity; pipeline_requests={} rpc_handlers={} blocking_threads={}",
         capacity.executions,

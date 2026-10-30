@@ -314,8 +314,8 @@ pub(crate) fn record_session(config: &Config, report: &crate::report::BuildRepor
     crate::events::append_json_line(&path, &record)?;
     crate::events::rotate_if_needed(
         &path,
-        config.event_log_max_size,
-        config.event_log_keep_lines,
+        crate::config::DEFAULT_EVENT_LOG_MAX_SIZE,
+        crate::config::DEFAULT_EVENT_LOG_KEEP_LINES,
     )
 }
 

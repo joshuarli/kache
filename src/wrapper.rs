@@ -6986,14 +6986,14 @@ pub(crate) fn write_event(config: &Config, event: &BuildEvent) {
     }
     let _ = events::rotate_events_if_needed(
         &config.event_log_path(),
-        config.event_log_max_size,
-        config.event_log_keep_lines,
+        crate::config::DEFAULT_EVENT_LOG_MAX_SIZE,
+        crate::config::DEFAULT_EVENT_LOG_KEEP_LINES,
         &config.cache_dir,
     );
     let _ = events::rotate_transfers_if_needed(
         &config.transfer_log_path(),
-        config.event_log_max_size,
-        config.event_log_keep_lines,
+        crate::config::DEFAULT_EVENT_LOG_MAX_SIZE,
+        crate::config::DEFAULT_EVENT_LOG_KEEP_LINES,
     );
 }
 
