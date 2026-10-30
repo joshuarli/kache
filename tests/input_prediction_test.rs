@@ -54,9 +54,10 @@ fn write_test_config_with(
     shard: Option<(&Path, &Path)>,
     predictions: bool,
 ) -> PathBuf {
+    let _ = predictions;
     let config_path = isolated_config_path(cache_dir);
     let mut config = format!(
-        "[cache]\nlocal_only = true\nignore_env = true\ninput_predictions = {predictions}\nlocal_store = {}\nruntime_dir = {}\n",
+        "[cache]\nlocal_only = true\nignore_env = true\nlocal_store = {}\nruntime_dir = {}\n",
         toml_path(cache_dir),
         toml_path(runtime_dir)
     );
@@ -178,11 +179,6 @@ fn run_kache_compiler_with(
         );
     }
     let config_path = write_test_config(cache_dir, predictions);
-    if invocation == Invocation::CargoPrepass {
-        let mut config = std::fs::read_to_string(&config_path).unwrap();
-        config.push_str("deferred_discovery = false\n");
-        std::fs::write(&config_path, config).unwrap();
-    }
     settle_writes(&[src.parent().expect("a source in a directory")]);
     let output = std::process::Command::new(kache_binary())
         .args(&args)
@@ -319,7 +315,7 @@ fn predictions_cold_warm_off_and_stale_closure() {
     run_kache_rustc_predict(cache_dir, out_dir, &src, false);
     let off = last_event(cache_dir);
     assert_eq!(off.result, "local_hit");
-    assert_eq!(off.dep_info_runs, 1);
+    assert_eq!(off.dep_info_runs, 0);
     assert_eq!(off.cache_key, cold.cache_key);
 
     // Grow the closure: the stale record must miss (never wrong-hit),
@@ -371,9 +367,8 @@ fn a_stale_record_is_re_derived_from_the_running_compile() {
     assert_eq!(grown.compiler_runs, 1);
     assert_ne!(grown.cache_key, cold.cache_key);
 
-    // The pre-pass, predictions off, in a fresh directory: the same key.
-    // Keep the diagnostic flags identical and disable deferred discovery
-    // through configuration so only the discovery method changes.
+    // The record, read in a fresh directory: the same key.
+    // Keep the diagnostic flags identical so only the discovery method changes.
     let fresh = TempDir::new().unwrap();
     run_kache_rustc_with(
         cache_dir,
@@ -385,7 +380,7 @@ fn a_stale_record_is_re_derived_from_the_running_compile() {
     );
     let checked = last_event(cache_dir);
     assert_eq!(checked.result, "local_hit");
-    assert_eq!(checked.dep_info_runs, 1);
+    assert_eq!(checked.dep_info_runs, 0);
     assert_eq!(checked.cache_key, grown.cache_key);
 }
 
@@ -952,7 +947,7 @@ fn predicts_in_another_target(unit: OutDirUnit) {
 
     let off = unit.build(&b, false, None);
     assert_eq!(off.result, "local_hit");
-    assert_eq!(off.dep_info_runs, 1);
+    assert_eq!(off.dep_info_runs, 0);
     assert_eq!(warm.cache_key, off.cache_key);
 
     let verified = unit.build(&b, true, Some("always"));
@@ -1071,7 +1066,6 @@ struct WorkspaceUnit {
     /// Copied into every target's `deps`; the member then links `facade`.
     facade: Vec<PathBuf>,
     external_targets: bool,
-    deferred_discovery: bool,
     /// Set for every build and report, after the rest.
     env: Vec<(&'static str, std::ffi::OsString)>,
     /// Kache's runtime directory, when it is not the cache directory.
@@ -1109,7 +1103,6 @@ impl WorkspaceUnit {
             proc_macro,
             facade: Vec::new(),
             external_targets: false,
-            deferred_discovery: true,
             env: Vec::new(),
             runtime: None,
             shard: None,
@@ -1266,11 +1259,6 @@ impl WorkspaceUnit {
             self.shard.as_deref().map(|shard| (target, shard)),
             predictions,
         );
-        if !self.deferred_discovery {
-            let mut config = std::fs::read_to_string(&config_path).unwrap();
-            config.push_str("deferred_discovery = false\n");
-            std::fs::write(&config_path, config).unwrap();
-        }
         settle_writes(&[checkout, target]);
         let mut command = std::process::Command::new(kache_binary());
         command
@@ -1325,7 +1313,7 @@ fn workspace_unit_predicts_in_another_checkout(unit: WorkspaceUnit) {
     let b = unit.root.path().join("b");
     let off = unit.build(&b, false, None);
     assert_eq!(off.result, "local_hit");
-    assert_eq!(off.dep_info_runs, 1);
+    assert_eq!(off.dep_info_runs, 0);
     assert_eq!(warm.cache_key, off.cache_key);
 
     let verified = unit.build(&b, true, Some("always"));
@@ -1367,7 +1355,7 @@ fn external_target_predictions_reject_changed_generated_inputs() {
 /// missing one lets it finish and stores under the key the pre-pass gives.
 #[test]
 fn a_rejected_record_keys_from_the_running_compile() {
-    let mut unit = WorkspaceUnit::new(true);
+    let unit = WorkspaceUnit::new(true);
     build_kache();
     let a = unit.checkout("a");
     let b = unit.checkout("b");
@@ -1396,7 +1384,6 @@ fn a_rejected_record_keys_from_the_running_compile() {
     if let Some(proc_macro) = &unit.proc_macro {
         std::fs::copy(proc_macro, unit.macro_in(&b.join("target"))).unwrap();
     }
-    unit.deferred_discovery = false;
     let checked = unit.build_with(
         &b,
         false,
@@ -1407,7 +1394,7 @@ fn a_rejected_record_keys_from_the_running_compile() {
         ],
     );
     assert_eq!(checked.result, "local_hit");
-    assert_eq!(checked.dep_info_runs, 1);
+    assert_eq!(checked.dep_info_runs, 0);
     assert_eq!(checked.cache_key, miss.cache_key);
 }
 
@@ -1885,7 +1872,6 @@ struct EmptyOutDirMacro {
     root: TempDir,
     cache: PathBuf,
     package: PathBuf,
-    alias: bool,
     proc_macro: Option<PathBuf>,
 }
 
@@ -1898,7 +1884,7 @@ impl Drop for EmptyOutDirMacro {
 
 #[cfg(unix)]
 impl EmptyOutDirMacro {
-    fn new(alias: bool, with_macro: bool) -> Self {
+    fn new(with_macro: bool) -> Self {
         let root = TempDir::new().unwrap();
         let package = root.path().join(REGISTRY_PACKAGE);
         std::fs::create_dir_all(package.join("src")).unwrap();
@@ -1930,7 +1916,6 @@ impl EmptyOutDirMacro {
             root,
             cache,
             package,
-            alias,
             proc_macro,
         }
     }
@@ -1998,9 +1983,6 @@ impl EmptyOutDirMacro {
             args.push(format!("pm={}", self.macro_in(target).display()));
         }
         let config_path = write_test_config(&self.cache, predictions);
-        let mut config = std::fs::read_to_string(&config_path).unwrap();
-        config.push_str(&format!("out_dir_alias = {}\n", self.alias));
-        std::fs::write(&config_path, config).unwrap();
         let out_dir = out_dir_in(target);
         let envs = [
             ("CARGO_MANIFEST_DIR", self.package.as_os_str()),
@@ -2020,8 +2002,7 @@ impl EmptyOutDirMacro {
 
 /// The shared `OUT_DIR` is one path outside every target directory, so the
 /// macro's record goes on the shared row and B keys from A's record with no
-/// pre-pass. The key a prediction gives is the one the pre-pass gives. With
-/// the alias off, B's key needs B's own `OUT_DIR`, so B misses.
+/// pre-pass. The key a prediction gives is the one the pre-pass gives.
 #[cfg(unix)]
 fn predicts_on_the_shared_out_dir(with_macro: bool) {
     // As root nothing is aliased: the mode bits would not stop root's writes.
@@ -2031,13 +2012,7 @@ fn predicts_on_the_shared_out_dir(with_macro: bool) {
     }
     build_kache();
 
-    let own = EmptyOutDirMacro::new(false, with_macro);
-    let (a, b) = (own.target("a"), own.target("b"));
-    assert_eq!(own.build(&a, true, None).result, "miss");
-    assert_eq!(own.build(&b, true, None).result, "miss");
-    assert!(!own.shared_out_dir().exists());
-
-    let unit = EmptyOutDirMacro::new(true, with_macro);
+    let unit = EmptyOutDirMacro::new(with_macro);
     let (a, b) = (unit.target("a"), unit.target("b"));
     let cold = unit.build(&a, true, None);
     assert_eq!(cold.result, "miss");
@@ -2051,7 +2026,7 @@ fn predicts_on_the_shared_out_dir(with_macro: bool) {
 
     let off = unit.build(&b, false, None);
     assert_eq!(off.result, "local_hit");
-    assert_eq!(off.dep_info_runs, 1);
+    assert_eq!(off.dep_info_runs, 0);
     assert_eq!(off.cache_key, warm.cache_key);
 
     let verified = unit.build(&b, true, Some("always"));

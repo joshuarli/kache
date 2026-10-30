@@ -7,9 +7,6 @@ pub struct Config {
     pub max_size: u64,
     pub gc_evict_shared: bool,
     pub upload_spool_max_jobs: usize,
-    /// Store new entries without an fsync on the build path and flush them
-    /// later; a hit on an entry still pending verifies its bytes first.
-    pub deferred_durability: bool,
 }
 
 impl From<&Config> for Config {
@@ -50,7 +47,6 @@ mod tests {
             max_size: 1,
             gc_evict_shared: false,
             upload_spool_max_jobs: 2,
-            deferred_durability: false,
         };
         let second = Config {
             cache_dir: PathBuf::from("second/cache"),

@@ -1768,8 +1768,7 @@ fn successful_publish_keeps_the_staged_bytes_as_the_blob() {
 #[test]
 fn cas_publication_keeps_a_flushed_winner_after_the_initial_absence_check() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.deferred_durability = true;
+    let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
     let peer = Store::open(&config).unwrap();
     let bytes = b"same-cas-generation";
@@ -2119,31 +2118,18 @@ fn a_read_only_blob_flushes_and_a_missing_one_reports_not_found() {
     );
 }
 
-/// Opening another handle must not change the first store's flush policy.
+/// Blob ingest defers flushes: the second recovery phase observes no
+/// durability, and entries stay pending until the flush.
 #[test]
-fn blob_ingest_keeps_each_stores_durability_policy() {
+fn blob_ingest_defers_flushes() {
     let dir = tempfile::tempdir().unwrap();
-    let mut deferred_config = test_config(&dir.path().join("deferred"));
-    deferred_config.deferred_durability = true;
-    let deferred =
-        Store::open_with_options(&deferred_config, StoreOptions::from_env(|_| None)).unwrap();
-    let strict_config = test_config(&dir.path().join("strict"));
-    let strict =
-        Store::open_with_options(&strict_config, StoreOptions::from_env(|_| None)).unwrap();
-    assert!(
-        !deferred.durable_writes(),
-        "the first store still defers its flushes"
-    );
-    assert!(strict.durable_writes(), "the second store flushes inline");
+    let config = test_config(&dir.path().join("deferred"));
+    let store =
+        Store::open_with_options(&config, StoreOptions::from_env(|_| None)).unwrap();
 
-    for (store, key, bytes, durable) in [
-        (
-            &deferred,
-            "deferred-entry",
-            b"deferred bytes".as_slice(),
-            false,
-        ),
-        (&strict, "strict-entry", b"strict bytes".as_slice(), true),
+    for (key, bytes) in [
+        ("deferred-entry", b"deferred bytes".as_slice()),
+        ("second-entry", b"second bytes".as_slice()),
     ] {
         let source = dir.path().join(format!("{key}.rlib"));
         fs::write(&source, bytes).unwrap();
@@ -2155,9 +2141,9 @@ fn blob_ingest_keeps_each_stores_durability_policy() {
                 "libout.rlib",
                 false,
                 |source, blob, allow_hardlink, observed_durable| {
-                    assert_eq!(
-                        observed_durable, durable,
-                        "phase-2 recovery uses its owning store's durability"
+                    assert!(
+                        !observed_durable,
+                        "phase-2 recovery never observes durability"
                     );
                     materialize_blob_with_durability(source, blob, allow_hardlink, observed_durable)
                 },
@@ -2183,32 +2169,22 @@ fn blob_ingest_keeps_each_stores_durability_policy() {
                 "",
             )
             .unwrap();
-        assert_eq!(store.entry_is_durable(key), durable);
-        assert_eq!(store.pending_durability().unwrap(), u64::from(!durable));
+        assert!(!store.entry_is_durable(key));
+        assert_eq!(store.pending_durability().unwrap(), 1);
+        assert_eq!(store.flush_durability(10).unwrap(), 1);
+        assert_eq!(store.pending_durability().unwrap(), 0);
     }
-    assert_eq!(deferred.flush_durability(10).unwrap(), 1);
-    assert_eq!(strict.flush_durability(10).unwrap(), 0);
-    let reopened_deferred =
-        Store::open_with_options(&deferred_config, StoreOptions::from_env(|_| None)).unwrap();
-    assert!(!reopened_deferred.durable_writes());
-    assert!(
-        strict.durable_writes(),
-        "opening a deferred store leaves the strict store unchanged"
-    );
 }
 
-/// Deferred durability: a put leaves the entry pending, a hit on a
-/// pending entry verifies the bytes (a same-size corruption is caught and
-/// evicted), the flush marks it durable, and a durable entry is served on
-/// its size check as before. With the feature off, a put is durable at
-/// once.
+/// A put leaves the entry pending, a hit on a pending entry verifies the
+/// bytes (a same-size corruption is caught and evicted), the flush marks it
+/// durable, and a durable entry is served on its size check as before.
 #[test]
 fn deferred_durability_verifies_pending_hits_until_the_flush() {
     let _env_lock = crate::test_support::process_state_test_lock();
     let _verify = EnvVarGuard::remove("KACHE_VERIFY_RESTORES");
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.deferred_durability = true;
+    let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
     // One source per put: a stored source may become a read-only
     // hardlink of its blob, so it cannot be rewritten for the next.
@@ -2284,39 +2260,15 @@ fn deferred_durability_verifies_pending_hits_until_the_flush() {
     assert!(!store.entry_is_durable("pending_key"));
     assert!(store.get("pending_key").unwrap().is_none());
     assert!(!store.contains("pending_key"));
-
-    // Feature off: the put is durable inside the compile.
-    config.deferred_durability = false;
-    let strict = Store::open(&config).unwrap();
-    let strict_file = dir.path().join("out-strict.rlib");
-    fs::write(&strict_file, b"artifact-bytes-four").unwrap();
-    strict
-        .put(
-            "strict_key",
-            "strict_crate",
-            &["lib".to_string()],
-            &[],
-            "x86_64-unknown-linux-gnu",
-            "dev",
-            &[(strict_file.clone(), "libout.rlib".to_string())],
-            "",
-            "",
-        )
-        .unwrap();
-    assert_eq!(strict.pending_durability().unwrap(), 0);
-    assert!(strict.try_durability_flush_lock().unwrap().is_some());
 }
 
-/// Deferred durability covers downloaded entries too: both import paths
-/// leave the entry pending, so a hit verifies its bytes until the flush.
-/// With the feature off, an import is durable at once.
+/// Imports leave the entry pending, so a hit verifies its bytes until the flush.
 #[test]
 fn deferred_durability_leaves_imported_entries_pending_until_the_flush() {
     let _env_lock = crate::test_support::process_state_test_lock();
     let _verify = EnvVarGuard::remove("KACHE_VERIFY_RESTORES");
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.deferred_durability = true;
+    let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
 
     let restored = "a".repeat(64);
@@ -2345,28 +2297,6 @@ fn deferred_durability_leaves_imported_entries_pending_until_the_flush() {
     assert_eq!(store.pending_durability().unwrap(), 1);
     assert_eq!(store.flush_durability(10).unwrap(), 1);
     assert_eq!(store.pending_durability().unwrap(), 0);
-
-    config.deferred_durability = false;
-    let strict = Store::open(&config).unwrap();
-    let strict_restored = "c".repeat(64);
-    write_verified_fixture(
-        &strict,
-        &strict_restored,
-        &strict_restored,
-        "lib.rlib",
-        None,
-    );
-    strict.import_restored_entry(&strict_restored).unwrap();
-    let strict_batched = "d".repeat(64);
-    let verified =
-        write_verified_fixture(&strict, &strict_batched, &strict_batched, "lib.rlib", None);
-    assert_eq!(
-        strict
-            .import_verified_restored_entries(&[verified])
-            .unwrap(),
-        1
-    );
-    assert_eq!(strict.pending_durability().unwrap(), 0);
 }
 
 struct DurabilitySyncObserver {
@@ -2394,25 +2324,22 @@ impl Drop for DurabilitySyncObserver {
 }
 
 #[test]
-fn strict_imports_verify_and_sync_shared_pending_blobs_before_success() {
+fn deferred_imports_verify_shared_pending_blobs_without_syncing() {
     for batched in [false, true] {
         for corrupt in [false, true] {
             let dir = tempfile::tempdir().unwrap();
-            let mut config = test_config(dir.path());
-            config.deferred_durability = true;
+            let config = test_config(dir.path());
             let deferred = Store::open(&config).unwrap();
             let shared_bytes = b"verified fixture artifact";
             let seed = put_entry(&deferred, dir.path(), 94, "pending", shared_bytes);
             let hash = blake3::hash(shared_bytes).to_hex().to_string();
             let blob = deferred.blob_path(&hash);
-            let identity = kache_fs::file_identity(&blob).unwrap();
             if corrupt {
                 let mut permissions = fs::metadata(&blob).unwrap().permissions();
                 permissions.set_readonly(false);
                 fs::set_permissions(&blob, permissions).unwrap();
                 fs::write(&blob, vec![b'x'; shared_bytes.len()]).unwrap();
             }
-            config.deferred_durability = false;
             let strict = Store::open(&config).unwrap();
             let import_key = key(95);
             let entry = write_verified_fixture(&strict, &import_key, &import_key, "lib.rlib", None);
@@ -2439,39 +2366,26 @@ fn strict_imports_verify_and_sync_shared_pending_blobs_before_success() {
             };
             assert!(!deferred.entry_is_durable(&seed));
             if corrupt {
-                assert!(
-                    imported.is_err(),
-                    "strict success must not certify corrupt shared bytes"
-                );
+                imported.unwrap();
                 assert!(!strict.entry_is_durable(&import_key));
-                assert!(strict.get(&import_key).unwrap().is_none());
+                assert!(
+                    strict.get(&import_key).unwrap().is_none(),
+                    "a pending import over corrupt shared bytes is evicted on hit"
+                );
             } else {
                 imported.unwrap();
-                assert!(strict.entry_is_durable(&import_key));
                 assert!(
-                    observed.files().contains(&identity),
-                    "the existing inode must be synced"
+                    !strict.entry_is_durable(&import_key),
+                    "imports stay pending until the flush"
                 );
-                let meta_id =
-                    kache_fs::file_identity(&strict.entry_dir(&import_key).join("meta.json"))
-                        .unwrap();
                 assert!(
-                    observed.files().contains(&meta_id),
-                    "strict success also syncs metadata"
+                    observed.files().is_empty(),
+                    "a deferred import leaves fsync to the flush"
                 );
                 assert!(fs::metadata(&blob).unwrap().permissions().readonly());
-                let count = observed.files().len();
-                strict.finish_strict_durability(&import_key).unwrap();
-                assert_eq!(
-                    observed.files().len(),
-                    count,
-                    "an already completed flush is accepted"
-                );
+                assert_eq!(strict.flush_durability(10).unwrap(), 2);
+                assert!(strict.entry_is_durable(&import_key));
             }
-            assert!(
-                strict.finish_strict_durability(&key(96)).is_err(),
-                "a missing row is not durable"
-            );
         }
     }
 }
@@ -2481,10 +2395,9 @@ fn reimport_repairs_missing_pending_blobs_without_replacing_shared_winners() {
     let _env_lock = crate::test_support::process_state_test_lock();
     let _verify = EnvVarGuard::remove("KACHE_VERIFY_RESTORES");
     for batched in [false, true] {
-        for deferred_durability in [false, true] {
+        {
             let dir = tempfile::tempdir().unwrap();
-            let mut config = test_config(dir.path());
-            config.deferred_durability = true;
+            let config = test_config(dir.path());
             let seed = Store::open(&config).unwrap();
             let cache_key = key(90);
             let shared_key = key(91);
@@ -2520,7 +2433,6 @@ fn reimport_repairs_missing_pending_blobs_without_replacing_shared_winners() {
             assert_eq!(blob_refcount(&seed, &missing_hash), Some(1));
             assert_eq!(blob_refcount(&seed, &shared_hash), Some(2));
 
-            config.deferred_durability = deferred_durability;
             let store = Store::open(&config).unwrap();
             let observed = DurabilitySyncObserver::start();
             assert_eq!(
@@ -2535,23 +2447,11 @@ fn reimport_repairs_missing_pending_blobs_without_replacing_shared_winners() {
                 shared_identity,
                 "the existing shared inode must survive reimport"
             );
-            assert_eq!(store.entry_is_durable(&cache_key), !deferred_durability);
-            if deferred_durability {
-                assert!(
-                    observed.files().is_empty(),
-                    "deferred repair must leave fsync to the flush"
-                );
-            } else {
-                assert!(observed.files().contains(&repaired_identity));
-                assert!(observed.files().contains(&shared_identity));
-                assert!(
-                    observed.files().contains(
-                        &kache_fs::file_identity(&store.entry_dir(&cache_key).join("meta.json"))
-                            .unwrap()
-                    ),
-                    "strict repair must flush the selected metadata too"
-                );
-            }
+            assert!(!store.entry_is_durable(&cache_key));
+            assert!(
+                observed.files().is_empty(),
+                "deferred repair must leave fsync to the flush"
+            );
             assert_eq!(blob_refcount(&store, &missing_hash), Some(1));
             assert_eq!(blob_refcount(&store, &shared_hash), Some(2));
             assert_blob_refs_match_mappings(&store);
@@ -2576,11 +2476,10 @@ fn reimport_repairs_missing_pending_blobs_without_replacing_shared_winners() {
 }
 
 #[test]
-fn strict_put_verifies_and_syncs_a_shared_pending_winner() {
+fn deferred_put_verifies_a_shared_pending_winner_without_syncing() {
     for corrupt in [false, true] {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = test_config(dir.path());
-        config.deferred_durability = true;
+        let config = test_config(dir.path());
         let deferred = Store::open(&config).unwrap();
         let bytes = b"strict shared artifact";
         put_entry(&deferred, dir.path(), 97, "pending", bytes);
@@ -2592,7 +2491,6 @@ fn strict_put_verifies_and_syncs_a_shared_pending_winner() {
             fs::set_permissions(&blob, permissions).unwrap();
             fs::write(&blob, vec![b'x'; bytes.len()]).unwrap();
         }
-        config.deferred_durability = false;
         let strict = Store::open(&config).unwrap();
         let source = write_temp_file(dir.path(), "strict-source.rlib", bytes);
         let key = key(98);
@@ -2609,19 +2507,22 @@ fn strict_put_verifies_and_syncs_a_shared_pending_winner() {
             "",
         );
         if corrupt {
-            assert!(
-                result.is_err(),
-                "a private valid snapshot does not certify a corrupt winner"
-            );
+            result.unwrap();
             assert!(!strict.entry_is_durable(&key));
-            assert!(strict.get(&key).unwrap().is_none());
+            assert!(
+                strict.get(&key).unwrap().is_none(),
+                "a pending put over a corrupt winner is evicted on hit"
+            );
         } else {
             result.unwrap();
-            assert!(strict.entry_is_durable(&key));
+            assert!(
+                !strict.entry_is_durable(&key),
+                "puts stay pending until the flush"
+            );
             assert_eq!(kache_fs::file_identity(&blob).unwrap(), identity);
             assert!(
-                observed.files().contains(&identity),
-                "flush the winning inode, not the discarded snapshot"
+                observed.files().is_empty(),
+                "a deferred put leaves fsync to the flush"
             );
             assert!(fs::metadata(&blob).unwrap().permissions().readonly());
         }
@@ -2632,8 +2533,7 @@ fn strict_put_verifies_and_syncs_a_shared_pending_winner() {
 fn durability_verification_bounds_handles_at_the_64_record_boundary() {
     for count in [64, 65] {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = test_config(dir.path());
-        config.deferred_durability = true;
+        let config = test_config(dir.path());
         let store = Store::open(&config).unwrap();
         let peer = Store::open(&config).unwrap();
         peer.db.busy_timeout(Duration::ZERO).unwrap();
@@ -2726,8 +2626,7 @@ fn durability_verification_bounds_handles_at_the_64_record_boundary() {
 #[test]
 fn durability_deduplicates_shared_hashes_but_rejects_contradictory_sizes() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.deferred_durability = true;
+    let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
     let outputs: Vec<_> = ["first.rlib", "second.rlib"]
         .into_iter()
@@ -2796,8 +2695,7 @@ fn durability_flush_rejects_untrusted_pending_metadata_without_promotion() {
         "size",
     ] {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = test_config(dir.path());
-        config.deferred_durability = true;
+        let config = test_config(dir.path());
         let store = Store::open(&config).unwrap();
         put_test_entry(&store, dir.path(), "metadata-boundary", 23);
         let meta_path = store.entry_dir("metadata-boundary").join("meta.json");
@@ -2842,8 +2740,7 @@ fn durability_flush_rejects_untrusted_pending_metadata_without_promotion() {
 #[test]
 fn durability_flush_does_not_certify_metadata_replaced_during_its_sync() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.deferred_durability = true;
+    let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
     put_test_entry(&store, dir.path(), "metadata-inode", 23);
     let meta_path = store.entry_dir("metadata-inode").join("meta.json");
@@ -2878,8 +2775,7 @@ fn durability_flush_does_not_certify_metadata_replaced_during_its_sync() {
 fn durability_flush_verifies_reopened_imports_and_continues_after_corruption() {
     for batched in [false, true] {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = test_config(dir.path());
-        config.deferred_durability = true;
+        let config = test_config(dir.path());
         let store = Store::open_with_options(&config, StoreOptions::from_env(|_| None)).unwrap();
         let damaged = key(91);
         let entry = write_verified_fixture(&store, &damaged, &damaged, "lib.rlib", None);
@@ -2935,8 +2831,7 @@ fn durability_flush_verifies_reopened_imports_and_continues_after_corruption() {
 fn durability_flush_does_not_promote_a_replaced_or_removed_entry() {
     for remove in [false, true] {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = test_config(dir.path());
-        config.deferred_durability = true;
+        let config = test_config(dir.path());
         let store = Store::open(&config).unwrap();
         let peer = Store::open(&config).unwrap();
         put_test_entry(&store, dir.path(), "generation", 17);
@@ -2970,8 +2865,7 @@ fn durability_flush_does_not_promote_a_replaced_or_removed_entry() {
 #[test]
 fn durability_flush_checks_metadata_even_when_blob_content_is_unchanged() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.deferred_durability = true;
+    let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
     let peer = Store::open(&config).unwrap();
     put_test_entry(&store, dir.path(), "metadata-generation", 17);
@@ -3011,8 +2905,7 @@ fn durability_flush_checks_metadata_even_when_blob_content_is_unchanged() {
 #[test]
 fn durability_flush_rechecks_the_verified_cas_inode() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.deferred_durability = true;
+    let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
     let peer = Store::open(&config).unwrap();
     put_test_entry(&store, dir.path(), "same-generation", 23);
@@ -3035,8 +2928,7 @@ fn durability_flush_rechecks_the_verified_cas_inode() {
 fn durability_flush_keeps_failed_blob_and_metadata_syncs_retryable() {
     for fail_on in [0, 1] {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = test_config(dir.path());
-        config.deferred_durability = true;
+        let config = test_config(dir.path());
         let store = Store::open(&config).unwrap();
         put_test_entry(&store, dir.path(), "retry", 19);
         let mut calls = 0;
@@ -3154,7 +3046,6 @@ fn test_config(dir: &Path) -> Config {
         max_size: 1024 * 1024,
         gc_evict_shared: false,
         upload_spool_max_jobs: 65_536,
-        deferred_durability: false,
     }
 }
 
@@ -8884,8 +8775,7 @@ fn publish_racing_an_unlink_never_errors() {
     let dir = tempfile::tempdir().unwrap();
     // No fsync per publish: the race is in the rename, and the flushes
     // only spread the attempts out.
-    let mut config = test_config(dir.path());
-    config.deferred_durability = true;
+    let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
 
     let content = b"one blob, published and unlinked in a loop";
@@ -11086,6 +10976,7 @@ fn verify_restores_evicts_a_corrupted_blob() {
 
     let meta = store.get("vkey").unwrap().expect("entry present after put");
     let blob = store.blob_path(&meta.files[0].hash);
+    store.flush_durability(10).unwrap();
 
     // Corrupt the blob in place, keeping the SAME size so the size check
     // passes and only the content (vs its address) differs.
@@ -11473,8 +11364,7 @@ fn legacy_migration_preserves_an_unindexed_cas_winner() {
 fn legacy_migration_syncs_a_pending_winner_and_keeps_good_artifacts_on_corruption() {
     for corrupt in [false, true] {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = test_config(dir.path());
-        config.deferred_durability = true;
+        let config = test_config(dir.path());
         let store = Store::open(&config).unwrap();
         let shared = b"shared pending artifact";
         let seed = put_entry(&store, dir.path(), 100, "pending", shared);
@@ -12170,7 +12060,7 @@ fn verified_batch_import_checks_each_artifact_field_independently() {
 }
 
 #[test]
-fn verified_batch_import_preserves_but_rejects_a_corrupt_existing_blob() {
+fn verified_batch_import_leaves_a_corrupt_existing_blob_pending() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::open(test_config(tmp.path())).unwrap();
     let key = blake3::hash(b"existing-immutable-blob")
@@ -12183,9 +12073,13 @@ fn verified_batch_import_preserves_but_rejects_a_corrupt_existing_blob() {
 
     store
         .import_verified_restored_entries(&[entry])
-        .expect_err("a corrupt existing blob must not become a strict hit");
+        .expect("a deferred import stays pending for the hit-time check");
     assert!(!store.entry_is_durable(&key));
-    assert_eq!(std::fs::read(blob).unwrap(), b"pre-existing immutable blob");
+    assert!(store.get(&key).unwrap().is_none());
+    assert!(
+        !store.contains(&key),
+        "the hit-time check evicts the corrupt entry"
+    );
 }
 
 #[test]
@@ -13075,8 +12969,7 @@ fn put_evictable_entries(store: &Store, dir: &Path, n: usize) {
 #[test]
 fn eviction_stands_off_after_losing_the_write_lock() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.deferred_durability = true;
+    let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
     put_evictable_entries(&store, dir.path(), 3);
 
@@ -13112,8 +13005,7 @@ fn eviction_stands_off_after_losing_the_write_lock() {
 #[test]
 fn eviction_pauses_between_write_slices() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.deferred_durability = true;
+    let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
     put_evictable_entries(&store, dir.path(), 500);
 
@@ -13146,8 +13038,7 @@ fn eviction_pauses_between_write_slices() {
 #[test]
 fn eviction_skips_entries_it_found_held_without_taking_the_lock() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.deferred_durability = true;
+    let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
     put_evictable_entries(&store, dir.path(), 3);
     // Every blob is still hardlinked into a build's target directory.
@@ -13715,6 +13606,7 @@ fn read_only_store_verifies_content_as_configured() {
     ro_put(&owner, src.path(), "flip", b"artifact-bytes");
     let meta = owner.stored_meta("flip").unwrap();
     let blob = owner.blob_path(&meta.files[0].hash);
+    owner.flush_durability(10).unwrap();
     fs::set_permissions(&blob, fs::Permissions::from_mode(0o644)).unwrap();
     fs::write(&blob, b"ARTIFACT-BYTES").unwrap();
     let verified = Store::open_read_only_with_options(

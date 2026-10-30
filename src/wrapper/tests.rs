@@ -99,12 +99,12 @@ fn only_a_fresh_closure_is_worth_recording() {
     assert!(should_record_closure(false, true));
 }
 
-/// Recording is opt-in and needs somewhere to record.
+/// Recording needs somewhere to record.
 #[test]
-fn input_predictions_record_only_when_enabled_and_backed_by_a_store() {
+fn input_predictions_record_only_when_backed_by_a_store() {
     let _lock = crate::test_support::process_state_test_lock();
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().join("cache"));
+    let config = test_config(dir.path().join("cache"));
     let store = Store::open(&config).unwrap();
     let args = rustc_args(&["rustc", "src/lib.rs", "--crate-name", "demo"]);
     let closure = crate::cache_key::DepInfo {
@@ -119,21 +119,12 @@ fn input_predictions_record_only_when_enabled_and_backed_by_a_store() {
         .expect("an invocation with a crate root has an identity");
     let recorded = |store: &Store| store.file_hasher().input_prediction(&identity).is_some();
 
-    // Off by default, which is the state every user is in today.
-    assert!(!config.input_predictions);
-    record_input_prediction(&config, Some(&store), &args, true, &key);
-    assert!(
-        !recorded(&store),
-        "the feature is off; nothing may be written"
-    );
-
-    // On, but with no store to record into: the daemon's store-free path.
-    config.input_predictions = true;
-    record_input_prediction(&config, None, &args, true, &key);
+    // With no store to record into: the daemon's store-free path.
+    record_input_prediction( None, &args, true, &key);
     assert!(!recorded(&store));
 
-    // On, with a store, and a closure to record.
-    record_input_prediction(&config, Some(&store), &args, true, &key);
+    // With a store, and a closure to record.
+    record_input_prediction( Some(&store), &args, true, &key);
     assert!(
         recorded(&store),
         "an enabled build with a store must remember what it discovered"
@@ -144,7 +135,6 @@ fn input_predictions_record_only_when_enabled_and_backed_by_a_store() {
     // And with no closure there is nothing to record: an invocation that
     // never ran a pre-pass must not write an empty closure over a good one.
     record_input_prediction(
-        &config,
         Some(&store),
         &args,
         true,
@@ -176,8 +166,7 @@ fn a_registry_unit_reading_its_out_dir_records_a_relocated_row() {
     }
     let _lock = crate::test_support::process_state_test_lock();
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().join("cache"));
-    config.input_predictions = true;
+    let config = test_config(dir.path().join("cache"));
     let store = Store::open(&config).unwrap();
     let package = dir.path().join("home/registry/src/index-1/kt-1.0.0");
     std::fs::create_dir_all(package.join("src")).unwrap();
@@ -212,7 +201,6 @@ fn a_registry_unit_reading_its_out_dir_records_a_relocated_row() {
         ..Default::default()
     };
     record_input_prediction(
-        &config,
         Some(&store),
         &args,
         true,
@@ -228,7 +216,6 @@ fn a_registry_unit_reading_its_out_dir_records_a_relocated_row() {
         env_deps: Vec::new(),
     };
     record_input_prediction(
-        &config,
         Some(&store),
         &args,
         true,
@@ -255,8 +242,7 @@ fn a_workspace_units_rows_carry_the_guard_only_while_it_covers_the_closure() {
     }
     let mut lock = crate::test_support::process_state_test_lock();
     let base = lock.enter();
-    let mut config = test_config(base.join("cache"));
-    config.input_predictions = true;
+    let config = test_config(base.join("cache"));
     let store = Store::open(&config).unwrap();
     let root = base.join("w");
     std::fs::create_dir_all(root.join("kt/src")).unwrap();
@@ -296,11 +282,10 @@ fn a_workspace_units_rows_carry_the_guard_only_while_it_covers_the_closure() {
         (tree(&local), tree(&shared))
     };
     let lib = PathBuf::from("kt/src/lib.rs");
-    record_input_prediction(&config, Some(&store), &args, true, &key(vec![lib.clone()]));
+    record_input_prediction( Some(&store), &args, true, &key(vec![lib.clone()]));
     let guarded = Some("tree".to_string());
     assert_eq!(trees(), (guarded.clone(), guarded));
     record_input_prediction(
-        &config,
         Some(&store),
         &args,
         true,
@@ -325,8 +310,7 @@ fn a_record_keeps_no_guard_once_its_tree_moved() {
     }
     let mut lock = crate::test_support::process_state_test_lock();
     let base = lock.enter();
-    let mut config = test_config(base.join("cache"));
-    config.input_predictions = true;
+    let config = test_config(base.join("cache"));
     let store = Store::open(&config).unwrap();
     let root = base.join("w");
     std::fs::create_dir_all(root.join("kt/src")).unwrap();
@@ -363,7 +347,7 @@ fn a_record_keeps_no_guard_once_its_tree_moved() {
             tree_guard: Some(guard),
             ..Default::default()
         };
-        record_input_prediction(&config, Some(&store), &args, true, &key);
+        record_input_prediction( Some(&store), &args, true, &key);
         let hasher = store.file_hasher();
         let tree = |identity: &str| hasher.input_prediction(identity).unwrap().tree;
         (
@@ -838,7 +822,7 @@ fn auto_gc_wanted_fires_only_over_budget_and_respects_throttle() {
 
 #[test]
 #[cfg(unix)]
-fn disk_pressure_hints_even_below_cache_budget_and_the_detached_worker_recovers() {
+fn disk_pressure_recovers_even_below_cache_budget() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = crate::test_support::test_config(dir.path().to_path_buf());
     config.max_size = u64::MAX;
@@ -868,13 +852,11 @@ fn disk_pressure_hints_even_below_cache_budget_and_the_detached_worker_recovers(
         }),
     );
     config.auto_recover_min_free_bytes = 100;
-    config.auto_gc = false;
-    assert!(!auto_gc_wanted(&config, &store));
+    assert!(
+        auto_gc_wanted(&config, &store),
+        "disk pressure triggers even below the cache budget"
+    );
     crate::disk_recovery::run(&config);
-    assert!(store.contains("old"));
-    config.auto_gc = true;
-    assert!(auto_gc_wanted(&config, &store));
-    crate::cli::run_auto_gc_worker(&config, std::time::Duration::ZERO);
     assert!(!store.contains("old"));
     expire_auto_gc_stamp(&config);
     assert!(
@@ -884,20 +866,14 @@ fn disk_pressure_hints_even_below_cache_budget_and_the_detached_worker_recovers(
 }
 
 #[test]
-fn auto_gc_wanted_respects_disable_and_slack() {
+fn auto_gc_wanted_respects_slack() {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = test_config(dir.path().to_path_buf());
     let store = Store::open(&cfg).unwrap();
     put_test_entry(&store, dir.path(), "auto-gc-key-2");
 
-    // Disabled: never triggers, regardless of size.
-    cfg.auto_gc = false;
-    cfg.max_size = 1;
-    assert!(!auto_gc_wanted(&cfg, &store), "auto_gc=false must disable");
-
-    // Enabled but within the +10% slack band: no trigger. The store holds
+    // Within the +10% slack band: no trigger. The store holds
     // exactly 4096 bytes; max_size 4000 → threshold 4400 ≥ 4096.
-    cfg.auto_gc = true;
     cfg.max_size = 4000;
     assert!(
         !auto_gc_wanted(&cfg, &store),
@@ -1987,22 +1963,11 @@ fn compile_before_key_needs_a_local_store() {
         "--out-dir",
         "/t/debug/deps",
     ]);
-    assert!(
-        deferral_allowed(&config, &cargo_like, None),
-        "predictions off still defers a provable miss"
-    );
-    config.input_predictions = true;
     assert!(deferral_allowed(&config, &cargo_like, None));
     assert!(
         !deferral_allowed(&config, &no_dep_info, None),
         "nothing to key from"
     );
-    config.deferred_discovery = false;
-    assert!(
-        !deferral_allowed(&config, &cargo_like, None),
-        "switched off"
-    );
-    config.deferred_discovery = true;
     config.fallback = Some("sccache".to_string());
     assert!(
         !deferral_allowed(&config, &cargo_like, None),
@@ -8139,15 +8104,13 @@ fn take_recheck_hit_returns_only_entries_the_predicate_accepts() {
     assert!(take_recheck_hit(&store, "missing", &|_| true).is_none());
 }
 
-/// With deferred durability the entry is left for the daemon when one is
-/// listening, and flushed here when none is: either way nothing outlives
-/// the build, and a store never sees a daemon does not accumulate
-/// unflushed entries. With the feature off, a put is already durable.
+/// The entry is left for the daemon when one is listening, and flushed
+/// here when none is: either way nothing outlives the build, and a store
+/// that never sees a daemon does not accumulate unflushed entries.
 #[test]
 fn a_pending_entry_waits_for_the_daemon_or_is_flushed_here() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = test_config(dir.path().join("cache"));
-    config.deferred_durability = true;
     config.socket_path_override = Some(dir.path().join("absent.sock"));
     let store = Store::open(&config).unwrap();
     let output = dir.path().join("out.rlib");
@@ -8182,7 +8145,7 @@ fn a_pending_entry_waits_for_the_daemon_or_is_flushed_here() {
     // A listening socket: the daemon owns the flush, so this leaves the
     // entry pending and starts nothing.
     let socket = dir.path().join("live.sock");
-    let listener = std::os::unix::net::UnixListener::bind(&socket)
+    let _listener = std::os::unix::net::UnixListener::bind(&socket)
         .expect("bind listener");
     config.socket_path_override = Some(socket);
     put("with_daemon", b"artifact-two");
@@ -8192,15 +8155,6 @@ fn a_pending_entry_waits_for_the_daemon_or_is_flushed_here() {
         store.pending_durability().unwrap(),
         1,
         "a reachable daemon is left to flush it"
-    );
-    drop(listener);
-
-    config.deferred_durability = false;
-    flush_or_hand_off_durability(&config, &store, "with_daemon");
-    assert_eq!(
-        store.pending_durability().unwrap(),
-        1,
-        "the switch being off says nothing about an entry already pending"
     );
 }
 
@@ -8267,29 +8221,6 @@ fn a_deferred_cc_compile_is_stored_unless_a_peer_beat_it_or_an_input_moved() {
         "never over a compile's own outputs"
     );
     assert!(!cc_restore_committed(true, false));
-}
-
-#[test]
-fn admit_scheduler_miss_off_returns_empty_without_leases() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().to_path_buf());
-    config.scheduler = false;
-    let store = Store::open(&config).unwrap();
-    let (guard, hit) = admit_scheduler_miss(
-        &config,
-        &store,
-        "key",
-        FlightIdentity::cc("a.c"),
-        "a.c",
-        false,
-        |_| true,
-    );
-    assert!(guard.is_empty());
-    assert!(hit.is_none());
-    assert!(
-        !dir.path().join("scheduler").exists(),
-        "off switch must not create lease files"
-    );
 }
 
 #[test]
@@ -8423,7 +8354,7 @@ fn hold_scheduler_flight_fixture() {
     let crate_name = std::env::var("KACHE_TEST_FLIGHT_CRATE").expect("fixture crate name");
     let key = std::env::var("KACHE_TEST_FLIGHT_KEY").expect("fixture cache key");
     let identity = FlightIdentity::rustc(&crate_name, &["lib".into()], false).with_key(&key);
-    let guard = match scheduler::begin_miss(&root, true, &identity, &crate_name, false) {
+    let guard = match scheduler::begin_miss(&root, &identity, &crate_name, false) {
         scheduler::BeginMiss::Compile(guard) => guard,
         scheduler::BeginMiss::Recheck => panic!("fixture must own the flight"),
     };
@@ -8452,8 +8383,7 @@ fn a_key_from_emitted_dep_info_always_arms_the_too_new_guard() {
     }
     let _lock = crate::test_support::process_state_test_lock();
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().join("cache"));
-    config.input_predictions = true;
+    let config = test_config(dir.path().join("cache"));
     let src = dir.path().join("src");
     std::fs::create_dir_all(&src).unwrap();
     let lib = src.join("lib.rs");
@@ -8551,8 +8481,7 @@ fn only_a_non_linking_compile_that_reports_its_dep_info_is_stopped_on_a_hit() {
 #[test]
 fn a_rederivation_never_waits_on_a_discovery_flight() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().join("cache"));
-    config.scheduler = true;
+    let config = test_config(dir.path().join("cache"));
     let flights = |discovery: KeyDiscovery| discovery_flight_dir(&config, &discovery);
     assert_eq!(
         flights(KeyDiscovery::Immediate),
@@ -8566,11 +8495,6 @@ fn a_rederivation_never_waits_on_a_discovery_flight() {
         flights(KeyDiscovery::Rederived),
         None,
         "the caller may already hold the flight"
-    );
-    config.scheduler = false;
-    assert_eq!(
-        discovery_flight_dir(&config, &KeyDiscovery::Immediate),
-        None
     );
 }
 
@@ -8590,9 +8514,7 @@ fn a_rederived_key_holds_no_discovery_flight() {
     }
     let _lock = crate::test_support::process_state_test_lock();
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().join("cache"));
-    config.scheduler = true;
-    config.input_predictions = true;
+    let config = test_config(dir.path().join("cache"));
     let store = Store::open(&config).unwrap();
     let lib = dir.path().join("src/lib.rs");
     std::fs::create_dir_all(lib.parent().unwrap()).unwrap();
@@ -8670,8 +8592,7 @@ fn the_stop_on_hit_probe_and_the_rederived_key_fold_the_declared_inputs() {
     }
     let _lock = crate::test_support::process_state_test_lock();
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().join("cache"));
-    config.input_predictions = true;
+    let config = test_config(dir.path().join("cache"));
     let store = Store::open(&config).unwrap();
     let lib = dir.path().join("src/lib.rs");
     std::fs::create_dir_all(lib.parent().unwrap()).unwrap();
@@ -9384,9 +9305,7 @@ fn cc_successful_compile_and_handoff_preserve_actual_rebuilt_outputs() {
     crate::test_support::settle_writes(&[&source]);
     let cc = crate::compiler::resolve_program_on_path("cc")
         .expect("the test runner requires a C compiler");
-    let mut config = test_config(dir.path().join("cache"));
-    config.deferred_discovery = false;
-    config.daemon_publish = true;
+    let config = test_config(dir.path().join("cache"));
     std::fs::create_dir_all(&config.cache_dir).unwrap();
     let run_lock = std::fs::OpenOptions::new()
         .create(true)
@@ -9441,8 +9360,7 @@ fn cc_failed_compile_does_not_claim_rebuilt_outputs_or_publish_handoff() {
     std::fs::write(&source, "this is invalid C source @\n").unwrap();
     let cc = crate::compiler::resolve_program_on_path("cc")
         .expect("the test runner requires a C compiler");
-    let mut config = test_config(dir.path().join("cache"));
-    config.deferred_discovery = false;
+    let config = test_config(dir.path().join("cache"));
     let argv = vec![
         cc.display().to_string(),
         "-c".into(),

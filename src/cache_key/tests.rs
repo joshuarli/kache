@@ -1462,24 +1462,18 @@ fn toolchain_selector_fingerprint_tracks_every_selection_source() {
     );
 }
 
-/// Both halves have to hold: a build that asked for predictions but has no
-/// index DB (the daemon's store-free hasher) cannot read one.
+/// Predictions are always requested; only the table can be missing (the
+/// daemon's store-free hasher has no index DB to read).
 #[test]
 fn predictions_need_both_the_request_and_a_table() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("index.db");
     assert!(
         FileHasher::persistent(&db)
-            .with_input_predictions(true)
             .uses_input_predictions()
     );
     assert!(
-        !FileHasher::persistent(&db).uses_input_predictions(),
-        "a hasher nobody asked must not read records"
-    );
-    assert!(
         !FileHasher::new()
-            .with_input_predictions(true)
             .uses_input_predictions(),
         "asking is not enough without a table to read"
     );
@@ -1618,7 +1612,6 @@ fn discovery_defers_to_the_compile_and_takes_the_emitted_closure() {
         )
         .unwrap();
     let on = FileHasher::persistent(&db)
-        .with_input_predictions(true)
         .with_prediction_flights(Some(dir.path().join("cache")));
 
     set_defer_discovery(true);
@@ -2004,11 +1997,11 @@ fn a_record_is_only_consulted_for_an_eligible_invocation() {
         "my_macro=/t/debug/deps/libmy_macro-3.so",
     ]);
 
-    let off = FileHasher::persistent(&db).with_invocation_env(&env);
+    let hasher = FileHasher::persistent(&db).with_invocation_env(&env);
     assert_eq!(
-        predicted_key_inputs(&plain, &off, &mut None),
-        Err(Rejection::Disabled),
-        "predictions off must not touch the table"
+        predicted_key_inputs(&plain, &hasher, &mut None),
+        Err(Rejection::NoRecord),
+        "an eligible invocation with nothing recorded falls back"
     );
 
     let on = FileHasher::persistent(&db)
@@ -3596,7 +3589,6 @@ fn an_rlib_only_member_is_predicted_only_under_the_workspace_guard() {
     let hasher = |name: &str| {
         FileHasher::persistent(&base.join(name))
             .with_invocation_env(&env)
-            .with_input_predictions(true)
     };
     let closure = |sources: &[PathBuf]| DepInfo {
         source_files: sources.to_vec(),
@@ -5698,7 +5690,6 @@ fn emitted_closure_keeps_the_precompile_tree_guard() {
         )
         .unwrap();
     let hasher = FileHasher::persistent(&db)
-        .with_input_predictions(true)
         .with_prediction_flights(Some(dir.path().join("cache")));
     let original_tree = crate_tree_digest(&hasher).unwrap();
     set_defer_discovery(true);
@@ -16802,9 +16793,7 @@ fn a_discovery_identity_is_the_shared_one_when_predictions_are_on() {
         "my_macro=/t/debug/deps/libmy_macro-3.so",
     ]);
     let db = dir.path().join("index.db");
-    let off = FileHasher::persistent(&db);
-    assert_eq!(prediction_discovery_identity(&eligible, &off), None);
-    let on = FileHasher::persistent(&db).with_input_predictions(true);
+    let on = FileHasher::persistent(&db);
     let identity = prediction_discovery_identity(&eligible, &on).unwrap();
     assert_eq!(
         Some(identity.clone()),

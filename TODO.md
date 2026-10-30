@@ -1,14 +1,5 @@
 Prefix: KACH
 Next: 5
-### KACH-1 · P3 · Convert default-true pipeline toggles to constants
-
-- **Area:** Config
-- **Where:** `crates/kache-config/src/config.rs:220`, `crates/kache-config/src/config.rs:243`, `crates/kache-config/src/config.rs:250`, `crates/kache-config/src/config.rs:261`, `crates/kache-config/src/config.rs:267`, `crates/kache-config/src/config.rs:294`, `crates/kache-config/src/config.rs:304`, `crates/kache-config/src/config.rs:359`
-- **Problem:** `input_predictions`, `deferred_discovery`, `out_dir_alias`, `deferred_durability`, `daemon_publish`, `auto_gc`, `index_auto_compact`, `scheduler` default true with opt-outs. Every toggle doubles test matrix and docs. Defaults are correct; opt-outs are unmeasured.
-- **Recommendation:** Fix each to always-on, delete the config knob, env var, file key, and opt-out branches. Keep fail-open behavior on unusable scheduler dir.
-- **Fix with:** none
-- **Effort:** M
-
 ### KACH-2 · P3 · Remove narrow chaining and second-store knobs
 
 - **Area:** Config

@@ -61,7 +61,7 @@ impl RustcHitContext<'_> {
             object_output: String::new(),
         }
         .report(self.config, meta);
-        record_input_prediction(self.config, prediction_store, self.args, true, key);
+        record_input_prediction(prediction_store, self.args, true, key);
         Ok(())
     }
 }

@@ -91,15 +91,12 @@ disagree — not settings you can set.
 | none | `cache.volumes` | unset | Volume-local store shards, e.g. `[cache.volumes] "D:" = "D:/kache-store"`. Builds on a mapped volume share inodes there instead of copying across mounts. Unmapped volumes use the main store. GC sweeps each shard with its own budget; see [Volume shards](#volume-shards). |
 | `KACHE_SOCKET_PATH` | none | `<runtime_dir>/daemon.sock` | Absolute daemon endpoint override |
 | `KACHE_MAX_SIZE` | `cache.local_max_size` | 5% of the cache disk, rounded to the nearest GiB, floored at 5GiB and capped at 100GiB; 50GiB when the disk size cannot be read | Registered blob bytes allowed before GC. An explicit size always wins. `none` is not allowed. |
-| `KACHE_AUTO_GC` | `cache.auto_gc` | `true` | Spawn throttled background GC under size pressure |
-| `KACHE_INDEX_AUTO_COMPACT` | `cache.index_auto_compact` | `true` | Let the daemon heal the blob index and compact `index.db` when the machine is quiet. See [Daemon index maintenance](#daemon-index-maintenance). |
 | `KACHE_AUTO_RECOVER_MIN_FREE_BYTES` | `cache.auto_recover_min_free_bytes` | `10737418240` (10 GiB); `0` in CI | Below this many free bytes, builds evict eligible cache entries; `0` disables recovery. See [Free-space recovery](#free-space-recovery). |
 | `KACHE_COMPRESSION_LEVEL` | `cache.compression_level` | `3` | Zstd level, clamped to 1 through 22 |
 | none | `cache.event_log_max_size` | `64MiB` | Rotate the event log after this size. Rotation keeps the build in progress, up to half this size, and moves the dropped lines to `events.jsonl.archive/`, pruned at each rotation to 8 days and 512 MiB |
 | none | `cache.event_log_keep_lines` | `1000` | Minimum lines retained when the event log rotates |
 | `KACHE_DISABLED` | none | `false` | Pass all compiler work through when set to `1` or `true` |
 | `KACHE_DAEMON_EXECUTION_CONCURRENCY` | `cache.daemon_execution_concurrency` | automatic | Concurrent daemon pipeline requests: four per available CPU, at least 32. A positive integer overrides that default; `0` selects automatic sizing. On Unix, the daemon can lower the count to fit its open-file limit and logs the reduction. RPC and blocking-thread capacity grow with this setting. It does not change compiler scheduler permits. Restart the daemon after changing it; an installed service reads its own environment and config. |
-| `KACHE_SCHEDULER` | `cache.scheduler` | `true` | Pace real compiler processes across concurrent builds after a miss. Hits and passthroughs never wait. `0` or `false` turns it off. |
 | `KACHE_SCHEDULER_MEMORY_PRESSURE` | `cache.scheduler_memory_pressure` | `true` | Under memory pressure, run compiles one after another. See [Limits](/docs/how-it-works/limits). |
 
 On macOS the default store is `~/Library/Caches/kache`; on Linux it is `$XDG_CACHE_HOME/kache` or `~/.cache/kache`.
@@ -176,7 +173,7 @@ The local store is not designed for sharing across machines. Each machine keeps 
 
 The daemon looks after `index.db` on its own. It checks 60 seconds after it starts, every 5 minutes after that, and once at shutdown. Each check runs two steps in order: it heals the blob index, then compacts the file. Both steps hold the index write lock while they work, so both wait for a quiet machine. A machine is quiet when no compile holds a scheduler slot, and the daemon has received no build request for 60 seconds. Stats polling does not count as a build request. Neither step overlaps a GC sweep.
 
-Set `cache.index_auto_compact = false` or `KACHE_INDEX_AUTO_COMPACT=0` to turn both steps off. `kache doctor --repair` does the same work on demand either way.
+`kache doctor --repair` does the same work on demand.
 
 #### Blob index heal
 
@@ -212,8 +209,7 @@ Set `cache.auto_recover_min_free_bytes` to the minimum free space on the store's
 | --- | --- | --- | --- |
 | `KACHE_CACHE_EXECUTABLES` | `cache.cache_executables` | `true` | Cache eligible Rust bins and test executables |
 | `KACHE_TRUST_CODEGEN_BACKENDS` | `cache.trust_codegen_backends` | `false` | Cache rustc compiles that load a codegen backend dylib (`-Zcodegen-backend=<path>`), keyed by the dylib's contents. The backend must be passed as a path, and libraries it loads at run time are not part of the key. Off because a backend can write files rustc does not report, and a cache hit would not restore them. |
-| `KACHE_INPUT_PREDICTIONS` | `cache.input_predictions` | `true` | Remember each crate's source closure and derive the next key from it, skipping the dep-info pre-pass when every recorded input still checks out |
-| `KACHE_VERIFY_INPUT_PREDICTIONS` | none | off | `sampled` or `always`: also run the dep-info pre-pass for a validated prediction and count disagreements in the report. The pre-pass result is the one used |
+| `KACHE_VERIFY_INPUT_PREDICTIONS` | none | off | `sampled` or `always`: also run the dep-info pre-pass alongside a prediction and count disagreements in the report. The pre-pass result is the one used |
 | `KACHE_BUILD_SCRIPT_HERMETIC` | `cache.build_script_hermetic` | `false` | On Unix, run cached build scripts with `OUT_DIR` in a shared directory named by their inputs, so a run is shared across target directories. See [Build scripts](/docs/how-it-works/build-scripts). |
 | `KACHE_BUILD_SCRIPT_CACHE` | none | `true` on Linux and macOS | Cache build-script runs: restore `OUT_DIR` and the script's output instead of running it when its binary, Cargo environment and declared `rerun-if-*` inputs match a recorded run. See [Build scripts](/docs/how-it-works/build-scripts). |
 | `KACHE_FALLBACK` | `cache.fallback` | none | Wrapper used for ordinary Kache passthroughs |
@@ -311,8 +307,7 @@ shared only once a build on this machine has shown that nothing but proc macros
 links it, so the first checkout still rebuilds it. A `crate:VAR` entry for
 `OUT_DIR`, or for a variable whose value is under it, keeps that crate on its
 own `OUT_DIR`. A macro that writes debug output into the shared directory fails
-with a hint: run `cargo clean -p <crate>` and rebuild with
-`KACHE_OUT_DIR_ALIAS=0`. The hint comes from rustc's error output, so a compile
+with a hint: run `cargo clean -p <crate>` and rebuild. The hint comes from rustc's error output, so a compile
 that Kache passes straight to rustc fails with rustc's error alone. That covers
 a `bypass_*` or `exclude` match and an incremental compile.
 
@@ -388,11 +383,7 @@ Every GC driver (the daemon's sweep and its eviction after an upload, the auto-G
 
 | Environment | TOML key | Default | Purpose |
 | --- | --- | --- | --- |
-| `KACHE_DAEMON_PUBLISH` | `cache.daemon_publish` | `true` | Let a running daemon store completed C/C++ compiles. The wrapper stores locally when the daemon cannot accept the work. |
 | `KACHE_TRUST_DAEMON_EXECUTION` | `cache.trust_daemon_execution` | `false` | Both peers must opt in. Allows a trusted daemon pipeline under Linux Seccomp/NoNewPrivs or macOS sandboxes. Compiler children and artifact restoration run in the client; input discovery and other pipeline accesses retain the daemon's restrictions. See [Process restrictions](/docs/how-it-works/architecture#process-restrictions). |
-| `KACHE_DEFERRED_DISCOVERY` | `cache.deferred_discovery` | `true` | On a certain miss (no closure record), compile first and key from the dep-info rustc emits instead of running the dep-info pre-pass; a C compile with no recorded read set likewise compiles first and keys from the dependency file it writes. Set to `0` to keep the pre-pass and the preprocessor probe on every miss. |
-| `KACHE_OUT_DIR_ALIAS` | `cache.out_dir_alias` | `true` | On Unix, compile a registry proc macro whose `OUT_DIR` is empty, or a registry lib that only proc macros link, against one shared read-only directory under `<cache>/out-dirs` instead of its own `OUT_DIR`, so the path it bakes in is the same in checkouts sharing that root. With per-job or per-host stores, set `KACHE_OUT_DIR_ALIAS_ROOT` to share the path across stores. A macro that writes debug output there fails with a hint; set to `0` to turn this off. |
-| `KACHE_DEFERRED_DURABILITY` | `cache.deferred_durability` | `true` | Store a miss or a downloaded entry without an fsync and let a background worker flush it a moment later; a hit on an entry not yet flushed verifies its bytes first. Set to `0` to flush every entry inside the compile or download that stored it. |
 | `KACHE_PROGRESS` | none | off | `hits` or `verbose` compiler progress |
 | `KACHE_LOG` | none | CLI: `kache=warn`; wrapper: off | Stderr log filter |
 | `KACHE_LOG_FILE` | none | CLI/daemon: `kache=info`; wrapper: off | File log filter and wrapper opt-in. The file is `~/Library/Logs/kache/kache.log` on macOS and `kache.log` in the default store directory elsewhere, even when `KACHE_CACHE_DIR` or `cache.local_store` moves the store. A process that starts while it is over 5 MiB truncates it |
@@ -435,4 +426,4 @@ out_dir_alias_root = "/var/lib/kache-out-dirs"
 
 Set `KACHE_OUT_DIR_ALIAS_ROOT` to override the file. Each host needs that same canonical path, writable by the build user; Kache creates private parents and empty read-only aliases beneath it. The setting applies on Unix, where OUT_DIR aliasing is supported.
 
-When switching roots, clean existing Cargo targets so proc macros rebuild with the new path. Keep old alias directories while any artifacts may still reference them. Kache does not collect alias directories or the consumer evidence and deny markers stored with them. A macro that writes debug output still needs `KACHE_OUT_DIR_ALIAS=0`, as described above.
+When switching roots, clean existing Cargo targets so proc macros rebuild with the new path. Keep old alias directories while any artifacts may still reference them. Kache does not collect alias directories or the consumer evidence and deny markers stored with them. A macro that writes debug output fails with a hint naming the packages to clean, as described above.

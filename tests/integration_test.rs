@@ -263,9 +263,8 @@ fn rustc_corrupt_entry_recompiles_with_the_normal_path_remap() {
             cache.path(),
             Some(&isolated_config_path(cache.path())),
         )
-        // Exercise the key-first claim failure, rather than compiling before
-        // discovery where the ordinary remaps are already applied.
-        .env("KACHE_DEFERRED_DISCOVERY", "0")
+        // The corrupt entry fails lookup; the replacement compile must
+        // still carry the same path remap.
         .args([
             "rustc",
             "--edition",

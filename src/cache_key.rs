@@ -7260,7 +7260,7 @@ impl FileHasher<'static> {
             invocation_env: env.clone(),
             cache: None,
             daemon_socket: None,
-            use_input_predictions: false,
+            use_input_predictions: true,
             prediction_flight_dir: None,
             discovery_flight: RefCell::new(None),
             prefetched: RefCell::new(HashMap::new()),
@@ -7282,7 +7282,7 @@ impl FileHasher<'static> {
                 invocation_env: InvocationEnv::capture(),
                 cache: Some(cache),
                 daemon_socket: None,
-                use_input_predictions: false,
+                use_input_predictions: true,
                 prediction_flight_dir: None,
                 discovery_flight: RefCell::new(None),
                 prefetched: RefCell::new(HashMap::new()),
@@ -7368,7 +7368,7 @@ impl<'db> FileHasher<'db> {
             invocation_env: env.clone(),
             cache: Some(cache),
             daemon_socket: None,
-            use_input_predictions: false,
+            use_input_predictions: true,
             prediction_flight_dir: None,
             discovery_flight: RefCell::new(None),
             prefetched: RefCell::new(HashMap::new()),
@@ -7428,19 +7428,16 @@ impl<'db> FileHasher<'db> {
         }
     }
 
-    /// Let key computation derive its input set from a recorded closure
-    /// instead of spawning the dep-info pre-pass.
-    ///
-    /// A property of the hasher because the hasher is what reaches the
-    /// prediction table: without an index DB there is nothing to read, and
-    /// asking is always allowed to answer "run the pre-pass".
-    pub(crate) fn with_input_predictions(mut self, enabled: bool) -> Self {
-        self.use_input_predictions = enabled;
+    pub(crate) fn with_prediction_flights(mut self, cache_dir: Option<PathBuf>) -> Self {
+        self.prediction_flight_dir = cache_dir;
         self
     }
 
-    pub(crate) fn with_prediction_flights(mut self, cache_dir: Option<PathBuf>) -> Self {
-        self.prediction_flight_dir = cache_dir;
+    /// Internal bypass for key re-derivation: recompute from the pre-pass,
+    /// ignoring any recorded closure. Not a user setting; predictions are
+    /// otherwise always on.
+    pub(crate) fn with_input_predictions(mut self, enabled: bool) -> Self {
+        self.use_input_predictions = enabled;
         self
     }
 

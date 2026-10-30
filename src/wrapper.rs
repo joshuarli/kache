@@ -410,15 +410,12 @@ fn auto_gc_stamp_path(cache_dir: &Path) -> PathBuf {
     cache_dir.join("auto-gc-check.stamp")
 }
 
-/// Decide whether a background GC should be spawned: auto-GC enabled, the
-/// throttle interval elapsed, and the store over `max_size` plus slack.
+/// Decide whether a background GC should be spawned: the throttle interval
+/// elapsed, and the store over `max_size` plus slack.
 /// Touches the stamp *before* the size query so concurrent wrappers don't
 /// stampede on the SQLite `SUM`. Split from [`after_store`] so the decision
 /// is unit-testable without spawning processes.
 fn auto_gc_wanted(config: &Config, store: &Store) -> bool {
-    if !config.auto_gc {
-        return false;
-    }
     let stamp = auto_gc_stamp_path(&config.cache_dir);
     if !auto_gc_check_due(&stamp) {
         return false;
@@ -675,9 +672,6 @@ fn spawn_auto_gc_worker(config: &Config) {
 /// entries whose every hit re-reads them to verify.
 fn flush_or_hand_off_durability(config: &Config, store: &Store, cache_key: &str) {
     let _trace = crate::phase_trace::phase("durability_flush");
-    if !config.deferred_durability {
-        return;
-    }
     if crate::transport::is_reachable(&config.socket_path()) {
         return;
     }
@@ -1038,14 +1032,10 @@ fn admit_scheduler_miss(
     is_link: bool,
     entry_ok: impl Fn(&EntryMeta) -> bool,
 ) -> (MissGuard, Option<EntryMeta>) {
-    if !config.scheduler {
-        return (MissGuard::empty(), None);
-    }
     let identity = identity.with_key(cache_key);
     loop {
         match scheduler::begin_miss(
             &config.cache_dir,
-            true,
             &identity,
             crate_name,
             is_link,
@@ -1323,7 +1313,6 @@ fn run_cc_with_store(
         // is only for a certain miss: nowhere but this store could hold the
         // entry, and no fallback wrapper is waiting to be asked.
         None if precompiled.is_none()
-            && config.deferred_discovery
             && config.fallback.is_none()
             && config.readonly_store.is_none()
             && crate::compiler::cc::cc_direct_key_eligible(parsed) =>
@@ -1641,7 +1630,13 @@ fn run_cc_with_store(
     });
     // Without a live daemon, keep the ordinary staging and memo path.
     // The lifetime lock works for both Unix sockets and Windows pipes.
-    let daemon_publish = config.daemon_publish
+    // A daemon pipeline never hands off to itself; it stores inline.
+    let in_daemon = INVOCATION_SETTINGS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|settings| settings.daemon.is_some())
+    });
+    let daemon_publish = !in_daemon
         && crate::daemon::existing_daemon_run_lock_is_held(&config.socket_path()).unwrap_or(false);
     // A deferred compile's memo goes to the daemon with the entry; the
     // wrapper records it only if the hand-off does not happen (below). Only
@@ -3937,7 +3932,7 @@ fn run_parsed_rustc(
     drop(trace_store);
     let store_ms = store_start.elapsed().as_millis() as u64;
 
-    record_input_prediction(config, Some(&store), args, record_closure, &key_outputs);
+    record_input_prediction(Some(&store), args, record_closure, &key_outputs);
 
     let elapsed = start.elapsed().as_millis() as u64;
     let size = result.artifacts.total_size();
@@ -5202,7 +5197,6 @@ fn compile_before_key(
     // pool, as every other compile does.
     let miss_guard = scheduler::begin_keyless_compile(
         &config.cache_dir,
-        config.scheduler,
         crate_name,
         args.invokes_linker(),
     );
@@ -5377,7 +5371,6 @@ fn deferral_allowed(
     // The compile must emit the dep-info the key is derived from afterwards
     // (Cargo always asks for it; a bare rustc invocation may not).
     args.dep_info_path().is_some()
-        && config.deferred_discovery
         && config.fallback.is_none()
         && config.readonly_store.is_none()
         && extra_inputs.is_none()
@@ -5391,18 +5384,16 @@ fn deferral_allowed(
 /// — its sources are usually mid-edit, and a record written from them would
 /// only be re-validated away later at the cost of the write.
 ///
-/// Silent and best-effort throughout. Every reason to give up (feature off, no
-/// store, no closure to record, no identity) costs a future pre-pass and
-/// nothing else, so none of them is worth a warning on a successful build.
+/// Silent and best-effort throughout. Every reason to give up (no store, no
+/// closure to record, no identity) costs a future pre-pass and nothing else, so none of them is worth a warning on a successful build.
 fn record_input_prediction(
-    config: &Config,
     store: Option<&Store>,
     args: &RustcArgs,
     wanted: bool,
     key: &crate::cache_key::KeyOutputs,
 ) {
     let _trace = crate::phase_trace::phase("prediction_record");
-    if !config.input_predictions || !wanted {
+    if !wanted {
         return;
     }
     let Some(dep_info) = &key.dep_info else {
@@ -5606,11 +5597,10 @@ enum KeyDiscovery {
 }
 
 /// Where this key computation may wait for a peer discovering the same
-/// unit: nowhere without the scheduler, and nowhere for a re-derivation,
-/// which would otherwise wait on the flight its own caller holds.
+/// unit: nowhere for a re-derivation, which would otherwise wait on the
+/// flight its own caller holds.
 fn discovery_flight_dir(config: &Config, discovery: &KeyDiscovery) -> Option<PathBuf> {
-    (config.scheduler && !matches!(discovery, KeyDiscovery::Rederived))
-        .then(|| config.cache_dir.clone())
+    (!matches!(discovery, KeyDiscovery::Rederived)).then(|| config.cache_dir.clone())
 }
 
 /// What Kache and Cargo write as a project builds, which the tree guard and
@@ -5690,6 +5680,7 @@ fn compute_rustc_cache_key(
     let emitted =
         matches!(discovery, KeyDiscovery::Emitted(..)) || crate::cache_key::dep_info_provided();
     let flight_dir = discovery_flight_dir(config, &discovery);
+    let use_predictions = !matches!(discovery, KeyDiscovery::Rederived);
     crate::cache_key::set_defer_discovery(matches!(discovery, KeyDiscovery::Deferrable { .. }));
     crate::cache_key::set_compile_while_keying(matches!(
         discovery,
@@ -5705,7 +5696,7 @@ fn compute_rustc_cache_key(
         None => crate::cache_key::FileHasher::new_for(args.invocation_env())
             .with_daemon(config.socket_path()),
     }
-    .with_input_predictions(config.input_predictions)
+    .with_input_predictions(use_predictions)
     .with_prediction_flights(flight_dir)
     .with_own_dirs(written_while_building(config, store, args.invocation_env()));
     let emitted_sources = crate::cache_key::provided_dep_info_sources_for(&file_hasher);
@@ -5865,10 +5856,8 @@ fn recompute_key_without_prediction(
     build_script_inputs_digest: Option<&str>,
     key_record: &mut KeyEventRecord,
 ) -> Result<ComputedKey> {
-    let mut without = config.clone();
-    without.input_predictions = false;
     compute_rustc_cache_key(
-        &without,
+        config,
         compiler,
         args,
         workspace_root,
@@ -6750,7 +6739,6 @@ fn cc_compile_before_key(
     // jobs beside Cargo's.
     let miss_guard = scheduler::begin_keyless_compile(
         &config.cache_dir,
-        config.scheduler,
         crate_name,
         false,
     );

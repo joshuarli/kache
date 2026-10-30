@@ -1674,9 +1674,8 @@ fn server_main(
         }
     });
 
-    let maintenance_handle = config
-        .index_auto_compact
-        .then(|| crate::maintenance::spawn_periodic(config.clone(), daemon.request_clock.clone()));
+    let maintenance_handle =
+        Some(crate::maintenance::spawn_periodic(config.clone(), daemon.request_clock.clone()));
 
     // Background blob migration: lazily migrate legacy entries on startup
     let migration_config = config.clone();
@@ -1781,9 +1780,7 @@ fn server_main(
     // Handlers and uploads are done, so the index is as idle as this daemon
     // will see it. Quiet rules only: a contended index yields at once, and a
     // large store or live index is skipped, so shutdown stays short.
-    if config.index_auto_compact {
-        crate::maintenance::run_at_shutdown(config.clone());
-    }
+    crate::maintenance::run_at_shutdown(config.clone());
 
     control.finish();
     // Socket file is cleaned up by `_socket_guard` (Drop).

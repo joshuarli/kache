@@ -163,55 +163,6 @@ fn trust_domain_isolates_stores_and_fails_open() {
     );
 }
 
-/// Resolution order for predictions: the environment overrides the
-/// file, the file is consulted when the environment is silent, and the
-/// answer with neither is on. CI exports `KACHE_*` of its own, so the
-/// variable is cleared explicitly rather than assumed absent.
-#[test]
-fn input_predictions_resolve_env_over_file_and_default_on() {
-    let _lock = config_path_lock();
-    let file_says = |value: Option<bool>| -> Result<FileConfig> {
-        Ok(FileConfig {
-            cache: Some(CacheFileConfig {
-                input_predictions: value,
-                ..Default::default()
-            }),
-            ..Default::default()
-        })
-    };
-
-    {
-        let _env = set_env_for_test("KACHE_INPUT_PREDICTIONS", None);
-        assert!(
-            Config::input_predictions_enabled(&file_says(None)),
-            "on unless explicitly disabled"
-        );
-        assert!(Config::input_predictions_enabled(
-            &Ok(FileConfig::default())
-        ));
-        assert!(Config::input_predictions_enabled(&Err(anyhow::anyhow!(
-            "no config file"
-        ))));
-        assert!(Config::input_predictions_enabled(&file_says(Some(true))));
-        assert!(!Config::input_predictions_enabled(&file_says(Some(false))));
-    }
-
-    for on in ["1", "true", "TRUE"] {
-        let _env = set_env_for_test("KACHE_INPUT_PREDICTIONS", Some(on.as_ref()));
-        assert!(
-            Config::input_predictions_enabled(&file_says(Some(false))),
-            "{on} in the environment must override the file"
-        );
-    }
-    for off in ["0", "false", "no", ""] {
-        let _env = set_env_for_test("KACHE_INPUT_PREDICTIONS", Some(off.as_ref()));
-        assert!(
-            !Config::input_predictions_enabled(&file_says(Some(true))),
-            "{off:?} in the environment must override the file"
-        );
-    }
-}
-
 fn set_kache_config_for_test(path: &std::path::Path) -> TestEnvGuard {
     set_env_for_test("KACHE_CONFIG", Some(path.as_os_str()))
 }
@@ -263,38 +214,6 @@ fn the_event_log_rotates_at_64_mib_by_default() {
     std::fs::write(&config_path, "[cache]\nevent_log_max_size = \"8MiB\"\n").unwrap();
     assert_eq!(Config::load().unwrap().event_log_max_size, 8 * 1024 * 1024);
 }
-#[test]
-fn index_auto_compact_is_on_by_default_and_obeys_env_precedence() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&config_path);
-    let _missing = NamedEnvGuard::remove("KACHE_INDEX_AUTO_COMPACT");
-
-    assert!(Config::load().unwrap().index_auto_compact);
-
-    std::fs::write(&config_path, "[cache]\nindex_auto_compact = false\n").unwrap();
-    assert!(!Config::load().unwrap().index_auto_compact);
-
-    let _override = NamedEnvGuard::set("KACHE_INDEX_AUTO_COMPACT", "1");
-    assert!(Config::load().unwrap().index_auto_compact);
-    drop(_override);
-
-    std::fs::write(&config_path, "[cache]\nindex_auto_compact = true\n").unwrap();
-    for off in ["0", "false", "FALSE"] {
-        let _override = NamedEnvGuard::set("KACHE_INDEX_AUTO_COMPACT", off);
-        assert!(!Config::load().unwrap().index_auto_compact, "{off}");
-    }
-
-    std::fs::write(
-        &config_path,
-        "[cache]\nignore_env = true\nindex_auto_compact = true\n",
-    )
-    .unwrap();
-    let _ignored = NamedEnvGuard::set("KACHE_INDEX_AUTO_COMPACT", "0");
-    assert!(Config::load().unwrap().index_auto_compact);
-}
-
 #[test]
 fn recovery_floor_obeys_file_environment_and_ci_defaults() {
     let _lock = config_path_lock();
@@ -754,7 +673,7 @@ fn the_chosen_file_beats_the_host_key_by_key() {
     let dir = tempfile::tempdir().unwrap();
     let (host, chosen) = write_host_and_chosen(
         dir.path(),
-        "[cache]\ninput_predictions = true\nlocal_max_size = \"50GiB\"\n",
+        "[cache]\nkey_salt = \"host\"\nlocal_max_size = \"50GiB\"\n",
         Some("[cache]\nlocal_max_size = \"10GiB\"\n"),
     );
     let _host = set_host_config_for_test(&host);
@@ -763,8 +682,8 @@ fn the_chosen_file_beats_the_host_key_by_key() {
     let cache = Config::load_file_config().unwrap().cache.unwrap();
     assert_eq!(cache.local_max_size.as_deref(), Some("10GiB"));
     assert_eq!(
-        cache.input_predictions,
-        Some(true),
+        cache.key_salt.as_deref(),
+        Some("host"),
         "a key the chosen file leaves unset still comes from the host"
     );
 }
@@ -775,20 +694,24 @@ fn the_environment_beats_both_files() {
     let dir = tempfile::tempdir().unwrap();
     let (host, chosen) = write_host_and_chosen(
         dir.path(),
-        "[cache]\ninput_predictions = true\n",
+        "[cache]\nkey_salt = \"host\"\n",
         Some("[cache]\nlocal_max_size = \"10GiB\"\n"),
     );
     let _host = set_host_config_for_test(&host);
     let _chosen = set_kache_config_for_test(&chosen);
-    let file = Config::load_file_config();
 
     {
-        let _env = set_env_for_test("KACHE_INPUT_PREDICTIONS", None);
-        assert!(Config::input_predictions_enabled(&file), "host value");
+        let _env = set_env_for_test("KACHE_KEY_SALT", None);
+        assert_eq!(
+            Config::load().unwrap().key_salt.as_deref(),
+            Some("host"),
+            "host value"
+        );
     }
-    let _env = set_env_for_test("KACHE_INPUT_PREDICTIONS", Some(std::ffi::OsStr::new("0")));
-    assert!(
-        !Config::input_predictions_enabled(&file),
+    let _env = set_env_for_test("KACHE_KEY_SALT", Some(std::ffi::OsStr::new("env")));
+    assert_eq!(
+        Config::load().unwrap().key_salt.as_deref(),
+        Some("env"),
         "the environment overrides the host file"
     );
 }
@@ -912,7 +835,7 @@ fn the_host_layer_never_contributes_workspace_declarations() {
     let dir = tempfile::tempdir().unwrap();
     let (host, chosen) = write_host_and_chosen(
         dir.path(),
-        "[workspace]\nextra = 1\n\n[cache]\ninput_predictions = true\n",
+        "[workspace]\nextra = 1\n\n[cache]\nkey_salt = \"host\"\n",
         None,
     );
     let _host = set_host_config_for_test(&host);
@@ -921,8 +844,8 @@ fn the_host_layer_never_contributes_workspace_declarations() {
     let file = Config::load_file_config().unwrap();
     assert!(file.workspace.is_none());
     assert_eq!(
-        file.cache.unwrap().input_predictions,
-        Some(true),
+        file.cache.unwrap().key_salt.as_deref(),
+        Some("host"),
         "with no chosen file, the host layer is the whole file config"
     );
 }
@@ -935,23 +858,24 @@ fn a_host_ignore_env_cannot_silence_the_environment() {
     let dir = tempfile::tempdir().unwrap();
     let (host, chosen) = write_host_and_chosen(
         dir.path(),
-        "[cache]\nignore_env = true\ninput_predictions = true\n",
+        "[cache]\nignore_env = true\nkey_salt = \"host\"\n",
         Some("[cache]\nlocal_max_size = \"10GiB\"\n"),
     );
     let _host = set_host_config_for_test(&host);
     let _chosen = set_kache_config_for_test(&chosen);
-    let _env = set_env_for_test("KACHE_INPUT_PREDICTIONS", Some(std::ffi::OsStr::new("0")));
+    let _env = set_env_for_test("KACHE_KEY_SALT", Some(std::ffi::OsStr::new("env")));
 
     let file = Config::load_file_config();
     let cache = file.as_ref().unwrap().cache.as_ref().unwrap();
     assert_eq!(cache.ignore_env, None, "the host key is dropped");
     assert_eq!(
-        cache.input_predictions,
-        Some(true),
+        cache.key_salt.as_deref(),
+        Some("host"),
         "the rest still applies"
     );
-    assert!(
-        !Config::input_predictions_enabled(&file),
+    assert_eq!(
+        Config::load().unwrap().key_salt.as_deref(),
+        Some("env"),
         "the environment overrides the host file"
     );
     let HostConfigStatus::Present { keys, .. } = host_config_status() else {
@@ -1003,12 +927,12 @@ fn host_status_names_what_overrides_each_key() {
     let dir = tempfile::tempdir().unwrap();
     let (host, chosen) = write_host_and_chosen(
         dir.path(),
-        "[cache]\ninput_predictions = true\nlocal_max_size = \"50GiB\"\n",
+        "[cache]\nkey_salt = \"host\"\nlocal_max_size = \"50GiB\"\n",
         Some("[cache]\nlocal_max_size = \"10GiB\"\n"),
     );
     let _host = set_host_config_for_test(&host);
     let _chosen = set_kache_config_for_test(&chosen);
-    let _predictions = set_env_for_test("KACHE_INPUT_PREDICTIONS", Some(std::ffi::OsStr::new("1")));
+    let _salt = set_env_for_test("KACHE_KEY_SALT", Some(std::ffi::OsStr::new("env")));
 
     let HostConfigStatus::Present { keys, .. } = host_config_status() else {
         panic!("the host file must be present");
@@ -1021,8 +945,8 @@ fn host_status_names_what_overrides_each_key() {
             .clone()
     };
     assert_eq!(
-        source("cache.input_predictions"),
-        HostKeySource::Env("KACHE_INPUT_PREDICTIONS")
+        source("cache.key_salt"),
+        HostKeySource::Env("KACHE_KEY_SALT")
     );
     assert_eq!(
         source("cache.local_max_size"),
@@ -1476,145 +1400,6 @@ fn absolutize_volume_path_keeps_absolute_and_joins_relative() {
 }
 
 #[test]
-fn deferred_durability_is_on_unless_switched_off() {
-    let _lock = config_path_lock();
-    let none: Result<FileConfig> = Err(anyhow::anyhow!("no file"));
-    let off: Result<FileConfig> =
-        Ok(deser_toml::from_str("[cache]\ndeferred_durability = false\n").unwrap());
-    let on: Result<FileConfig> =
-        Ok(deser_toml::from_str("[cache]\ndeferred_durability = true\n").unwrap());
-    // SAFETY: the process-state lock serialises environment edits.
-    unsafe { std::env::remove_var("KACHE_DEFERRED_DURABILITY") };
-    assert!(Config::deferred_durability_enabled(&none));
-    assert!(!Config::deferred_durability_enabled(&off));
-    assert!(Config::deferred_durability_enabled(&on));
-    for (value, expected) in [
-        ("0", false),
-        ("false", false),
-        ("FALSE", false),
-        ("1", true),
-        ("true", true),
-        ("yes", true),
-        ("", true),
-    ] {
-        unsafe { std::env::set_var("KACHE_DEFERRED_DURABILITY", value) };
-        assert_eq!(
-            Config::deferred_durability_enabled(&on),
-            expected,
-            "{value:?}"
-        );
-        assert_eq!(
-            Config::deferred_durability_enabled(&off),
-            expected,
-            "{value:?} overrides the file"
-        );
-    }
-    unsafe { std::env::remove_var("KACHE_DEFERRED_DURABILITY") };
-}
-#[test]
-fn out_dir_alias_setting_is_on_unless_switched_off() {
-    assert!(out_dir_alias_setting(None, None));
-    assert!(out_dir_alias_setting(None, Some(true)));
-    assert!(!out_dir_alias_setting(None, Some(false)));
-    for (value, expected) in [
-        ("0", false),
-        ("false", false),
-        ("FALSE", false),
-        ("1", true),
-        ("true", true),
-        ("yes", true),
-        ("", true),
-    ] {
-        assert_eq!(out_dir_alias_setting(Some(value), Some(false)), expected);
-        assert_eq!(out_dir_alias_setting(Some(value), Some(true)), expected);
-        assert_eq!(out_dir_alias_setting(Some(value), None), expected);
-    }
-}
-
-/// `ignore_env` keeps the environment out of it, so the file decides.
-#[test]
-fn out_dir_alias_follows_the_file() {
-    let file = |body: &str| -> Result<FileConfig> {
-        Ok(deser_toml::from_str(&format!("[cache]\nignore_env = true\n{body}")).unwrap())
-    };
-    assert!(Config::out_dir_alias_enabled(&file("")));
-    assert!(Config::out_dir_alias_enabled(&file(
-        "out_dir_alias = true\n"
-    )));
-    assert!(!Config::out_dir_alias_enabled(&file(
-        "out_dir_alias = false\n"
-    )));
-}
-
-#[test]
-fn deferred_discovery_is_on_unless_switched_off() {
-    let _lock = config_path_lock();
-    let none: Result<FileConfig> = Err(anyhow::anyhow!("no file"));
-    let off: Result<FileConfig> =
-        Ok(deser_toml::from_str("[cache]\ndeferred_discovery = false\n").unwrap());
-    let on: Result<FileConfig> =
-        Ok(deser_toml::from_str("[cache]\ndeferred_discovery = true\n").unwrap());
-    // SAFETY: the process-state lock serialises environment edits.
-    unsafe { std::env::remove_var("KACHE_DEFERRED_DISCOVERY") };
-    assert!(Config::deferred_discovery_enabled(&none));
-    assert!(!Config::deferred_discovery_enabled(&off));
-    assert!(Config::deferred_discovery_enabled(&on));
-    for (value, expected) in [
-        ("0", false),
-        ("false", false),
-        ("FALSE", false),
-        ("1", true),
-        ("true", true),
-        ("yes", true),
-        ("", true),
-    ] {
-        unsafe { std::env::set_var("KACHE_DEFERRED_DISCOVERY", value) };
-        assert_eq!(
-            Config::deferred_discovery_enabled(&on),
-            expected,
-            "{value:?}"
-        );
-        assert_eq!(
-            Config::deferred_discovery_enabled(&off),
-            expected,
-            "{value:?} overrides the file"
-        );
-    }
-    unsafe { std::env::remove_var("KACHE_DEFERRED_DISCOVERY") };
-}
-
-#[test]
-fn daemon_publish_is_on_unless_switched_off() {
-    let _lock = config_path_lock();
-    let none: Result<FileConfig> = Err(anyhow::anyhow!("no file"));
-    let off: Result<FileConfig> = Ok(deser_toml::from_str("[cache]\ndaemon_publish = false\n").unwrap());
-    let on: Result<FileConfig> = Ok(deser_toml::from_str("[cache]\ndaemon_publish = true\n").unwrap());
-    // SAFETY: the process-state lock serialises environment edits.
-    unsafe { std::env::remove_var("KACHE_DAEMON_PUBLISH") };
-    assert!(Config::daemon_publish_enabled(&none));
-    assert!(!Config::daemon_publish_enabled(&off));
-    assert!(Config::daemon_publish_enabled(&on));
-    for (value, expected) in [
-        ("0", false),
-        ("false", false),
-        ("FALSE", false),
-        ("1", true),
-        ("true", true),
-        ("yes", true),
-        ("", true),
-    ] {
-        unsafe { std::env::set_var("KACHE_DAEMON_PUBLISH", value) };
-        assert_eq!(Config::daemon_publish_enabled(&on), expected, "{value:?}");
-        assert_eq!(
-            Config::daemon_publish_enabled(&off),
-            expected,
-            "{value:?} overrides the file"
-        );
-    }
-    unsafe { std::env::remove_var("KACHE_DAEMON_PUBLISH") };
-}
-
-#[test]
 fn daemon_execution_concurrency_respects_environment_file_and_automatic_mode() {
     let root = tempfile::tempdir().unwrap();
     let file = |text| Ok(deser_toml::from_str::<FileConfig>(text).unwrap());
@@ -1771,15 +1556,8 @@ fn test_file_config_roundtrip() {
             bypass_argv: None,
             bypass_crates: None,
             volumes: None,
-            input_predictions: None,
-            deferred_discovery: None,
-            out_dir_alias: None,
-                deferred_durability: None,
-            daemon_publish: None,
             trust_daemon_execution: None,
             daemon_execution_concurrency: None,
-            auto_gc: None,
-            index_auto_compact: None,
 
             auto_recover_min_free_bytes: None,
 
@@ -1799,7 +1577,6 @@ fn test_file_config_roundtrip() {
             event_log_max_size: Some("10MiB".to_string()),
             event_log_keep_lines: Some(500),
             compression_level: Some(3),
-            scheduler: None,
         }),
     };
     let serialized = deser_toml::to_string(&config).unwrap();
@@ -2071,24 +1848,16 @@ fn test_config_store_dir() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        input_predictions: false,
         volume_stores: Vec::new(),
-        deferred_discovery: true,
-        out_dir_alias: true,
-        deferred_durability: false,
-        daemon_publish: false,
         trust_daemon_execution: false,
         daemon_execution_concurrency: None,
         project_rules: ProjectRules::default(),
-        auto_gc: true,
-        index_auto_compact: true,
 
         auto_recover_min_free_bytes: 0,
 
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -2116,24 +1885,16 @@ fn test_config_index_db_path() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        input_predictions: false,
         volume_stores: Vec::new(),
-        deferred_discovery: true,
-        out_dir_alias: true,
-        deferred_durability: false,
-        daemon_publish: false,
         trust_daemon_execution: false,
         daemon_execution_concurrency: None,
         project_rules: ProjectRules::default(),
-        auto_gc: true,
-        index_auto_compact: true,
 
         auto_recover_min_free_bytes: 0,
 
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -2157,24 +1918,16 @@ fn test_config_event_log_path() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        input_predictions: false,
         volume_stores: Vec::new(),
-        deferred_discovery: true,
-        out_dir_alias: true,
-        deferred_durability: false,
-        daemon_publish: false,
         trust_daemon_execution: false,
         daemon_execution_concurrency: None,
         project_rules: ProjectRules::default(),
-        auto_gc: true,
-        index_auto_compact: true,
 
         auto_recover_min_free_bytes: 0,
 
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -2213,24 +1966,16 @@ fn test_config_socket_path() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        input_predictions: false,
         volume_stores: Vec::new(),
-        deferred_discovery: true,
-        out_dir_alias: true,
-        deferred_durability: false,
-        daemon_publish: false,
         trust_daemon_execution: false,
         daemon_execution_concurrency: None,
         project_rules: ProjectRules::default(),
-        auto_gc: true,
-        index_auto_compact: true,
 
         auto_recover_min_free_bytes: 0,
 
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -2878,15 +2623,8 @@ fn test_save_and_load_file_config() {
             bypass_argv: None,
             bypass_crates: None,
             volumes: None,
-            input_predictions: None,
-            deferred_discovery: None,
-            out_dir_alias: None,
-                deferred_durability: None,
-            daemon_publish: None,
             trust_daemon_execution: None,
             daemon_execution_concurrency: None,
-            auto_gc: None,
-            index_auto_compact: None,
 
             auto_recover_min_free_bytes: None,
 
@@ -2906,7 +2644,6 @@ fn test_save_and_load_file_config() {
             event_log_max_size: None,
             event_log_keep_lines: None,
             compression_level: Some(5),
-            scheduler: None,
         }),
     };
 
@@ -3102,95 +2839,6 @@ fn unusable_config_file_names_the_file_and_the_error() {
 
 
 
-
-#[test]
-fn scheduler_defaults_on_and_file_false_disables() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("kache/config.toml");
-    let _env_guard = set_kache_config_for_test(&config_path);
-    let _missing = NamedEnvGuard::remove("KACHE_SCHEDULER");
-
-    assert!(
-        Config::load().unwrap().scheduler,
-        "scheduler must default ON with no config file"
-    );
-
-    let file = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            scheduler: Some(false),
-            ..Default::default()
-        }),
-    };
-    Config::save_file_config_to(&file, &config_path).unwrap();
-    assert!(
-        !Config::load().unwrap().scheduler,
-        "[cache] scheduler = false must disable the miss-path scheduler"
-    );
-    assert!(IGNORE_ENV_GATED_VARS.contains(&"KACHE_SCHEDULER"));
-}
-
-#[test]
-fn scheduler_env_wins_over_file() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("kache/config.toml");
-    let _env_guard = set_kache_config_for_test(&config_path);
-
-    let file = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            scheduler: Some(false),
-            ..Default::default()
-        }),
-    };
-    Config::save_file_config_to(&file, &config_path).unwrap();
-
-    let _on = NamedEnvGuard::set("KACHE_SCHEDULER", "1");
-    assert!(
-        Config::load().unwrap().scheduler,
-        "KACHE_SCHEDULER=1 must re-enable despite file=false"
-    );
-    drop(_on);
-
-    let file_on = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            scheduler: Some(true),
-            ..Default::default()
-        }),
-    };
-    Config::save_file_config_to(&file_on, &config_path).unwrap();
-    let _off = NamedEnvGuard::set("KACHE_SCHEDULER", "0");
-    assert!(
-        !Config::load().unwrap().scheduler,
-        "KACHE_SCHEDULER=0 must disable despite file=true"
-    );
-    drop(_off);
-    let _false = NamedEnvGuard::set("KACHE_SCHEDULER", "false");
-    assert!(
-        !Config::load().unwrap().scheduler,
-        "KACHE_SCHEDULER=false must disable the scheduler"
-    );
-
-    std::fs::write(
-        &config_path,
-        "[cache]\nignore_env = true\nscheduler = false\n",
-    )
-    .unwrap();
-    let _ignored = NamedEnvGuard::set("KACHE_SCHEDULER", "1");
-    assert!(
-        !Config::load().unwrap().scheduler,
-        "ignore_env must keep [cache] scheduler = false"
-    );
-}
 
 #[test]
 fn test_resolve_config_path_prefers_project_file() {

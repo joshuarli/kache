@@ -2938,15 +2938,13 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         // partially written meta.json, and the rename's parent-directory
         // fsync makes the new name durable alongside the contents.
         fs::create_dir_all(&entry_dir).context("creating entry directory")?;
-        let durable = self.durable_writes();
-        crate::atomic::atomic_replace_deferrable(&meta_path, meta_json.as_bytes(), durable)
+        crate::atomic::atomic_replace_deferrable(&meta_path, meta_json.as_bytes(), false)
             .context("writing entry metadata")?;
         tx.execute(
             "INSERT OR REPLACE INTO entries (cache_key, crate_name, crate_type, profile, num_features, size, content_hash, compile_time_ms, key_schema, committed, durable, compile_time_backfilled) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, 1)",
             params![cache_key, crate_name, crate_type_str, profile, num_features, total_size as i64, content_hash, compile_time_ms as i64, kache_format::CACHE_KEY_VERSION, false],
         )?;
         tx.commit()?;
-        self.finish_strict_durability(cache_key)?;
 
         // Both ingest phases may hardlink a compiler output to the immutable
         // blob and mark the shared inode read-only, changing ctime. Seed only
@@ -3091,7 +3089,6 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             }
         }
 
-        self.finish_strict_durability(cache_key)?;
         Ok(())
     }
 
@@ -3357,7 +3354,6 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                     let _ = fs::remove_file(artifact);
                 }
             }
-            self.finish_strict_durability(&entry.cache_key)?;
         }
         Ok(imported)
     }
@@ -3951,9 +3947,6 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                     .with_context(|| format!("copying {} into store staging", source.display()))?;
                 StoreIngest::Copy(StoreCopyReason::Ineligible)
             };
-            if self.durable_writes() {
-                crate::atomic::fsync_file(tmp).context("flushing staged blob")?;
-            }
             let mut ro_guard_failed = false;
             if matches!(ingest, StoreIngest::Hardlink) && set_blob_readonly_checked(tmp).is_err() {
                 // The guard is a correctness requirement on a shared inode; a
@@ -4034,9 +4027,6 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         )?;
         if outcome != PublishRename::Published {
             return Ok(false);
-        }
-        if self.durable_writes() {
-            let _ = crate::atomic::fsync_dir(blob.parent().unwrap());
         }
         match ingest {
             StoreIngest::Reflink => crate::opcounts::record_store_reflinked(size_bytes),
@@ -4125,7 +4115,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         materialize: impl FnOnce(&Path, &Path, bool, bool) -> Result<bool>,
     ) -> Result<()> {
         let blob_path = self.blob_path(hash);
-        if materialize(source, &blob_path, allow_hardlink, self.durable_writes())? {
+        if materialize(source, &blob_path, allow_hardlink, false)? {
             let actual = crate::file_hash::hash_file(&blob_path)?;
             if actual != hash {
                 anyhow::bail!(
@@ -4284,34 +4274,9 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         &self.config.cache_dir
     }
 
-    /// Get the directory for a cache entry.
-    /// Whether puts flush on the build path. Off under deferred durability,
-    /// where [`Store::flush_durability`] flushes later.
-    fn durable_writes(&self) -> bool {
-        !self.config.deferred_durability
-    }
-
-    /// Strict success requires a verified flush of the current publication,
-    /// including shared blobs. A peer may already have completed that flush.
-    fn finish_strict_durability(&self, cache_key: &str) -> Result<()> {
-        if self.durable_writes() {
-            self.flush_entry_durability(cache_key)?;
-            let durable: bool = self.db.query_row(
-                "SELECT EXISTS(SELECT 1 FROM entries
-                 WHERE cache_key = ?1 AND committed = 1 AND durable = 1)",
-                params![cache_key],
-                |row| row.get(0),
-            )?;
-            anyhow::ensure!(
-                durable,
-                "entry remains pending after strict durability flush"
-            );
-        }
-        Ok(())
-    }
-
     /// Whether an entry's blobs and metadata have reached disk. Unknown rows
     /// read as durable: the size check and the verification policy still apply.
+    /// Puts never flush on the build path; [`Store::flush_durability`] flushes later.
     fn entry_is_durable(&self, cache_key: &str) -> bool {
         self.db
             .query_row(

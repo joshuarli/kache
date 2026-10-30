@@ -272,19 +272,15 @@ impl MissGuard {
 
 /// Consult the scheduler after a local+remote miss.
 ///
-/// Hits and passthroughs must not call this. Disabled and fail-open paths
-/// return [`BeginMiss::Compile`] with an empty guard so the caller proceeds
-/// to `claim_build` without waiting.
+/// Hits and passthroughs must not call this. An unusable scheduler directory
+/// fails open: [`BeginMiss::Compile`] with an empty guard so the caller
+/// proceeds to `claim_build` without waiting.
 pub fn begin_miss(
     cache_dir: &Path,
-    enabled: bool,
     identity: &FlightIdentity,
     crate_name: &str,
     is_link: bool,
 ) -> BeginMiss {
-    if !enabled {
-        return BeginMiss::Compile(MissGuard::empty());
-    }
     let scheduler = match Scheduler::open(cache_dir) {
         Ok(scheduler) => scheduler,
         Err(error) => {
@@ -303,13 +299,9 @@ pub fn begin_miss(
 /// just because its key comes later.
 pub fn begin_keyless_compile(
     cache_dir: &Path,
-    enabled: bool,
     crate_name: &str,
     is_link: bool,
 ) -> MissGuard {
-    if !enabled {
-        return MissGuard::empty();
-    }
     match Scheduler::open(cache_dir) {
         Ok(scheduler) => scheduler.keyless_compile(crate_name, is_link),
         Err(error) => {
@@ -2054,28 +2046,11 @@ mod tests {
     }
 
     #[test]
-    fn off_switch_does_not_create_scheduler_dir() {
-        let dir = temp_cache();
-        let identity = FlightIdentity::rustc("serde", &["lib".into()], true);
-        match begin_miss(dir.path(), false, &identity, "serde", true) {
-            BeginMiss::Compile(guard) => {
-                assert!(guard._flight.is_none());
-                assert!(guard._permit.is_none());
-            }
-            BeginMiss::Recheck => panic!("disabled scheduler must not wait"),
-        }
-        assert!(
-            !dir.path().join("scheduler").exists(),
-            "off switch must not create lease files"
-        );
-    }
-
-    #[test]
     fn fail_open_when_scheduler_dir_is_a_file() {
         let dir = temp_cache();
         fs::write(dir.path().join("scheduler"), b"not a directory").unwrap();
         let identity = FlightIdentity::cc("foo.c");
-        match begin_miss(dir.path(), true, &identity, "foo.c", false) {
+        match begin_miss(dir.path(), &identity, "foo.c", false) {
             BeginMiss::Compile(guard) => {
                 assert!(guard._flight.is_none());
                 assert!(guard._permit.is_none());
@@ -2088,7 +2063,7 @@ mod tests {
     fn owner_compiles_without_waiting() {
         let dir = temp_cache();
         let identity = FlightIdentity::rustc("app", &["bin".into()], true);
-        match begin_miss(dir.path(), true, &identity, "app", true) {
+        match begin_miss(dir.path(), &identity, "app", true) {
             BeginMiss::Compile(guard) => {
                 assert!(guard._flight.is_some(), "first miss must own the flight");
                 assert!(guard._permit.is_some(), "first miss must take a permit");
@@ -2106,7 +2081,7 @@ mod tests {
         let dir = temp_cache();
         let identity = FlightIdentity::rustc("drop", &["lib".into()], false);
         {
-            match begin_miss(dir.path(), true, &identity, "drop", false) {
+            match begin_miss(dir.path(), &identity, "drop", false) {
                 BeginMiss::Compile(guard) => {
                     assert!(guard._flight.is_some());
                     assert!(guard._permit.is_some());
@@ -2114,7 +2089,7 @@ mod tests {
                 BeginMiss::Recheck => panic!("empty scheduler must admit the first compile"),
             }
         }
-        match begin_miss(dir.path(), true, &identity, "drop", false) {
+        match begin_miss(dir.path(), &identity, "drop", false) {
             BeginMiss::Compile(guard) => {
                 assert!(
                     guard._flight.is_some(),
@@ -2166,7 +2141,7 @@ mod tests {
         let cache = dir.path().to_path_buf();
         let flight_wait_before = crate::opcounts::flight_wait_ms();
         let waiter =
-            std::thread::spawn(move || begin_miss(&cache, true, &identity, "shared", false));
+            std::thread::spawn(move || begin_miss(&cache, &identity, "shared", false));
         // The child holds the flight until `go` exists. Give the waiter time
         // to block on that lock so it cannot become the owner by racing.
         std::thread::sleep(Duration::from_millis(200));
@@ -2643,7 +2618,7 @@ mod tests {
     fn record_compile_rss_persists_child_sample() {
         let dir = temp_cache();
         let identity = FlightIdentity::rustc("measured", &["lib".into()], false);
-        let guard = match begin_miss(dir.path(), true, &identity, "measured", false) {
+        let guard = match begin_miss(dir.path(), &identity, "measured", false) {
             BeginMiss::Compile(guard) => guard,
             BeginMiss::Recheck => panic!("empty scheduler must admit the first compile"),
         };
@@ -2783,16 +2758,14 @@ mod tests {
         }
 
         let dir = temp_cache();
-        let disabled = begin_keyless_compile(dir.path(), false, "c_unit", false);
-        assert!(disabled.is_empty());
         {
             let _calm = PinnedPressure::new(false);
-            let enabled = begin_keyless_compile(dir.path(), true, "c_unit", false);
+            let enabled = begin_keyless_compile(dir.path(), "c_unit", false);
             assert!(!enabled.is_empty());
             assert_eq!(permits_in_use(dir.path()), Some(UNMEASURED_COMPILE_WEIGHT));
         }
         let _pressured = PinnedPressure::new(true);
-        let enabled = begin_keyless_compile(dir.path(), true, "c_unit", false);
+        let enabled = begin_keyless_compile(dir.path(), "c_unit", false);
         assert!(!enabled.is_empty());
         assert_eq!(permits_in_use(dir.path()), Some(default_pool_size()));
     }

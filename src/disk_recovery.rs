@@ -53,7 +53,7 @@ fn keep_recovering(floor: u64, elapsed: Duration, usage: Option<VolumeUsage>) ->
 /// Cheap check shared by wrappers and collectors. An unreadable timestamp
 /// or volume skips recovery. The collector checks again under `gc.lock`.
 pub(crate) fn wanted(config: &Config) -> bool {
-    if !config.auto_gc || config.auto_recover_min_free_bytes == 0 {
+    if config.auto_recover_min_free_bytes == 0 {
         return false;
     }
     let now = crate::maintenance::unix_now_secs();

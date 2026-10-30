@@ -49,10 +49,9 @@ Explicit per-kind Rust output destinations, such as `--emit=metadata=custom.rmet
 
 Use `kache explain <crate>` and trace logging to see the components for a particular build.
 
-Input predictions are enabled by default for eligible Rust units. Kache
+Input predictions are always on for eligible Rust units. Kache
 revalidates their recorded inputs and falls back to dependency discovery when
-the record cannot be used. Set `KACHE_INPUT_PREDICTIONS=0` or
-`[cache] input_predictions = false` to disable predictions.
+the record cannot be used.
 
 A proc macro can list a directory and include each file in it, so a new file
 can change a crate's output while every input Kache recorded stays the same.
@@ -143,12 +142,9 @@ time cannot tell the two apart: within the same kernel clock tick (1 to 10 ms)
 on Linux, 1 ms on macOS and Windows, 20 ms on other systems, and 2 seconds on file systems
 that keep whole seconds, such as HFS+ and FAT. Peers of the same unit in other
 target directories wait for this compile as they would for a pre-pass.
-Crates with extra inputs keep the pre-pass, and so does every Rust unit when
-the scheduler is off (`KACHE_SCHEDULER=0`). For a unit that links, a
+Crates with extra inputs keep the pre-pass. For a unit that links, a
 predicted key is first re-derived with the pre-pass, because that compile
 cannot be stopped on a hit.
-`[cache] deferred_discovery = false` or `KACHE_DEFERRED_DISCOVERY=0` restores
-the pre-pass everywhere.
 
 A C or C++ compile without a recorded read set does the same: it compiles
 with a dependency file and keys from the digest of the files that compile

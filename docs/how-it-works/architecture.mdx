@@ -123,7 +123,7 @@ Strict stores validate and flush shared blobs too, before a store or import oper
 The daemon owns delegated compilation and periodic maintenance:
 
 - concurrent cache pipelines for delegated compiler invocations
-- storing finished C/C++ compiles that wrappers hand over (`cache.daemon_publish`)
+- storing finished C/C++ compiles that wrappers hand over
 - copying large executables beside their destinations while the rest of a build runs
 - flushing entries stored without an fsync, every two seconds
 - scheduled garbage collection
