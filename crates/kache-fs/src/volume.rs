@@ -306,7 +306,13 @@ fn statfs_total_bytes_macos(stat: &libc::statfs) -> Option<u64> {
 
 #[cfg(target_os = "linux")]
 fn statfs_total_bytes_linux(stat: &libc::statfs) -> Option<u64> {
+    // `f_frsize`/`f_bsize` are signed (`__fsword_t`) on gnu, where this
+    // conversion rejects negatives, but `c_ulong` on musl, where it is a
+    // no-op. kache ships musl builds and lints on gnu, so the conversion
+    // has to stay and the lint has to be silenced explicitly.
+    #[allow(clippy::useless_conversion)]
     let frsize = u64::try_from(stat.f_frsize).unwrap_or(0);
+    #[allow(clippy::useless_conversion)]
     let bsize = u64::try_from(stat.f_bsize).unwrap_or(0);
     disk_bytes(linux_fragment_bytes(frsize, bsize), stat.f_blocks)
 }
