@@ -33,7 +33,6 @@ These are for CI, scripts and integrations, and are not listed by `kache --help`
 | --- | --- |
 | `cargo` | Run Cargo with Kache as its Rust compiler wrapper |
 | `telemetry` | Write cache counters as OTLP JSON for Kartero (`write`) |
-| `test-runner` | Run a test binary as Cargo's target runner, paced by the scheduler |
 | `report` | Same report as `kache stats --full`, kept for scripts |
 | `gc`, `purge` | Evict cache entries by policy or remove them explicitly |
 | `install-shims` | What `kache init --shims` does, kept for scripts |
@@ -95,11 +94,11 @@ kache init --no-shell
 kache init --yes
 ```
 
-`--check` (also `--dry-run` or `-n`) lists the changes init would make without writing. It ends with the `kache init` command and flags that apply them, or says there is nothing to change. With `--json`, each entry in `steps` says what init does to one component: `configure`, `update`, `keep`, or why it cannot (`unsupported`, `unavailable`, `manual`). A `backup` step names each existing file init would copy before editing it. After a real run, `steps` says what was done: a declined step is `skip`, and one that did not succeed is `failed`. `--no-service` skips login-service installation. `--no-shell` leaves shell startup files alone: no shim directory on `PATH` (C/C++ compilers and `cargo`) and no test pacing. Cargo's native dependencies are still configured through `[env]`. When the service cannot be installed, such as on a Linux host without a systemd user session, init reports why and starts the daemon directly.
+`--check` (also `--dry-run` or `-n`) lists the changes init would make without writing. It ends with the `kache init` command and flags that apply them, or says there is nothing to change. With `--json`, each entry in `steps` says what init does to one component: `configure`, `update`, `keep`, or why it cannot (`unsupported`, `unavailable`, `manual`). A `backup` step names each existing file init would copy before editing it. After a real run, `steps` says what was done: a declined step is `skip`, and one that did not succeed is `failed`. `--no-service` skips login-service installation. `--no-shell` leaves shell startup files alone: no shim directory on `PATH` (C/C++ compilers and `cargo`). Cargo's native dependencies are still configured through `[env]`. When the service cannot be installed, such as on a Linux host without a systemd user session, init reports why and starts the daemon directly.
 
 Init shows a setup plan and asks once before applying it. Replacing another Cargo wrapper requires a separate confirmation. `--yes` accepts both. If stdin has no answers, init exits 1 before changing files or services and prints the same command with `--yes`. Init backs up a file before it edits it, but not a file the same run created. Besides `rustc-wrapper`, init adds `HOST_CC` / `HOST_CXX` / `CC_KNOWN_WRAPPER_CUSTOM` under Cargo `[env]` when those keys are absent. It never sets `CC` or `CXX`.
 
-On Unix, init also configures test pacing: it exports `CARGO_TARGET_<HOST>_RUNNER="kache test-runner"` from the same shell startup files the C/C++ setup edits, so `cargo test` in every project waits for the scheduler's slots. A value you already export stays. `--no-shell` skips both edits. See [Test runner](/docs/getting-started/configuration#test-runner).
+On Unix, init also adds the C/C++ compiler shims to the shell startup files. `--no-shell` skips that edit.
 
 ### Compiler shims
 
@@ -271,15 +270,6 @@ Without a subcommand, lists the selected file's values. The subcommands read or 
 Each subcommand accepts `--project`, `--global`, or `--file PATH`. Without one, it uses Kache's normal config-file selection. `--project` selects the nearest existing `.kache.toml`, or creates it in the current directory when setting a value. `--global` selects the user config and ignores `KACHE_CONFIG` and project files. `--file` selects an explicit path. These selectors cannot be combined.
 
 `set` validates known keys and their TOML types. Boolean, number and array values use TOML syntax; strings such as `50GiB` can be unquoted. Workspace declarations and entire tables are edited directly in TOML. Edits preserve comments and other keys, follow existing file symlinks, and replace the file atomically under a writer lock. Invalid TOML is refused. All subcommands support `--json`. See [Configuration](/docs/getting-started/configuration).
-
-## `kache test-runner`
-
-```toml title=".cargo/config.toml"
-[target.'cfg(all())']
-runner = ["kache", "test-runner"]
-```
-
-Cargo runs each test binary as `kache test-runner <binary> <args>`. A test binary waits for slots in the scheduler's pool, then runs with its arguments, stdin, exit code and signals unchanged. Binaries without Cargo's hash suffix (`cargo run` targets, doctests), `--list` and `--bench` runs start at once, as does everything when the scheduler is off. Cargo is the caller, so the command is not listed in `kache --help`. See [Test runner](/docs/getting-started/configuration#test-runner).
 
 ## `kache completions`
 

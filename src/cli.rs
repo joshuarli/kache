@@ -5710,8 +5710,6 @@ mod tests;
 //       when those keys are absent. Never sets CC or CXX.
 //   1c. Unix: offers compiler-name shims in ~/.local/lib/kache/shims.
 //       Saves shell PATH setup after confirmation; activation needs a new terminal.
-//   1d. Unix: offers CARGO_TARGET_<HOST>_RUNNER="kache test-runner" in the
-//       same startup files, so test binaries share the scheduler's slots.
 //   2. Installs the daemon as a login service (launchd/systemd)
 //   3. Starts the daemon
 //
@@ -5930,7 +5928,6 @@ struct SetupResult {
     steps: Vec<SetupStep>,
     cargo_configured: bool,
     shell_activation_required: bool,
-    test_activation_required: bool,
     service_installed: bool,
     daemon_running: Option<bool>,
     #[deser(skip_serializing_if = Option::is_none)]
@@ -5949,8 +5946,6 @@ struct SetupFacts {
     /// exists now.
     shell: Option<SetupStep>,
     shell_changes: Vec<(std::path::PathBuf, bool)>,
-    test_runner: Option<SetupStep>,
-    test_changes: Vec<(std::path::PathBuf, bool)>,
     /// The `login_service` step's action; `None` with `--no-service`.
     service: Option<&'static str>,
     service_path: Option<std::path::PathBuf>,
@@ -5977,10 +5972,6 @@ fn setup_steps(facts: &SetupFacts) -> Vec<SetupStep> {
     for (path, exists) in &facts.shell_changes {
         steps.extend(backup_step(&mut created, path, *exists));
     }
-    steps.extend(facts.test_runner);
-    for (path, exists) in &facts.test_changes {
-        steps.extend(backup_step(&mut created, path, *exists));
-    }
     if let Some(action) = facts.service {
         steps.push(SetupStep::new(
             "login_service",
@@ -5996,10 +5987,6 @@ fn setup_steps(facts: &SetupFacts) -> Vec<SetupStep> {
 struct RunOutcome {
     /// Whether the Cargo edit was made; false when it was declined.
     cargo_applied: bool,
-    /// The test-runner step as planned after the compiler setup, which may
-    /// have written the same startup files.
-    test_runner: Option<SetupStep>,
-    test_changes: Vec<(std::path::PathBuf, bool)>,
     /// Whether the login service was installed or updated now.
     service_installed_now: bool,
 }
@@ -6017,8 +6004,6 @@ fn run_facts(plan: &SetupFacts, outcome: RunOutcome) -> SetupFacts {
     };
     SetupFacts {
         cargo,
-        test_runner: outcome.test_runner,
-        test_changes: outcome.test_changes,
         service,
         ..plan.clone()
     }
@@ -6103,20 +6088,17 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
     #[cfg(unix)]
     let compiler = plan_compiler_setup(no_shell)?;
     #[cfg(unix)]
-    let tests = plan_test_runner(no_shell)?;
     #[cfg(unix)]
     let shell_facts = (
         compiler.step(),
         existing_paths(compiler.changed_paths()),
-        tests.step(),
-        existing_paths(tests.changed_paths()),
     );
     #[cfg(not(unix))]
     let shell_facts = {
         let _ = (no_shell, existing_paths);
-        (None, Vec::new(), None, Vec::new())
+        (None, Vec::new())
     };
-    let (shell, shell_changes, test_runner, test_changes) = shell_facts;
+    let (shell, shell_changes) = shell_facts;
     // Asking runs the service manager, which --no-service must not touch.
     let service_available = !no_service && crate::service::login_service_available();
     let service_path = crate::service::service_file_path();
@@ -6131,8 +6113,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
         cargo_path: cargo_path.clone(),
         shell,
         shell_changes,
-        test_runner,
-        test_changes,
         service: service_action(
             no_service,
             service_available,
@@ -6143,13 +6123,12 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
     };
     let steps = setup_steps(&plan_facts);
     #[cfg(unix)]
-    let (shell_supported, shell_activation, test_activation) = (
+    let (shell_supported, shell_activation) = (
         compiler.supported(),
         compiler.activation_required(),
-        tests.activation_required(),
     );
     #[cfg(not(unix))]
-    let (shell_supported, shell_activation, test_activation) = (false, false, false);
+    let (shell_supported, shell_activation) = (false, false);
     let changes = steps.iter().any(|step| step_changes(step.action));
 
     if !check {
@@ -6165,7 +6144,7 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
             plan_rows.push((
                 "Shell",
                 "new terminals".into(),
-                "C/C++ caching and test pacing".into(),
+                "C/C++ caching".into(),
             ));
             for step in steps.iter().filter(|step| step.component == "shell") {
                 for path in &step.paths {
@@ -6254,21 +6233,11 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
 
     #[cfg(unix)]
     let shell_pending = init_compiler_setup(compiler, check, &mut created)?;
-    #[cfg(unix)]
-    let (tests_pending, tests_done, tests_changes) = {
-        // The compiler setup may have just written the same startup files.
-        let tests = if check {
-            tests
-        } else {
-            plan_test_runner(no_shell)?
-        };
-        let step = tests.step();
-        let changes = existing_paths(tests.changed_paths());
-        (init_test_runner(tests, check, &mut created)?, step, changes)
-    };
     #[cfg(not(unix))]
-    let (shell_pending, tests_pending, tests_done, tests_changes) =
-        (false, false, None, Vec::new());
+    let shell_pending = {
+        let _ = &mut created;
+        false
+    };
 
     // ── Step 2: daemon service ───────────────────────────────────
     let mut service_action_taken = false;
@@ -6311,7 +6280,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
                     steps,
                     cargo_configured: cargo_ready,
                     shell_activation_required: shell_activation,
-                    test_activation_required: test_activation,
                     service_installed,
                     daemon_running: None,
                     compiler_execution: None,
@@ -6384,9 +6352,6 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
     if shell_pending {
         println!("  Open a new terminal to activate C/C++ caching.");
     }
-    if tests_pending {
-        println!("  Open a new terminal to pace test binaries.");
-    }
     println!("  Run kache doctor to check this terminal.\n");
     if crate::machine::is_json() {
         crate::machine::emit(
@@ -6397,14 +6362,11 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
                     &plan_facts,
                     RunOutcome {
                         cargo_applied,
-                        test_runner: tests_done,
-                        test_changes: tests_changes,
                         service_installed_now: service_action_taken,
                     },
                 )),
                 cargo_configured: cargo_ready,
                 shell_activation_required: shell_pending,
-                test_activation_required: tests_pending,
                 service_installed: login_service_configured(
                     service_installed,
                     service_action_taken,
@@ -6665,194 +6627,6 @@ fn shell_startup_files() -> Result<Option<(crate::init_shell::Shell, Vec<std::pa
         .map(std::path::PathBuf::from);
     let paths = shell.paths(&home, zdotdir.as_deref(), xdg.as_deref())?;
     Ok(Some((shell, paths)))
-}
-
-#[cfg(unix)]
-/// What `kache init` sets as Cargo's runner for the host target.
-#[cfg(unix)]
-const TEST_RUNNER: &str = "kache test-runner";
-
-/// The host triple of the `rustc` Cargo would use here.
-#[cfg(unix)]
-fn rustc_host() -> Option<String> {
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let output = std::process::Command::new(rustc)
-        .arg("-vV")
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let host = crate::cache_key::rustc_host_triple(&stdout)?;
-    output.status.success().then(|| host.to_owned())
-}
-
-/// What `init` says about test pacing once the startup files are set up.
-#[cfg(unix)]
-#[derive(Debug, PartialEq, Eq)]
-enum TestPacing {
-    /// This terminal already runs tests through kache.
-    Active,
-    /// This terminal sets another runner, which the saved block leaves alone.
-    Overridden(String),
-    /// New terminals will run tests through kache.
-    Pending,
-}
-
-#[cfg(unix)]
-fn test_pacing(current: Option<&str>) -> TestPacing {
-    match current {
-        Some(TEST_RUNNER) => TestPacing::Active,
-        Some(value) if !value.is_empty() => TestPacing::Overridden(value.to_owned()),
-        _ => TestPacing::Pending,
-    }
-}
-
-/// What `kache init` plans for test pacing: an export of
-/// `CARGO_TARGET_<HOST>_RUNNER="kache test-runner"` in the shell startup
-/// files.
-#[cfg(unix)]
-enum TestPlan {
-    /// `--no-shell`.
-    Skipped,
-    /// rustc did not report its host target.
-    NoHost,
-    /// A login shell init cannot set up; the variable to export instead.
-    Unsupported(String),
-    /// A startup file init must not edit, and why.
-    Manual(String),
-    Ready {
-        var: String,
-        edits: Vec<crate::init_shell::Edit>,
-    },
-}
-
-#[cfg(unix)]
-impl TestPlan {
-    /// The `test_runner` step; none with `--no-shell`.
-    fn step(&self) -> Option<SetupStep> {
-        let (action, paths) = match self {
-            Self::Skipped => return None,
-            Self::NoHost => ("unavailable", Vec::new()),
-            Self::Unsupported(_) => ("unsupported", Vec::new()),
-            Self::Manual(_) => ("manual", Vec::new()),
-            Self::Ready { edits, .. } => (
-                edit_action(edits.iter().any(|edit| edit.changed()), false),
-                edits.iter().map(|edit| edit.path.clone()).collect(),
-            ),
-        };
-        Some(SetupStep::new("test_runner", action, paths))
-    }
-
-    /// The startup files a run changes.
-    fn changed_paths(&self) -> Vec<std::path::PathBuf> {
-        match self {
-            Self::Ready { edits, .. } => edits
-                .iter()
-                .filter(|edit| edit.changed())
-                .map(|edit| edit.path.clone())
-                .collect(),
-            _ => Vec::new(),
-        }
-    }
-
-    /// Whether this terminal needs replacing once the plan is applied.
-    fn activation_required(&self) -> bool {
-        match self {
-            Self::Ready { var, .. } => {
-                test_pacing(std::env::var(var).ok().as_deref()) == TestPacing::Pending
-            }
-            _ => false,
-        }
-    }
-}
-
-#[cfg(unix)]
-fn plan_test_runner(no_shell: bool) -> Result<TestPlan> {
-    use crate::init_shell::{Edit, TEST_RUNNER_BLOCK};
-    if no_shell {
-        return Ok(TestPlan::Skipped);
-    }
-    let Some(host) = rustc_host() else {
-        return Ok(TestPlan::NoHost);
-    };
-    let var = crate::test_runner::runner_var(&host);
-    let Some((shell, paths)) = shell_startup_files()? else {
-        return Ok(TestPlan::Unsupported(var));
-    };
-    let export = shell.export_unless_set(&var, TEST_RUNNER)?;
-    let edits = paths
-        .into_iter()
-        .map(|path| Edit::plan_block(path, TEST_RUNNER_BLOCK, &export))
-        .collect::<Result<Vec<_>>>();
-    Ok(match edits {
-        Ok(edits) => TestPlan::Ready { var, edits },
-        Err(error) => TestPlan::Manual(error.to_string()),
-    })
-}
-
-/// Export `CARGO_TARGET_<HOST>_RUNNER="kache test-runner"` from the shell
-/// startup files, so `cargo test` in any project paces its test binaries.
-/// Cargo ranks the variable above a project's own runner; `kache
-/// test-runner` looks that runner up and still runs the binary under it.
-/// Files in `created` are not backed up. Returns true when a new terminal is
-/// needed.
-#[cfg(unix)]
-fn init_test_runner(
-    plan: TestPlan,
-    check: bool,
-    created: &mut Vec<std::path::PathBuf>,
-) -> Result<bool> {
-    let (var, edits) = match plan {
-        TestPlan::Skipped => {
-            println!("  • Test pacing: skipped (--no-shell)");
-            return Ok(false);
-        }
-        TestPlan::NoHost => {
-            println!("  • Test pacing: skipped (rustc did not report its host target)");
-            return Ok(false);
-        }
-        TestPlan::Unsupported(var) => {
-            println!("  • Test pacing: shell not supported for automatic setup");
-            println!("    Export {var}=\"{TEST_RUNNER}\" from your shell's startup file.");
-            return Ok(false);
-        }
-        TestPlan::Manual(error) => {
-            println!("  • Test pacing: shell config needs manual attention");
-            println!("    {error}");
-            println!("    Test pacing changed no shell files.");
-            return Ok(false);
-        }
-        TestPlan::Ready { var, edits } => (var, edits),
-    };
-    if edits.iter().any(|edit| edit.changed()) {
-        println!("  Test pacing: cargo test waits for the CPU slots builds use");
-        for edit in edits.iter().filter(|edit| edit.changed()) {
-            println!(
-                "    Shell config: {}",
-                crate::wrapper_config::display_path(&edit.path)
-            );
-        }
-        if check {
-            println!("    Would set {var} in new terminals.");
-            return Ok(false);
-        }
-        apply_shell_edits(&edits, created)?;
-    }
-    match test_pacing(std::env::var(&var).ok().as_deref()) {
-        TestPacing::Active => {
-            println!("  ✓ Test pacing: active");
-            Ok(false)
-        }
-        TestPacing::Overridden(value) => {
-            println!("  • Test pacing: this terminal sets {var}={value:?}, which stays in effect");
-            Ok(false)
-        }
-        TestPacing::Pending => {
-            println!("  ✓ Test pacing: configured for new terminals");
-            Ok(true)
-        }
-    }
 }
 
 /// An installer alias or stable PATH entry when one reaches this binary, so

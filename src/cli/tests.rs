@@ -1888,25 +1888,6 @@ fn test_dir_size_nonexistent() {
     assert_eq!(dir_size(std::path::Path::new("/nonexistent/path")), 0);
 }
 
-#[cfg(unix)]
-#[test]
-fn init_reports_whether_this_terminal_paces_tests() {
-    assert_eq!(test_pacing(Some("kache test-runner")), TestPacing::Active);
-    assert_eq!(
-        test_pacing(Some("qemu-x86_64")),
-        TestPacing::Overridden("qemu-x86_64".into())
-    );
-    assert_eq!(test_pacing(Some("")), TestPacing::Pending);
-    assert_eq!(test_pacing(None), TestPacing::Pending);
-}
-
-#[cfg(unix)]
-#[test]
-fn init_reads_the_host_triple_from_rustc() {
-    let host = rustc_host().expect("rustc on the test PATH");
-    assert!(host.contains(std::env::consts::ARCH), "{host}");
-}
-
 #[test]
 fn test_cargo_wrapper_edit_create() {
     let dir = tempfile::tempdir().unwrap();
@@ -2255,7 +2236,6 @@ fn save_manifest_config(
         heartbeat_secs: 30,
         explain_miss: false,
         scheduler: true,
-        test_lease: None,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -4201,8 +4181,6 @@ fn init_steps_list_each_edit_with_the_backup_before_it() {
         cargo_exists,
         shell: Some(SetupStep::new("shell", "configure", vec![rc.clone()])),
         shell_changes: vec![(rc.clone(), rc_exists)],
-        test_runner: Some(SetupStep::new("test_runner", "configure", vec![rc.clone()])),
-        test_changes: vec![(rc.clone(), rc_exists)],
 
 
         service: Some("keep"),
@@ -4227,8 +4205,6 @@ fn init_steps_list_each_edit_with_the_backup_before_it() {
         [
             "cargo configure /home/me/.cargo/config.toml",
             "shell configure /home/me/.bashrc",
-            "test_runner configure /home/me/.bashrc",
-
             "login_service keep /svc",
             "daemon ensure_running ",
         ]
@@ -4241,7 +4217,6 @@ fn init_steps_list_each_edit_with_the_backup_before_it() {
             "backup create /home/me/.cargo/config.toml",
             "shell configure /home/me/.bashrc",
             "backup create /home/me/.bashrc",
-            "test_runner configure /home/me/.bashrc",
             "backup create /home/me/.bashrc",
 
             "login_service keep /svc",
@@ -4252,8 +4227,6 @@ fn init_steps_list_each_edit_with_the_backup_before_it() {
     let kept = SetupFacts {
         shell: None,
         shell_changes: Vec::new(),
-        test_runner: None,
-        test_changes: Vec::new(),
 
         service: None,
         ..facts(true, true, true)
@@ -4374,8 +4347,6 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
         cargo_exists: true,
         shell: None,
         shell_changes: Vec::new(),
-        test_runner: None,
-        test_changes: Vec::new(),
 
 
         service: Some("configure"),
@@ -4401,9 +4372,7 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
         &plan,
         RunOutcome {
             cargo_applied: false,
-            test_runner: None,
-            test_changes: Vec::new(),
-
+        
             service_installed_now: false,
         },
     );
@@ -4420,9 +4389,7 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
         &plan,
         RunOutcome {
             cargo_applied: true,
-            test_runner: None,
-            test_changes: Vec::new(),
-
+        
             service_installed_now: true,
         },
     );
@@ -4445,9 +4412,7 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
         },
         RunOutcome {
             cargo_applied: false,
-            test_runner: None,
-            test_changes: Vec::new(),
-
+        
             service_installed_now: false,
         },
     );
@@ -4457,51 +4422,6 @@ fn a_run_reports_declined_and_failed_steps_as_not_done() {
             "cargo keep",
 
             "login_service keep"
-        ]
-    );
-}
-
-#[test]
-fn a_run_reports_the_test_runner_it_planned_after_the_shell_edits() {
-    use std::path::PathBuf;
-    let rc = PathBuf::from("/home/me/.bashrc");
-    let plan = SetupFacts {
-        cargo_path: PathBuf::from("/home/me/.cargo/config.toml"),
-        cargo: "keep",
-        cargo_exists: true,
-        shell: Some(SetupStep::new("shell", "configure", vec![rc.clone()])),
-        shell_changes: vec![(rc.clone(), true)],
-        test_runner: Some(SetupStep::new("test_runner", "unsupported", Vec::new())),
-        test_changes: Vec::new(),
-
-
-        service: None,
-        service_path: None,
-    };
-    let run = run_facts(
-        &plan,
-        RunOutcome {
-            cargo_applied: false,
-            test_runner: Some(SetupStep::new("test_runner", "configure", vec![rc.clone()])),
-            test_changes: vec![(rc.clone(), true)],
-
-            service_installed_now: false,
-        },
-    );
-    let steps: Vec<_> = setup_steps(&run)
-        .into_iter()
-        .map(|step| format!("{} {}", step.component, step.action))
-        .collect();
-    assert_eq!(
-        steps,
-        [
-            "cargo keep",
-            "shell configure",
-            "backup create",
-            "test_runner configure",
-            "backup create",
-
-            "daemon ensure_running",
         ]
     );
 }

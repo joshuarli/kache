@@ -8538,7 +8538,7 @@ fn hold_scheduler_flight_fixture() {
     let crate_name = std::env::var("KACHE_TEST_FLIGHT_CRATE").expect("fixture crate name");
     let key = std::env::var("KACHE_TEST_FLIGHT_KEY").expect("fixture cache key");
     let identity = FlightIdentity::rustc(&crate_name, &["lib".into()], false).with_key(&key);
-    let guard = match scheduler::begin_miss(&root, true, &identity, &crate_name, false, None) {
+    let guard = match scheduler::begin_miss(&root, true, &identity, &crate_name, false) {
         scheduler::BeginMiss::Compile(guard) => guard,
         scheduler::BeginMiss::Recheck => panic!("fixture must own the flight"),
     };

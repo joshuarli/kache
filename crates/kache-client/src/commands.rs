@@ -69,7 +69,7 @@ pub(crate) enum Commands {
         /// Do not install the daemon as a login service
         no_service: bool,
 
-        /// Leave shell setup alone: no C/C++ shims on PATH or test runner
+        /// Leave shell setup alone: no C/C++ shims on PATH
         /// (Cargo native dependencies are still configured)
         no_shell: bool,
 

@@ -1050,7 +1050,6 @@ fn admit_scheduler_miss(
             &identity,
             crate_name,
             is_link,
-            config.test_lease.as_deref(),
         ) {
             scheduler::BeginMiss::Recheck => {
                 if let Some(meta) = take_recheck_hit(store, cache_key, &entry_ok) {
@@ -5221,7 +5220,6 @@ fn compile_before_key(
         config.scheduler,
         crate_name,
         args.invokes_linker(),
-        config.test_lease.as_deref(),
     );
     let compile_start = std::time::Instant::now();
     // An entry could exist: key from the dep-info rustc writes right
@@ -6794,7 +6792,6 @@ fn cc_compile_before_key(
         config.scheduler,
         crate_name,
         false,
-        config.test_lease.as_deref(),
     );
     let compile_start = std::time::Instant::now();
     let compiled = compiler.execute_capturing_inputs(parsed, file_hasher);

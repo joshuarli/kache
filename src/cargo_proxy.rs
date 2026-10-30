@@ -21,20 +21,17 @@ pub(crate) fn run_shim(cargo_args: Vec<OsString>) -> Result<()> {
 }
 
 fn run_cargo(mut command: Command) -> Result<()> {
+    use std::os::unix::process::ExitStatusExt as _;
     let mut child = command.spawn().with_context(|| {
         format!(
             "running Cargo program {:?}",
             command.get_program().to_string_lossy()
         )
     })?;
-    crate::test_runner::signals::forward_to(child.id());
     let status = child.wait().context("waiting for Cargo")?;
-    std::process::exit(crate::test_runner::finish(
-        crate::test_runner::exit_disposition(
-            status.code(),
-            crate::test_runner::signals::of(&status),
-        ),
-    ));
+    std::process::exit(status.code().unwrap_or_else(|| {
+        status.signal().map_or(101, |signal| 128 + signal)
+    }));
 }
 
 fn real_cargo_program(shimmed: bool) -> Result<PathBuf> {

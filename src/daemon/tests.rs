@@ -720,7 +720,6 @@ pub(super) fn test_config(dir: &Path) -> Config {
         heartbeat_secs: 30,
         explain_miss: false,
         scheduler: true,
-        test_lease: None,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),

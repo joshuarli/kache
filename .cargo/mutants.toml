@@ -463,7 +463,6 @@ exclude_re = [
     # The test runner's Windows console adapter, the `disk_usage::other`
     # shape: the ubuntu lane never compiles it. The Unix `signals` module
     # stays in scope, and the runner's integration tests kill its mutants.
-    "src/test_runner.rs:.*windows_signals::",
     "replace run_cold_phase .* with Ok",
     "replace run_mbx_cold_phase .* with Ok",
     "src/cache_fs.rs:.*replace probe_windows",

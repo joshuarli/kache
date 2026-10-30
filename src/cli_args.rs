@@ -1122,7 +1122,7 @@ Usage: kache init [OPTIONS]
 Options:
   -y, --yes            Accept all default answers (non-interactive)
   --no-service         Do not install the daemon as a login service
-  --no-shell           Leave shell setup alone: no C/C++ shims on PATH or test runner
+  --no-shell           Leave shell setup alone: no C/C++ shims on PATH
   -n, --check          Print what would change without modifying anything [alias: --dry-run]
   --shims [<DIR>]      Only create the compiler-name links to kache (Unix), in DIR or ~/.local/lib/kache/shims
   --from-path          With --shims, also link every other compiler name on PATH (target triplets)

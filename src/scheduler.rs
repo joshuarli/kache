@@ -24,14 +24,6 @@
 //!
 //! If the scheduler directory cannot be used, compilation continues without
 //! a permit. [`Config::scheduler`] / `KACHE_SCHEDULER=0` turns the module off.
-//!
-//! Test binaries run through `kache test-runner` take slots too, but only
-//! above the compile reserve ([`reserve_for`]), so a compile always has a
-//! slot to wait for. A running test holds a marker per slot under
-//! `scheduler/tests/` and passes the path of its lowest one to its children
-//! in [`TEST_LEASE_ENV`]. A compile or test runner started under that marker
-//! is covered by the test's slots and takes none of its own; see
-//! [`lease_covers`].
 
 mod permit_wait;
 pub(crate) mod pressure;
@@ -54,14 +46,7 @@ pub const UNMEASURED_LINK_WEIGHT: u32 = 2;
 /// this (see [`slot_bytes`]).
 pub const RSS_BYTES_PER_SLOT: u64 = 512 * 1024 * 1024;
 
-/// Environment variable that carries a running test's lease marker to its
-/// children. Its value is the marker's absolute path.
-pub use kache_config::TEST_LEASE_ENV;
-
 pub(crate) const WAIT_TIMEOUT: Duration = Duration::from_secs(1800);
-/// How long a test lease waits for its marker, never longer than its wait
-/// for slots.
-const MARKER_WAIT: Duration = Duration::from_secs(1);
 /// How soon a discovery flight or an empty permit scan retries. A permit
 /// scan that found a held slot sleeps in [`permit_wait`] instead.
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -289,15 +274,13 @@ impl MissGuard {
 ///
 /// Hits and passthroughs must not call this. Disabled and fail-open paths
 /// return [`BeginMiss::Compile`] with an empty guard so the caller proceeds
-/// to `claim_build` without waiting. `lease` is the inherited
-/// [`TEST_LEASE_ENV`] marker, if any; see [`Scheduler::begin_miss`].
+/// to `claim_build` without waiting.
 pub fn begin_miss(
     cache_dir: &Path,
     enabled: bool,
     identity: &FlightIdentity,
     crate_name: &str,
     is_link: bool,
-    lease: Option<&Path>,
 ) -> BeginMiss {
     if !enabled {
         return BeginMiss::Compile(MissGuard::empty());
@@ -309,7 +292,7 @@ pub fn begin_miss(
             return BeginMiss::Compile(MissGuard::empty());
         }
     };
-    scheduler.begin_miss(identity, crate_name, is_link, lease)
+    scheduler.begin_miss(identity, crate_name, is_link)
 }
 
 /// A permit for a compile that runs before it has a key: the compile-first C
@@ -323,13 +306,12 @@ pub fn begin_keyless_compile(
     enabled: bool,
     crate_name: &str,
     is_link: bool,
-    lease: Option<&Path>,
 ) -> MissGuard {
     if !enabled {
         return MissGuard::empty();
     }
     match Scheduler::open(cache_dir) {
-        Ok(scheduler) => scheduler.keyless_compile(crate_name, is_link, lease),
+        Ok(scheduler) => scheduler.keyless_compile(crate_name, is_link),
         Err(error) => {
             log::debug!("scheduler unusable ({error:#}); compiling without a permit");
             MissGuard::empty()
@@ -378,31 +360,16 @@ impl Scheduler {
         permits_dir(&self.root).join(index.to_string())
     }
 
-    /// Join the flight, then take a permit unless a running test's lease
-    /// covers this process.
-    ///
-    /// A covered compile still joins the flight, so two nested builds of one
-    /// key share a compile. It takes no permit: the test's slots stand for
-    /// the work the test starts, and a nested build taking permits would
-    /// queue behind other compiles while those slots sat idle. That is a
-    /// throughput choice. A permit could not deadlock here: once it has
-    /// waited, a compile asks for no more slots than tests leave (see
-    /// [`compile_need`]). The cost is that a nested build can run more
-    /// compiles than its test holds slots.
+    /// Join the flight, then take a permit.
     fn begin_miss(
         &self,
         identity: &FlightIdentity,
         crate_name: &str,
         is_link: bool,
-        lease: Option<&Path>,
     ) -> BeginMiss {
         match self.join_flight(identity) {
             FlightJoin::Owner(flight) => {
-                let permit = if lease_covers(lease, &self.root) {
-                    None
-                } else {
-                    self.acquire_permit(self.weight_for(crate_name, is_link))
-                };
+                let permit = self.acquire_permit(self.weight_for(crate_name, is_link));
                 BeginMiss::Compile(MissGuard::compiling(permit, flight, self.weights_dir()))
             }
             FlightJoin::Waited => BeginMiss::Recheck,
@@ -410,12 +377,8 @@ impl Scheduler {
         }
     }
 
-    fn keyless_compile(&self, crate_name: &str, is_link: bool, lease: Option<&Path>) -> MissGuard {
-        let permit = if lease_covers(lease, &self.root) {
-            None
-        } else {
-            self.acquire_permit(self.weight_for(crate_name, is_link))
-        };
+    fn keyless_compile(&self, crate_name: &str, is_link: bool) -> MissGuard {
+        let permit = self.acquire_permit(self.weight_for(crate_name, is_link));
         MissGuard {
             _permit: permit,
             _flight: None,
@@ -479,9 +442,8 @@ impl Scheduler {
     fn acquire_permit(&self, weight: u32) -> Option<Permit> {
         let _trace = crate::phase_trace::phase("permit_wait");
         let started = std::time::Instant::now();
-        let slots = self.wait_for_permit(0..self.pool_size, |waited| {
-            let weight = pressure::weight(weight, self.pool_size, pressure::now());
-            compile_need(weight, self.pool_size, waited, || tests_held(&self.root))
+        let slots = self.wait_for_permit(0..self.pool_size, |_waited| {
+            pressure::weight(weight, self.pool_size, pressure::now()).clamp(1, self.pool_size)
         });
         crate::opcounts::record_permit_wait(started.elapsed());
         slots.map(|slots| Permit {
@@ -490,14 +452,7 @@ impl Scheduler {
         })
     }
 
-    /// Wait for `need(waited)` free slots in `range`. The need is asked again
-    /// on every scan, with `waited` false on the first: a compile's need
-    /// shrinks while tests hold slots.
-    ///
-    /// A scan that locked nothing another process is holding retries on
-    /// [`POLL_INTERVAL`]. A scan that found held slots arms a release watch
-    /// and scans once more, so an unlock during the arm is not missed, then
-    /// sleeps in [`permit_wait`].
+    /// Wait for `need` free slots in `range`.
     fn wait_for_permit(
         &self,
         range: Range<u32>,
@@ -538,217 +493,6 @@ impl Scheduler {
         }
     }
 
-    /// Take slots above the compile reserve for a test binary.
-    ///
-    /// Blocks up to the wait timeout for the fixed count or the elastic
-    /// floor, then an elastic want also takes every other free test slot
-    /// without waiting. `None` means run without a lease.
-    fn acquire_test_lease(&self, want: TestWant) -> Option<TestLease> {
-        let (floor, elastic) = match want {
-            TestWant::Fixed(slots) => (slots, false),
-            TestWant::Elastic(floor) => (floor, true),
-        };
-        let need = test_need(floor, self.pool_size);
-        if need == 0 {
-            log::debug!("no test slots above the compile reserve; running without a lease");
-            return None;
-        }
-        let range = reserve_for(self.pool_size)..self.pool_size;
-        let mut slots = self.wait_for_permit(range.clone(), |_| need)?;
-        if elastic {
-            slots.extend(self.take_free_slots(range));
-        }
-        // One marker per slot, so a compile can count the slots tests hold.
-        let markers = slots
-            .iter()
-            .map(|(index, _)| self.lock_marker(*index))
-            .collect::<Option<Vec<_>>>()?;
-        let lowest = slots.iter().map(|(index, _)| *index).min()?;
-        let path = tests_dir(&self.root).join(lowest.to_string());
-        Some(TestLease {
-            _markers: markers,
-            marker_path: std::path::absolute(&path).unwrap_or(path),
-            _slots: slots,
-        })
-    }
-
-    /// Lock the marker of test slot `index`. Only the holder of a slot locks
-    /// its marker, so a busy one is a compile counting markers, which lets
-    /// go at once.
-    fn lock_marker(&self, index: u32) -> Option<StoreLock> {
-        let path = tests_dir(&self.root).join(index.to_string());
-        let wait = MARKER_WAIT.min(self.wait_timeout);
-        let marker = acquire_within(&path, wait, self.poll_interval)
-            .ok()
-            .flatten();
-        if marker.is_none() {
-            log::debug!("test lease marker busy; running without a lease");
-        }
-        marker
-    }
-
-    /// Lock every free slot in `range` without waiting. A slot this process
-    /// already holds is busy to a second handle, so it is skipped.
-    fn take_free_slots(&self, range: Range<u32>) -> Vec<(u32, StoreLock)> {
-        range
-            .filter_map(
-                |index| match StoreLock::try_acquire(&self.permit_path(index)) {
-                    Ok(Some(lock)) => Some((index, lock)),
-                    Ok(None) | Err(_) => None,
-                },
-            )
-            .collect()
-    }
-}
-
-/// Slots at the bottom of the pool that test binaries never take: a quarter
-/// of the pool, at least one. Compiles can use every slot.
-pub(crate) fn reserve_for(pool: u32) -> u32 {
-    (pool / 4).max(1)
-}
-
-/// Slots a test asks for: `want`, clamped to the slots above the reserve.
-/// Zero when the pool has nothing above the reserve.
-pub(crate) fn test_need(want: u32, pool: u32) -> u32 {
-    want.min(pool.saturating_sub(reserve_for(pool)))
-}
-
-/// Slots a compile of `weight` asks for.
-///
-/// The first try asks for the whole weight. Once it has `waited`, a compile
-/// heavier than the reserve asks for no more than the slots tests leave,
-/// and never less than the reserve. A test may be waiting on this very
-/// compile, and tests never take reserve slots, so this is what keeps both
-/// moving. Only a heavy compile that has waited calls `tests_held`, which
-/// counts the slots tests hold.
-pub(crate) fn compile_need(
-    weight: u32,
-    pool: u32,
-    waited: bool,
-    tests_held: impl FnOnce() -> u32,
-) -> u32 {
-    let need = weight.clamp(1, pool);
-    let reserve = reserve_for(pool);
-    if waited && need > reserve {
-        need.min(pool.saturating_sub(tests_held()).max(reserve))
-    } else {
-        need
-    }
-}
-
-/// Slots a scheduled test binary asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TestWant {
-    /// Exactly this many slots.
-    Fixed(u32),
-    /// At least this many slots, plus any other free test slots.
-    Elastic(u32),
-}
-
-/// Slots held by a running test binary.
-///
-/// `_markers` holds one marker per slot. Its children find the lowest one
-/// through [`TEST_LEASE_ENV`]. They are declared first so they are released
-/// before the slots: whoever takes a slot next can always lock its marker.
-pub struct TestLease {
-    _markers: Vec<StoreLock>,
-    marker_path: PathBuf,
-    _slots: Vec<(u32, StoreLock)>,
-}
-
-impl TestLease {
-    /// Absolute path of the lease marker.
-    pub fn marker_path(&self) -> &Path {
-        &self.marker_path
-    }
-
-    /// Number of slots held.
-    pub fn held(&self) -> u32 {
-        self._slots.len() as u32
-    }
-}
-
-/// Take test slots for a test binary from a pool of `pool` slots, waiting at
-/// most `wait`. The runner passes [`default_pool_size`].
-///
-/// `None` means run without a lease: the scheduler directory is unusable,
-/// the pool has no slots above the reserve, the wait timed out, or a
-/// marker could not be locked.
-pub fn acquire_test_lease(
-    cache_dir: &Path,
-    pool: u32,
-    want: TestWant,
-    wait: Duration,
-) -> Option<TestLease> {
-    match Scheduler::open_with(cache_dir, pool, wait, POLL_INTERVAL) {
-        Ok(scheduler) => scheduler.acquire_test_lease(want),
-        Err(error) => {
-            log::debug!("scheduler unusable ({error:#}); running without a lease");
-            None
-        }
-    }
-}
-
-/// The fewest slots a test binary takes: its last recorded peak RSS in the
-/// slots of the default pool, as a compile is weighed, or 1 with no sample.
-/// Callers clamp it to the pool.
-pub fn test_floor(cache_dir: &Path, key: &str) -> u32 {
-    let slot = slot_bytes(machine_memory(), default_pool_size());
-    read_weight(&scheduler_root(cache_dir).join("weights"), key)
-        .map_or(1, |rss| weight_in_slots(rss, u32::MAX, slot))
-}
-
-/// Record the waited-for test child's peak RSS under `key`. No-op on
-/// non-Unix.
-pub fn record_test_rss(cache_dir: &Path, key: &str) {
-    if let Some(rss) = peak_child_rss_bytes() {
-        let _ = write_weight(&scheduler_root(cache_dir).join("weights"), key, rss);
-    }
-}
-
-/// Record `rss` for the test binary `key`, as [`record_test_rss`] would.
-#[cfg(test)]
-pub(crate) fn write_test_weight(cache_dir: &Path, key: &str, rss: u64) {
-    write_weight(&scheduler_root(cache_dir).join("weights"), key, rss).unwrap();
-}
-
-/// Whether `lease` is a held marker of this scheduler's test leases, so the
-/// caller runs inside a test that already holds slots. Any error is false.
-pub(crate) fn lease_covers(lease: Option<&Path>, root: &Path) -> bool {
-    let Some(lease) = lease else {
-        return false;
-    };
-    let Some(parent) = lease.parent() else {
-        return false;
-    };
-    match (parent.canonicalize(), tests_dir(root).canonicalize()) {
-        (Ok(parent), Ok(tests)) => parent == tests && slot_is_held(lease) == Some(true),
-        _ => false,
-    }
-}
-
-/// Slots test leases hold: the held markers, one per slot. A marker or
-/// directory that cannot be probed counts as every slot, so a compile errs
-/// toward the smaller need.
-fn tests_held(root: &Path) -> u32 {
-    let entries = match fs::read_dir(tests_dir(root)) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return 0,
-        Err(_) => return u32::MAX,
-    };
-    let mut held = 0;
-    for entry in entries {
-        match entry.ok().and_then(|entry| slot_is_held(&entry.path())) {
-            Some(true) => held += 1,
-            Some(false) => {}
-            None => return u32::MAX,
-        }
-    }
-    held
-}
-
-fn tests_dir(root: &Path) -> PathBuf {
-    root.join("tests")
 }
 
 #[cfg(test)]
@@ -841,10 +585,9 @@ fn permits_dir(root: &Path) -> PathBuf {
     root.join("permits")
 }
 
-/// Number of permit slots held by running compiles and by test binaries run
-/// through `kache test-runner`, without waiting. Daemon maintenance waits
-/// for zero, so a leased test run defers it: the heal and the compaction
-/// hold the index write lock, which a build inside the test would wait on.
+/// Number of permit slots held by running compiles, without waiting. Daemon maintenance waits
+/// for zero: the heal and the compaction hold the index write lock, which a
+/// concurrent build would wait on.
 ///
 /// Walks the slot files that exist rather than `0..pool_size`: a held slot
 /// always has a file, so this covers wrappers that see a different pool size
@@ -2314,7 +2057,7 @@ mod tests {
     fn off_switch_does_not_create_scheduler_dir() {
         let dir = temp_cache();
         let identity = FlightIdentity::rustc("serde", &["lib".into()], true);
-        match begin_miss(dir.path(), false, &identity, "serde", true, None) {
+        match begin_miss(dir.path(), false, &identity, "serde", true) {
             BeginMiss::Compile(guard) => {
                 assert!(guard._flight.is_none());
                 assert!(guard._permit.is_none());
@@ -2332,7 +2075,7 @@ mod tests {
         let dir = temp_cache();
         fs::write(dir.path().join("scheduler"), b"not a directory").unwrap();
         let identity = FlightIdentity::cc("foo.c");
-        match begin_miss(dir.path(), true, &identity, "foo.c", false, None) {
+        match begin_miss(dir.path(), true, &identity, "foo.c", false) {
             BeginMiss::Compile(guard) => {
                 assert!(guard._flight.is_none());
                 assert!(guard._permit.is_none());
@@ -2345,7 +2088,7 @@ mod tests {
     fn owner_compiles_without_waiting() {
         let dir = temp_cache();
         let identity = FlightIdentity::rustc("app", &["bin".into()], true);
-        match begin_miss(dir.path(), true, &identity, "app", true, None) {
+        match begin_miss(dir.path(), true, &identity, "app", true) {
             BeginMiss::Compile(guard) => {
                 assert!(guard._flight.is_some(), "first miss must own the flight");
                 assert!(guard._permit.is_some(), "first miss must take a permit");
@@ -2363,7 +2106,7 @@ mod tests {
         let dir = temp_cache();
         let identity = FlightIdentity::rustc("drop", &["lib".into()], false);
         {
-            match begin_miss(dir.path(), true, &identity, "drop", false, None) {
+            match begin_miss(dir.path(), true, &identity, "drop", false) {
                 BeginMiss::Compile(guard) => {
                     assert!(guard._flight.is_some());
                     assert!(guard._permit.is_some());
@@ -2371,7 +2114,7 @@ mod tests {
                 BeginMiss::Recheck => panic!("empty scheduler must admit the first compile"),
             }
         }
-        match begin_miss(dir.path(), true, &identity, "drop", false, None) {
+        match begin_miss(dir.path(), true, &identity, "drop", false) {
             BeginMiss::Compile(guard) => {
                 assert!(
                     guard._flight.is_some(),
@@ -2423,7 +2166,7 @@ mod tests {
         let cache = dir.path().to_path_buf();
         let flight_wait_before = crate::opcounts::flight_wait_ms();
         let waiter =
-            std::thread::spawn(move || begin_miss(&cache, true, &identity, "shared", false, None));
+            std::thread::spawn(move || begin_miss(&cache, true, &identity, "shared", false));
         // The child holds the flight until `go` exists. Give the waiter time
         // to block on that lock so it cannot become the owner by racing.
         std::thread::sleep(Duration::from_millis(200));
@@ -2900,7 +2643,7 @@ mod tests {
     fn record_compile_rss_persists_child_sample() {
         let dir = temp_cache();
         let identity = FlightIdentity::rustc("measured", &["lib".into()], false);
-        let guard = match begin_miss(dir.path(), true, &identity, "measured", false, None) {
+        let guard = match begin_miss(dir.path(), true, &identity, "measured", false) {
             BeginMiss::Compile(guard) => guard,
             BeginMiss::Recheck => panic!("empty scheduler must admit the first compile"),
         };
@@ -2940,23 +2683,7 @@ mod tests {
         Scheduler::open_with(dir, pool, BUDGET, Duration::from_millis(5)).unwrap()
     }
 
-    #[test]
-    fn reserve_is_a_quarter_of_the_pool_and_at_least_one() {
-        assert_eq!(reserve_for(1), 1);
-        assert_eq!(reserve_for(2), 1);
-        assert_eq!(reserve_for(4), 1);
-        assert_eq!(reserve_for(8), 2);
-        assert_eq!(reserve_for(16), 4);
-    }
 
-    #[test]
-    fn test_need_clamps_to_the_slots_above_the_reserve() {
-        // A pool of 8 keeps 2 for compiles, leaving 6 for tests.
-        assert_eq!(test_need(5, 8), 5);
-        assert_eq!(test_need(6, 8), 6);
-        assert_eq!(test_need(7, 8), 6);
-        assert_eq!(test_need(1, 1), 0, "a pool of one has no test slots");
-    }
 
     #[test]
     fn memory_pressure_admits_a_compile_only_when_no_other_holds_a_slot() {
@@ -2992,353 +2719,28 @@ mod tests {
         drop(_pin);
     }
 
-    #[test]
-    fn compile_need_caps_heavy_compiles_at_what_tests_leave() {
-        use std::cell::Cell;
-        let calls = Cell::new(0);
-        let held = |answer: u32| {
-            let calls = &calls;
-            move || {
-                calls.set(calls.get() + 1);
-                answer
-            }
-        };
-        // Pool 8: reserve 2, test slots 2..8.
-        assert_eq!(compile_need(2, 8, true, held(6)), 2);
-        assert_eq!(
-            calls.get(),
-            0,
-            "a compile no heavier than the reserve never asks"
-        );
-        assert_eq!(compile_need(1, 8, true, held(6)), 1);
-        assert_eq!(calls.get(), 0);
-        assert_eq!(
-            compile_need(3, 8, true, held(6)),
-            2,
-            "tests hold every test slot: the reserve"
-        );
-        assert_eq!(calls.get(), 1);
-        assert_eq!(
-            compile_need(7, 8, true, held(1)),
-            7,
-            "one test slot held leaves seven"
-        );
-        assert_eq!(compile_need(8, 8, true, held(1)), 7);
-        assert_eq!(compile_need(8, 8, true, held(4)), 4);
-        assert_eq!(compile_need(3, 8, true, held(0)), 3, "no tests, no cap");
-        assert_eq!(
-            compile_need(8, 8, true, held(u32::MAX)),
-            2,
-            "unknown counts as every slot"
-        );
-        assert_eq!(compile_need(20, 8, true, held(0)), 8, "clamped to the pool");
-        assert_eq!(compile_need(0, 8, true, held(0)), 1, "at least one slot");
 
-        let before = calls.get();
-        assert_eq!(
-            compile_need(8, 8, false, held(6)),
-            8,
-            "the first try asks for the whole weight"
-        );
-        assert_eq!(compile_need(1, 8, false, held(6)), 1);
-        assert_eq!(calls.get(), before, "without counting markers");
-    }
 
-    #[test]
-    fn lease_covers_only_markers_of_this_scheduler() {
-        let dir = temp_cache();
-        let root = scheduler_root(dir.path());
-        fs::create_dir_all(tests_dir(&root)).unwrap();
-        let other = temp_cache();
-        let other_root = scheduler_root(other.path());
-        fs::create_dir_all(tests_dir(&other_root)).unwrap();
 
-        assert!(!lease_covers(None, &root));
-        let marker = tests_dir(&root).join("3");
-        let held = StoreLock::try_acquire(&marker).unwrap().unwrap();
-        assert!(lease_covers(Some(&marker), &root));
-        let other_marker = tests_dir(&other_root).join("3");
-        let _other_held = StoreLock::try_acquire(&other_marker).unwrap().unwrap();
-        assert!(!lease_covers(
-            Some(&tests_dir(&other_root).join("3")),
-            &root
-        ));
-        assert!(
-            !lease_covers(Some(&root.join("permits/3")), &root),
-            "only markers under tests/ cover"
-        );
-        drop(held);
-        let fresh = temp_cache();
-        assert!(
-            !lease_covers(
-                Some(&tests_dir(&scheduler_root(fresh.path())).join("3")),
-                &scheduler_root(fresh.path())
-            ),
-            "a scheduler with no tests yet covers nothing"
-        );
-    }
 
-    #[cfg(unix)]
-    #[test]
-    fn lease_covers_a_marker_named_through_a_symlink() {
-        let dir = temp_cache();
-        let root = scheduler_root(dir.path());
-        fs::create_dir_all(tests_dir(&root)).unwrap();
-        let links = temp_cache();
-        let alias = links.path().join("alias");
-        std::os::unix::fs::symlink(dir.path(), &alias).unwrap();
-        let marker = tests_dir(&scheduler_root(&alias)).join("1");
-        let _held = StoreLock::try_acquire(&marker).unwrap().unwrap();
-        assert!(lease_covers(Some(&marker), &root));
-    }
 
-    #[test]
-    #[ignore = "subprocess fixture for exited_test_lease_owner_restores_admission"]
-    fn test_lease_owner_child_fixture() {
-        let cache = PathBuf::from(std::env::var_os("KACHE_TEST_SCHEDULER_ROOT").unwrap());
-        let scheduler = test_scheduler(&cache, 4);
-        let lease = scheduler.acquire_test_lease(TestWant::Fixed(2)).unwrap();
-        fs::write(
-            cache.join("lease-marker.json"),
-            deser_json::to_string(lease.marker_path()).map(String::into_bytes).unwrap(),
-        )
-        .unwrap();
-        fs::write(cache.join("lock-ready"), b"ready").unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        while !cache.join("go").exists() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "lease fixture was not released"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
 
-    #[test]
-    fn exited_test_lease_owner_restores_admission() {
-        let dir = temp_cache();
-        let scheduler = test_scheduler(dir.path(), 4);
-        let _calm = PinnedPressure::new(false);
-        let mut child = spawn_fixture(
-            dir.path(),
-            "scheduler::tests::test_lease_owner_child_fixture",
-        );
-        wait_ready(dir.path(), &mut child);
-        let marker: PathBuf =
-            deser_json::from_slice(&fs::read(dir.path().join("lease-marker.json")).unwrap())
-                .unwrap();
-        let probe = fs::File::open(&marker).unwrap();
-        assert!(matches!(
-            probe.try_lock_shared(),
-            Err(std::fs::TryLockError::WouldBlock)
-        ));
-        assert_eq!(permits_in_use(dir.path()), Some(2));
-        let args = vec![std::ffi::OsString::from("probe-0123456789abcdef")];
-        let env = crate::test_runner::TestEnv {
-            lease: Some(marker.clone()),
-            nextest_mode: None,
-            rust_test_threads: Some("1".into()),
-            pkg_name: Some("lease_fixture".into()),
-        };
-        let live_plan = crate::test_runner::plan(&args, &env, Some(dir.path()));
-        let identity = FlightIdentity::rustc("nested", &["lib".into()], false).with_key("lease");
-        let live_keyless = scheduler.keyless_compile("nested", false, Some(&marker));
-        let live_keyless_slots = permits_in_use(dir.path());
-        drop(live_keyless);
-        let BeginMiss::Compile(live_miss) =
-            scheduler.begin_miss(&identity, "nested", false, Some(&marker))
-        else {
-            panic!("a fresh keyed compile must own its flight");
-        };
-        let live_miss_slots = permits_in_use(dir.path());
-        drop(live_miss);
-        fs::write(dir.path().join("go"), b"release").unwrap();
-        assert!(child.wait().unwrap().success());
-        probe
-            .try_lock_shared()
-            .expect("exited owner must release its marker");
-        probe.unlock().unwrap();
-        assert_eq!(permits_in_use(dir.path()), Some(0));
-        assert_eq!(live_plan, crate::test_runner::Plan::Exec);
-        assert_eq!(
-            live_keyless_slots,
-            Some(2),
-            "live lease must cover keyless compiles"
-        );
-        assert_eq!(
-            live_miss_slots,
-            Some(2),
-            "live lease must cover keyed compiles"
-        );
 
-        let keyless = scheduler.keyless_compile("nested", false, Some(&marker));
-        assert_eq!(
-            permits_in_use(dir.path()),
-            Some(1),
-            "stale inherited lease must restore keyless compile admission after owner exit"
-        );
-        drop(keyless);
-        let BeginMiss::Compile(miss) =
-            scheduler.begin_miss(&identity, "nested", false, Some(&marker))
-        else {
-            panic!("the previous covered compile released its flight");
-        };
-        assert_eq!(
-            permits_in_use(dir.path()),
-            Some(1),
-            "stale lease must admit keyed compiles"
-        );
-        drop(miss);
-        assert_eq!(
-            crate::test_runner::plan(&args, &env, Some(dir.path())),
-            crate::test_runner::Plan::Schedule {
-                key: "test:lease_fixture:probe".into(),
-                want: TestWant::Fixed(1),
-            },
-            "stale lease must schedule the next test runner"
-        );
-    }
 
-    #[test]
-    fn tests_held_counts_held_markers() {
-        let dir = temp_cache();
-        let root = scheduler_root(dir.path());
-        assert_eq!(tests_held(&root), 0, "no tests directory yet");
-        let one = StoreLock::try_acquire(&tests_dir(&root).join("1"))
-            .unwrap()
-            .unwrap();
-        let two = StoreLock::try_acquire(&tests_dir(&root).join("2"))
-            .unwrap()
-            .unwrap();
-        assert_eq!(tests_held(&root), 2);
-        drop(one);
-        assert_eq!(tests_held(&root), 1, "a released marker is not held");
-        drop(two);
-        assert_eq!(tests_held(&root), 0);
-    }
 
-    #[cfg(unix)]
-    #[test]
-    fn tests_held_counts_an_unreadable_directory_as_every_slot() {
-        let dir = temp_cache();
-        let root = scheduler_root(dir.path());
-        fs::create_dir_all(&root).unwrap();
-        fs::write(tests_dir(&root), b"not a directory").unwrap();
-        assert_eq!(tests_held(&root), u32::MAX);
-    }
 
-    #[cfg(unix)]
-    #[test]
-    fn tests_held_counts_an_unprobeable_marker_as_every_slot() {
-        let dir = temp_cache();
-        let root = scheduler_root(dir.path());
-        let _held = StoreLock::try_acquire(&tests_dir(&root).join("1"))
-            .unwrap()
-            .unwrap();
-        // A marker that links to itself fails to open with ELOOP, so it is
-        // neither held nor free.
-        std::os::unix::fs::symlink("2", tests_dir(&root).join("2")).unwrap();
-        assert_eq!(tests_held(&root), u32::MAX);
-    }
 
-    #[test]
-    fn test_leases_are_bounded_by_the_slots_above_the_reserve() {
-        let dir = temp_cache();
-        let scheduler = budget_scheduler(dir.path(), 4);
-        // Pool 4 keeps slot 0 for compiles and leaves 1..4 to tests.
-        let leases: Vec<_> = (0..3)
-            .map(|_| scheduler.acquire_test_lease(TestWant::Fixed(1)).unwrap())
-            .collect();
-        assert_eq!(
-            leases.iter().map(TestLease::held).collect::<Vec<_>>(),
-            [1, 1, 1]
-        );
-        let compile = scheduler.acquire_permit(1);
-        assert!(compile.is_some(), "the reserve admits a compile");
-        drop(compile);
 
-        let started = std::time::Instant::now();
-        assert!(
-            scheduler.acquire_test_lease(TestWant::Fixed(1)).is_none(),
-            "a fourth test must wait, then run without a lease"
-        );
-        assert!(started.elapsed() >= BUDGET, "it waited the whole budget");
-        assert!(
-            scheduler.acquire_permit(1).is_some(),
-            "compiles are still admitted"
-        );
-
-        let mut leases = leases;
-        leases.pop();
-        assert!(scheduler.acquire_test_lease(TestWant::Fixed(1)).is_some());
-    }
-
-    #[test]
-    fn test_leases_never_take_the_reserve() {
-        let dir = temp_cache();
-        let scheduler = budget_scheduler(dir.path(), 8);
-        let lease = scheduler
-            .acquire_test_lease(TestWant::Fixed(100))
-            .expect("a want larger than the range is clamped");
-        assert_eq!(lease.held(), 6);
-        assert_eq!(lease.marker_path(), tests_dir(&scheduler.root).join("2"));
-        assert_eq!(permits_in_use(dir.path()), Some(6));
-        assert_eq!(tests_held(&scheduler.root), 6, "a marker per slot");
-        for index in 0..2 {
-            assert!(
-                StoreLock::try_acquire(&scheduler.permit_path(index))
-                    .unwrap()
-                    .is_some(),
-                "reserve slot {index} stays free"
-            );
-        }
-    }
-
-    #[test]
-    fn a_pool_of_one_runs_tests_without_a_lease() {
-        let dir = temp_cache();
-        let scheduler = budget_scheduler(dir.path(), 1);
-        let started = std::time::Instant::now();
-        assert!(scheduler.acquire_test_lease(TestWant::Elastic(1)).is_none());
-        assert!(started.elapsed() < BUDGET, "an empty range does not wait");
-    }
-
-    #[test]
-    fn heavy_compiles_fit_in_the_reserve_while_tests_hold_the_rest() {
-        let dir = temp_cache();
-        let scheduler = test_scheduler(dir.path(), 4);
-        let _tests = scheduler.acquire_test_lease(TestWant::Elastic(1)).unwrap();
-        let permit = scheduler.acquire_permit(4);
-        assert!(permit.is_some(), "a pool-sized compile takes the reserve");
-        assert_eq!(permits_in_use(dir.path()), Some(4));
-    }
-
-    #[test]
-    fn heavy_compiles_take_what_tests_leave() {
-        let dir = temp_cache();
-        let scheduler = test_scheduler(dir.path(), 8);
-        let _test = scheduler.acquire_test_lease(TestWant::Fixed(1)).unwrap();
-        let permit = scheduler.acquire_permit(8);
-        assert!(permit.is_some(), "the seven slots the test leaves");
-        assert_eq!(
-            permits_in_use(dir.path()),
-            Some(8),
-            "one test slot and seven compile slots, not just the reserve"
-        );
-    }
 
     #[test]
     fn a_free_pool_gives_a_heavy_compile_its_whole_weight_at_once() {
         let dir = temp_cache();
         let scheduler = budget_scheduler(dir.path(), 4);
-        // An unreadable tests directory counts as every test slot held, so
-        // any capped ask would be the reserve alone.
-        fs::write(tests_dir(&scheduler.root), b"not a directory").unwrap();
         let _permit = scheduler.acquire_permit(4).unwrap();
         assert_eq!(
             permits_in_use(dir.path()),
             Some(4),
-            "the first try takes the whole weight without asking about tests"
+            "the first try takes the whole weight"
         );
     }
 
@@ -3355,56 +2757,12 @@ mod tests {
                 Some(held),
                 "pressured={pressured}"
             );
-            assert!(
-                !tests_dir(&scheduler.root).exists(),
-                "compiles alone leave no test state"
-            );
         }
     }
 
-    #[test]
-    fn covered_misses_skip_the_permit_but_join_the_flight() {
-        // A covered miss stays at zero slots either way. An uncovered miss
-        // takes its weight when calm and the whole pool under pressure.
-        for (pressured, uncovered) in [(false, 1), (true, 2)] {
-            let dir = temp_cache();
-            let scheduler = budget_scheduler(dir.path(), 2);
-            let _pin = PinnedPressure::new(pressured);
-            fs::create_dir_all(tests_dir(&scheduler.root)).unwrap();
-            let marker = tests_dir(&scheduler.root).join("1");
-            let _marker_lock = StoreLock::try_acquire(&marker).unwrap().unwrap();
-            let identity = FlightIdentity::rustc("nested", &["lib".into()], false).with_key("k");
-
-            let BeginMiss::Compile(covered) =
-                scheduler.begin_miss(&identity, "nested", false, Some(&marker))
-            else {
-                panic!("the first miss owns the flight");
-            };
-            assert!(covered._flight.is_some(), "a covered miss joins the flight");
-            assert!(covered._permit.is_none(), "a covered miss takes no permit");
-            assert_eq!(permits_in_use(dir.path()), Some(0), "pressured={pressured}");
-            drop(covered);
-
-            let BeginMiss::Compile(uncovered_miss) =
-                scheduler.begin_miss(&identity, "nested", false, None)
-            else {
-                panic!("the first miss owns the flight");
-            };
-            assert!(uncovered_miss._flight.is_some());
-            assert!(
-                uncovered_miss._permit.is_some(),
-                "an uncovered miss takes a permit"
-            );
-            assert_eq!(
-                permits_in_use(dir.path()),
-                Some(uncovered),
-                "pressured={pressured}"
-            );
-        }
-    }
 
     /// A compile that runs before its key takes a pool slot and no flight,
-    /// unless the scheduler is off or a test lease covers it.
+    /// unless the scheduler is off.
     #[test]
     fn a_keyless_compile_takes_a_permit_and_no_flight() {
         for (pressured, held) in [(false, 1), (true, 2)] {
@@ -3412,7 +2770,7 @@ mod tests {
             let scheduler = budget_scheduler(dir.path(), 2);
             let _pin = PinnedPressure::new(pressured);
 
-            let guard = scheduler.keyless_compile("c_unit", false, None);
+            let guard = scheduler.keyless_compile("c_unit", false);
             assert!(guard._permit.is_some(), "a keyless compile takes a permit");
             assert!(guard._flight.is_none(), "its discovery flight dedupes it");
             assert_eq!(
@@ -3422,145 +2780,26 @@ mod tests {
             );
             drop(guard);
             assert_eq!(permits_in_use(dir.path()), Some(0));
-
-            fs::create_dir_all(tests_dir(&scheduler.root)).unwrap();
-            let marker = tests_dir(&scheduler.root).join("1");
-            let _marker_lock = StoreLock::try_acquire(&marker).unwrap().unwrap();
-            let covered = scheduler.keyless_compile("c_unit", false, Some(&marker));
-            assert!(
-                covered._permit.is_none(),
-                "a covered compile takes no permit"
-            );
-            assert_eq!(permits_in_use(dir.path()), Some(0), "pressured={pressured}");
         }
 
         let dir = temp_cache();
-        let disabled = begin_keyless_compile(dir.path(), false, "c_unit", false, None);
+        let disabled = begin_keyless_compile(dir.path(), false, "c_unit", false);
         assert!(disabled.is_empty());
         {
             let _calm = PinnedPressure::new(false);
-            let enabled = begin_keyless_compile(dir.path(), true, "c_unit", false, None);
+            let enabled = begin_keyless_compile(dir.path(), true, "c_unit", false);
             assert!(!enabled.is_empty());
             assert_eq!(permits_in_use(dir.path()), Some(UNMEASURED_COMPILE_WEIGHT));
         }
         let _pressured = PinnedPressure::new(true);
-        let enabled = begin_keyless_compile(dir.path(), true, "c_unit", false, None);
+        let enabled = begin_keyless_compile(dir.path(), true, "c_unit", false);
         assert!(!enabled.is_empty());
         assert_eq!(permits_in_use(dir.path()), Some(default_pool_size()));
     }
 
-    #[test]
-    fn elastic_leases_take_every_free_test_slot() {
-        let dir = temp_cache();
-        let scheduler = budget_scheduler(dir.path(), 8);
-        let busy = StoreLock::try_acquire(&scheduler.permit_path(2))
-            .unwrap()
-            .unwrap();
-        let lease = scheduler.acquire_test_lease(TestWant::Elastic(1)).unwrap();
-        assert_eq!(lease.held(), 5, "slots 3..8");
-        assert_eq!(lease.marker_path(), tests_dir(&scheduler.root).join("3"));
-        drop(busy);
-        drop(lease);
 
-        let lease = scheduler.acquire_test_lease(TestWant::Elastic(2)).unwrap();
-        assert_eq!(lease.held(), 6, "slots 2..8");
-        assert_eq!(
-            lease.marker_path(),
-            tests_dir(&scheduler.root).join("2"),
-            "a later lease reuses the marker of its lowest slot"
-        );
-        drop(lease);
-        let lease = scheduler.acquire_test_lease(TestWant::Fixed(1)).unwrap();
-        assert_eq!(lease.marker_path(), tests_dir(&scheduler.root).join("2"));
-    }
 
-    #[test]
-    fn a_marker_that_stays_busy_releases_the_slots() {
-        let dir = temp_cache();
-        let scheduler = budget_scheduler(dir.path(), 4);
-        let stuck = StoreLock::try_acquire(&tests_dir(&scheduler.root).join("1"))
-            .unwrap()
-            .unwrap();
-        assert!(scheduler.acquire_test_lease(TestWant::Fixed(1)).is_none());
-        assert_eq!(permits_in_use(dir.path()), Some(0), "the slot was released");
-        drop(stuck);
-        assert!(scheduler.acquire_test_lease(TestWant::Fixed(1)).is_some());
-    }
 
-    #[test]
-    fn a_lease_waits_for_a_compile_checking_its_marker() {
-        let dir = temp_cache();
-        let scheduler = test_scheduler(dir.path(), 4);
-        let marker = tests_dir(&scheduler.root).join("1");
-        // A compile checking for live tests holds the marker shared for a
-        // moment.
-        fs::create_dir_all(tests_dir(&scheduler.root)).unwrap();
-        let check = fs::File::create(&marker).unwrap();
-        check.lock_shared().unwrap();
-        let release = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(30));
-            drop(check);
-        });
-        let lease = scheduler.acquire_test_lease(TestWant::Fixed(1));
-        release.join().unwrap();
-        let lease = lease.expect("the check lets go, so the lease must get its marker");
-        assert_eq!(lease.marker_path(), marker);
-    }
 
-    #[test]
-    fn acquire_test_lease_fails_open_and_uses_the_given_pool() {
-        let dir = temp_cache();
-        fs::write(dir.path().join("scheduler"), b"not a directory").unwrap();
-        assert!(acquire_test_lease(dir.path(), 4, TestWant::Fixed(1), BUDGET).is_none());
 
-        // A fixed pool, so this holds on a one-CPU host too.
-        let dir = temp_cache();
-        let lease = acquire_test_lease(dir.path(), 4, TestWant::Elastic(1), BUDGET)
-            .expect("a pool of 4 has three test slots");
-        assert_eq!(lease.held(), 3);
-        assert!(lease.marker_path().is_absolute());
-        assert!(lease_covers(
-            Some(lease.marker_path()),
-            &scheduler_root(dir.path())
-        ));
-    }
-
-    #[test]
-    fn test_floor_reads_recorded_rss() {
-        const MIB: u64 = 1024 * 1024;
-        let dir = temp_cache();
-        assert_eq!(test_floor(dir.path(), "test:demo:probe"), 1, "no sample");
-        write_test_weight(dir.path(), "test:demo:probe", 3 * 512 * MIB);
-        assert_eq!(test_floor(dir.path(), "test:demo:probe"), 3);
-        write_test_weight(dir.path(), "test:demo:big", 100 * 512 * MIB);
-        assert_eq!(
-            test_floor(dir.path(), "test:demo:big"),
-            100,
-            "the pool clamp is the caller's"
-        );
-        // A test binary is weighed in the same slots as a compile: 4 GiB
-        // each when the machine has that much per slot of the default pool.
-        let memory = u64::from(default_pool_size()) * 4 * 1024 * MIB;
-        TEST_MEMORY.with(|cell| cell.set(Some(Some(memory))));
-        assert_eq!(test_floor(dir.path(), "test:demo:probe"), 1);
-        assert_eq!(test_floor(dir.path(), "test:demo:big"), 13);
-        TEST_MEMORY.with(|cell| cell.set(Some(None)));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn record_test_rss_persists_the_child_sample() {
-        let dir = temp_cache();
-        assert!(
-            Command::new("true").status().unwrap().success(),
-            "need a waited-for child so RUSAGE_CHILDREN is populated"
-        );
-        record_test_rss(dir.path(), "test:demo:probe");
-        let rss = read_weight(
-            &scheduler_root(dir.path()).join("weights"),
-            "test:demo:probe",
-        )
-        .expect("a test run must persist a peak RSS sample");
-        assert!(rss > 1024, "got {rss}");
-    }
 }

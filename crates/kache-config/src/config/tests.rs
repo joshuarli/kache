@@ -2370,7 +2370,6 @@ fn test_config_store_dir() {
         heartbeat_secs: 30,
         explain_miss: false,
         scheduler: true,
-        test_lease: None,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -2429,7 +2428,6 @@ fn test_config_index_db_path() {
         heartbeat_secs: 30,
         explain_miss: false,
         scheduler: true,
-        test_lease: None,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -2484,7 +2482,6 @@ fn test_config_event_log_path() {
         heartbeat_secs: 30,
         explain_miss: false,
         scheduler: true,
-        test_lease: None,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -2554,7 +2551,6 @@ fn test_config_socket_path() {
         heartbeat_secs: 30,
         explain_miss: false,
         scheduler: true,
-        test_lease: None,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -3608,26 +3604,6 @@ fn scheduler_env_wins_over_file() {
     assert!(
         !Config::load().unwrap().scheduler,
         "ignore_env must keep [cache] scheduler = false"
-    );
-}
-
-#[test]
-fn test_lease_comes_from_the_environment_even_with_ignore_env() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("kache/config.toml");
-    let _env_guard = set_kache_config_for_test(&config_path);
-    let _missing = NamedEnvGuard::remove("KACHE_TEST_LEASE");
-    assert_eq!(Config::load().unwrap().test_lease, None);
-
-    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
-    std::fs::write(&config_path, "[cache]\nignore_env = true\n").unwrap();
-    let lease = dir.path().join("scheduler/tests/1");
-    let _lease = NamedEnvGuard::set("KACHE_TEST_LEASE", lease.to_str().unwrap());
-    assert_eq!(
-        Config::load().unwrap().test_lease,
-        Some(lease),
-        "the lease is operational, so ignore_env does not hide it"
     );
 }
 

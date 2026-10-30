@@ -24,13 +24,6 @@ pub(crate) const COMPILER_BLOCK: Block = Block {
     end: END,
     last: true,
 };
-/// Makes `kache test-runner` Cargo's runner for the host target. A new one
-/// goes above the compiler block, which then stays last.
-pub(crate) const TEST_RUNNER_BLOCK: Block = Block {
-    begin: "# >>> kache test runner >>>",
-    end: "# <<< kache test runner <<<",
-    last: false,
-};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Shell {
@@ -110,31 +103,6 @@ impl Shell {
             _ => {
                 format!("case \"$PATH\" in\n    {quoted}|{quoted}:*) ;;\n    *) {command} ;;\nesac")
             }
-        })
-    }
-
-    /// Export `var`, set to `value` unless the shell already has a
-    /// non-empty `var`, so a value the user chose earlier in the file wins
-    /// and reaches Cargo.
-    pub fn export_unless_set(self, var: &str, value: &str) -> Result<String> {
-        ensure!(
-            !var.is_empty()
-                && var
-                    .bytes()
-                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'),
-            "invalid environment variable name {var:?}"
-        );
-        ensure!(
-            value
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-'),
-            "invalid value {value:?} for {var}"
-        );
-        Ok(match self {
-            Self::Fish => format!(
-                "if test -z \"${var}\"; set -gx {var} '{value}'; else; set -gx {var} ${var}; end"
-            ),
-            _ => format!("[ -n \"${{{var}-}}\" ] || {var}='{value}'; export {var}"),
         })
     }
 }
@@ -365,7 +333,7 @@ mod tests {
         let edit = Edit::plan(path.clone(), &activation).unwrap();
         assert!(edit.creates());
         assert!(edit.apply_keeping(true).unwrap().is_none());
-        let edit = Edit::plan_block(path.clone(), TEST_RUNNER_BLOCK, "export X=1").unwrap();
+        let edit = Edit::plan_block(path.clone(), COMPILER_BLOCK, "export X=1").unwrap();
         assert!(!edit.creates() && edit.changed());
         assert!(edit.apply_keeping(false).unwrap().is_none());
         assert!(
@@ -378,7 +346,7 @@ mod tests {
             .filter(|entry| entry.as_ref().unwrap().file_name() != ".bashrc")
             .count();
         assert_eq!(backups, 0);
-        let edit = Edit::plan_block(path.clone(), TEST_RUNNER_BLOCK, "export X=2").unwrap();
+        let edit = Edit::plan_block(path.clone(), COMPILER_BLOCK, "export X=2").unwrap();
         assert!(edit.apply_keeping(true).unwrap().is_some());
     }
 
@@ -534,114 +502,6 @@ mod tests {
         assert!(read_regular(&path).is_err());
         std::fs::write(&path, [0xff]).unwrap();
         assert!(read_regular(&path).is_err());
-    }
-
-    #[test]
-    fn export_unless_set_keeps_a_value_the_user_chose() {
-        let _guard = crate::test_support::process_state_test_lock();
-        let bash = crate::compiler::resolve_program_on_path("bash").expect("Bash on test PATH");
-        let export = Shell::Bash
-            .export_unless_set("CARGO_TARGET_X_RUNNER", "kache test-runner")
-            .unwrap();
-        for (initial, earlier, expected) in [
-            (None, "", "kache test-runner"),
-            (Some(""), "", "kache test-runner"),
-            (Some("mine"), "", "mine"),
-            // Set earlier in the file but not exported: exported as it is.
-            (None, "CARGO_TARGET_X_RUNNER=earlier\n", "earlier"),
-        ] {
-            let script = format!(
-                "set -u\n{earlier}{export}\n\
-                 bash --noprofile --norc -c 'printf %s \"$CARGO_TARGET_X_RUNNER\"'"
-            );
-            let mut command = std::process::Command::new(&bash);
-            command
-                .args(["--noprofile", "--norc", "-c", &script])
-                .env_remove("BASH_ENV")
-                .env_remove("CARGO_TARGET_X_RUNNER");
-            if let Some(initial) = initial {
-                command.env("CARGO_TARGET_X_RUNNER", initial);
-            }
-            let output = command.output().unwrap();
-            assert!(output.status.success());
-            assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
-        }
-        assert_eq!(
-            Shell::Fish
-                .export_unless_set("CARGO_TARGET_X_RUNNER", "kache test-runner")
-                .unwrap(),
-            "if test -z \"$CARGO_TARGET_X_RUNNER\"; \
-             set -gx CARGO_TARGET_X_RUNNER 'kache test-runner'; \
-             else; set -gx CARGO_TARGET_X_RUNNER $CARGO_TARGET_X_RUNNER; end"
-        );
-        for var in ["", "lower", "A-B", "A B", "A$B"] {
-            assert!(Shell::Zsh.export_unless_set(var, "kache").is_err(), "{var}");
-        }
-        assert!(Shell::Zsh.export_unless_set("A_1", "kache").is_ok());
-        for value in ["it's", "a$b", "a;b", "a/b"] {
-            assert!(Shell::Zsh.export_unless_set("A", value).is_err(), "{value}");
-        }
-    }
-
-    #[test]
-    fn the_runner_block_stays_put_above_the_compiler_block() {
-        let home = tempfile::tempdir().unwrap();
-        let path = home.path().join(".zshrc");
-        let runner = |body: &str| {
-            format!(
-                "{}\n{body}\n{}\n",
-                TEST_RUNNER_BLOCK.begin, TEST_RUNNER_BLOCK.end
-            )
-        };
-        let shims = format!("{BEGIN}\nshims\n{END}\n");
-        std::fs::write(&path, format!("# user\n{shims}")).unwrap();
-        Edit::plan_block(path.clone(), TEST_RUNNER_BLOCK, "runner")
-            .unwrap()
-            .apply()
-            .unwrap();
-        let both = format!("# user\n{}{shims}", runner("runner"));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), both);
-        // Running init again changes neither file nor order.
-        assert!(!Edit::plan(path.clone(), "shims").unwrap().changed());
-        assert!(
-            !Edit::plan_block(path.clone(), TEST_RUNNER_BLOCK, "runner")
-                .unwrap()
-                .changed()
-        );
-        // A changed runner block is rewritten where it is.
-        assert_eq!(
-            Edit::plan_block(path.clone(), TEST_RUNNER_BLOCK, "other")
-                .unwrap()
-                .updated,
-            format!("# user\n{}{shims}", runner("other"))
-        );
-        // Without a compiler block, or with only a mention of its marker
-        // inside a line, a new runner block is appended.
-        for original in [
-            "# user",
-            "# user\n",
-            "# see # >>> kache compiler cache >>>\n",
-        ] {
-            std::fs::write(&path, original).unwrap();
-            let updated = Edit::plan_block(path.clone(), TEST_RUNNER_BLOCK, "runner")
-                .unwrap()
-                .updated;
-            assert_eq!(
-                updated,
-                format!(
-                    "{}{}",
-                    original.trim_end_matches('\n').to_owned() + "\n",
-                    runner("runner")
-                )
-            );
-        }
-        std::fs::write(&path, &shims).unwrap();
-        assert_eq!(
-            Edit::plan_block(path.clone(), TEST_RUNNER_BLOCK, "runner")
-                .unwrap()
-                .updated,
-            format!("{}{shims}", runner("runner"))
-        );
     }
 
     #[test]

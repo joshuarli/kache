@@ -54,7 +54,6 @@ mod compiler_store;
 use compiler_store as store;
 mod store_view;
 mod term;
-mod test_runner;
 #[cfg(test)]
 mod test_support;
 mod toolchain_dylib;
@@ -407,23 +406,6 @@ fn entry_route(argv: &[String], self_spawn: Option<&std::ffi::OsStr>) -> EntryRo
     EntryRoute::Argv
 }
 
-/// The test binary and its arguments when kache runs as a Cargo target
-/// runner (`kache test-runner <binary> <args>`). Behind a compiler-name shim
-/// argv[1] is a compiler argument, so `cc test-runner` stays a compile.
-fn test_runner_args(raw_args: &[std::ffi::OsString]) -> Option<&[std::ffi::OsString]> {
-    match raw_args.get(1) {
-        Some(arg)
-            if arg == "test-runner"
-                && !raw_args.first().is_some_and(|arg0| {
-                    compiler::shim::invoked_as_compiler(&arg0.to_string_lossy())
-                }) =>
-        {
-            Some(&raw_args[2..])
-        }
-        _ => None,
-    }
-}
-
 /// Run the engine CLI, compiler pipeline or daemon process.
 pub fn main() -> std::process::ExitCode {
     match run_main() {
@@ -456,8 +438,6 @@ fn run_main() -> Result<()> {
     if let Some(notifier) = &mut readiness {
         let _ = notifier.progress("starting kache");
     }
-    // Cargo target runner. Checked before the probe and shim guards, which
-    // exit without running anything: a test must always run.
     let raw_args = entry.args;
     if raw_args.first().is_some_and(|arg| {
         std::path::Path::new(arg)
@@ -468,10 +448,8 @@ fn run_main() -> Result<()> {
         init_logging(LogMode::Cli);
         return cargo_proxy::run_shim(raw_args[1..].to_vec());
     }
-    if let Some(args) = test_runner_args(&raw_args) {
-        init_logging(LogMode::Wrapper);
-        std::process::exit(test_runner::run(args));
-    }
+    // Cargo running a build script through the launcher the rustc wrapper
+    // installed. Decided on the environment alone: argv is the script's own.
     if std::env::var_os("KACHE_FAMILY_PROBE_ACTIVE").is_some() {
         // Prevent unbounded recursion when a probed wrapper calls back into kache.
         return Ok(());
@@ -2730,36 +2708,6 @@ mod tests {
         );
         assert!(argv.contains(&format!("-Cincremental={}\n", incremental.display())));
 
-    }
-
-    #[test]
-    fn test_runner_args_take_everything_after_the_subcommand() {
-        let os = |args: &[&str]| -> Vec<std::ffi::OsString> {
-            args.iter().map(std::ffi::OsString::from).collect()
-        };
-        let argv = os(&[
-            "kache",
-            "test-runner",
-            "/t/probe-0123456789abcdef",
-            "--exact",
-        ]);
-        assert_eq!(
-            test_runner_args(&argv),
-            Some(&argv[2..]),
-            "the binary and its arguments"
-        );
-        let bare = os(&["kache", "test-runner"]);
-        assert_eq!(test_runner_args(&bare), Some(&bare[2..]));
-        assert_eq!(
-            test_runner_args(&os(&["kache", "rustc", "test-runner"])),
-            None
-        );
-        assert_eq!(test_runner_args(&os(&["kache"])), None);
-        // A compile through a shim whose first input is named `test-runner`.
-        assert_eq!(
-            test_runner_args(&os(&["/x/shims/cc", "test-runner", "-o", "app"])),
-            None
-        );
     }
 
     #[test]

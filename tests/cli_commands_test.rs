@@ -217,38 +217,6 @@ fn unknown_subcommand_is_a_usage_error() {
     }
 }
 
-/// `kache test-runner` hands back the test binary's exit code, with the
-/// scheduler on and off. Kept here rather than with the Unix-only runner
-/// tests so it runs on Windows too. The stand-in test binary is kache under
-/// a Cargo test binary name, given a subcommand that does not exist, so it
-/// exits 2. It is hard-linked: a copy is written through a descriptor that
-/// a fork on another test thread can hold, and running it then fails with
-/// ETXTBSY on Linux.
-#[test]
-fn test_runner_passes_the_exit_code_through() {
-    let e = env();
-    let dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let probe = dir.path().join(format!(
-        "probe-0123456789abcdef{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    std::fs::hard_link(env!("CARGO_BIN_EXE_kache-engine"), &probe)
-        .or_else(|_| std::fs::copy(env!("CARGO_BIN_EXE_kache-engine"), &probe).map(drop))
-        .unwrap();
-    for scheduler in ["1", "0"] {
-        e.cmd()
-            .arg("test-runner")
-            .arg(&probe)
-            .arg("definitely-not-a-command")
-            .env("KACHE_SCHEDULER", scheduler)
-            .env_remove("KACHE_TEST_LEASE")
-            .env_remove("RUST_TEST_THREADS")
-            .env_remove("NEXTEST_EXECUTION_MODE")
-            .assert()
-            .code(2);
-    }
-}
-
 /// Without a terminal and without `--yes`, a clean that would ask fails once
 /// with the same command line plus `--yes`, and removes nothing.
 #[test]
@@ -368,25 +336,6 @@ fn a_closed_stdout_ends_quietly() {
         assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
         assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
     }
-}
-
-#[test]
-fn test_runner_explains_itself() {
-    let e = env();
-    for help in ["--help", "-h"] {
-        e.cmd()
-            .args(["test-runner", help])
-            .assert()
-            .success()
-            .stdout(predicates::str::contains("Usage: kache test-runner"));
-    }
-    e.cmd()
-        .arg("test-runner")
-        .assert()
-        .code(101)
-        .stderr(predicates::str::starts_with(
-            "error: expected a test binary to run",
-        ));
 }
 
 /// Each lifecycle command says what it found or did, and stopping a daemon
@@ -801,16 +750,6 @@ fn init_check_steps_follow_the_plans() {
     assert!(!e.home.join(".bashrc").exists());
 }
 
-/// The rustc on PATH, outside the test HOME that hides rustup's toolchains.
-#[cfg(unix)]
-fn real_rustc() -> std::path::PathBuf {
-    let sysroot = std::process::Command::new("rustc")
-        .args(["--print", "sysroot"])
-        .output()
-        .unwrap();
-    Path::new(String::from_utf8(sysroot.stdout).unwrap().trim()).join("bin/rustc")
-}
-
 /// `component action [file name]` for each step.
 #[cfg(unix)]
 fn step_summary(plan: &deser_value::Value) -> Vec<String> {
@@ -834,31 +773,14 @@ fn step_summary(plan: &deser_value::Value) -> Vec<String> {
 }
 
 /// A startup file that exists is backed up before each edit init plans for
-/// it, and a terminal without the runner needs replacing.
+/// it.
 #[cfg(unix)]
 #[test]
 fn init_preview_backs_up_existing_startup_files_before_each_edit() {
     let e = env();
     std::fs::write(e.home.join(".bashrc"), "# user rc\n").unwrap();
-    let rustc = real_rustc();
-    let version = std::process::Command::new(&rustc)
-        .arg("-vV")
-        .output()
-        .unwrap();
-    let version = String::from_utf8(version.stdout).unwrap();
-    let host = version
-        .lines()
-        .find_map(|line| line.strip_prefix("host: "))
-        .unwrap();
-    let var = format!(
-        "CARGO_TARGET_{}_RUNNER",
-        host.to_ascii_uppercase().replace(['-', '.'], "_")
-    );
     let mut command = e.cmd();
-    command
-        .args(["init", "--check", "--no-service", "--json"])
-        .env("RUSTC", &rustc)
-        .env_remove(&var);
+    command.args(["init", "--check", "--no-service", "--json"]);
     let output = command.output().unwrap();
     assert!(output.status.success(), "{output:?}");
     let plan: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
@@ -867,21 +789,15 @@ fn init_preview_backs_up_existing_startup_files_before_each_edit() {
         .iter()
         .position(|step| step.starts_with("shell "))
         .unwrap();
-    let tests = steps
-        .iter()
-        .position(|step| step.starts_with("test_runner "))
-        .unwrap();
     assert_eq!(steps[shell + 1], "backup create .bashrc", "{steps:?}");
-    assert_eq!(steps[tests + 1], "backup create .bashrc", "{steps:?}");
     assert_eq!(
         steps
             .iter()
             .filter(|step| step.starts_with("backup "))
             .count(),
-        2,
+        1,
         "{steps:?}"
     );
-    assert_eq!(plan["test_activation_required"], true, "{plan:?}");
 }
 
 #[cfg(unix)]
@@ -2452,164 +2368,6 @@ fn init_continues_when_the_login_service_cannot_be_installed() {
 /// startup files, keeps the files as they are on a rerun, and leaves them
 /// alone under `--check`, `--no-shell` or a declined prompt.
 #[cfg(unix)]
-#[test]
-fn init_exports_the_test_runner_for_the_host() {
-    // The test HOME hides rustup's toolchains, so hand init the real rustc.
-    let sysroot = std::process::Command::new("rustc")
-        .args(["--print", "sysroot"])
-        .output()
-        .unwrap();
-    let rustc = Path::new(String::from_utf8(sysroot.stdout).unwrap().trim()).join("bin/rustc");
-    let version = std::process::Command::new(&rustc)
-        .arg("-vV")
-        .output()
-        .unwrap();
-    let version = String::from_utf8(version.stdout).unwrap();
-    let host = version
-        .lines()
-        .find_map(|line| line.strip_prefix("host: "))
-        .unwrap();
-    let var = format!(
-        "CARGO_TARGET_{}_RUNNER",
-        host.to_ascii_uppercase().replace(['-', '.'], "_")
-    );
-    let export = format!("{var}='kache test-runner'; export {var}");
-    let init = |e: &Env, args: &[&str], runner: Option<&str>, stdin: &str| {
-        let mut command = e.cmd();
-        command
-            .arg("init")
-            .args(args)
-            .env("RUSTC", &rustc)
-            .env_remove(&var)
-            .write_stdin(stdin.to_owned());
-        if let Some(runner) = runner {
-            command.env(&var, runner);
-        }
-        let output = command.assert().success().get_output().stdout.clone();
-        String::from_utf8(output).unwrap()
-    };
-    let bashrc = |e: &Env| std::fs::read_to_string(e.home.join(".bashrc")).unwrap_or_default();
-
-    let e = env();
-    let out = init(&e, &["--no-service", "--no-shell"], None, "y\nn\n");
-    assert!(out.contains("Test pacing: skipped (--no-shell)"), "{out}");
-    let out = init(&e, &["--no-service", "--check"], None, "");
-    assert!(
-        out.contains(&format!("Would set {var} in new terminals.")),
-        "{out}"
-    );
-    assert!(!e.home.join(".bashrc").exists());
-
-    // One answer enables the shell setup and test pacing together.
-    let out = init(&e, &["--no-service"], None, "y\n");
-    assert_eq!(out.matches("[Y/n]").count(), 1, "{out}");
-    assert!(
-        out.contains("Test pacing: configured for new terminals"),
-        "{out}"
-    );
-    assert!(
-        out.contains("Open a new terminal to pace test binaries."),
-        "{out}"
-    );
-    let saved = bashrc(&e);
-    assert!(saved.contains("# >>> kache test runner >>>"), "{saved}");
-    assert!(saved.contains(&export), "{saved}");
-    assert!(saved.contains("kache compiler cache"), "{saved}");
-    let profile = std::fs::read_to_string(e.home.join(".bash_profile")).unwrap();
-    assert!(profile.contains(&export), "{profile}");
-    // The startup files this run created get no backup before the test
-    // pacing edit; on a fresh machine nothing does.
-    assert!(!out.contains("Backup: ~/.bash"), "{out}");
-    let fresh = env();
-    let fresh_out = init(&fresh, &["--no-service"], None, "y\n");
-    assert!(!fresh_out.contains("Backup:"), "{fresh_out}");
-    for dir in [fresh.home.clone(), fresh.home.join(".cargo")] {
-        let backups: Vec<_> = std::fs::read_dir(&dir)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .filter(|name| name.to_string_lossy().starts_with(".kache-"))
-            .collect();
-        assert!(backups.is_empty(), "{backups:?}");
-    }
-    // On a configured machine the preview keeps every step.
-    let plan: deser_value::Value = deser_json::from_str(&init(
-        &e,
-        &["--no-service", "--check", "--json"],
-        Some("kache test-runner"),
-        "",
-    ))
-    .unwrap();
-    for component in ["cargo", "shell", "test_runner"] {
-        let step = plan["steps"]
-            .as_seq()
-            .unwrap()
-            .iter()
-            .find(|step| step["component"] == component)
-            .unwrap_or_else(|| panic!("{component}: {plan:?}"));
-        assert_eq!(step["action"], "keep", "{component}: {plan:?}");
-    }
-    assert_eq!(plan["test_activation_required"], false, "{plan:?}");
-    let out = init(
-        &e,
-        &["--no-service", "--check"],
-        Some("kache test-runner"),
-        "",
-    );
-    assert!(out.contains("Nothing to change."), "{out}");
-    assert!(!out.contains("Proposed changes"), "{out}");
-
-    // Nothing to change on a rerun; the terminal decides what init reports.
-    let out = init(&e, &["--no-service"], Some("kache test-runner"), "y\n");
-    assert!(out.contains("Test pacing: active"), "{out}");
-    assert!(!out.contains("Pace test binaries"), "{out}");
-    assert!(!out.contains("pace test binaries."), "{out}");
-    let out = init(&e, &["--no-service"], Some("qemu-user"), "y\n");
-    assert!(
-        out.contains(&format!("sets {var}=\"qemu-user\", which stays")),
-        "{out}"
-    );
-    assert_eq!(bashrc(&e), saved);
-
-    let declined = env();
-    let out = init(&declined, &["--no-service"], None, "n\n");
-    assert!(out.contains("Setup cancelled"), "{out}");
-    assert!(!bashrc(&declined).contains("kache test runner"));
-
-    // No host triple, an unsupported shell, or a malformed block: no edit.
-    let other = env();
-    let mut command = other.cmd();
-    command
-        .args(["init", "--no-service"])
-        .env("RUSTC", other.home.join("no-rustc"))
-        .write_stdin("y\nn\nn\n");
-    let out = command.assert().success().get_output().stdout.clone();
-    let out = String::from_utf8(out).unwrap();
-    assert!(
-        out.contains("rustc did not report its host target"),
-        "{out}"
-    );
-    let mut command = other.cmd();
-    command
-        .args(["init", "--no-service"])
-        .env("RUSTC", &rustc)
-        .env("SHELL", "/bin/tcsh")
-        .write_stdin("y\n");
-    let out = command.assert().success().get_output().stdout.clone();
-    let out = String::from_utf8(out).unwrap();
-    assert!(
-        out.contains(&format!("Export {var}=\"kache test-runner\"")),
-        "{out}"
-    );
-    std::fs::write(
-        other.home.join(".bashrc"),
-        "# >>> kache test runner >>>\nno end marker\n",
-    )
-    .unwrap();
-    let out = init(&other, &["--no-service"], None, "y\n");
-    assert!(out.contains("Test pacing changed no shell files."), "{out}");
-    assert!(!bashrc(&other).contains(&export));
-}
-
 #[cfg(unix)]
 #[test]
 fn init_saves_shell_setup_preserves_cargo_choices_and_is_idempotent() {

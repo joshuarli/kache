@@ -368,11 +368,6 @@ pub struct Config {
     /// `KACHE_SCHEDULER=0`/`false` or `[cache] scheduler = false` to disable.
     /// An unusable scheduler directory fails open and compiles without a permit.
     pub scheduler: bool,
-    /// Lease marker of the `kache test-runner` test this process runs under,
-    /// from `KACHE_TEST_LEASE`. A miss under a covering lease joins the
-    /// flight but takes no permit: the test holds slots already. Operational,
-    /// so `ignore_env` does not gate it.
-    pub test_lease: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -1198,11 +1193,6 @@ impl Config {
             .unwrap_or(DEFAULT_HEARTBEAT_SECS);
         let explain_miss = Self::explain_miss_enabled_for(invocation, &file_config);
         let scheduler = Self::scheduler_enabled_for(invocation, &file_config);
-        let test_lease = invocation
-            .var_os(crate::TEST_LEASE_ENV)
-            .map(PathBuf::from)
-            .map(|path| resolve_invocation_path(invocation, &path))
-            .transpose()?;
         Ok(Config {
             cache_dir,
             runtime_dir,
@@ -1233,7 +1223,6 @@ impl Config {
             heartbeat_secs,
             explain_miss,
             scheduler,
-            test_lease,
             cache_executables,
             cache_cc_links,
             trust_codegen_backends,
