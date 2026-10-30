@@ -39,6 +39,10 @@ path = "source"
 
 [env]
 RUSTC_WRAPPER = "$KACHE"
+# Dev-profile builds enable rustc incremental compilation by default, which
+# kache passes through uncached by design (S5); without this the workspace
+# crates bypass the cache and their DWARF never gets remapped.
+CARGO_INCREMENTAL = "0"
 
 [commands]
 # DEBUG build (no --release) so DWARF is emitted and remapped.
