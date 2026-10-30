@@ -11,6 +11,13 @@ fn run_kache_cc(project: &Path, cache_dir: &Path, args: &[&str]) {
 
 fn run_kache_cc_from(cwd: &Path, cache_dir: &Path, args: &[&str]) {
     settle_writes(&[cwd]);
+    let event_path = cache_dir.join("events.jsonl");
+    let read_events = || match std::fs::read_to_string(&event_path) {
+        Ok(events) => events,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => panic!("reading {}: {error}", event_path.display()),
+    };
+    let previous_events = read_events().lines().count();
     let output = hermetic_command(
         kache_binary(),
         cache_dir,
@@ -28,6 +35,15 @@ fn run_kache_cc_from(cwd: &Path, cache_dir: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let events = read_events();
+        if events.ends_with('\n') && events.lines().count() > previous_events {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "event not published for {args:?}");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 #[test]
