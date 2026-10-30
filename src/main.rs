@@ -1541,10 +1541,9 @@ mod tests {
     #[test]
     fn client_routes_every_engine_command_and_alias_without_loading_config() {
         for name in kache_client::engine_command_names() {
-            // `telemetry` requires a subcommand; probe it with its minimal
-            // shape. Everything else must route bare.
             let argv: Vec<&str> = match *name {
                 "telemetry" => vec!["kache", name, "write", "telemetry-probe-dir"],
+                "explain" | "why-miss" => vec!["kache", name, "example"],
                 _ => vec!["kache", name],
             };
             match parsed(&argv) {
