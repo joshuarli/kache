@@ -531,9 +531,11 @@ fn local_offset_seconds(moment: UtcTime) -> i32 {
 mod imp {
     pub fn local_offset_seconds(moment: super::UtcTime) -> i32 {
         // Safety: both pointers name live stack slots; localtime_r
-        // writes only `zone` and reads only `stamp`.
+        // writes only `zone` and reads only `stamp`. The cast target is
+        // inferred from `localtime_r` so this never names `libc::time_t`,
+        // which is deprecated on some musl targets.
         unsafe {
-            let stamp: libc::time_t = moment.timestamp() as libc::time_t;
+            let stamp = moment.timestamp() as _;
             let mut zone: libc::tm = std::mem::zeroed();
             if libc::localtime_r(&stamp, &mut zone).is_null() {
                 return 0;
