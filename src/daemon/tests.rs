@@ -7,7 +7,9 @@ fn compiler_request_capacity_handles_bursts_and_recovers_after_drop() {
     let root = tempfile::tempdir().unwrap();
     let mut config = test_config(root.path());
     config.daemon_execution_concurrency = Some(32);
-    let daemon = Daemon::new(config);
+    let provenance = crate::config::ConfigFileProvenance::current();
+    let capacity = DaemonCapacity::for_resources(Some(32), 1, Some(640));
+    let daemon = Daemon::new_with_provenance(config, &provenance, capacity);
     let workers = daemon.execution_workers.clone();
     let mut requests = Vec::new();
 
