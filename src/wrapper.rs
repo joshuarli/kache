@@ -4412,33 +4412,25 @@ fn find_executable_output(
 
 /// Why a linked executable must not be cached: its selected output must be
 /// identifiable, and each PE must carry no external CodeView info or be
-/// stored with the PDB it names ([`crate::pe_pdb`]).
+/// Windows executables are not cached: PE/PDB pairing was removed with
+/// Windows host support. Cross-targets to `*-windows-*` run uncached.
 fn unpaired_executable_debug_info(
     args: &RustcArgs,
     artifacts: &crate::compiler::ArtifactSet,
 ) -> Option<String> {
-    let executable_name = match crate::pe_pdb::executable_output_name(
-        args.is_user_facing_executable() && args.emits_link(),
-        args.output.as_deref(),
-        artifacts
-            .outputs()
-            .iter()
-            .map(|artifact| artifact.store_name.as_str()),
-    ) {
-        Ok(name) => name,
-        Err(error) => {
-            return Some(format!(
-                "its executable output cannot be identified: {error:#}"
-            ));
-        }
-    };
-    let outputs = artifacts
-        .outputs()
-        .iter()
-        .map(|a| (a.path.as_path(), a.store_name.as_str()));
-    crate::pe_pdb::check_outputs(outputs, executable_name.as_deref())
-        .err()
-        .map(|error| format!("its executable cannot be cached with its .pdb: {error:#}"))
+    let is_windows_target = args
+        .target
+        .as_deref()
+        .is_some_and(|target| target.contains("windows"));
+    let names_windows_exe = artifacts.outputs().iter().any(|artifact| {
+        artifact
+            .store_name
+            .rsplit('.')
+            .next()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+    });
+    (is_windows_target || names_windows_exe)
+        .then(|| "windows executables are not cached".to_string())
 }
 
 /// Bundle debug info for cached user binaries unless the invocation opts out
@@ -6188,41 +6180,23 @@ fn restore_from_cache_with_memo_store(
         );
     }
 
-    // The key namespace excludes legacy EXE-only producers. Still validate
-    // a cached pair before touching any destination: incomplete metadata or
-    // mismatched blobs must never be published as a hit. Library-only entries
-    // do not allocate paths or open blobs for this audit.
+    // Windows executables were never stored after PE pairing was removed;
+    // evict any legacy entry that names one.
     let reject_pair = |error: anyhow::Error| {
         let _ = store.remove_entry(&meta.cache_key);
         error.context(
-            "cached executable/PDB pair is incomplete or incompatible; evicting and recompiling",
+            "cached Windows executable evicted; recompiling uncached",
         )
     };
-    let executable_name = crate::pe_pdb::executable_output_name(
-        args.is_user_facing_executable() && args.emits_link(),
-        args.output.as_deref(),
-        meta.files.iter().map(|file| file.name.as_str()),
-    )
-    .map_err(reject_pair)?;
-    if executable_name.is_some()
-        || meta
-            .files
-            .iter()
-            .any(|file| crate::pe_pdb::is_windows_executable_name(&file.name))
-    {
-        let cached_outputs: Vec<_> = meta
-            .files
-            .iter()
-            .map(|file| (store.blob_path(&file.hash), file.name.as_str()))
-            .collect();
-        if let Err(error) = crate::pe_pdb::check_cached_outputs(
-            cached_outputs
-                .iter()
-                .map(|(path, name)| (path.as_path(), *name)),
-            executable_name.as_deref(),
-        ) {
-            return Err(reject_pair(error));
-        }
+    if meta.files.iter().any(|file| {
+        file.name
+            .rsplit('.')
+            .next()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+    }) {
+        return Err(reject_pair(anyhow::anyhow!(
+            "legacy Windows executable entry"
+        )));
     }
 
     // Legacy entries may predate emit-kind metadata and therefore bypass the

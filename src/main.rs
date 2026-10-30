@@ -39,7 +39,6 @@ mod opcounts;
 mod otel;
 mod out_dir_alias;
 mod path_normalizer;
-mod pe_pdb;
 mod phase_trace;
 mod platform;
 mod prestage;
