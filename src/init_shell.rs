@@ -655,7 +655,11 @@ mod tests {
         let shell = ["/bin/sh", "/usr/bin/sh"]
             .into_iter()
             .map(std::path::PathBuf::from)
-            .find(|path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()))
+            // Follow symlinks: the system shell usually is one (`/bin/sh`
+            // points at dash or busybox), and rejecting links drops it in
+            // favor of whatever `sh` the live PATH resolves — which may be
+            // the very shim this probe exists to avoid.
+            .find(|path| std::fs::metadata(path).is_ok_and(|meta| meta.is_file()))
             .or_else(|| crate::compiler::resolve_program_on_path("sh"))
             .or_else(|| crate::compiler::resolve_program_on_path("bash"))
             .expect("a POSIX shell on test PATH");
