@@ -931,7 +931,7 @@ fn record_sessions_comes_from_the_host_layer() {
     let (host, chosen) = write_host_and_chosen(
         dir.path(),
         "[cache]\nrecord_sessions = true\n",
-        Some("[cache]\nheartbeat_secs = 30\n"),
+        Some("[cache]\nauto_gc = false\n"),
     );
     let _host = set_host_config_for_test(&host);
     let _chosen = set_kache_config_for_test(&chosen);
@@ -2039,7 +2039,6 @@ fn test_file_config_roundtrip() {
             build_script_hermetic: None,
             gc_evict_shared: None,
             storage_layout_advice: None,
-            heartbeat_secs: None,
             explain_miss: None,
             ignore_env: None,
             fallback: None,
@@ -2352,7 +2351,6 @@ fn test_config_store_dir() {
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
-        heartbeat_secs: 30,
         explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
@@ -2408,7 +2406,6 @@ fn test_config_index_db_path() {
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
-        heartbeat_secs: 30,
         explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
@@ -2460,7 +2457,6 @@ fn test_config_event_log_path() {
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
-        heartbeat_secs: 30,
         explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
@@ -2527,7 +2523,6 @@ fn test_config_socket_path() {
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
-        heartbeat_secs: 30,
         explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
@@ -3201,7 +3196,6 @@ fn test_save_and_load_file_config() {
             build_script_hermetic: None,
             gc_evict_shared: None,
             storage_layout_advice: None,
-            heartbeat_secs: None,
             explain_miss: None,
             ignore_env: None,
             fallback: None,
@@ -3436,7 +3430,6 @@ fn storage_layout_advice_defaults_on_and_file_false_disables() {
         workspace: None,
         cache: Some(CacheFileConfig {
             storage_layout_advice: Some(false),
-            heartbeat_secs: None,
             explain_miss: None,
             ..Default::default()
         }),
@@ -3464,7 +3457,6 @@ fn storage_layout_advice_env_wins_over_file() {
         workspace: None,
         cache: Some(CacheFileConfig {
             storage_layout_advice: Some(false),
-            heartbeat_secs: None,
             explain_miss: None,
             ..Default::default()
         }),

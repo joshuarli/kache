@@ -2233,7 +2233,6 @@ fn save_manifest_config(
         build_script_hermetic: false,
         gc_evict_shared: false,
         storage_layout_advice: true,
-        heartbeat_secs: 30,
         explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),

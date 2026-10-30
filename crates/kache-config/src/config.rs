@@ -332,17 +332,6 @@ pub struct Config {
     /// `KACHE_STORAGE_LAYOUT_ADVICE=0`/`=false` or
     /// `[cache] storage_layout_advice = false` to disable.
     pub storage_layout_advice: bool,
-    /// In-flight compile heartbeat cadence, in seconds
-    /// (kunobi-ninja/kache#131). While a cache-miss compile runs, the wrapper
-    /// appends a structured heartbeat line to `events.jsonl` every this many
-    /// seconds, so a long compile (Firefox's gkrust runs ~8 min) never looks
-    /// frozen. With `KACHE_PROGRESS=verbose`/`all`, it also prints `still
-    /// compiling <crate> — Xs elapsed (typical: Ys, ETA Zs)` to stderr. Stderr
-    /// is opt-in because Cargo fingerprints compiler-wrapper diagnostics and
-    /// replays them on later builds. The first beat fires after one full
-    /// cadence, so ordinary fast compiles emit nothing. `0` disables both
-    /// sinks. Set via `KACHE_HEARTBEAT_SECS` or `[cache] heartbeat_secs`.
-    pub heartbeat_secs: u64,
     /// Opt-in miss diagnostics (kunobi-ninja/kache#131): on a cache miss for
     /// a crate that previously hit in this build tree, name the key input
     /// groups whose hashes changed (`key changed in: rustflags, env_deps`),
@@ -430,8 +419,6 @@ pub struct CacheFileConfig {
     pub gc_evict_shared: Option<bool>,
     /// Storage-layout advisory toggle. See [`Config::storage_layout_advice`].
     pub storage_layout_advice: Option<bool>,
-    /// In-flight heartbeat cadence. See [`Config::heartbeat_secs`].
-    pub heartbeat_secs: Option<u64>,
     /// Miss-diagnostics opt-in. See [`Config::explain_miss`].
     pub explain_miss: Option<bool>,
     /// Ignore `KACHE_*` env overrides for file-backed settings. File-only by
@@ -727,7 +714,6 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
     ),
     ("KACHE_BUILD_SCRIPT_HERMETIC", "cache.build_script_hermetic"),
     ("KACHE_STORAGE_LAYOUT_ADVICE", "cache.storage_layout_advice"),
-    ("KACHE_HEARTBEAT_SECS", "cache.heartbeat_secs"),
     ("KACHE_EXPLAIN_MISS", "cache.explain_miss"),
     ("KACHE_SCHEDULER", "cache.scheduler"),
 ];
@@ -1133,17 +1119,6 @@ impl Config {
         for shard in &mut volume_stores {
             shard.store = resolve_invocation_path(invocation, &shard.store)?;
         }
-        let heartbeat_secs = env_or_ignored_for(invocation, "KACHE_HEARTBEAT_SECS", ignore_env)
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .or_else(|| {
-                file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|c| c.cache.as_ref())
-                    .and_then(|c| c.heartbeat_secs)
-            })
-            .unwrap_or(DEFAULT_HEARTBEAT_SECS);
         let explain_miss = Self::explain_miss_enabled_for(invocation, &file_config);
         let scheduler = Self::scheduler_enabled_for(invocation, &file_config);
         Ok(Config {
@@ -1173,7 +1148,6 @@ impl Config {
             gc_evict_shared,
             storage_layout_advice,
             volume_stores,
-            heartbeat_secs,
             explain_miss,
             scheduler,
             cache_executables,

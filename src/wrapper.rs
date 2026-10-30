@@ -2956,7 +2956,7 @@ fn run_parsed_rustc(
     // process; the monitor only actually starts if this invocation reaches a
     // miss compile, and only beats once the compile outlives one cadence.
     crate::heartbeat::set_heartbeat_ctx(
-        config.heartbeat_secs,
+        crate::config::DEFAULT_HEARTBEAT_SECS,
         config.event_log_path(),
         config.socket_path(),
         event_root.clone(),
