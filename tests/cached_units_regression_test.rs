@@ -1675,6 +1675,10 @@ fn build_scripts_run_with_zero_ar_date_on_macos() {
 /// the sandbox's `OUT_DIR`, never Cargo's.
 #[test]
 fn a_declared_out_dir_does_not_split_a_hermetic_run() {
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipping: hermetic runs need a non-root host, whose read-only seal root cannot write through");
+        return;
+    }
     let fx = fixture_from(|root| {
         let write = |relative: &str, content: &str| {
             let path = root.join(relative);
@@ -1741,6 +1745,10 @@ fn main() {
 /// agree with the directory its `OUT_DIR` resolves to.
 #[test]
 fn hermetic_runs_keep_values_derived_from_out_dir_consistent() {
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipping: hermetic runs need a non-root host, whose read-only seal root cannot write through");
+        return;
+    }
     let fx = fixture_from(|root| {
         let write = |relative: &str, content: &str| {
             let path = root.join(relative);
