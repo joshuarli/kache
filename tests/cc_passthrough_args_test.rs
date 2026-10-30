@@ -117,6 +117,14 @@ fn refused_double_dash_invocation_is_exact_passthrough() {
 /// publication. Exercise the read-set memo, then invalidate it with an edit.
 #[test]
 fn deferred_cc_reuses_setup_and_still_invalidates_changed_headers() {
+    fn read_events(path: &std::path::Path) -> String {
+        match fs::read_to_string(path) {
+            Ok(events) => events,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => panic!("reading {}: {error}", path.display()),
+        }
+    }
+
     let dir = FixtureDir::new();
     let root = dir.path().canonicalize().unwrap();
     let cache = root.join("cache");
@@ -143,6 +151,8 @@ fn deferred_cc_reuses_setup_and_still_invalidates_changed_headers() {
             fs::write(root.join("value.h"), "#define VALUE 17\n").unwrap();
         }
         let trace = root.join(phase);
+        let event_path = cache.join("events.jsonl");
+        let previous_events = read_events(&event_path).lines().count();
         let _ = fs::remove_file(root.join("unit.o"));
         let output = cacheable_cc_command(&root)
             .args(["cc", "-c", "unit.c", "-o", "unit.o"])
@@ -154,9 +164,17 @@ fn deferred_cc_reuses_setup_and_still_invalidates_changed_headers() {
             "{phase}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let events = fs::read_to_string(cache.join("events.jsonl")).unwrap();
-        let event: deser_value::Value =
-            deser_json::from_str(events.lines().last().unwrap()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let event: deser_value::Value = loop {
+            let events = read_events(&event_path);
+            if events.ends_with('\n')
+                && let Some(line) = events.lines().nth(previous_events)
+            {
+                break deser_json::from_str(line).unwrap();
+            }
+            assert!(std::time::Instant::now() < deadline, "{phase}: event not published");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
         assert_eq!(event["result"] == "local_hit", hit, "{phase}: {event:?}");
         assert_eq!(event["compiler_runs"], u32::from(!hit), "{phase}: {event:?}");
         assert!(
