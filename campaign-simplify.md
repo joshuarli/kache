@@ -20,7 +20,8 @@ copy-on-write restores, e2e) stay strict throughout.
 - S8 parked: its prerequisite S6 and offline Rust/native benchmark profiles are unavailable. The daemon remains; retry after the S6 verdict and both profiles can be measured.
 - S9 contract: remove `diff`, no-crate `explain`, `explain --all` and `--root`, `stats --last-build`, `report --last-build`, and doctor’s session-based Other checkouts row. Per-crate `explain` and its `why-miss` alias remain. Report JSON schema 2→3 removes `meta.session`; trace output removes the session field. Recorded report lines no longer include session IDs.
 - S9 evidence: the CLI suite (122 tests), report suite (108 tests), benchmark report reader tests (6), clippy, and docs check pass. OTLP and Perfetto exporters remain because the benchmark runner consumes them.
-- Next: S10 closeout and final checks; S6 and S8 remain parked until their offline benchmark prerequisites are available.
+- S10 closeout: bounded independent review found no supported P1/P2 defects. The dead-code sweep removed a stale test-only policy parameter, README commands, and an obsolete target-seeding reference. Final macOS e2e: 50 fixtures passed and six skipped (platform or missing tools), including cross-tree. Final Linux `make check` passed clippy, client checks, resource guard, 3,173 library tests and 126 CLI tests, then stopped on the same two engine tests reproduced on `d02affd`. The fail-fast-disabled workspace run completed every target with only those two failures; 43 C/C++ integration tests passed. Documentation checks passed.
+- Next: retry S6 and S8 when their offline benchmark prerequisites are available; no daemon parity or build-script verdict is claimed. The Linux engine baseline requires a suitable environment or separate investigation.
 
 ## Charter
 
