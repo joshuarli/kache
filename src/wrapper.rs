@@ -1139,7 +1139,6 @@ fn run_cc_inner(
     crate::link::set_cow_warn_marker(warn_marker_path("cow", &config.cache_dir));
     warn_nonlocal_cache_fs_once(config);
     let compiler = CcCompiler::for_invocation(config.cc_extra_allowlist_flags.clone(), env)
-        .with_cache_cc_links(config.cache_cc_links)
         .with_base_dirs(config.base_dirs.clone());
     let trace_parse = crate::phase_trace::phase("cc_parse");
     let parsed = compiler
@@ -2975,10 +2974,9 @@ fn run_parsed_rustc(
     let refuse = compiler.refuse_reasons(args);
     // A codegen backend loaded from a dylib can write files rustc never
     // reports (cuda-oxide writes device artifacts next to the crate), and a
-    // hit would restore the artifacts without them. Such compiles bypass the
-    // cache unless the user trusts the backend.
-    let untrusted_codegen_backend =
-        untrusted_codegen_backend(args.codegen_backend_dylib(), config.trust_codegen_backends);
+    // hit would restore the artifacts without them. Such compiles always
+    // bypass the cache.
+    let untrusted_codegen_backend = args.codegen_backend_dylib();
     // The environment and working directory the key reads, taken once.
     let key_env = KeyEnv::from_invocation(args.invocation_env());
     let current_dir = key_env.cwd().map(Path::to_path_buf);
@@ -6703,15 +6701,11 @@ fn passthrough_with_event<R: Into<String>>(
     Ok(output.exit_code)
 }
 
-/// The codegen backend dylib that keeps a rustc compile out of the cache: any
-/// dylib when backends are untrusted, and a trusted one kache cannot key.
-fn untrusted_codegen_backend(backend: Option<&str>, trusted: bool) -> Option<&str> {
-    backend.filter(|backend| !trusted || !crate::args::codegen_backend_is_keyable(backend))
-}
+/// The codegen backend dylib that keeps a rustc compile out of the cache.
 
 /// Passthrough reason for a rustc compile whose codegen backend dylib is not
 /// trusted. The string is a contract: reports group passthroughs by it.
-const UNTRUSTED_CODEGEN_BACKEND_REASON: &str = "unsupported|rustc codegen backend dylib (-Zcodegen-backend=<path>) may write files kache cannot restore; set cache.trust_codegen_backends and pass the backend as a path to cache it";
+const UNTRUSTED_CODEGEN_BACKEND_REASON: &str = "unsupported|rustc codegen backend dylib (-Zcodegen-backend=<path>) may write files kache cannot restore";
 
 /// Run rustc without caching and without the configured fallback, for
 /// compiles no cache can replay correctly.

@@ -163,19 +163,6 @@ fn trust_domain_isolates_stores_and_fails_open() {
     );
 }
 
-#[test]
-fn cache_cc_links_env_one_and_true_enable_zero_does_not() {
-    for on in ["1", "true", "TRUE"] {
-        assert!(env_flag_one_or_true(on), "{on} must enable cache_cc_links");
-    }
-    for off in ["0", "false", "no", ""] {
-        assert!(
-            !env_flag_one_or_true(off),
-            "{off:?} must not enable cache_cc_links"
-        );
-    }
-}
-
 /// Resolution order for predictions: the environment overrides the
 /// file, the file is consulted when the environment is silent, and the
 /// answer with neither is on. CI exports `KACHE_*` of its own, so the
@@ -2063,8 +2050,6 @@ fn test_file_config_roundtrip() {
             runtime_dir: Some("~/my/runtime".to_string()),
             local_max_size: Some("50GiB".to_string()),
             cache_executables: Some(true),
-            cache_cc_links: None,
-            trust_codegen_backends: None,
             exclude: Some(vec!["vendor/problem/**".to_string()]),
             event_log_max_size: Some("10MiB".to_string()),
             event_log_keep_lines: Some(500),
@@ -2379,8 +2364,6 @@ fn test_config_store_dir() {
         max_size: 1024,
         disabled: false,
         cache_executables: false,
-        cache_cc_links: false,
-        trust_codegen_backends: false,
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
@@ -2437,8 +2420,6 @@ fn test_config_index_db_path() {
         max_size: 1024,
         disabled: false,
         cache_executables: false,
-        cache_cc_links: false,
-        trust_codegen_backends: false,
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
@@ -2491,8 +2472,6 @@ fn test_config_event_log_path() {
         max_size: 1024,
         disabled: false,
         cache_executables: false,
-        cache_cc_links: false,
-        trust_codegen_backends: false,
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
@@ -2560,8 +2539,6 @@ fn test_config_socket_path() {
         max_size: 1024,
         disabled: false,
         cache_executables: false,
-        cache_cc_links: false,
-        trust_codegen_backends: false,
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
@@ -3235,8 +3212,6 @@ fn test_save_and_load_file_config() {
             runtime_dir: Some("/tmp/my-runtime".to_string()),
             local_max_size: Some("10GiB".to_string()),
             cache_executables: Some(true),
-            cache_cc_links: None,
-            trust_codegen_backends: None,
             exclude: None,
             event_log_max_size: None,
             event_log_keep_lines: None,

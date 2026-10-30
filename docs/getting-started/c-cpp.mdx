@@ -162,7 +162,7 @@ Kache caches the source analysis by content hash. A settled warm memo reuses tha
 
 Kache currently passes through:
 
-- link and whole-program steps, unless `KACHE_CACHE_CC_LINKS` or `[cache] cache_cc_links` is on
+- link and whole-program steps
 - assembly output (`-S`) and output to standard output (`-o -`)
 - multi-source or multi-architecture invocations
 - `-x` languages other than C, C++, Objective-C, Objective-C++, and assembly, such as `-x cuda` and `-x hip`, and `.cu` sources given to `cc` or `clang`

@@ -67,7 +67,6 @@ printf 'binary' > app
         .env("KACHE_FALLBACK", &fallback)
         .env("KACHE_CACHE_EXECUTABLES", "true")
         .env("KACHE_REMOTE", "")
-        .env_remove("KACHE_TRUST_CODEGEN_BACKENDS")
         .env_remove("KACHE_DISABLED")
         .env("TEST_CALLS", &calls)
         .output()
@@ -95,7 +94,7 @@ printf 'binary' > app
     assert!(
         reasons
             .iter()
-            .all(|event| event.contains("cache.trust_codegen_backends")),
+            .all(|event| event.contains("codegen backend dylib")),
         "{events}"
     );
 }

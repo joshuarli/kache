@@ -97,17 +97,6 @@ pub struct Config {
     pub max_size: u64,
     pub disabled: bool,
     pub cache_executables: bool,
-    /// Opt-in C/C++ whole-program link caching (epic #762 / #259). Off by
-    /// default until path/repro gates pass. `KACHE_CACHE_CC_LINKS` or
-    /// `[cache] cache_cc_links`.
-    pub cache_cc_links: bool,
-    /// Opt-in caching for rustc compiles that load a codegen backend from a
-    /// dylib (`-Zcodegen-backend=<path>`). Such a backend can write files
-    /// rustc does not report, which a cache hit would not restore, so these
-    /// compiles bypass the cache unless this is set. The key covers the dylib
-    /// file only, not libraries it loads at run time.
-    /// `KACHE_TRUST_CODEGEN_BACKENDS` or `[cache] trust_codegen_backends`.
-    pub trust_codegen_backends: bool,
     pub event_log_max_size: u64,
     pub event_log_keep_lines: usize,
     /// Zstd compression level (1-19, default 3). Lower = faster, higher = smaller.
@@ -449,8 +438,6 @@ pub struct CacheFileConfig {
     /// design (env must not re-enable env). See [`Config::ignore_env_enabled`].
     pub ignore_env: Option<bool>,
     pub cache_executables: Option<bool>,
-    pub cache_cc_links: Option<bool>,
-    pub trust_codegen_backends: Option<bool>,
     pub exclude: Option<Vec<String>>,
     /// Declarative bypass rules (kunobi-ninja/kache#222). Siblings of
     /// `exclude`, which already covers the source-path case; each entry means
@@ -649,8 +636,6 @@ const IGNORE_ENV_GATED_VARS: &[&str] = &[
     "KACHE_READONLY_STORE",
     "KACHE_MAX_SIZE",
     "KACHE_CACHE_EXECUTABLES",
-    "KACHE_CACHE_CC_LINKS",
-    "KACHE_TRUST_CODEGEN_BACKENDS",
 
     "KACHE_COMPRESSION_LEVEL",
     "KACHE_MIN_STORE_COMPILE_MS",
@@ -695,11 +680,6 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
     ("KACHE_READONLY_STORE", "cache.readonly_store"),
     ("KACHE_MAX_SIZE", "cache.local_max_size"),
     ("KACHE_CACHE_EXECUTABLES", "cache.cache_executables"),
-    ("KACHE_CACHE_CC_LINKS", "cache.cache_cc_links"),
-    (
-        "KACHE_TRUST_CODEGEN_BACKENDS",
-        "cache.trust_codegen_backends",
-    ),
 
     ("KACHE_COMPRESSION_LEVEL", "cache.compression_level"),
     ("KACHE_MIN_STORE_COMPILE_MS", "cache.min_store_compile_ms"),
@@ -757,10 +737,6 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
 /// every existing env -> file -> default fallback arm transparently skips the
 /// env value and takes the file/default. A drop-in for `std::env::var` on the
 /// file-backed settings (see [`IGNORE_ENV_GATED_VARS`]).
-fn env_flag_one_or_true(v: &str) -> bool {
-    v == "1" || v.eq_ignore_ascii_case("true")
-}
-
 fn env_or_ignored(name: &str, ignore_env: bool) -> Result<String, std::env::VarError> {
     if ignore_env {
         Err(std::env::VarError::NotPresent)
@@ -936,29 +912,6 @@ impl Config {
                         .and_then(|c| c.cache.as_ref())
                         .and_then(|c| c.cache_executables)
                         .unwrap_or(default_cache_executables())
-                });
-
-        let cache_cc_links = env_or_ignored_for(invocation, "KACHE_CACHE_CC_LINKS", ignore_env)
-            .map(|v| env_flag_one_or_true(&v))
-            .unwrap_or_else(|_| {
-                file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|c| c.cache.as_ref())
-                    .and_then(|c| c.cache_cc_links)
-                    .unwrap_or(false)
-            });
-
-        let trust_codegen_backends =
-            env_or_ignored_for(invocation, "KACHE_TRUST_CODEGEN_BACKENDS", ignore_env)
-                .map(|v| env_flag_one_or_true(&v))
-                .unwrap_or_else(|_| {
-                    file_config
-                        .as_ref()
-                        .ok()
-                        .and_then(|c| c.cache.as_ref())
-                        .and_then(|c| c.trust_codegen_backends)
-                        .unwrap_or(false)
                 });
 
         let event_log_max_size = file_config
@@ -1224,8 +1177,6 @@ impl Config {
             explain_miss,
             scheduler,
             cache_executables,
-            cache_cc_links,
-            trust_codegen_backends,
             event_log_max_size,
             event_log_keep_lines,
             compression_level,

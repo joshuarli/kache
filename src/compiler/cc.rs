@@ -22,7 +22,7 @@
 //!   deliberately local.
 //!
 //! What passes through (refused, see [`CcArgs::refuse_reasons`]):
-//! - Link mode unless `[cache] cache_cc_links` / `KACHE_CACHE_CC_LINKS` is on
+//! - Link mode (always passthrough)
 //!   (epic #762 / #259)
 //! - Assemble (`-S`) mode
 //! - Multi-source compiles, multi-arch fat binaries
@@ -7134,8 +7134,6 @@ pub struct CcCompiler {
     /// refusing and is folded verbatim into the cache key. Empty in the
     /// common case (and for every existing `CcCompiler::new()` caller).
     extra_allowlist_flags: Vec<String>,
-    /// Opt-in whole-program link caching (epic #762 / #259).
-    cache_cc_links: bool,
     /// Deterministically ordered `[paths].base_dirs` roots applied to both the
     /// cc key probes and the real compiler invocation.
     base_dirs: Vec<String>,
@@ -7199,7 +7197,6 @@ impl CcCompiler {
         Self {
             invocation_env: env.clone(),
             extra_allowlist_flags,
-            cache_cc_links: false,
             base_dirs: Vec::new(),
             pending_preprocess_memo: RefCell::new(None),
             pending_include_dir_digest: RefCell::new(None),
@@ -7213,10 +7210,6 @@ impl CcCompiler {
         self
     }
 
-    pub fn with_cache_cc_links(mut self, cache_cc_links: bool) -> Self {
-        self.cache_cc_links = cache_cc_links;
-        self
-    }
 
     /// clang-cl's `-###` dump uses Windows path tokens; GNU/clang do not.
     fn cc_link_probe_is_windows_aware(family: ToolFamily) -> bool {
@@ -7624,43 +7617,9 @@ impl Compiler for CcCompiler {
         // catch-all is gone — single-source `-c` compiles with no
         // unsafe flags now produce an EMPTY refuse list, which is the
         // signal to the wrapper that this invocation is cacheable.
-        let mut reasons = parsed.refuse_reasons(&self.extra_allowlist_flags);
-        if self.cache_cc_links && parsed.mode == CompileMode::Link {
-            // Link mode short-circuits CcArgs::refuse_reasons before
-            // feature checks such as `@file`; opt-in admission below must
-            // validate those independently after stripping this reason.
-            reasons.retain(|reason| match reason {
-                RefuseReason::Unsupported(detail) => !detail.contains("cc link mode"),
-                _ => true,
-            });
-            if parsed.output.is_none() {
-                reasons.push(RefuseReason::Unsupported(
-                    "cc link mode without -o — not cacheable",
-                ));
-            }
-            // The link key hashes explicit file inputs; named selections
-            // depend on linker search state it cannot validate. Response
-            // quoting also exceeds the key's whitespace-only parser.
-            let mut linker_args = parsed.rest.iter().flat_map(|arg| {
-                std::iter::once(arg.as_str()).chain(
-                    arg.strip_prefix("-Wl,")
-                        .into_iter()
-                        .flat_map(|flags| flags.split(',')),
-                )
-            });
-            if linker_args.clone().any(|arg| arg.starts_with('@')) {
-                reasons.push(RefuseReason::Unsupported(
-                    "cc link response files have untracked library selections",
-                ));
-            } else if linker_args.any(|arg| {
-                arg.starts_with("-l") || arg == "--library" || arg.starts_with("--library=")
-            }) {
-                reasons.push(RefuseReason::Unsupported(
-                    "cc link libraries selected by name have untracked dependencies",
-                ));
-            }
-        }
-        reasons
+        // Link mode is always refused: whole-program link caching was
+        // removed, so links run uncached.
+        parsed.refuse_reasons(&self.extra_allowlist_flags)
     }
 
     fn execute(&self, parsed: &CcArgs) -> Result<CompileResult> {
@@ -8519,7 +8478,6 @@ impl CcCompiler {
         // takes its real destination from the current invocation
         // (kunobi-ninja/kache#655).
         let discovers_outputs = matches!(parsed.mode, CompileMode::Compile)
-            || (parsed.mode == CompileMode::Link && self.cache_cc_links)
             || (parsed.mode == CompileMode::Preprocess && parsed.output.is_some());
         let mut keepalive = Vec::new();
         let mut artifacts = if exit_code == 0 && discovers_outputs {

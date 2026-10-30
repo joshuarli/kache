@@ -2857,196 +2857,6 @@ fn closed_set_m_flags_are_raw_keyed_issue_826() {
 }
 
 #[test]
-fn opt_in_named_library_links_are_refused_until_selections_are_tracked() {
-    let compiler = CcCompiler::new().with_cache_cc_links(true);
-    for flags in [
-        s(&["-lvalue"]),
-        s(&["-l", "value"]),
-        s(&["-Wl,-lvalue"]),
-        s(&["-Wl,-l,value"]),
-        s(&["-Wl,--library=value"]),
-        s(&["-Wl,--library,value"]),
-        s(&["-Xlinker", "-lvalue"]),
-        s(&["-Xlinker", "-l", "-Xlinker", "value"]),
-        s(&["-Xlinker", "--library=value"]),
-        s(&["-Xlinker", "--library", "-Xlinker", "value"]),
-    ] {
-        let mut args = s(&["cc", "main.o", "-o", "app"]);
-        args.extend(flags);
-        let parsed = compiler.parse(&args).unwrap();
-        assert!(
-            matches!(
-                compiler.refuse_reasons(&parsed).as_slice(),
-                [RefuseReason::Unsupported(
-                    "cc link libraries selected by name have untracked dependencies"
-                )]
-            ),
-            "{args:?}: named-library selection must reach the exact untracked-input refusal"
-        );
-    }
-    for flags in [
-        s(&["libvalue.a"]),
-        s(&["objects,-lvalue.o"]),
-        s(&["-Llibrary-path"]),
-        s(&["-Wl,--library-path=."]),
-        s(&["-Wl,--library-path,."]),
-        s(&["-Xlinker", "--library-path=."]),
-        s(&["-Xlinker", "--library-path", "-Xlinker", "."]),
-        s(&["-Wl,-rpath,libdir"]),
-    ] {
-        let mut args = s(&["cc", "main.o", "-o", "app"]);
-        args.extend(flags);
-        assert!(
-            compiler
-                .refuse_reasons(&compiler.parse(&args).unwrap())
-                .is_empty(),
-            "{args:?}: explicit inputs and non-library flags retain opt-in caching"
-        );
-    }
-    let default = CcCompiler::new();
-    let named = default
-        .parse(&s(&["cc", "main.o", "-lvalue", "-o", "app"]))
-        .unwrap();
-    assert!(
-        matches!(
-            default.refuse_reasons(&named).as_slice(),
-            [RefuseReason::Unsupported(
-                "cc link mode (whole-program caching) — not yet"
-            )]
-        ),
-        "default links retain the ordinary link-mode refusal"
-    );
-}
-
-#[test]
-fn opt_in_link_response_files_are_refused_without_compiler_parsing() {
-    let compiler = CcCompiler::new().with_cache_cc_links(true);
-    for flags in [
-        s(&["@link.rsp"]),
-        s(&["-Wl,@link.rsp"]),
-        s(&["-Wl,--start-group,@link.rsp,--end-group"]),
-        s(&["-Xlinker", "@link.rsp"]),
-    ] {
-        let mut args = s(&["cc", "main.o", "-o", "app"]);
-        args.extend(flags);
-        let parsed = compiler.parse(&args).unwrap();
-        assert!(
-            matches!(
-                compiler.refuse_reasons(&parsed).as_slice(),
-                [RefuseReason::Unsupported(
-                    "cc link response files have untracked library selections"
-                )]
-            ),
-            "{args:?}: response files can hide quoted library options from the whitespace key parser"
-        );
-    }
-}
-
-#[test]
-fn opt_in_link_keys_preserve_unicode17_soname_bytes() {
-    let _lock = crate::test_support::process_state_test_lock();
-    let env = InvocationEnv::capture();
-    let dir = tempfile::tempdir().unwrap();
-    let object = dir.path().join("input.o");
-    fs::write(&object, b"same object bytes").unwrap();
-    let compiler = CcCompiler::for_invocation(Vec::new(), &env).with_cache_cc_links(true);
-    let file_hasher = crate::cache_key::FileHasher::new_for(&env);
-    let path_normalizer = crate::path_normalizer::PathNormalizer::empty();
-    let ctx = KeyCtx {
-        invocation_env: &env,
-        file_hasher: &file_hasher,
-        path_normalizer: &path_normalizer,
-        cache_dir: dir.path(),
-        key_salt: None,
-        key_env_vars: &[],
-        extra_inputs_digest: None,
-        build_script_inputs_digest: None,
-    };
-    // Unicode 18 assigns U+1ADE a combining class that merges these names
-    // under NFC. The linker embeds their distinct raw SONAME bytes.
-    let key = |soname: &str| {
-        let argv = vec![
-            "cc".to_string(),
-            "-shared".to_string(),
-            object.to_string_lossy().into_owned(),
-            format!("-Wl,-soname,{soname}"),
-            "-o".to_string(),
-            dir.path().join("output.so").to_string_lossy().into_owned(),
-        ];
-        let parsed = compiler.parse(&argv).unwrap();
-        assert!(compiler.refuse_reasons(&parsed).is_empty());
-        compiler.key_for_test(&parsed, &ctx)
-    };
-    assert_ne!(key("q\u{1ade}\u{0323}"), key("q\u{0323}\u{1ade}"));
-}
-
-#[test]
-fn cache_key_for_link_changes_when_an_object_changes() {
-    let _lock = crate::test_support::process_state_test_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let a = dir.path().join("a.o");
-    let b = dir.path().join("b.o");
-    let out = dir.path().join("prog");
-    fs::write(&a, b"obj-a-v1").unwrap();
-    fs::write(&b, b"obj-b").unwrap();
-    let compiler = CcCompiler::new().with_cache_cc_links(true);
-    let argv = s(&[
-        "cc",
-        a.to_str().unwrap(),
-        b.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-    ]);
-    let parsed = compiler.parse(&argv).unwrap();
-    assert!(
-        compiler.refuse_reasons(&parsed).is_empty(),
-        "opt-in link should be cacheable: {:?}",
-        compiler.refuse_reasons(&parsed)
-    );
-    let cache = tempfile::tempdir().unwrap();
-    let file_hasher = crate::cache_key::FileHasher::new();
-    let path_normalizer = crate::path_normalizer::PathNormalizer::empty();
-    let ctx = KeyCtx {
-        invocation_env: &crate::invocation::InvocationEnv::capture(),
-        file_hasher: &file_hasher,
-        path_normalizer: &path_normalizer,
-        cache_dir: cache.path(),
-        key_salt: None,
-        key_env_vars: &[],
-        extra_inputs_digest: None,
-        build_script_inputs_digest: None,
-    };
-    let first = compiler.key_for_test(&parsed, &ctx);
-    fs::write(&a, b"obj-a-v2").unwrap();
-    let second = compiler.key_for_test(&parsed, &ctx);
-    assert_ne!(
-        first, second,
-        "changing an input object must miss the link cache"
-    );
-    fs::write(&a, b"obj-a-v1").unwrap();
-    let restored = compiler.key_for_test(&parsed, &ctx);
-    assert_eq!(first, restored, "restoring object bytes must hit again");
-
-    let libdir = dir.path().join("libfoo.a");
-    fs::write(&libdir, b"not-an-input-archive").unwrap();
-    let object = a.to_string_lossy().into_owned();
-    for (flag, next) in [
-        ("-L", libdir.clone()),
-        ("-o", dir.path().join("out.a")),
-        ("-I", dir.path().join("hdr.o")),
-        ("-include", dir.path().join("forced.o")),
-    ] {
-        fs::write(&next, b"skip-me").unwrap();
-        let inputs = cc_link_file_inputs(&s(&[object.as_str(), flag, next.to_str().unwrap()]));
-        assert_eq!(
-            inputs,
-            vec![a.clone()],
-            "{flag} must skip the next path even when it looks like a link input, got {inputs:?}"
-        );
-    }
-}
-
-#[test]
 fn cc_link_probe_is_windows_aware_for_gnu_not_clang_cl() {
     assert!(CcCompiler::cc_link_probe_is_windows_aware(ToolFamily::Gnu));
     assert!(CcCompiler::cc_link_probe_is_windows_aware(
@@ -3195,55 +3005,6 @@ fn discover_cc_link_sidecars_names_a_dsym_dir_as_dsym_tar() {
         bundle.store_name, "prog.dsym.tar",
         "unpack_debug_bundle requires a .dsym.tar store name, got {}",
         bundle.store_name
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn execute_opt_in_link_writes_the_output() {
-    // Link from outside the checkout: a Nix dev shell's `cc` adds
-    // `-rpath $out/lib` with `$out` inside it, and a binary that names the
-    // checkout is rightly not stored.
-    let mut lock = crate::test_support::process_state_test_lock();
-    lock.enter();
-    let dir = tempfile::tempdir().unwrap();
-    let src_a = dir.path().join("a.c");
-    let src_b = dir.path().join("b.c");
-    fs::write(&src_a, "int a(void){return 1;}\n").unwrap();
-    fs::write(&src_b, "int a(void); int main(void){return a();}\n").unwrap();
-    let obj_a = dir.path().join("a.o");
-    let obj_b = dir.path().join("b.o");
-    let bin = dir.path().join("prog");
-    assert!(
-        std::process::Command::new("cc")
-            .args(["-c", src_a.to_str().unwrap(), "-o", obj_a.to_str().unwrap()])
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(
-        std::process::Command::new("cc")
-            .args(["-c", src_b.to_str().unwrap(), "-o", obj_b.to_str().unwrap()])
-            .status()
-            .unwrap()
-            .success()
-    );
-    let compiler = CcCompiler::new().with_cache_cc_links(true);
-    let parsed = compiler
-        .parse(&s(&[
-            "cc",
-            obj_a.to_str().unwrap(),
-            obj_b.to_str().unwrap(),
-            "-o",
-            bin.to_str().unwrap(),
-        ]))
-        .unwrap();
-    let result = compiler.execute(&parsed).unwrap();
-    assert_eq!(result.exit_code, 0, "stderr={}", result.stderr);
-    assert!(bin.is_file(), "link execute must produce the binary");
-    assert!(
-        !result.artifacts.is_empty(),
-        "opt-in link must discover the output artifact"
     );
 }
 
@@ -4164,14 +3925,14 @@ fn non_compile_refusal_does_not_carry_unsupported_flag_noise() {
         descs.iter().any(|d| d.contains("link mode")),
         "link mode must be reported, got: {descs:?}"
     );
-    let compiler = CcCompiler::new().with_cache_cc_links(true);
+    let compiler = CcCompiler::new();
     let parsed = compiler.parse(&s(&["cc", "foo.o", "-o", "foo"])).unwrap();
-    let opt_in = compiler.refuse_reasons(&parsed);
+    let reasons = compiler.refuse_reasons(&parsed);
     assert!(
-        !opt_in
+        reasons
             .iter()
             .any(|r| { matches!(r, RefuseReason::Unsupported(d) if d.contains("cc link mode")) }),
-        "opt-in link cache must not refuse link mode, got: {opt_in:?}"
+        "link mode is always refused, got: {reasons:?}"
     );
     assert!(
         !descs.iter().any(|d| d.contains("unsupported flag")),

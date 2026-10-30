@@ -6,10 +6,9 @@
 # crate, outside rustc's declared outputs, so kache runs those compiles
 # directly. The patch embeds everything the side files hold in the binary and
 # has cargo-oxide write the files from the binary after every build, comparing
-# bytes where a real build already wrote them. With it, the backend's outputs
-# are all declared, so this arm trusts the backend
-# (KACHE_TRUST_CODEGEN_BACKENDS=1) and kache caches those compiles. The
-# smoketest still checks every device artifact, so a hit that lost one fails.
+# bytes where a real build already wrote them. Kache still runs backend
+# compiles directly: codegen backends can write files rustc does not report.
+# The smoketest still checks every device artifact, so a hit that lost one fails.
 name = "bench-cuda-oxide-patched"
 tags = ["suite:bench", "project:cuda-oxide", "backend:kache", "lang:rust"]
 
@@ -49,9 +48,6 @@ build = """
 # Input-set predictions, with a sampled cross-check (kunobi-ninja/kache#945).
 export KACHE_INPUT_PREDICTIONS=1
 export KACHE_VERIFY_INPUT_PREDICTIONS=sampled
-
-# The patch declares every backend output, so the backend can be trusted.
-export KACHE_TRUST_CODEGEN_BACKENDS=1
 
 # See prepare: the subject's rust-toolchain.toml must pick the compiler.
 unset RUSTUP_TOOLCHAIN

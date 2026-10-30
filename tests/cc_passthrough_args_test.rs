@@ -396,10 +396,6 @@ fn changed_link_archives_use_current_code_and_explicit_files_keep_cache_hits() {
                 .arg("cc")
                 .args(options)
                 .env("HOME", root.join("home"))
-                .env(
-                    "KACHE_CACHE_CC_LINKS",
-                    if style == "default" { "0" } else { "1" },
-                )
                 .env("KACHE_DAEMON_PUBLISH", "0")
                 .env("KACHE_MIN_STORE_COMPILE_MS", "0")
                 .env_remove("RUSTC_WRAPPER")
@@ -413,17 +409,12 @@ fn changed_link_archives_use_current_code_and_explicit_files_keep_cache_hits() {
             );
             results.push(last_cc_event(&root)["result"].clone());
         }
-        let cacheable = matches!(style, "explicit" | "explicit-search-path");
-        let expected_results = if cacheable {
-            vec!["miss", "local_hit", "miss", "local_hit"]
-        } else {
-            vec!["passthrough"; 4]
-        };
+        let expected_results = vec!["passthrough"; 4];
         assert_eq!(
             results, expected_results,
-            "{style}: explicit archives retain reuse and untracked selections pass through"
+            "{style}: all links pass through"
         );
-        if !cacheable && root.join("cache/index.db").is_file() {
+        if root.join("cache/index.db").is_file() {
             assert_eq!(
                 index_rows(&root, "entries"),
                 0,

@@ -361,10 +361,6 @@ pub fn codegen_backend_name(unstable_flags: &[String]) -> Option<&str> {
 /// A value without a path separator (`x.so`) is handed to the platform
 /// loader, which searches library paths rather than the working directory,
 /// so hashing `./x.so` could key a different file than rustc loads.
-pub fn codegen_backend_is_keyable(backend: &str) -> bool {
-    backend.contains('/')
-}
-
 impl RustcArgs {
     /// Is this `clippy-driver <rustc> <args>`, Cargo's composition of
     /// `RUSTC_WRAPPER` with Clippy as `RUSTC_WORKSPACE_WRAPPER`?
@@ -1325,16 +1321,6 @@ mod tests {
         assert_eq!(
             codegen_backend_dylib(&flags(&["codegen-backend=llvm", "codegen-backend=x.dylib"])),
             Some("x.dylib")
-        );
-        assert!(codegen_backend_is_keyable("/b/librustc_codegen_cuda.so"));
-        assert!(codegen_backend_is_keyable("./x.so"));
-        assert!(
-            !codegen_backend_is_keyable("x.so"),
-            "the loader searches library paths for a bare file name"
-        );
-        assert!(
-            !codegen_backend_is_keyable("dir\\x.so"),
-            "a backslash does not separate paths on unix"
         );
         let parsed =
             RustcArgs::parse(&flags(&["rustc", "lib.rs", "-Z", "codegen-backend=./x.so"])).unwrap();

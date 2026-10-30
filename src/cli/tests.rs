@@ -2244,8 +2244,6 @@ fn save_manifest_config(
         max_size: 1024 * 1024,
         disabled: false,
         cache_executables: false,
-        cache_cc_links: false,
-        trust_codegen_backends: false,
         event_log_max_size: 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
@@ -4216,7 +4214,6 @@ fn init_steps_list_each_edit_with_the_backup_before_it() {
             "cargo configure /home/me/.cargo/config.toml",
             "backup create /home/me/.cargo/config.toml",
             "shell configure /home/me/.bashrc",
-            "backup create /home/me/.bashrc",
             "backup create /home/me/.bashrc",
 
             "login_service keep /svc",

@@ -65,8 +65,6 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
-        cache_cc_links: false,
-        trust_codegen_backends: false,
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
