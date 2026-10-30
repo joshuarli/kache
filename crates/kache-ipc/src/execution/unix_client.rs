@@ -755,13 +755,28 @@ mod tests {
             0
         );
         let native = |value: &std::ffi::OsStr| NativeString::capture(value);
-        let copy = Command::Workspace(kache_protocol::execution::unix::Workspace::Copy {
-            source: native(blob.as_os_str()),
-            target: native(denied.as_os_str()),
-            executable: false,
-        });
+        // Name `openat` explicitly: `std::fs` reaches the kernel through
+        // the legacy `open` syscall on some libc/arch pairs (musl issues
+        // it where the architecture keeps one; only `openat` exists on
+        // the rest), so a product-level copy cannot exercise this filter
+        // portably. What matters here is that write-capable `openat` is
+        // denied in this process before the native child below inherits
+        // the filter.
+        let denied_name = std::ffi::CString::new(
+            std::os::unix::ffi::OsStrExt::as_bytes(denied.as_os_str()),
+        )
+        .unwrap();
+        let fd = unsafe {
+            libc::openat(
+                libc::AT_FDCWD,
+                denied_name.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                0o644,
+            )
+        };
+        assert_eq!(fd, -1);
         assert_eq!(
-            client.execute(copy).unwrap_err().raw_os_error(),
+            io::Error::last_os_error().raw_os_error(),
             Some(libc::EPERM)
         );
         assert!(!denied.exists());
