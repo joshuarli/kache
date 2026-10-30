@@ -38,9 +38,11 @@ Build once to make eligible outputs available in the cache:
 (
   set -e
   cd "$kache_trial/first"
-  cargo build --locked --target-dir "$PWD/target"
+  CARGO_INCREMENTAL=0 cargo build --locked --target-dir "$PWD/target"
 )
 ```
+
+Cargo enables incremental compilation for workspace members in its `dev` profile by default, and Kache passes those units through uncached by design (see [Incremental builds](#incremental-builds)). Without `CARGO_INCREMENTAL=0` the workspace crates bypass the cache and the second tree has nothing to reuse.
 
 Then build the same revision in the second worktree:
 
@@ -48,7 +50,7 @@ Then build the same revision in the second worktree:
 (
   set -e
   cd "$kache_trial/second"
-  KACHE_PROGRESS=hits cargo build --locked --target-dir "$PWD/target"
+  KACHE_PROGRESS=hits CARGO_INCREMENTAL=0 cargo build --locked --target-dir "$PWD/target"
   kache stats --full --root "$PWD"
 )
 ```
@@ -101,7 +103,16 @@ After setup, keep using ordinary Cargo commands. Give concurrent worktrees separ
 
 Kache caches eligible Rust executables by default: binaries, test binaries and build scripts, which Cargo compiles as executables. Override the policy with `KACHE_CACHE_EXECUTABLES` or `cache.cache_executables`.
 
-When Cargo enables incremental compilation for a unit, Kache passes the compiler invocation through unchanged and leaves Cargo's incremental directory alone. The unit does not use Kache's artifact cache. Other eligible, non-incremental units can still be cached. Set `CARGO_INCREMENTAL=0` before running Cargo if you want those units to use the artifact cache instead.
+## Incremental builds
+
+Cargo enables incremental compilation by default for workspace members and path dependencies in its `dev` profile. When Cargo enables it for a unit, Kache passes that compiler invocation through unchanged and leaves Cargo's incremental directory alone: the unit does not use Kache's artifact cache. Registry dependencies already build without incremental state, so they still hit.
+
+That is a deliberate tradeoff:
+
+- Keep Cargo's default (`CARGO_INCREMENTAL` unset) to reuse incremental state *within* one target directory: edit rebuilds are fast there, but workspace crates never enter Kache's cache and never reuse across worktrees.
+- Set `CARGO_INCREMENTAL=0` (as the walkthrough above does) to let eligible workspace units use the artifact cache instead: cold builds fill the cache, and other worktrees restore from it, at the cost of slower edit rebuilds in the same directory.
+
+Mixing the two in the same target directory is allowed but each mode only reuses its own state. Use one setting per target directory when comparing hits.
 
 ## Temporarily disable caching
 
