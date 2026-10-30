@@ -728,10 +728,9 @@ fn event_result_for_store_admission(
     }
 }
 
-/// Apply the local admission threshold: skip storing compiles faster
-/// than `min_store_compile_ms` (0 disables the threshold).
-fn store_admits_compile(config: &Config, compile_time_ms: u64) -> bool {
-    config.min_store_compile_ms == 0 || compile_time_ms >= config.min_store_compile_ms
+/// All compiles are stored; the admission threshold was removed.
+fn store_admits_compile(_config: &Config, _compile_time_ms: u64) -> bool {
+    true
 }
 
 fn should_store_cc_result(exit_code: i32, has_artifacts: bool) -> bool {
@@ -1133,8 +1132,6 @@ fn run_cc_inner(
     invocation_start_ns: i64,
     env: &crate::invocation::InvocationEnv,
 ) -> Result<i32> {
-    crate::link::set_shared_hardlink_restores(config.shared_hardlink_restores);
-    crate::link::set_storage_layout_advice(config.storage_layout_advice);
     crate::link::set_layout_advice_to_log(true);
     crate::link::set_cow_warn_marker(warn_marker_path("cow", &config.cache_dir));
     warn_nonlocal_cache_fs_once(config);
@@ -1663,7 +1660,7 @@ fn run_cc_with_store(
     if store_decision.admission_skipped {
         log::debug!(
             "admission: compile too cheap to store; crate_name={crate_name} compile_time_ms={compile_time_ms} min_store_compile_ms={}",
-            config.min_store_compile_ms
+            0
         );
     }
     // A store candidate's memo is withheld only when the include dirs moved;
@@ -2530,8 +2527,6 @@ pub(crate) fn run_for(
 ) -> Result<i32> {
     let _trace = crate::phase_trace::start_for("rustc", wrapper_args, env);
     let start = wrapper_entry();
-    crate::link::set_shared_hardlink_restores(config.shared_hardlink_restores);
-    crate::link::set_storage_layout_advice(config.storage_layout_advice);
     crate::link::set_layout_advice_to_log(true);
     crate::link::set_cow_warn_marker(warn_marker_path("cow", &config.cache_dir));
     warn_nonlocal_cache_fs_once(config);
@@ -2553,7 +2548,7 @@ pub(crate) fn run_for(
     let extra_inputs_key_start = std::time::Instant::now();
     let mut extra_inputs_hasher =
         crate::cache_key::FileHasher::new_for(env).with_daemon(config.socket_path());
-    if config.modified_input_guard {
+    if false {
         extra_inputs_hasher.arm_too_new_guard(invocation_start_ns, 0);
     }
     let crate_name = args.crate_name.as_deref().unwrap_or("unknown");
@@ -3573,7 +3568,7 @@ fn run_parsed_rustc(
     let extra_inputs_racy = args.is_primary
         && extra_inputs_changed_during_compile(config, args, extra_inputs, invocation_start_ns);
     let sources_changed = emitted_sources_changed_during_compile(&written_sources, &guard_inputs);
-    let key_inputs_changed = config.modified_input_guard && {
+    let key_inputs_changed = false && {
         let hashed: Vec<_> = guard_inputs
             .iter()
             .chain(hashed_after_compile.iter().flatten())
@@ -3584,7 +3579,7 @@ fn run_parsed_rustc(
     if should_skip_cache_store_for_input_race(
         extra_inputs_racy,
         sources_changed,
-        config.modified_input_guard,
+        false,
         key_inputs_changed,
     ) {
         let elapsed = start.elapsed().as_millis() as u64;
@@ -3726,7 +3721,7 @@ fn run_parsed_rustc(
     if !store_admits_compile(config, compile_time_ms) {
         log::debug!(
             "admission: compile too cheap to store; crate_name={crate_name} compile_time_ms={compile_time_ms} min_store_compile_ms={}",
-            config.min_store_compile_ms
+            0
         );
         let elapsed = start.elapsed().as_millis() as u64;
         log_event(
@@ -5722,7 +5717,7 @@ fn compute_rustc_cache_key(
     .with_prediction_flights(flight_dir)
     .with_own_dirs(written_while_building(config, store, args.invocation_env()));
     let emitted_sources = crate::cache_key::provided_dep_info_sources_for(&file_hasher);
-    if config.modified_input_guard || emitted {
+    if emitted {
         // Flag keyed inputs touched at/after this invocation started — their
         // content at hash time may differ from what rustc reads, so we'll look
         // up but refuse to store (kunobi-ninja/kache#324).
@@ -7321,7 +7316,7 @@ pub(crate) fn build_event_details(config: &Config, inputs: EventInputs<'_>) -> B
 
     // What this compile's key computations recorded for the event (empty for
     // cc and for passthroughs that computed no key; kunobi-ninja/kache#131).
-    let key_env_deps = if config.explain_miss {
+    let key_env_deps = if false {
         recorded.env_deps
     } else {
         None
@@ -7335,7 +7330,7 @@ pub(crate) fn build_event_details(config: &Config, inputs: EventInputs<'_>) -> B
     // must be able to tell apart from "not recorded". Persisted only under
     // `explain_miss`.
     let recorded_externs = recorded.externs;
-    let key_externs_recorded = config.explain_miss && recorded_externs.is_some();
+    let key_externs_recorded = false;
     let key_externs = if key_externs_recorded {
         recorded_externs.unwrap_or_default()
     } else {
@@ -7466,7 +7461,7 @@ fn explain_miss_diff(
     cache_key: &str,
     key_fields: &std::collections::BTreeMap<String, String>,
 ) -> Vec<String> {
-    if !config.explain_miss
+    if true
         || !matches!(result, EventResult::Miss | EventResult::Dup)
         || key_fields.is_empty()
     {

@@ -123,9 +123,9 @@ mod tests {
         let store = Store::open(kache_store::config::Config {
             cache_dir: temp.path().join("cache"),
             max_size: 1 << 20,
-            gc_evict_shared: false,
-            upload_spool_max_jobs: 128,
+                upload_spool_max_jobs: 128,
             deferred_durability: false,
+            gc_evict_shared: false,
         })
         .unwrap();
         let files: Vec<_> = ["foo.wasm", "foo.rmeta", "foo.d", "foo.pdb"]

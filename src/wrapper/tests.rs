@@ -1503,7 +1503,6 @@ fn auto_gc_worker_waits_out_a_backoff_another_driver_left() {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = test_config(dir.path().to_path_buf());
     cfg.max_size = 1024;
-    cfg.record_sessions = true;
     let store = Store::open(&cfg).unwrap();
     put_sized_entry(&store, dir.path(), "evictable", 4096);
     record_auto_gc_outcome(&cfg, 4096, 0);
@@ -1519,8 +1518,8 @@ fn auto_gc_worker_waits_out_a_backoff_another_driver_left() {
     assert!(!store.contains("evictable"));
     assert_eq!(
         recorded_gc_runs(&cfg),
-        1,
-        "a store that fits needs no retry"
+        0,
+        "gc history recording removed"
     );
     assert_eq!(auto_gc_backoff_interval_for_test(&cfg.cache_dir), None);
 }
@@ -1532,21 +1531,19 @@ fn auto_gc_worker_retries_only_for_pinned_entries() {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = test_config(dir.path().to_path_buf());
     cfg.max_size = 1024;
-    cfg.record_sessions = true;
     let store = Store::open(&cfg).unwrap();
     put_retained_entry(&store, dir.path(), "retained");
     crate::cli::run_auto_gc_worker(&cfg, std::time::Duration::ZERO);
-    assert_eq!(recorded_gc_runs(&cfg), 1);
+    assert_eq!(recorded_gc_runs(&cfg), 0, "gc history recording removed");
 
     let pinned_dir = tempfile::tempdir().unwrap();
     let mut pinned_cfg = test_config(pinned_dir.path().to_path_buf());
     pinned_cfg.max_size = 1024;
-    pinned_cfg.record_sessions = true;
     let pinned_store = Store::open(&pinned_cfg).unwrap();
     // Just stored: inside the idle grace, so eviction pins it.
     put_test_entry(&pinned_store, pinned_dir.path(), "pinned");
     crate::cli::run_auto_gc_worker(&pinned_cfg, std::time::Duration::ZERO);
-    assert_eq!(recorded_gc_runs(&pinned_cfg), 2);
+    assert_eq!(recorded_gc_runs(&pinned_cfg), 0);
     assert_eq!(
         auto_gc_backoff_interval_for_test(&pinned_cfg.cache_dir),
         Some(600),
@@ -1649,102 +1646,6 @@ fn record_auto_gc_outcome_persists_the_backoff_until_the_store_fits() {
     assert!(!auto_gc_backoff_path(&cfg.cache_dir).exists());
     assert!(auto_gc_sweep_due(&cfg, 5000));
 }
-
-/// #131: explain_miss names exactly the key groups whose digests changed
-/// vs the crate's last hit in the same tree — and stays silent (and
-/// log-read-free) when disabled, on hits, or with no prior hit.
-#[test]
-fn explain_miss_diff_names_changed_groups() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().to_path_buf());
-    config.explain_miss = true;
-
-    let fields_now: std::collections::BTreeMap<String, String> = [
-        ("args".to_string(), "bbbb".to_string()),
-        ("sources".to_string(), "ssss".to_string()),
-    ]
-    .into();
-
-    // No prior hit in the log → nothing to diff against.
-    assert!(
-        explain_miss_diff(
-            &config,
-            "/w",
-            "gkrust",
-            EventResult::Miss,
-            "newkey",
-            &fields_now
-        )
-        .is_empty()
-    );
-
-    let hit: crate::events::BuildEvent = deser_json::from_str(
-        r#"{"ts":"2026-07-23T00:00:00Z","crate_name":"gkrust","root":"/w",
-                "result":"local_hit","elapsed_ms":1,"size":1,
-                "key_fields":{"args":"aaaa","sources":"ssss","link":"llll"}}"#,
-    )
-    .unwrap();
-    events::log_event(&config.event_log_path(), &hit).unwrap();
-
-    let diff = explain_miss_diff(
-        &config,
-        "/w",
-        "gkrust",
-        EventResult::Miss,
-        "newkey",
-        &fields_now,
-    );
-    assert_eq!(
-        diff,
-        vec!["args".to_string(), "link".to_string()],
-        "changed digest + group missing from the new key both count"
-    );
-
-    // Same fields as the hit → the difference must be in post-hoc folds.
-    let unchanged: std::collections::BTreeMap<String, String> = [
-        ("args".to_string(), "aaaa".to_string()),
-        ("sources".to_string(), "ssss".to_string()),
-        ("link".to_string(), "llll".to_string()),
-    ]
-    .into();
-    assert_eq!(
-        explain_miss_diff(
-            &config,
-            "/w",
-            "gkrust",
-            EventResult::Miss,
-            "newkey",
-            &unchanged
-        ),
-        vec!["salt_or_extra_inputs".to_string()],
-    );
-
-    // Off by default / hits: no diagnostics.
-    assert!(
-        explain_miss_diff(
-            &config,
-            "/w",
-            "gkrust",
-            EventResult::LocalHit,
-            "newkey",
-            &fields_now
-        )
-        .is_empty()
-    );
-    config.explain_miss = false;
-    assert!(
-        explain_miss_diff(
-            &config,
-            "/w",
-            "gkrust",
-            EventResult::Miss,
-            "newkey",
-            &fields_now
-        )
-        .is_empty()
-    );
-}
-
 /// After a deferred compile the keyed flow must never run the compiler
 /// again: Cargo has already consumed the first run's artifact
 /// notifications, and a second set makes it finish the unit twice.
@@ -6058,13 +5959,13 @@ fn log_event_with_store_stats_persists_timing_hash_and_store_fields() {
 /// each field is fed a magnitude ten times the last: a lower bound and a
 /// band catch a zeroed field and a swapped one, whatever ran before.
 /// An event carries the record its invocation's keys left. The extern maps
-/// and unit id need `explain_miss`; the group digests do not.
+/// and unit id are no longer recorded (explain_miss removed); the group
+/// digests do not need it.
 #[test]
 fn an_event_carries_its_invocations_key_record() {
     let _ = crate::verify_compare::take_last_report();
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().join("cache"));
-    config.explain_miss = true;
+    let config = test_config(dir.path().join("cache"));
     let map = |name: &str, value: &str| {
         std::collections::BTreeMap::from([(name.to_string(), value.to_string())])
     };
@@ -6090,22 +5991,21 @@ fn an_event_carries_its_invocations_key_record() {
     // but keeps the earlier digests.
     record.absorb(&crate::cache_key::KeyOutputs::default());
     log(&config, record);
-    config.explain_miss = false;
     let mut record = KeyEventRecord::default();
     record.absorb(&key);
     log(&config, record);
 
     let events = crate::events::read_events(&config.event_log_path()).unwrap();
     assert_eq!(events.len(), 4);
-    assert_eq!(events[0].key_env_deps, Some(map("MODE", "eeee")));
+    assert_eq!(events[0].key_env_deps, None, "explain_miss removed: no env deps");
     assert_eq!(events[1].key_env_deps, None);
-    assert_eq!(events[2].key_env_deps, Some(map("MODE", "eeee")));
+    assert_eq!(events[2].key_env_deps, None);
     assert_eq!(events[3].key_env_deps, None);
     assert_eq!(events[0].key_fields, map("args", "aaaa"));
-    assert!(events[0].key_externs_recorded);
-    assert_eq!(events[0].key_externs, map("dep", "dddd"));
-    assert_eq!(events[0].extern_units, map("dep", "uuuu"));
-    assert_eq!(events[0].unit_id, "self");
+    assert!(!events[0].key_externs_recorded);
+    assert!(events[0].key_externs.is_empty());
+    assert!(events[0].extern_units.is_empty());
+    assert!(events[0].unit_id.is_empty());
     assert!(events[1].key_fields.is_empty(), "no key, no record");
     assert!(!events[1].key_externs_recorded);
     assert_eq!(events[2].key_fields, map("args", "aaaa"));
@@ -8553,7 +8453,6 @@ fn a_key_from_emitted_dep_info_always_arms_the_too_new_guard() {
     let _lock = crate::test_support::process_state_test_lock();
     let dir = tempfile::tempdir().unwrap();
     let mut config = test_config(dir.path().join("cache"));
-    config.modified_input_guard = false;
     config.input_predictions = true;
     let src = dir.path().join("src");
     std::fs::create_dir_all(&src).unwrap();

@@ -686,28 +686,6 @@ fn purge_keeps_only_linked_build_script_runs() {
     assert!(linked.exists(), "a target directory links to it");
     assert!(!unlinked.exists());
 }
-
-/// Every driver records through record_gc_run; the local one shows the
-/// history is wired in and stays off until record_sessions asks for it.
-#[test]
-fn local_gc_appends_to_the_gc_history_only_when_record_sessions_is_on() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(dir.path().to_path_buf());
-
-    run_gc_local(&config, GcMode::Cli).unwrap();
-    assert!(!config.cache_dir.join("telemetry").exists());
-
-    config.record_sessions = true;
-    run_gc_local(&config, GcMode::Background).unwrap();
-    let log = std::fs::read_to_string(crate::report::gc_runs_log_path(&config.cache_dir)).unwrap();
-    let records: Vec<crate::report::GcRunRecord> = log
-        .lines()
-        .map(|line| deser_json::from_str(line).unwrap())
-        .collect();
-    assert_eq!(records.len(), 1, "{log}");
-    assert_eq!(records[0].source, "auto");
-}
-
 /// kunobi-ninja/kache#1126: the local sweep removes stale key locks and
 /// records the housekeeping counts.
 #[test]
@@ -1470,25 +1448,6 @@ fn tree_contents(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
     files.sort();
     files
 }
-
-/// `record_sessions` (env or config) makes a plain `kache report` record
-/// exactly as `--record` would, so a host can opt in once for every job.
-#[test]
-fn report_records_without_the_flag_when_record_sessions_is_on() {
-    let cache = tempfile::tempdir().unwrap();
-    let out = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(cache.path().to_path_buf());
-    config.record_sessions = true;
-
-    report_run(&config, out.path(), false);
-
-    let log = std::fs::read_to_string(session_log_path(&config)).unwrap();
-    assert_eq!(log.lines().count(), 1, "{log}");
-    let record: crate::report::SessionRecord =
-        deser_json::from_str(log.lines().next().unwrap()).unwrap();
-    assert_eq!(record.schema, crate::report::SESSION_RECORD_SCHEMA);
-}
-
 /// Recording is opt-in: a plain `kache report` leaves the cache dir
 /// exactly as it found it.
 #[test]
@@ -2203,21 +2162,16 @@ fn test_plan_cargo_wrapper_edit_rejects_malformed_toml() {
 fn save_manifest_config(
     cache_dir: std::path::PathBuf,
 ) -> Config {
-    use crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS;
     Config {
         socket_path_override: None,
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
         readonly_store: None,
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: false,
         trust_daemon_execution: false,
@@ -2231,9 +2185,6 @@ fn save_manifest_config(
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -2246,9 +2197,6 @@ fn save_manifest_config(
         event_log_max_size: 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     }
 }
 

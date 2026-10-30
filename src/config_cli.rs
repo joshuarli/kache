@@ -124,7 +124,7 @@ fn key_parts(key: &str) -> Result<Vec<&str>> {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
     }) {
-        bail!("use a dotted key such as cache.explain_miss");
+        bail!("use a dotted key such as cache.scheduler");
     }
     Ok(keys)
 }
@@ -267,7 +267,7 @@ fn assign(
     replacement: Option<deser_value::Value>,
 ) -> Result<()> {
     let Some((key, rest)) = keys.split_first() else {
-        bail!("use a dotted key such as cache.explain_miss");
+        bail!("use a dotted key such as cache.scheduler");
     };
     let table = node
         .as_map_mut()
@@ -305,15 +305,15 @@ mod tests {
         let path = root.path().join("config.toml");
         fs::write(
             &path,
-            "# Personal settings\n[cache]\nexplain_miss = false # Keep offline\nfuture_key = 9\n[workspace]\nextra_inputs = []\n",
+            "# Personal settings\n[cache]\nscheduler = true # Keep offline\nfuture_key = 9\n[workspace]\nextra_inputs = []\n",
         )
         .unwrap();
-        edit(&path, "cache.explain_miss", Some("true")).unwrap();
+        edit(&path, "cache.scheduler", Some("true")).unwrap();
         edit(&path, "cache.local_max_size", Some("50GiB")).unwrap();
         edit(&path, "paths.base_dirs", Some("['/a', '/b']")).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         let values: deser_value::Value = deser_toml::from_str(&text).unwrap();
-        assert_eq!(values["cache"]["explain_miss"].as_bool(), Some(true));
+        assert_eq!(values["cache"]["scheduler"].as_bool(), Some(true));
         assert_eq!(values["cache"]["local_max_size"].as_str(), Some("50GiB"));
         assert_eq!(values["paths"]["base_dirs"][1].as_str(), Some("/b"));
         edit(&path, "cache.future_key", None).unwrap();
@@ -326,18 +326,18 @@ mod tests {
     fn rejected_edits_leave_the_file_unchanged() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("config.toml");
-        let original = "[cache]\nexplain_miss = true\n";
+        let original = "[cache]\nscheduler = false\n";
         fs::write(&path, original).unwrap();
         for (key, value) in [
             ("cache.typo", Some("true")),
             ("workspace.typo", Some("true")),
-            ("cache.explain_miss", Some("not-a-boolean")),
+            ("cache.scheduler", Some("not-a-boolean")),
             ("cache.not_a_section.typo", Some("1")),
-            ("cache", Some("{explain_miss = false}")),
-            ("cache.explain_miss.child", Some("false")),
-            ("cache..explain_miss", Some("false")),
+            ("cache", Some("{scheduler = true}")),
+            ("cache.scheduler.child", Some("false")),
+            ("cache..scheduler", Some("false")),
             ("", Some("false")),
-            ("cache.explain_miss\n", Some("false")),
+            ("cache.scheduler\n", Some("false")),
             ("cache.absent", None),
             ("missing.value", None),
         ] {
@@ -345,7 +345,7 @@ mod tests {
             assert_eq!(fs::read_to_string(&path).unwrap(), original, "{key}");
         }
         fs::write(&path, "not valid TOML").unwrap();
-        assert!(edit(&path, "cache.explain_miss", Some("true")).is_err());
+        assert!(edit(&path, "cache.scheduler", Some("true")).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "not valid TOML");
     }
 
@@ -353,12 +353,12 @@ mod tests {
     fn set_creates_a_config_and_unset_restores_absence() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("nested/config.toml");
-        assert!(edit(&path, "cache.explain_miss", None).is_err());
+        assert!(edit(&path, "cache.scheduler", None).is_err());
         assert!(!path.exists());
-        edit(&path, "cache.explain_miss", Some("true")).unwrap();
-        edit(&path, "cache.explain_miss", None).unwrap();
+        edit(&path, "cache.scheduler", Some("true")).unwrap();
+        edit(&path, "cache.scheduler", None).unwrap();
         let values: deser_value::Value = deser_toml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-        assert!(lookup(&values, &["cache", "explain_miss"]).is_none());
+        assert!(lookup(&values, &["cache", "scheduler"]).is_none());
     }
 
     #[test]
@@ -366,10 +366,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("config.toml");
         for _ in 0..8 {
-            fs::write(&path, "[cache]\ncache_executables = false\nexplain_miss = false\n").unwrap();
+            fs::write(&path, "[cache]\ncache_executables = false\nscheduler = true\n").unwrap();
             let barrier = std::sync::Barrier::new(2);
             std::thread::scope(|scope| {
-                for key in ["cache.cache_executables", "cache.explain_miss"] {
+                for key in ["cache.cache_executables", "cache.scheduler"] {
                     let barrier = &barrier;
                     let path = &path;
                     scope.spawn(move || {
@@ -379,8 +379,8 @@ mod tests {
                 }
             });
             let values: deser_value::Value = deser_toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-            assert_eq!(values["cache"]["explain_miss"].as_bool(), Some(true));
-            assert_eq!(values["cache"]["explain_miss"].as_bool(), Some(true));
+            assert_eq!(values["cache"]["scheduler"].as_bool(), Some(true));
+            assert_eq!(values["cache"]["scheduler"].as_bool(), Some(true));
         }
     }
 
@@ -391,14 +391,14 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let target = root.path().join("dotfiles.toml");
         let link = root.path().join("config.toml");
-        edit(&target, "cache.explain_miss", Some("false")).unwrap();
+        edit(&target, "cache.scheduler", Some("false")).unwrap();
         assert_eq!(
             fs::metadata(&target).unwrap().permissions().mode() & 0o777,
             0o600
         );
         fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
         symlink(&target, &link).unwrap();
-        edit(&link, "cache.explain_miss", Some("true")).unwrap();
+        edit(&link, "cache.scheduler", Some("true")).unwrap();
         assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
         assert!(fs::read_to_string(&target).unwrap().contains("true"));
         assert_eq!(
@@ -406,6 +406,6 @@ mod tests {
             0o640
         );
         fs::remove_file(target).unwrap();
-        assert!(edit(&link, "cache.explain_miss", Some("false")).is_err());
+        assert!(edit(&link, "cache.scheduler", Some("false")).is_err());
     }
 }

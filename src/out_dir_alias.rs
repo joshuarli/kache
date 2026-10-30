@@ -934,7 +934,7 @@ fn apply_after_host_check(
     let compiler = RustcCompiler::new_for(invocation).with_base_dirs(config.base_dirs.clone());
     let args = compiler.parse(wrapper_args).ok()?;
     let cache_dir = invocation.resolve(&config.cache_dir)?;
-    let root = alias_root(&cache_dir, config.out_dir_alias_root.as_deref(), euid)?;
+    let root = alias_root(&cache_dir, None, euid)?;
     if let Some(code) = checks_before_decision(&args, &root, &mut crate::invocation::io::stderr()) {
         return Some(code);
     }

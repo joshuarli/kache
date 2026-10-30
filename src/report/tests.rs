@@ -112,140 +112,6 @@ fn load_gc_summary_all_sums_unique_stores_and_selects_latest_instant() {
     assert_eq!(reversed.last_run, gc.last_run);
     assert_eq!(reversed.bytes_freed, gc.bytes_freed);
 }
-
-/// The GC history is opt-in with session recording. Off, a run writes
-/// gc_stats.json and nothing under `telemetry/`; on, each run appends one
-/// line carrying every figure of that run.
-#[test]
-fn gc_runs_history_is_appended_only_with_record_sessions() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = write_test_events(dir.path());
-    let run = crate::store::GcStats {
-        entries_evicted: 3,
-        bytes_freed: 100,
-        disk_bytes_reclaimed: 60,
-        blobs_removed: 2,
-        duration_ms: 9,
-        entries_pinned: 4,
-        entries_unreclaimable: 1,
-        entries_failed: 5,
-        entries_locked: 3,
-        entries_busy_snapshot: 2,
-        entries_recent_prefiltered: 4,
-        entries_import_pinned: 7,
-        evict_write_ms: 11,
-        bytes_held: 12,
-        housekeeping: Some(crate::store::HousekeepingStats {
-            key_locks_removed: 6,
-            key_locks_remaining: 7,
-            predictions_pruned: 8,
-            file_hashes_pruned: 9,
-        }),
-        ..Default::default()
-    };
-
-    record_gc_run(
-        &config,
-        "daemon",
-        crate::store::SweepOrigin::Automatic,
-        &run,
-    )
-    .unwrap();
-    let persisted = read_gc_stats(&config.cache_dir).unwrap();
-    assert_eq!(persisted.source, "daemon");
-    assert_eq!(persisted.bytes_held, 12);
-    assert!(
-        !config.cache_dir.join("telemetry").exists(),
-        "recording off: no telemetry dir"
-    );
-
-    config.record_sessions = true;
-    record_gc_run(&config, "auto", crate::store::SweepOrigin::Automatic, &run).unwrap();
-    record_gc_run(
-        &config,
-        "manual",
-        crate::store::SweepOrigin::Requested,
-        &crate::store::GcStats::default(),
-    )
-    .unwrap();
-
-    let log = std::fs::read_to_string(gc_runs_log_path(&config.cache_dir)).unwrap();
-    let records: Vec<GcRunRecord> = log
-        .lines()
-        .map(|line| deser_json::from_str(line).unwrap())
-        .collect();
-    assert_eq!(records.len(), 2, "{log}");
-    assert!(UtcTime::parse_rfc3339(&records[0].ts).is_some());
-    assert_eq!(
-        records[0],
-        GcRunRecord {
-            ts: records[0].ts.clone(),
-            schema: GC_RUN_RECORD_SCHEMA,
-            source: "auto".to_string(),
-            entries_evicted: 3,
-            bytes_freed: 100,
-            disk_bytes_reclaimed: 60,
-            blobs_removed: 2,
-            entries_failed: 5,
-            entries_locked: 3,
-            entries_busy_snapshot: 2,
-            entries_recent_prefiltered: 4,
-            entries_import_pinned: 7,
-            entries_pinned: 4,
-            entries_unreclaimable: 1,
-            bytes_held: 12,
-            duration_ms: 9,
-            evict_write_ms: 11,
-            key_locks_removed: Some(6),
-            key_locks_remaining: Some(7),
-            predictions_pruned: Some(8),
-            file_hashes_pruned: Some(9),
-        }
-    );
-    assert_eq!(records[1].source, "manual");
-    assert_eq!(records[1].entries_evicted, 0);
-    // A run with no housekeeping writes no counts, rather than zeros.
-    assert_eq!(records[1].key_locks_removed, None);
-    assert_eq!(records[1].key_locks_remaining, None);
-    assert_eq!(records[1].predictions_pruned, None);
-    assert!(!log.lines().nth(1).unwrap().contains("key_locks"), "{log}");
-}
-
-#[test]
-fn gc_runs_history_rotates_like_the_other_logs() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = write_test_events(dir.path());
-    config.record_sessions = true;
-    config.event_log_max_size = 1;
-    config.event_log_keep_lines = 2;
-    for entries_evicted in 1..=3 {
-        let run = crate::store::GcStats {
-            entries_evicted,
-            ..Default::default()
-        };
-        record_gc_run(
-            &config,
-            "manual",
-            crate::store::SweepOrigin::Requested,
-            &run,
-        )
-        .unwrap();
-    }
-    let log = std::fs::read_to_string(gc_runs_log_path(&config.cache_dir)).unwrap();
-    let evicted: Vec<usize> = log
-        .lines()
-        .map(|line| {
-            deser_json::from_str::<GcRunRecord>(line)
-                .unwrap()
-                .entries_evicted
-        })
-        .collect();
-    // Past the size cap, rotation keeps at most keep_lines, then drops the
-    // oldest until the file fits; a 1-byte cap leaves only the newest.
-    assert_eq!(evicted, vec![3]);
-}
-
-/// gc_stats.json is the last run only: a second run replaces every field,
 /// and the file keeps the keys that older readers require.
 #[test]
 fn record_gc_run_keeps_only_the_last_run() {
@@ -545,14 +411,10 @@ fn write_test_events(dir: &std::path::Path) -> Config {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: false,
         trust_daemon_execution: false,
@@ -566,9 +428,6 @@ fn write_test_events(dir: &std::path::Path) -> Config {
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -582,9 +441,6 @@ fn write_test_events(dir: &std::path::Path) -> Config {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     };
 
     // Write build events
@@ -1743,14 +1599,10 @@ fn test_missing_transfer_data() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: false,
         trust_daemon_execution: false,
@@ -1764,9 +1616,6 @@ fn test_missing_transfer_data() {
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -1780,9 +1629,6 @@ fn test_missing_transfer_data() {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     };
 
     // Only write build events, no transfers
@@ -1808,14 +1654,10 @@ fn test_suggestion_high_miss_share() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: false,
         trust_daemon_execution: false,
@@ -1829,9 +1671,6 @@ fn test_suggestion_high_miss_share() {
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -1845,9 +1684,6 @@ fn test_suggestion_high_miss_share() {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     };
 
     // Mostly misses — should trigger high miss share suggestion
@@ -1882,14 +1718,10 @@ fn test_suggestion_high_hit_overhead() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: false,
         trust_daemon_execution: false,
@@ -1903,9 +1735,6 @@ fn test_suggestion_high_hit_overhead() {
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -1919,9 +1748,6 @@ fn test_suggestion_high_hit_overhead() {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     };
 
     // Several hits, each with a high elapsed time -> avg overhead > 50ms
@@ -1957,14 +1783,10 @@ fn test_suggestion_network_download_failures_and_fanout() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: false,
         trust_daemon_execution: false,
@@ -1978,9 +1800,6 @@ fn test_suggestion_network_download_failures_and_fanout() {
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -1994,9 +1813,6 @@ fn test_suggestion_network_download_failures_and_fanout() {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     };
 
     // One OK download (test_transfer sets request_count=4 -> 4 GETs for 1 hit,
@@ -2037,14 +1853,10 @@ fn test_suggestion_network_latency_thresholds() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: false,
         trust_daemon_execution: false,
@@ -2058,9 +1870,6 @@ fn test_suggestion_network_latency_thresholds() {
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -2074,9 +1883,6 @@ fn test_suggestion_network_latency_thresholds() {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     };
 
     let slow = TransferEvent {
@@ -2518,14 +2324,10 @@ fn test_empty_report() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: false,
         trust_daemon_execution: false,
@@ -2539,9 +2341,6 @@ fn test_empty_report() {
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -2555,9 +2354,6 @@ fn test_empty_report() {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     };
 
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
@@ -2960,14 +2756,10 @@ fn report_counts_each_download_transfer_format() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: false,
         trust_daemon_execution: false,
@@ -2981,9 +2773,6 @@ fn report_counts_each_download_transfer_format() {
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -2997,9 +2786,6 @@ fn report_counts_each_download_transfer_format() {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     };
     for fmt in ["v1", "v2", "weird-future-format"] {
         let t = test_transfer(fmt, TransferDirection::Download, fmt, 500, 40, true);

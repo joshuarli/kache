@@ -212,45 +212,6 @@ fn input_predictions_resolve_env_over_file_and_default_on() {
     }
 }
 
-/// Session recording resolves like input predictions: the environment
-/// over the file, and off with neither.
-#[test]
-fn record_sessions_resolve_env_over_file_and_default_off() {
-    let _lock = config_path_lock();
-    let file_says = |value: Option<bool>| -> Result<FileConfig> {
-        Ok(FileConfig {
-            cache: Some(CacheFileConfig {
-                record_sessions: value,
-                ..Default::default()
-            }),
-            ..Default::default()
-        })
-    };
-
-    {
-        let _env = set_env_for_test("KACHE_RECORD_SESSIONS", None);
-        assert!(
-            !Config::record_sessions_enabled(&file_says(None)),
-            "off unless something asks for it"
-        );
-        assert!(Config::record_sessions_enabled(&file_says(Some(true))));
-    }
-    for on in ["1", "true", "TRUE"] {
-        let _env = set_env_for_test("KACHE_RECORD_SESSIONS", Some(on.as_ref()));
-        assert!(
-            Config::record_sessions_enabled(&file_says(Some(false))),
-            "{on} in the environment must override the file"
-        );
-    }
-    for off in ["0", "false", ""] {
-        let _env = set_env_for_test("KACHE_RECORD_SESSIONS", Some(off.as_ref()));
-        assert!(
-            !Config::record_sessions_enabled(&file_says(Some(true))),
-            "{off:?} in the environment must override the file"
-        );
-    }
-}
-
 fn set_kache_config_for_test(path: &std::path::Path) -> TestEnvGuard {
     set_env_for_test("KACHE_CONFIG", Some(path.as_os_str()))
 }
@@ -290,18 +251,6 @@ fn test_default_cache_dir() {
     let dir = default_cache_dir();
     assert!(dir.to_string_lossy().contains("kache"));
 }
-
-#[test]
-fn daemon_idle_timeout_defaults_to_disabled() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&config_path);
-    let _timeout = NamedEnvGuard::remove("KACHE_DAEMON_IDLE_TIMEOUT");
-
-    assert_eq!(Config::load().unwrap().daemon_idle_timeout_secs, 0);
-}
-
 #[test]
 fn the_event_log_rotates_at_64_mib_by_default() {
     let _lock = config_path_lock();
@@ -314,60 +263,6 @@ fn the_event_log_rotates_at_64_mib_by_default() {
     std::fs::write(&config_path, "[cache]\nevent_log_max_size = \"8MiB\"\n").unwrap();
     assert_eq!(Config::load().unwrap().event_log_max_size, 8 * 1024 * 1024);
 }
-
-#[test]
-fn gc_max_age_is_opt_in_and_obeys_env_precedence() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&config_path);
-    let _age_missing = NamedEnvGuard::remove("KACHE_GC_MAX_AGE_HOURS");
-
-    assert_eq!(Config::load().unwrap().gc_max_age_hours, 0);
-
-    std::fs::write(&config_path, "[cache]\ngc_max_age_hours = 72\n").unwrap();
-    assert_eq!(Config::load().unwrap().gc_max_age_hours, 72);
-
-    let _age_override = NamedEnvGuard::set("KACHE_GC_MAX_AGE_HOURS", "96");
-    assert_eq!(Config::load().unwrap().gc_max_age_hours, 96);
-
-    std::fs::write(
-        &config_path,
-        "[cache]\nignore_env = true\ngc_max_age_hours = 72\n",
-    )
-    .unwrap();
-    assert_eq!(Config::load().unwrap().gc_max_age_hours, 72);
-}
-
-#[test]
-fn gc_evict_shared_is_opt_in_and_obeys_env_precedence() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&config_path);
-    let _missing = NamedEnvGuard::remove("KACHE_GC_EVICT_SHARED");
-
-    assert!(!Config::load().unwrap().gc_evict_shared);
-
-    std::fs::write(&config_path, "[cache]\ngc_evict_shared = true\n").unwrap();
-    assert!(Config::load().unwrap().gc_evict_shared);
-
-    let _override = NamedEnvGuard::set("KACHE_GC_EVICT_SHARED", "0");
-    assert!(!Config::load().unwrap().gc_evict_shared);
-
-    drop(_override);
-    let _true_override = NamedEnvGuard::set("KACHE_GC_EVICT_SHARED", "1");
-    assert!(Config::load().unwrap().gc_evict_shared);
-
-    std::fs::write(
-        &config_path,
-        "[cache]\nignore_env = true\ngc_evict_shared = true\n",
-    )
-    .unwrap();
-    assert!(Config::load().unwrap().gc_evict_shared);
-}
-
-#[test]
 fn index_auto_compact_is_on_by_default_and_obeys_env_precedence() {
     let _lock = config_path_lock();
     let dir = tempfile::tempdir().unwrap();
@@ -477,31 +372,6 @@ fn memory_pressure_admission_is_on_by_default_and_obeys_env_precedence() {
     let _ignored = NamedEnvGuard::set("KACHE_SCHEDULER_MEMORY_PRESSURE", "0");
     assert!(Config::load().unwrap().scheduler_memory_pressure);
 }
-
-#[test]
-fn min_store_compile_is_opt_in_and_obeys_env_precedence() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&config_path);
-    let _missing = NamedEnvGuard::remove("KACHE_MIN_STORE_COMPILE_MS");
-
-    assert_eq!(Config::load().unwrap().min_store_compile_ms, 0);
-
-    std::fs::write(&config_path, "[cache]\nmin_store_compile_ms = 750\n").unwrap();
-    assert_eq!(Config::load().unwrap().min_store_compile_ms, 750);
-
-    let _override = NamedEnvGuard::set("KACHE_MIN_STORE_COMPILE_MS", "1200");
-    assert_eq!(Config::load().unwrap().min_store_compile_ms, 1200);
-
-    std::fs::write(
-        &config_path,
-        "[cache]\nignore_env = true\nmin_store_compile_ms = 750\n",
-    )
-    .unwrap();
-    assert_eq!(Config::load().unwrap().min_store_compile_ms, 750);
-}
-
 
 
 #[test]
@@ -921,33 +791,6 @@ fn the_environment_beats_both_files() {
         "the environment overrides the host file"
     );
 }
-
-/// A CI host turns session recording on once, in the host layer, under a
-/// chosen file that sets other cache keys and leaves recording unset.
-#[test]
-fn record_sessions_comes_from_the_host_layer() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let (host, chosen) = write_host_and_chosen(
-        dir.path(),
-        "[cache]\nrecord_sessions = true\n",
-        Some("[cache]\nauto_gc = false\n"),
-    );
-    let _host = set_host_config_for_test(&host);
-    let _chosen = set_kache_config_for_test(&chosen);
-    let file = Config::load_file_config();
-
-    {
-        let _env = set_env_for_test("KACHE_RECORD_SESSIONS", None);
-        assert!(Config::record_sessions_enabled(&file), "host value");
-    }
-    let _env = set_env_for_test("KACHE_RECORD_SESSIONS", Some(std::ffi::OsStr::new("0")));
-    assert!(
-        !Config::record_sessions_enabled(&file),
-        "the environment overrides the host file"
-    );
-}
-
 /// `local_hit_daemon` was removed before 1.0 (kunobi-ninja/kache#565).
 /// A file that still sets it, in either layer, must load with every other
 /// setting intact rather than fail the parse.
@@ -957,7 +800,7 @@ fn a_removed_local_hit_daemon_key_is_ignored() {
     let dir = tempfile::tempdir().unwrap();
     let (host, chosen) = write_host_and_chosen(
         dir.path(),
-        "[cache]\nlocal_hit_daemon = true\nrecord_sessions = true\n",
+        "[cache]\nlocal_hit_daemon = true\n",
         Some("[cache]\nlocal_hit_daemon = true\nkey_salt = \"kept\"\n"),
     );
     let _host = set_host_config_for_test(&host);
@@ -972,7 +815,6 @@ fn a_removed_local_hit_daemon_key_is_ignored() {
         .as_ref()
         .unwrap();
     assert_eq!(cache.key_salt.as_deref(), Some("kept"));
-    assert!(Config::record_sessions_enabled(&file), "host value");
 }
 
 
@@ -1668,58 +1510,6 @@ fn deferred_durability_is_on_unless_switched_off() {
     }
     unsafe { std::env::remove_var("KACHE_DEFERRED_DURABILITY") };
 }
-
-#[test]
-fn out_dir_alias_root_follows_invocation_file_and_ignore_env() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path();
-    let load = |vars: Vec<(&str, &str)>, file: &str| {
-        let invocation =
-            InvocationEnv::from_parts(vars, Some(root.to_owned()), None, root.to_owned());
-        Config::load_resolved_for(&invocation, deser_toml::from_str(file).map_err(Into::into))
-    };
-    assert_eq!(load(vec![], "").unwrap().out_dir_alias_root, None);
-    let from_file = root.join("file-alias");
-    let from_env = root.join("env-alias");
-    let file = format!(
-        "[cache]\nout_dir_alias_root = {:?}\n",
-        from_file.to_str().unwrap()
-    );
-    assert_eq!(
-        load(vec![], &file).unwrap().out_dir_alias_root,
-        Some(from_file.clone())
-    );
-    let vars = vec![("KACHE_OUT_DIR_ALIAS_ROOT", from_env.to_str().unwrap())];
-    assert_eq!(
-        load(vars.clone(), &file).unwrap().out_dir_alias_root,
-        Some(from_env.clone())
-    );
-    let ignored = format!("{file}ignore_env = true\n");
-    assert_eq!(
-        load(vars, &ignored).unwrap().out_dir_alias_root,
-        Some(from_file)
-    );
-    assert_eq!(
-        load(vec![("KACHE_OUT_DIR_ALIAS_ROOT", "")], &file)
-            .unwrap()
-            .out_dir_alias_root,
-        None
-    );
-    for file in ["[cache]\nout_dir_alias_root = 'relative'\n", ""] {
-        let vars = if file.is_empty() {
-            vec![("KACHE_OUT_DIR_ALIAS_ROOT", "relative")]
-        } else {
-            vec![]
-        };
-        assert!(
-            load(vars, file)
-                .unwrap_err()
-                .to_string()
-                .contains("out_dir_alias_root must be an absolute path")
-        );
-    }
-}
-
 #[test]
 fn out_dir_alias_setting_is_on_unless_switched_off() {
     assert!(out_dir_alias_setting(None, None));
@@ -1954,44 +1744,6 @@ fn trusted_daemon_execution_requires_an_explicit_setting() {
         &file("[cache]\nignore_env = true\ntrust_daemon_execution = true")
     ));
 }
-
-#[test]
-fn shared_hardlink_restores_are_off_unless_switched_on() {
-    let _lock = config_path_lock();
-    let none: Result<FileConfig> = Err(anyhow::anyhow!("no file"));
-    let off: Result<FileConfig> =
-        Ok(deser_toml::from_str("[cache]\nshared_hardlink_restores = false\n").unwrap());
-    let on: Result<FileConfig> =
-        Ok(deser_toml::from_str("[cache]\nshared_hardlink_restores = true\n").unwrap());
-    // SAFETY: the process-state lock serialises environment edits.
-    unsafe { std::env::remove_var("KACHE_SHARED_HARDLINK_RESTORES") };
-    assert!(!Config::shared_hardlink_restores_enabled(&none));
-    assert!(!Config::shared_hardlink_restores_enabled(&off));
-    assert!(Config::shared_hardlink_restores_enabled(&on));
-    for (value, expected) in [
-        ("1", true),
-        ("true", true),
-        ("TRUE", true),
-        ("0", false),
-        ("false", false),
-        ("yes", false),
-        ("", false),
-    ] {
-        unsafe { std::env::set_var("KACHE_SHARED_HARDLINK_RESTORES", value) };
-        assert_eq!(
-            Config::shared_hardlink_restores_enabled(&off),
-            expected,
-            "{value:?}"
-        );
-        assert_eq!(
-            Config::shared_hardlink_restores_enabled(&on),
-            expected,
-            "{value:?} overrides the file"
-        );
-    }
-    unsafe { std::env::remove_var("KACHE_SHARED_HARDLINK_RESTORES") };
-}
-
 #[test]
 fn probe_memos_live_under_the_configured_cache_dir() {
     let _lock = config_path_lock();
@@ -2018,14 +1770,10 @@ fn test_file_config_roundtrip() {
             bypass_argv: None,
             bypass_crates: None,
             volumes: None,
-            modified_input_guard: None,
             input_predictions: None,
-            record_sessions: None,
-            shared_hardlink_restores: None,
             deferred_discovery: None,
             out_dir_alias: None,
-            out_dir_alias_root: None,
-            deferred_durability: None,
+                deferred_durability: None,
             daemon_publish: None,
             trust_daemon_execution: None,
             daemon_execution_concurrency: None,
@@ -2037,9 +1785,6 @@ fn test_file_config_roundtrip() {
             scheduler_memory_pressure: None,
 
             build_script_hermetic: None,
-            gc_evict_shared: None,
-            storage_layout_advice: None,
-            explain_miss: None,
             ignore_env: None,
             fallback: None,
             key_salt: None,
@@ -2053,9 +1798,6 @@ fn test_file_config_roundtrip() {
             event_log_max_size: Some("10MiB".to_string()),
             event_log_keep_lines: Some(500),
             compression_level: Some(3),
-            min_store_compile_ms: None,
-            gc_max_age_hours: None,
-            daemon_idle_timeout_secs: None,
             scheduler: None,
         }),
     };
@@ -2328,14 +2070,10 @@ fn test_config_store_dir() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: false,
         trust_daemon_execution: false,
@@ -2349,9 +2087,6 @@ fn test_config_store_dir() {
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -2365,9 +2100,6 @@ fn test_config_store_dir() {
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
-        min_store_compile_ms: DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     };
     assert_eq!(config.store_dir(), PathBuf::from("/tmp/kache/store"));
     assert_eq!(
@@ -2383,14 +2115,10 @@ fn test_config_index_db_path() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: false,
         trust_daemon_execution: false,
@@ -2404,9 +2132,6 @@ fn test_config_index_db_path() {
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -2420,9 +2145,6 @@ fn test_config_index_db_path() {
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
-        min_store_compile_ms: DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     };
     assert_eq!(config.index_db_path(), PathBuf::from("/tmp/kache/index.db"));
 }
@@ -2434,14 +2156,10 @@ fn test_config_event_log_path() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: false,
         trust_daemon_execution: false,
@@ -2455,9 +2173,6 @@ fn test_config_event_log_path() {
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -2471,9 +2186,6 @@ fn test_config_event_log_path() {
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
-        min_store_compile_ms: DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     };
     assert_eq!(
         config.event_log_path(),
@@ -2500,14 +2212,10 @@ fn test_config_socket_path() {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: false,
         trust_daemon_execution: false,
@@ -2521,9 +2229,6 @@ fn test_config_socket_path() {
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -2537,9 +2242,6 @@ fn test_config_socket_path() {
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
-        min_store_compile_ms: DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     };
     assert_eq!(
         config.socket_path(),
@@ -3175,14 +2877,10 @@ fn test_save_and_load_file_config() {
             bypass_argv: None,
             bypass_crates: None,
             volumes: None,
-            modified_input_guard: None,
             input_predictions: None,
-            record_sessions: None,
-            shared_hardlink_restores: None,
             deferred_discovery: None,
             out_dir_alias: None,
-            out_dir_alias_root: None,
-            deferred_durability: None,
+                deferred_durability: None,
             daemon_publish: None,
             trust_daemon_execution: None,
             daemon_execution_concurrency: None,
@@ -3194,9 +2892,6 @@ fn test_save_and_load_file_config() {
             scheduler_memory_pressure: None,
 
             build_script_hermetic: None,
-            gc_evict_shared: None,
-            storage_layout_advice: None,
-            explain_miss: None,
             ignore_env: None,
             fallback: None,
             key_salt: None,
@@ -3210,9 +2905,6 @@ fn test_save_and_load_file_config() {
             event_log_max_size: None,
             event_log_keep_lines: None,
             compression_level: Some(5),
-            min_store_compile_ms: None,
-            gc_max_age_hours: None,
-            daemon_idle_timeout_secs: None,
             scheduler: None,
         }),
     };
@@ -3409,81 +3101,6 @@ fn unusable_config_file_names_the_file_and_the_error() {
 
 
 
-/// #551: storage-layout advisories default ON; `[cache]
-/// storage_layout_advice = false` is the explicit acknowledgement that
-/// mutes them.
-#[test]
-fn storage_layout_advice_defaults_on_and_file_false_disables() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("kache/config.toml");
-    let _env_guard = set_kache_config_for_test(&config_path);
-
-    assert!(
-        Config::load().unwrap().storage_layout_advice,
-        "advice must default ON with no config file"
-    );
-
-    let file = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            storage_layout_advice: Some(false),
-            explain_miss: None,
-            ..Default::default()
-        }),
-    };
-    Config::save_file_config_to(&file, &config_path).unwrap();
-    assert!(
-        !Config::load().unwrap().storage_layout_advice,
-        "[cache] storage_layout_advice = false must mute the advisories"
-    );
-}
-
-/// #551: `KACHE_STORAGE_LAYOUT_ADVICE` wins over the file, mirroring every
-/// other `[cache]` toggle — `=0` mutes despite file=true, `=1` re-enables
-/// despite file=false.
-#[test]
-fn storage_layout_advice_env_wins_over_file() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("kache/config.toml");
-    let _env_guard = set_kache_config_for_test(&config_path);
-
-    let file = FileConfig {
-        cc: None,
-        paths: None,
-        workspace: None,
-        cache: Some(CacheFileConfig {
-            storage_layout_advice: Some(false),
-            explain_miss: None,
-            ..Default::default()
-        }),
-    };
-    Config::save_file_config_to(&file, &config_path).unwrap();
-
-    let prev = std::env::var_os("KACHE_STORAGE_LAYOUT_ADVICE");
-    unsafe { std::env::set_var("KACHE_STORAGE_LAYOUT_ADVICE", "1") };
-    let on = Config::load().unwrap().storage_layout_advice;
-    unsafe { std::env::set_var("KACHE_STORAGE_LAYOUT_ADVICE", "0") };
-    let off = Config::load().unwrap().storage_layout_advice;
-    unsafe {
-        match prev {
-            Some(v) => std::env::set_var("KACHE_STORAGE_LAYOUT_ADVICE", v),
-            None => std::env::remove_var("KACHE_STORAGE_LAYOUT_ADVICE"),
-        }
-    }
-
-    assert!(
-        on,
-        "KACHE_STORAGE_LAYOUT_ADVICE=1 must re-enable despite file=false"
-    );
-    assert!(
-        !off,
-        "KACHE_STORAGE_LAYOUT_ADVICE=0 must mute the advisories"
-    );
-}
 
 #[test]
 fn scheduler_defaults_on_and_file_false_disables() {

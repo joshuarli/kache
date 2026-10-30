@@ -30,14 +30,10 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
         readonly_store: None,
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: true,
         trust_daemon_execution: false,
@@ -51,9 +47,6 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -67,9 +60,6 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     }
 }
 

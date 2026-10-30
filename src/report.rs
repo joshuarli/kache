@@ -184,7 +184,7 @@ pub fn record_gc_run(
         log::debug!("gc: could not update the savings ledger: {e:#}");
     }
     write_last_gc_run(&config.cache_dir, source, stats)?;
-    if !config.record_sessions {
+    if true {
         return Ok(());
     }
     let path = gc_runs_log_path(&config.cache_dir);

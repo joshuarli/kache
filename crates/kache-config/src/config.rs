@@ -101,23 +101,6 @@ pub struct Config {
     pub event_log_keep_lines: usize,
     /// Zstd compression level (1-19, default 3). Lower = faster, higher = smaller.
     pub compression_level: i32,
-    /// Local put-side admission threshold in milliseconds (default `0`, off).
-    /// A publish-capable path with a writable remote overrides it so admission
-    /// never suppresses publication; local-only paths still honor the threshold.
-    pub min_store_compile_ms: u64,
-    /// Age retention applied by unattended GC sweeps, in hours (default `0`,
-    /// disabled). Set via `KACHE_GC_MAX_AGE_HOURS` or
-    /// `[cache] gc_max_age_hours`.
-    pub gc_max_age_hours: u64,
-    /// Permit GC to evict an entry even when its last store blob is still
-    /// hardlinked or block-cloned into a build target. Off by default because
-    /// that eviction frees no disk and destroys a usable cache hit. Enable it
-    /// only when enforcing the store namespace limit matters more than disk
-    /// reclamation. Set via `KACHE_GC_EVICT_SHARED=1`/`=true` or
-    /// `[cache] gc_evict_shared = true`.
-    pub gc_evict_shared: bool,
-    /// Daemon idle timeout in seconds (default 0 = no timeout).
-    pub daemon_idle_timeout_secs: u64,
     /// Secondary wrapper for ordinary uncached compiles. Incremental compiles
     /// go directly to the compiler. Set with `KACHE_FALLBACK` or `[cache] fallback`.
     pub fallback: Option<String>,
@@ -196,20 +179,6 @@ pub struct Config {
     /// `KACHE_READONLY_STORE` or `[cache] readonly_store`; env wins over the
     /// file, and an empty value turns it off.
     pub readonly_store: Option<PathBuf>,
-    /// Opt-in too-new-input guard (kunobi-ninja/kache#324): when on, an
-    /// invocation whose keyed inputs were modified at/after the build started
-    /// is looked up but NOT stored (its hashes are racy relative to what the
-    /// compiler reads). Off by default. A key derived after the compile, from
-    /// the dep-info it emitted, always refuses a source modified since the
-    /// build started; this option extends the check to the other keyed inputs
-    /// and to keys taken before the compile, and refuses an input whose size,
-    /// write time or inode moved after the key read it. It applies to rustc:
-    /// C/C++ compiles always check the files their key hashes, and a
-    /// key taken before such a compile does not count a stamp ahead of the
-    /// clock when it read the file as a write. Set via
-    /// `KACHE_MODIFIED_INPUT_GUARD=1`/`=true` or `[cache] modified_input_guard`;
-    /// env wins over the file.
-    pub modified_input_guard: bool,
     /// Input-set predictions: each eligible rustc invocation remembers
     /// the source closure its dep-info pre-pass discovered, and a later build
     /// of the same unit derives the key from that record instead of spawning
@@ -220,21 +189,6 @@ pub struct Config {
     /// `KACHE_INPUT_PREDICTIONS=0` or `[cache] input_predictions = false`.
     /// The environment overrides the file.
     pub input_predictions: bool,
-    /// Make every `kache report` append its session line to
-    /// `<cache dir>/telemetry/sessions.jsonl`, as `--record` does, and every
-    /// GC run append one line to `telemetry/gc-runs.jsonl`. Off by default. Set via `KACHE_RECORD_SESSIONS=1`/`=true` or `[cache]
-    /// record_sessions`; env wins over the file.
-    pub record_sessions: bool,
-    /// Let every target directory hardlink the same store blob (Unix, no
-    /// reflink). Off, at most one target directory shares a blob's inode and
-    /// later consumers get a private copy, because the restore-time mtime
-    /// stamp on a shared inode re-dates the artifact in the other tree and
-    /// can make that tree's dependents look stale (#794). Turn this on when
-    /// target directories are single-use — a CI job's tree that no later
-    /// `cargo` will examine — and restores of already-cached artifacts cost
-    /// a link instead of a copy. Set via `KACHE_SHARED_HARDLINK_RESTORES=1`
-    /// or `[cache] shared_hardlink_restores`.
-    pub shared_hardlink_restores: bool,
     /// Compile before keying when a unit has no closure record and no remote
     /// could hold its entry (a certain miss), then key from the dep-info
     /// rustc emitted instead of spawning the dep-info pre-pass first. On by
@@ -248,10 +202,6 @@ pub struct Config {
     /// default on Unix; `KACHE_OUT_DIR_ALIAS=0` or
     /// `[cache] out_dir_alias = false` turns it off.
     pub out_dir_alias: bool,
-    /// Shared empty OUT_DIR root, independent of the local store. Defaults to
-    /// `<cache_dir>/out-dirs`. Must be absolute and outside the checkout.
-    /// Set via `KACHE_OUT_DIR_ALIAS_ROOT` or `[cache] out_dir_alias_root`.
-    pub out_dir_alias_root: Option<PathBuf>,
     /// Store new and downloaded entries without an fsync on the build path.
     /// The daemon (or the next `kache gc`) flushes them shortly after; until
     /// then a hit on such an entry verifies its bytes before restoring. On by
@@ -322,24 +272,6 @@ pub struct Config {
     /// prevents zero-copy dedup — no copy-on-write on the volume, cache and
     /// build tree on different volumes, or an inconclusive capability probe —
     /// is surfaced as a deduplicated advisory with fix suggestions. CLI
-    /// commands print it on stderr; compiler wrappers send it to the log
-    /// (`KACHE_LOG=warn`) so it never mixes with compiler output (#1067),
-    /// and `kache doctor` and `kache report` show the copy reasons. Set
-    /// `= false` when the layout is intentional and unfixable: the advisories
-    /// drop to debug logging. Genuine clone *faults* (a large file failing to
-    /// block-clone on a CoW-capable volume) are still reported — this knob
-    /// mutes advice, never fault reports. Set via
-    /// `KACHE_STORAGE_LAYOUT_ADVICE=0`/`=false` or
-    /// `[cache] storage_layout_advice = false` to disable.
-    pub storage_layout_advice: bool,
-    /// Opt-in miss diagnostics (kunobi-ninja/kache#131): on a cache miss for
-    /// a crate that previously hit in this build tree, name the key input
-    /// groups whose hashes changed (`key changed in: rustflags, env_deps`),
-    /// turning "kache misses more than I expect" into a concrete field. Costs
-    /// one event-log read per miss, so off by default — enable it while
-    /// investigating unexpected misses. Set via `KACHE_EXPLAIN_MISS=1`/`=true`
-    /// or `[cache] explain_miss`.
-    pub explain_miss: bool,
     /// Machine-wide miss-path scheduler (default on). After a local and remote
     /// miss, the wrapper joins a flight and takes a memory-weighted permit
     /// before the per-key build lock. Hits and passthroughs never wait. Set
@@ -384,20 +316,12 @@ pub struct CacheFileConfig {
     /// Volume-local store shards. See [`Config::volume_stores`]: keys are
     /// volume roots (`"D:"`, `"/mnt/biglake"`), values shard store dirs.
     pub volumes: Option<HashMap<String, String>>,
-    /// Too-new-input guard. See [`Config::modified_input_guard`].
-    pub modified_input_guard: Option<bool>,
     /// Input-set predictions. See [`Config::input_predictions`].
     pub input_predictions: Option<bool>,
-    /// Session recording. See [`Config::record_sessions`].
-    pub record_sessions: Option<bool>,
-    /// Shared-inode restore opt-in. See [`Config::shared_hardlink_restores`].
-    pub shared_hardlink_restores: Option<bool>,
     /// Compile-before-key toggle. See [`Config::deferred_discovery`].
     pub deferred_discovery: Option<bool>,
     /// Shared read-only OUT_DIR toggle. See [`Config::out_dir_alias`].
     pub out_dir_alias: Option<bool>,
-    /// Shared empty OUT_DIR root. See [`Config::out_dir_alias_root`].
-    pub out_dir_alias_root: Option<String>,
     /// Deferred store flush toggle. See [`Config::deferred_durability`].
     pub deferred_durability: Option<bool>,
     /// Daemon hand-off toggle. See [`Config::daemon_publish`].
@@ -415,12 +339,6 @@ pub struct CacheFileConfig {
     pub scheduler_memory_pressure: Option<bool>,
     /// See [`Config::build_script_hermetic`].
     pub build_script_hermetic: Option<bool>,
-    /// Namespace-first GC compatibility mode. See [`Config::gc_evict_shared`].
-    pub gc_evict_shared: Option<bool>,
-    /// Storage-layout advisory toggle. See [`Config::storage_layout_advice`].
-    pub storage_layout_advice: Option<bool>,
-    /// Miss-diagnostics opt-in. See [`Config::explain_miss`].
-    pub explain_miss: Option<bool>,
     /// Ignore `KACHE_*` env overrides for file-backed settings. File-only by
     /// design (env must not re-enable env). See [`Config::ignore_env_enabled`].
     pub ignore_env: Option<bool>,
@@ -436,11 +354,6 @@ pub struct CacheFileConfig {
     pub event_log_max_size: Option<String>,
     pub event_log_keep_lines: Option<usize>,
     pub compression_level: Option<i32>,
-    /// Put-side admission threshold. See [`Config::min_store_compile_ms`].
-    pub min_store_compile_ms: Option<u64>,
-    /// Automatic GC age retention. See [`Config::gc_max_age_hours`].
-    pub gc_max_age_hours: Option<u64>,
-    pub daemon_idle_timeout_secs: Option<u64>,
     /// Secondary compiler-wrapper for passed-through compiles.
     /// See [`Config::fallback`].
     pub fallback: Option<String>,
@@ -625,36 +538,26 @@ const IGNORE_ENV_GATED_VARS: &[&str] = &[
     "KACHE_CACHE_EXECUTABLES",
 
     "KACHE_COMPRESSION_LEVEL",
-    "KACHE_MIN_STORE_COMPILE_MS",
-    "KACHE_GC_MAX_AGE_HOURS",
-    "KACHE_DAEMON_IDLE_TIMEOUT",
     "KACHE_FALLBACK",
     "KACHE_KEY_SALT",
     "KACHE_CC_EXTRA_ALLOWLIST_FLAGS",
     "KACHE_PATH_ONLY_ENV_VARS",
 
     "KACHE_KEY_ENV_VARS",
-    "KACHE_MODIFIED_INPUT_GUARD",
     "KACHE_INPUT_PREDICTIONS",
-    "KACHE_RECORD_SESSIONS",
-    "KACHE_SHARED_HARDLINK_RESTORES",
     "KACHE_DEFERRED_DISCOVERY",
     "KACHE_DAEMON_PUBLISH",
     "KACHE_TRUST_DAEMON_EXECUTION",
     "KACHE_DAEMON_EXECUTION_CONCURRENCY",
     "KACHE_OUT_DIR_ALIAS",
-    "KACHE_OUT_DIR_ALIAS_ROOT",
     "KACHE_DEFERRED_DURABILITY",
     "KACHE_AUTO_GC",
     "KACHE_INDEX_AUTO_COMPACT",
     "KACHE_AUTO_RECOVER_MIN_FREE_BYTES",
     "KACHE_SCHEDULER_MEMORY_PRESSURE",
     "KACHE_BUILD_SCRIPT_HERMETIC",
-    "KACHE_STORAGE_LAYOUT_ADVICE",
     "KACHE_HEARTBEAT_SECS",
-    "KACHE_EXPLAIN_MISS",
     "KACHE_SCHEDULER",
-    "KACHE_GC_EVICT_SHARED",
 ];
 
 /// Every file-backed `KACHE_*` variable and the config key it overrides, as
@@ -669,29 +572,15 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
     ("KACHE_CACHE_EXECUTABLES", "cache.cache_executables"),
 
     ("KACHE_COMPRESSION_LEVEL", "cache.compression_level"),
-    ("KACHE_MIN_STORE_COMPILE_MS", "cache.min_store_compile_ms"),
-    ("KACHE_GC_MAX_AGE_HOURS", "cache.gc_max_age_hours"),
-    ("KACHE_GC_EVICT_SHARED", "cache.gc_evict_shared"),
-    (
-        "KACHE_DAEMON_IDLE_TIMEOUT",
-        "cache.daemon_idle_timeout_secs",
-    ),
     ("KACHE_FALLBACK", "cache.fallback"),
     ("KACHE_KEY_SALT", "cache.key_salt"),
     ("KACHE_CC_EXTRA_ALLOWLIST_FLAGS", "cc.extra_allowlist_flags"),
     ("KACHE_PATH_ONLY_ENV_VARS", "cache.path_only_env_vars"),
 
     ("KACHE_KEY_ENV_VARS", "cache.key_env_vars"),
-    ("KACHE_MODIFIED_INPUT_GUARD", "cache.modified_input_guard"),
     ("KACHE_INPUT_PREDICTIONS", "cache.input_predictions"),
-    ("KACHE_RECORD_SESSIONS", "cache.record_sessions"),
-    (
-        "KACHE_SHARED_HARDLINK_RESTORES",
-        "cache.shared_hardlink_restores",
-    ),
     ("KACHE_DEFERRED_DISCOVERY", "cache.deferred_discovery"),
     ("KACHE_OUT_DIR_ALIAS", "cache.out_dir_alias"),
-    ("KACHE_OUT_DIR_ALIAS_ROOT", "cache.out_dir_alias_root"),
     ("KACHE_DEFERRED_DURABILITY", "cache.deferred_durability"),
     ("KACHE_DAEMON_PUBLISH", "cache.daemon_publish"),
     (
@@ -713,8 +602,6 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
         "cache.scheduler_memory_pressure",
     ),
     ("KACHE_BUILD_SCRIPT_HERMETIC", "cache.build_script_hermetic"),
-    ("KACHE_STORAGE_LAYOUT_ADVICE", "cache.storage_layout_advice"),
-    ("KACHE_EXPLAIN_MISS", "cache.explain_miss"),
     ("KACHE_SCHEDULER", "cache.scheduler"),
 ];
 
@@ -929,44 +816,6 @@ impl Config {
                 .unwrap_or(3)
                 .clamp(1, 22);
 
-        let min_store_compile_ms =
-            env_or_ignored_for(invocation, "KACHE_MIN_STORE_COMPILE_MS", ignore_env)
-                .ok()
-                .and_then(|s| s.parse::<u64>().ok())
-                .or_else(|| {
-                    file_config
-                        .as_ref()
-                        .ok()
-                        .and_then(|c| c.cache.as_ref())
-                        .and_then(|c| c.min_store_compile_ms)
-                })
-                .unwrap_or(DEFAULT_MIN_STORE_COMPILE_MS);
-
-        let gc_max_age_hours = env_or_ignored_for(invocation, "KACHE_GC_MAX_AGE_HOURS", ignore_env)
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .or_else(|| {
-                file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|c| c.cache.as_ref())
-                    .and_then(|c| c.gc_max_age_hours)
-            })
-            .unwrap_or(DEFAULT_GC_MAX_AGE_HOURS);
-
-        let daemon_idle_timeout_secs =
-            env_or_ignored_for(invocation, "KACHE_DAEMON_IDLE_TIMEOUT", ignore_env)
-                .ok()
-                .and_then(|s| s.parse::<u64>().ok())
-                .or_else(|| {
-                    file_config
-                        .as_ref()
-                        .ok()
-                        .and_then(|c| c.cache.as_ref())
-                        .and_then(|c| c.daemon_idle_timeout_secs)
-                })
-                .unwrap_or(DEFAULT_DAEMON_IDLE_TIMEOUT_SECS);
-
         // Fallback compiler-wrapper for passed-through compiles. Env
         // wins over the file; empty / "off" / "none" disables it.
         let fallback = env_or_ignored_for(invocation, "KACHE_FALLBACK", ignore_env)
@@ -1073,31 +922,9 @@ impl Config {
             );
         }
 
-        let modified_input_guard = Self::modified_input_guard_enabled_for(invocation, &file_config);
         let input_predictions = Self::input_predictions_enabled_for(invocation, &file_config);
-        let record_sessions = Self::record_sessions_enabled_for(invocation, &file_config);
-        let shared_hardlink_restores =
-            Self::shared_hardlink_restores_enabled_for(invocation, &file_config);
         let deferred_discovery = Self::deferred_discovery_enabled_for(invocation, &file_config);
         let out_dir_alias = Self::out_dir_alias_enabled_for(invocation, &file_config);
-        let out_dir_alias_root =
-            env_or_ignored_for(invocation, "KACHE_OUT_DIR_ALIAS_ROOT", ignore_env)
-                .ok()
-                .or_else(|| {
-                    file_config
-                        .as_ref()
-                        .ok()
-                        .and_then(|c| c.cache.as_ref())
-                        .and_then(|c| c.out_dir_alias_root.clone())
-                })
-                .filter(|value| !value.is_empty())
-                .map(|value| shellexpand_for(invocation, &value));
-        if let Some(root) = &out_dir_alias_root {
-            anyhow::ensure!(
-                root.is_absolute(),
-                "cache.out_dir_alias_root must be an absolute path"
-            );
-        }
         let deferred_durability = Self::deferred_durability_enabled_for(invocation, &file_config);
         let daemon_publish = Self::daemon_publish_enabled_for(invocation, &file_config);
         let trust_daemon_execution = Self::trust_daemon_execution_for(invocation, &file_config);
@@ -1112,14 +939,10 @@ impl Config {
             Self::scheduler_memory_pressure_enabled_for(invocation, &file_config);
         let build_script_hermetic =
             Self::build_script_hermetic_enabled_for(invocation, &file_config);
-        let gc_evict_shared = Self::gc_evict_shared_enabled_for(invocation, &file_config);
-        let storage_layout_advice =
-            Self::storage_layout_advice_enabled_for(invocation, &file_config);
         let mut volume_stores = Self::load_volume_stores(&file_config, explicit_max_size);
         for shard in &mut volume_stores {
             shard.store = resolve_invocation_path(invocation, &shard.store)?;
         }
-        let explain_miss = Self::explain_miss_enabled_for(invocation, &file_config);
         let scheduler = Self::scheduler_enabled_for(invocation, &file_config);
         Ok(Config {
             cache_dir,
@@ -1128,13 +951,9 @@ impl Config {
             max_size,
             disabled,
             readonly_store,
-            modified_input_guard,
             input_predictions,
-            record_sessions,
-            shared_hardlink_restores,
             deferred_discovery,
             out_dir_alias,
-            out_dir_alias_root,
             deferred_durability,
             daemon_publish,
             trust_daemon_execution,
@@ -1145,18 +964,12 @@ impl Config {
             auto_recover_min_free_bytes,
             scheduler_memory_pressure,
             build_script_hermetic,
-            gc_evict_shared,
-            storage_layout_advice,
             volume_stores,
-            explain_miss,
             scheduler,
             cache_executables,
             event_log_max_size,
             event_log_keep_lines,
             compression_level,
-            min_store_compile_ms,
-            gc_max_age_hours,
-            daemon_idle_timeout_secs,
             fallback,
             key_salt,
             path_only_env_vars,
@@ -1177,10 +990,6 @@ impl Config {
     }
 
     #[cfg(test)]
-    fn record_sessions_enabled(file_config: &Result<FileConfig>) -> bool {
-        Self::record_sessions_enabled_for(&InvocationEnv::capture(), file_config)
-    }
-
     #[cfg(test)]
     fn deferred_discovery_enabled(file_config: &Result<FileConfig>) -> bool {
         Self::deferred_discovery_enabled_for(&InvocationEnv::capture(), file_config)
@@ -1202,10 +1011,6 @@ impl Config {
     }
 
     #[cfg(test)]
-    fn shared_hardlink_restores_enabled(file_config: &Result<FileConfig>) -> bool {
-        Self::shared_hardlink_restores_enabled_for(&InvocationEnv::capture(), file_config)
-    }
-
     /// Load a raw FileConfig, without env overrides or defaults, from an
     /// explicit path. Returns `(config, file_existed)`. A file that exists but
     /// does not read or parse is an error, so the editor never starts from
@@ -1348,22 +1153,6 @@ impl Config {
             .unwrap_or(false)
     }
 
-    fn modified_input_guard_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_MODIFIED_INPUT_GUARD", ignore_env) {
-            return v == "1" || v.eq_ignore_ascii_case("true");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.modified_input_guard)
-            .unwrap_or(false)
-    }
-
     /// Whether input-set predictions are recorded. Env wins over the file:
     /// `KACHE_INPUT_PREDICTIONS=1`/`=true`, else `[cache] input_predictions`,
     /// else on.
@@ -1386,22 +1175,6 @@ impl Config {
     /// Whether every `kache report` records its session. Env wins over the
     /// file: `KACHE_RECORD_SESSIONS=1`/`=true`, else `[cache] record_sessions`,
     /// else off.
-    fn record_sessions_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_RECORD_SESSIONS", ignore_env) {
-            return v == "1" || v.eq_ignore_ascii_case("true");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.record_sessions)
-            .unwrap_or(false)
-    }
-
     fn deferred_discovery_enabled_for(
         invocation: &InvocationEnv,
         file_config: &Result<FileConfig>,
@@ -1516,23 +1289,6 @@ impl Config {
             .unwrap_or(true)
     }
 
-    fn shared_hardlink_restores_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_SHARED_HARDLINK_RESTORES", ignore_env)
-        {
-            return v == "1" || v.eq_ignore_ascii_case("true");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.shared_hardlink_restores)
-            .unwrap_or(false)
-    }
-
     /// Opportunistic size-pressure GC (kunobi-ninja/kache#497): on by default so
     /// size pressure also runs for daemon-less, local-only builds.
     /// `KACHE_AUTO_GC=0`/`=false` (env wins), else `[cache] auto_gc`, else on.
@@ -1637,62 +1393,14 @@ impl Config {
     /// the older namespace-first policy for installations that require the
     /// registered store size to fall below `max_size` even when no filesystem
     /// blocks would be reclaimed.
-    fn gc_evict_shared_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_GC_EVICT_SHARED", ignore_env) {
-            return v == "1" || v.eq_ignore_ascii_case("true");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.gc_evict_shared)
-            .unwrap_or(false)
-    }
-
     /// Storage-layout advisories (kunobi-ninja/kache#551): on by default so
     /// users who *can* fix their layout hear about the dedup they're missing.
     /// `KACHE_STORAGE_LAYOUT_ADVICE=0`/`=false` (env wins), else
     /// `[cache] storage_layout_advice`, else on.
     /// See [`Config::storage_layout_advice`].
-    fn storage_layout_advice_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_STORAGE_LAYOUT_ADVICE", ignore_env) {
-            return v != "0" && !v.eq_ignore_ascii_case("false");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.storage_layout_advice)
-            .unwrap_or(true)
-    }
-
     /// Opt-in miss diagnostics (kunobi-ninja/kache#131). Env wins over the
     /// file: `KACHE_EXPLAIN_MISS=1`/`=true`, else `[cache] explain_miss`,
     /// else off. See [`Config::explain_miss`].
-    fn explain_miss_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_EXPLAIN_MISS", ignore_env) {
-            return v == "1" || v.eq_ignore_ascii_case("true");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.explain_miss)
-            .unwrap_or(false)
-    }
-
     /// Machine-wide miss-path scheduler: on by default.
     /// `KACHE_SCHEDULER=0`/`=false` (env wins), else `[cache] scheduler`, else on.
     fn scheduler_enabled_for(invocation: &InvocationEnv, file_config: &Result<FileConfig>) -> bool {
@@ -3092,7 +2800,7 @@ impl From<&Config> for kache_core::store_config::Config {
         Self {
             cache_dir: config.cache_dir.clone(),
             max_size: config.max_size,
-            gc_evict_shared: config.gc_evict_shared,
+            gc_evict_shared: false,
             upload_spool_max_jobs: UPLOAD_SPOOL_MAX_JOBS,
             deferred_durability: config.deferred_durability,
         }

@@ -132,19 +132,9 @@ pub fn set_cow_warn_marker(path: std::path::PathBuf) {
 }
 
 /// Surface storage-*layout* advisories
-/// ("cross-volume") on copy-restores (#551). On by default; set once from
-/// `Config::storage_layout_advice` at wrapper entry.
+/// ("cross-volume") on copy-restores (#551). Always on; the advisory toggle
+/// was removed.
 static STORAGE_LAYOUT_ADVICE: AtomicBool = AtomicBool::new(true);
-
-/// Set the storage-layout advisory toggle (from `Config::storage_layout_advice`).
-/// Call before restoring.
-pub fn set_storage_layout_advice(enabled: bool) {
-    set_policy_bool(
-        &STORAGE_LAYOUT_ADVICE,
-        |policy| &policy.storage_layout_advice,
-        enabled,
-    );
-}
 
 /// A mapped target may intentionally restore from the main-store fallback.
 /// Do not suggest another volume mapping for that copy; faults still report.

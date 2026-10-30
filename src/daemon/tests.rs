@@ -694,14 +694,10 @@ pub(super) fn test_config(dir: &Path) -> Config {
         fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        modified_input_guard: false,
         input_predictions: false,
-        record_sessions: false,
         volume_stores: Vec::new(),
-        shared_hardlink_restores: false,
         deferred_discovery: true,
         out_dir_alias: true,
-        out_dir_alias_root: None,
         deferred_durability: false,
         daemon_publish: false,
         trust_daemon_execution: false,
@@ -715,9 +711,6 @@ pub(super) fn test_config(dir: &Path) -> Config {
         scheduler_memory_pressure: true,
 
         build_script_hermetic: false,
-        gc_evict_shared: false,
-        storage_layout_advice: true,
-        explain_miss: false,
         scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
@@ -731,9 +724,6 @@ pub(super) fn test_config(dir: &Path) -> Config {
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
-        min_store_compile_ms: crate::config::DEFAULT_MIN_STORE_COMPILE_MS,
-        gc_max_age_hours: crate::config::DEFAULT_GC_MAX_AGE_HOURS,
-        daemon_idle_timeout_secs: crate::config::DEFAULT_DAEMON_IDLE_TIMEOUT_SECS,
     }
 }
 
@@ -882,8 +872,7 @@ fn foreground_startup_rejects_a_file_in_place_of_the_runtime_directory() {
 #[test]
 fn server_main_binds_socket_and_handles_shutdown() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.daemon_idle_timeout_secs = 0;
+    let config = test_config(dir.path());
     let socket_path = config.socket_path();
     let coord = DaemonCoordFile::for_socket(&socket_path);
     let server_config = config.clone();
@@ -1465,7 +1454,7 @@ fn test_handle_gc_empty_store() {
     let config = test_config(dir.path());
     let daemon = Daemon::new(config);
 
-    let resp = daemon.handle_gc(&GcRequest::automatic(daemon.config.gc_max_age_hours));
+    let resp = daemon.handle_gc(&GcRequest::automatic(0));
     assert!(resp.ok);
     assert_eq!(resp.evicted, Some(0));
     assert_eq!(resp.gc.as_ref().unwrap().mode, GcRequestMode::Automatic);
@@ -1627,7 +1616,7 @@ fn test_handle_gc_reports_lock_skip() {
     let report = daemon
         .run_gc(
             GcPolicy::Automatic {
-                max_age_hours: daemon.config.gc_max_age_hours,
+                max_age_hours: 0,
             },
             GcDriver::Periodic,
         )
@@ -1725,7 +1714,7 @@ fn test_handle_gc_evicts_entries() {
     let stats = daemon
         .run_gc(
             GcPolicy::Automatic {
-                max_age_hours: daemon.config.gc_max_age_hours,
+                max_age_hours: 0,
             },
             GcDriver::Requested,
         )
@@ -1784,56 +1773,11 @@ fn automatic_gc_runs_store_housekeeping_and_records_it() {
     assert_eq!(recorded.predictions_pruned, Some(0));
     assert_eq!(recorded.file_hashes_pruned, Some(0));
 }
-
-/// kunobi-ninja/kache#711: automatic GC applies configured age retention
-/// even while the store is below its size budget.
-#[test]
-fn automatic_gc_applies_configured_max_age_even_under_size_budget() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.max_size = 1024 * 1024 * 1024;
-    config.gc_max_age_hours = 1;
-
-    let src_file = dir.path().join("stale.rlib");
-    std::fs::write(&src_file, vec![0u8; 32]).unwrap();
-    let store = Store::open(&config).unwrap();
-    store
-        .put(
-            "stale_key",
-            "testcrate",
-            &["lib".into()],
-            &[],
-            "host",
-            "dev",
-            &[(src_file.clone(), "lib.rlib".into())],
-            "",
-            "",
-        )
-        .unwrap();
-    store.remove_clone_for_test(&src_file);
-    store.set_last_accessed_for_test("stale_key", "-2 hours");
-    drop(store);
-
-    let daemon = Daemon::new(config);
-    let stats = daemon
-        .run_gc(
-            GcPolicy::Automatic {
-                max_age_hours: daemon.config.gc_max_age_hours,
-            },
-            GcDriver::Requested,
-        )
-        .unwrap();
-    assert_eq!(stats.total.entries_evicted, 1);
-    let store = Store::open(&daemon.config).unwrap();
-    assert!(!store.contains("stale_key"));
-}
-
 #[test]
 fn automatic_gc_skips_age_eviction_when_max_age_hours_is_zero() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = test_config(dir.path());
     config.max_size = 1024 * 1024 * 1024;
-    config.gc_max_age_hours = 0;
 
     let src_file = dir.path().join("stale.rlib");
     std::fs::write(&src_file, vec![0u8; 32]).unwrap();
@@ -1858,7 +1802,7 @@ fn automatic_gc_skips_age_eviction_when_max_age_hours_is_zero() {
     let stats = daemon
         .run_gc(
             GcPolicy::Automatic {
-                max_age_hours: daemon.config.gc_max_age_hours,
+                max_age_hours: 0,
             },
             GcDriver::Requested,
         )
@@ -1873,7 +1817,6 @@ fn manual_automatic_gc_sends_effective_age_and_runs_age_before_size() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = test_config(dir.path());
     config.max_size = 1_000; // physical 1,200; size target 900
-    config.gc_max_age_hours = 0; // daemon startup policy differs from request
 
     let old_file = dir.path().join("old.rlib");
     let fresh_file = dir.path().join("fresh.rlib");
@@ -2645,7 +2588,7 @@ fn test_handle_request_sync_dispatches_gc() {
     let config = test_config(dir.path());
     let daemon = Daemon::new(config);
 
-    let req = Request::Gc(GcRequest::automatic(daemon.config.gc_max_age_hours));
+    let req = Request::Gc(GcRequest::automatic(0));
     let resp = daemon.handle_request_sync(&req);
     assert!(resp.ok);
     assert_eq!(resp.evicted, Some(0));
@@ -2662,7 +2605,7 @@ fn test_run_gc_returns_count() {
     let stats = daemon
         .run_gc(
             GcPolicy::Automatic {
-                max_age_hours: daemon.config.gc_max_age_hours,
+                max_age_hours: 0,
             },
             GcDriver::Requested,
         )
@@ -2713,7 +2656,7 @@ fn gc_preserves_cargo_incremental_directories() {
     let stats = daemon
         .run_gc(
             GcPolicy::Automatic {
-                max_age_hours: daemon.config.gc_max_age_hours,
+                max_age_hours: 0,
             },
             GcDriver::Requested,
         )
@@ -2727,7 +2670,7 @@ fn gc_preserves_cargo_incremental_directories() {
     let stats = daemon
         .run_gc(
             GcPolicy::Automatic {
-                max_age_hours: daemon.config.gc_max_age_hours,
+                max_age_hours: 0,
             },
             GcDriver::Requested,
         )
@@ -2776,7 +2719,7 @@ fn test_socket_gc_roundtrip() {
     let resp = one_shot_request(
         &daemon,
         &socket_path,
-        &Request::Gc(GcRequest::automatic(daemon.config.gc_max_age_hours)),
+        &Request::Gc(GcRequest::automatic(0)),
     );
 
     assert!(resp.ok);

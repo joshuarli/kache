@@ -922,7 +922,7 @@ impl Daemon {
 
     /// Handle a GC request — pure logic against the store.
     pub fn handle_gc(&self, req: &GcRequest) -> Response {
-        let policy = match resolve_gc_request(req, self.config.gc_max_age_hours) {
+        let policy = match resolve_gc_request(req, 0) {
             Ok(policy) => policy,
             Err(e) => return Response::err(format!("invalid GC request: {e}")),
         };
@@ -1659,7 +1659,7 @@ fn server_main(
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             gc_daemon.run_gc(
                 GcPolicy::Automatic {
-                    max_age_hours: gc_daemon.config.gc_max_age_hours,
+                    max_age_hours: 0,
                 },
                 GcDriver::Periodic,
             )
@@ -1757,7 +1757,7 @@ fn server_main(
             shutdown_lifecycle.start_drain();
         });
 
-    let idle_timeout = daemon_idle_timeout(config.daemon_idle_timeout_secs);
+    let idle_timeout = daemon_idle_timeout(0);
 
     accept_loop(
         &listener,
@@ -2320,7 +2320,7 @@ fn send_gc_request_with_timeout(
     // deserialize it, even if it replaced the probed daemon between sockets.
     let req = Request::GcV2(match max_age_hours {
         Some(hours) => GcRequest::explicit_age(hours),
-        None => GcRequest::automatic(config.gc_max_age_hours),
+        None => GcRequest::automatic(0),
     });
 
     let try_send = |path: &Path| -> Result<Response> {

@@ -1128,7 +1128,7 @@ pub fn report(
     };
 
     // Record the unredacted report. Redaction is for the copy being shared.
-    let recorded = if record || config.record_sessions {
+    let recorded = if record {
         record_session(config, &report)
     } else {
         Ok(())
@@ -1414,7 +1414,7 @@ pub fn why_miss(config: &Config, crate_name: &str, json: bool) -> Result<()> {
         stored.len(),
         same_key_present,
         chain,
-        config.explain_miss,
+        false,
     );
     diagnosis.checkout =
         miss_index.and_then(|index| crate::miss_chain::compare_checkout(&all_events, index));
@@ -2730,31 +2730,7 @@ pub fn run_gc_local(config: &Config, mode: GcMode) -> Result<crate::store::GcSta
         }
     }
 
-    // Automatic age retention runs first so later pressure policies observe
-    // the reduced physical store. `0` keeps it disabled.
-    if config.gc_max_age_hours > 0 {
-        if verbose {
-            print!(
-                "Evicting entries older than {}h...",
-                config.gc_max_age_hours
-            );
-            std::io::Write::flush(&mut std::io::stdout()).ok();
-        }
-        let age_stats = store.evict_older_than(config.gc_max_age_hours)?;
-        add_gc_stats(&mut combined, &age_stats);
-        if verbose {
-            if age_stats.entries_evicted > 0 {
-                println!(
-                    " dropped {} from the store ({}); {} became free on disk.",
-                    term::counted(age_stats.entries_evicted as u64, "entry", "entries"),
-                    crate::report::format_bytes(age_stats.bytes_freed),
-                    crate::report::format_bytes(age_stats.disk_bytes_reclaimed),
-                );
-            } else {
-                println!(" none old enough.");
-            }
-        }
-    }
+    // Automatic age retention is disabled (gc_max_age_hours removed).
 
     if verbose {
         print!("Deduplicating entries...");
