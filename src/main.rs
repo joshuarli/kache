@@ -967,7 +967,7 @@ fn run_workspace_wrapper_chain_for(
 }
 
 #[cfg(all(test, unix))]
-fn run_compiler_process_directly(args: &[String], _preserve_incremental: bool) -> Result<i32> {
+fn run_compiler_process_directly(args: &[String]) -> Result<i32> {
     run_compiler_process_directly_for(args, &invocation::InvocationEnv::capture())
 }
 
@@ -1829,11 +1829,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn run_generated_compiler_process_directly(
-        args: &[String],
-        preserve_incremental: bool,
-    ) -> Result<i32> {
-        match run_compiler_process_directly(args, preserve_incremental) {
+    fn run_generated_compiler_process_directly(args: &[String]) -> Result<i32> {
+        match run_compiler_process_directly(args) {
             Err(error)
                 if error
                     .downcast_ref::<std::io::Error>()
@@ -1842,7 +1839,7 @@ mod tests {
                 // Some Linux filesystems briefly keep a just-written test
                 // executable busy even after its writer has closed.
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                run_compiler_process_directly(args, preserve_incremental)
+                run_compiler_process_directly(args)
             }
             result => result,
         }
@@ -2476,11 +2473,11 @@ mod tests {
         // `true` / `false` utilities are the simplest stand-ins for a
         // compiler: they exit 0 / 1 and ignore their arguments.
         assert_eq!(
-            run_compiler_process_directly(&["true".to_string()], false).unwrap(),
+            run_compiler_process_directly(&["true".to_string()]).unwrap(),
             0
         );
         assert_eq!(
-            run_compiler_process_directly(&["false".to_string()], false).unwrap(),
+            run_compiler_process_directly(&["false".to_string()]).unwrap(),
             1
         );
     }
@@ -2583,7 +2580,6 @@ mod tests {
                 "--out-dir".to_string(),
                 dir.path().to_string_lossy().into_owned(),
             ],
-            false,
         )
         .unwrap();
 
@@ -2617,7 +2613,6 @@ mod tests {
                 "--out-dir".to_string(),
                 dir.path().to_string_lossy().into_owned(),
             ],
-            false,
         )
         .unwrap();
 
@@ -2652,7 +2647,6 @@ mod tests {
                 direct.clone(),
                 response_arg.clone(),
             ],
-            false,
         )
         .unwrap();
 
@@ -2684,7 +2678,6 @@ mod tests {
                 "-o".to_string(),
                 output.to_string_lossy().into_owned(),
             ],
-            false,
         )
         .unwrap();
 
@@ -2727,7 +2720,6 @@ mod tests {
                 inner.to_string_lossy().into_owned(),
                 format!("@{}", response.display()),
             ],
-            true,
         )
         .unwrap();
 

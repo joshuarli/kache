@@ -69,9 +69,8 @@ to see the workload, platform, and validation behind each result.
 ## Watch a build and explain a miss
 
 ```bash
-kache stats --last-build  # latest recorded build session
-kache explain             # why the latest build missed
-kache explain --all       # all recorded skips and passthroughs, by reason
+kache stats --full        # recorded hits, misses, and passthroughs
+kache explain my_crate    # why a crate missed
 kache doctor              # check your setup
 ```
 
