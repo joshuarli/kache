@@ -650,44 +650,6 @@ fn local_gc_records_its_run_with_the_driver_that_ran_it() {
     assert_eq!(stats.source, "manual");
 }
 
-/// A sandbox a crashed hermetic attempt left is gone after any GC run.
-#[test]
-fn local_gc_sweeps_hermetic_build_script_runs() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf());
-    let leftover = config.cache_dir.join("out-dirs/v2").join("ab".repeat(16));
-    std::fs::create_dir_all(leftover.join("debug/build/z-1/out")).unwrap();
-    run_gc_local(&config, GcMode::Background).unwrap();
-    assert!(!leftover.exists());
-}
-
-/// `kache purge` removes every shared build-script run but the ones a
-/// target directory still links to.
-#[cfg(unix)]
-#[test]
-fn purge_keeps_only_linked_build_script_runs() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"));
-    let v2 = config.cache_dir.join("out-dirs/v2");
-    let run = |key: &str| {
-        let root = v2.join(key.repeat(16));
-        std::fs::create_dir_all(root.join("out")).unwrap();
-        std::fs::write(root.join(".kache-sealed"), b"{}").unwrap();
-        root
-    };
-    let (linked, unlinked) = (run("ab"), run("cd"));
-    let link = dir.path().join("target-out");
-    std::os::unix::fs::symlink(linked.join("out"), &link).unwrap();
-    let mut line = link.as_os_str().as_encoded_bytes().to_vec();
-    line.push(b'\n');
-    std::fs::write(linked.with_extension("refs"), line).unwrap();
-
-    purge(&config, None).unwrap();
-    assert!(linked.exists(), "a target directory links to it");
-    assert!(!unlinked.exists());
-}
-/// kunobi-ninja/kache#1126: the local sweep removes stale key locks and
-/// records the housekeeping counts.
 #[test]
 fn local_gc_runs_store_housekeeping_and_records_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -1796,26 +1758,6 @@ fn test_sccache_rc_detection_ignores_fallback_setting() {
 }
 
 #[test]
-fn test_fallback_is_sccache() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut cfg = save_manifest_config(dir.path().to_path_buf());
-
-    // No config / no fallback -> false.
-    assert!(!fallback_is_sccache(None));
-    assert!(!fallback_is_sccache(Some(&cfg)));
-
-    // Fallback set to an sccache binary (incl. a full path) -> true.
-    cfg.fallback = Some("sccache".to_string());
-    assert!(fallback_is_sccache(Some(&cfg)));
-    cfg.fallback = Some("/usr/local/bin/sccache".to_string());
-    assert!(fallback_is_sccache(Some(&cfg)));
-
-    // A non-sccache fallback -> false.
-    cfg.fallback = Some("/usr/bin/gcc".to_string());
-    assert!(!fallback_is_sccache(Some(&cfg)));
-}
-
-#[test]
 fn test_dir_size_empty() {
     let dir = tempfile::tempdir().unwrap();
     assert_eq!(dir_size(dir.path()), 0);
@@ -2164,28 +2106,15 @@ fn save_manifest_config(
 ) -> Config {
     Config {
         socket_path_override: None,
-        fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        readonly_store: None,
-        input_predictions: false,
         volume_stores: Vec::new(),
-        deferred_discovery: true,
-        out_dir_alias: true,
-        deferred_durability: false,
-        daemon_publish: false,
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: crate::config::ProjectRules::default(),
-        auto_gc: true,
-        index_auto_compact: true,
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
-        scheduler: true,
+
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -2194,9 +2123,6 @@ fn save_manifest_config(
         max_size: 1024 * 1024,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 1024 * 1024,
-        event_log_keep_lines: 1000,
-        compression_level: 3,
     }
 }
 

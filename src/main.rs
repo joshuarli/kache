@@ -1220,15 +1220,11 @@ fn run_compiler_invocation_inner(
 
     // Local fallback keeps the snapshot used to select the daemon endpoint.
     // Delegated requests load their own invocation's configuration here.
-    let mut config = match prepared_config {
+    let config = match prepared_config {
         Some(config) => config,
         None => config::Config::load_for(&env)?,
     };
-    if daemon.is_some() {
-        config.daemon_publish = false;
-    }
-    let _pressure =
-        scheduler::pressure::InvocationPressureScope::enter(config.scheduler_memory_pressure);
+    let _pressure = scheduler::pressure::InvocationPressureScope::enter(true);
 
     if config.disabled {
         return run_compiler_directly_for(&config, args, &env);

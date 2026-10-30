@@ -408,6 +408,30 @@ fn loaded_aliases(externs: &[ExternDep], root: &Path) -> BTreeSet<String> {
         .collect()
 }
 
+/// The aliases a loaded macro baked for itself: the baked units whose package
+/// matches the macro's own crate name. A macro writes to its own `OUT_DIR`,
+/// so its own alias is the write target; aliases it merely mentions belong
+/// to units it links. Underscores match dashes: crate `wasm_macro` bakes the
+/// package directory `wasm-macro-<hash>`.
+fn own_aliases(dep: &ExternDep, root: &Path) -> BTreeSet<String> {
+    let Some(path) = dep.path.as_deref() else {
+        return BTreeSet::new();
+    };
+    if path.extension() != Some(std::ffi::OsStr::new(std::env::consts::DLL_EXTENSION)) {
+        return BTreeSet::new();
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return BTreeSet::new();
+    };
+    let want = dep.name.replace('-', "_");
+    alias_units_in(&bytes, root)
+        .into_iter()
+        .filter(|unit| {
+            unit_package(unit).is_some_and(|package| package.replace('-', "_") == want)
+        })
+        .collect()
+}
+
 /// The one-line hint for a compile that failed to write, naming the packages
 /// of `units`.
 pub(crate) fn permission_hint(units: &BTreeSet<String>) -> String {
@@ -423,7 +447,7 @@ pub(crate) fn permission_hint(units: &BTreeSet<String>) -> String {
     };
     format!(
         "[kache] shared OUT_DIRs are read-only; to let a macro write debug output, run \
-         `cargo clean {clean}` and rebuild with KACHE_OUT_DIR_ALIAS=0"
+         `cargo clean {clean}` and rebuild"
     )
 }
 
@@ -433,8 +457,10 @@ pub(crate) fn permission_hint(units: &BTreeSet<String>) -> String {
 /// Its own alias and any alias its stderr names are known to be involved, so
 /// they are also denied: the rebuild and later checkouts compile them
 /// unaliased. A panic such as `Os { code: 13, .. }` names no path, and then
-/// any alias a loaded macro bakes may be the one; those are only named, since
-/// denying all of them would stop sharing units that had nothing to do with it.
+/// each loaded macro's own alias is the write target: deny those, and only
+/// name the other aliases the macros bake in. A macro that does not bake its
+/// own directory leaves nothing precisely identified; deny every suspect so a
+/// clean rebuild still recovers instead of restoring the same read-only alias.
 fn failure_hint(
     stderr: &str,
     externs: &[ExternDep],
@@ -449,7 +475,21 @@ fn failure_hint(
     for unit in &known {
         let _ = deny(root, unit);
     }
-    known.extend(loaded_aliases(externs, root));
+    let mut suspected = BTreeSet::new();
+    for dep in externs {
+        suspected.extend(own_aliases(dep, root));
+    }
+    for unit in &suspected {
+        let _ = deny(root, unit);
+    }
+    known.extend(suspected);
+    let named = loaded_aliases(externs, root);
+    if known.is_empty() && !named.is_empty() {
+        for unit in &named {
+            let _ = deny(root, unit);
+        }
+    }
+    known.extend(named);
     Some(permission_hint(&known))
 }
 
@@ -937,15 +977,6 @@ fn apply_after_host_check(
     let root = alias_root(&cache_dir, None, euid)?;
     if let Some(code) = checks_before_decision(&args, &root, &mut crate::invocation::io::stderr()) {
         return Some(code);
-    }
-    if !config.out_dir_alias {
-        replace_plan(Some(Plan {
-            root,
-            invocation_env: invocation.clone(),
-            alias: None,
-            candidate: None,
-        }));
-        return None;
     }
 
     let env: Vec<(OsString, OsString)> = invocation.vars_os().collect();
@@ -1681,8 +1712,7 @@ mod tests {
             names.iter().map(|name| name.to_string()).collect()
         };
         let one = permission_hint(&units(&["sp-api-0123456789abcdef"]));
-        assert!(one.contains("`cargo clean -p sp-api` and"), "{one}");
-        assert!(one.contains("KACHE_OUT_DIR_ALIAS=0"), "{one}");
+        assert!(one.contains("`cargo clean -p sp-api` and rebuild"), "{one}");
         let two = permission_hint(&units(&[
             "wasm-macro-0123456789abcdef",
             "expander-0123456789abcdef",
@@ -2005,8 +2035,8 @@ mod tests {
 
         /// wasmtime's and wit-bindgen's debug writes panic with
         /// `Os { code: 13, .. }` and no path, and a lib's alias is baked into
-        /// the macro that links it. The hint still names both. Neither is
-        /// denied: which loaded macro failed is unknown.
+        /// the macro that links it. The hint still names both. Only the loaded
+        /// macro's own alias is denied; the linked lib's alias is only named.
         #[test]
         fn a_path_less_write_failure_names_the_aliases_a_loaded_macro_bakes() {
             use std::os::unix::ffi::OsStrExt;
@@ -2045,7 +2075,12 @@ mod tests {
                 hint.contains("`cargo clean -p expander -p wasm-macro` and"),
                 "{hint}"
             );
-            assert!(!root.join(LAYOUT).join("deny").exists());
+            let mut denied: Vec<_> = std::fs::read_dir(root.join(LAYOUT).join("deny"))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            denied.sort();
+            assert_eq!(denied, ["wasm-macro-0123456789abcdef"]);
             let with_path = format!(
                 "{stderr}\n{}",
                 alias_dir(&root, "sp-api-0123456789abcdef").display()
@@ -2055,11 +2090,18 @@ mod tests {
                 hint.contains("`cargo clean -p expander -p sp-api -p wasm-macro` and"),
                 "{hint}"
             );
-            let denied: Vec<_> = std::fs::read_dir(root.join(LAYOUT).join("deny"))
+            let mut denied: Vec<_> = std::fs::read_dir(root.join(LAYOUT).join("deny"))
                 .unwrap()
                 .map(|entry| entry.unwrap().file_name())
                 .collect();
-            assert_eq!(denied, ["sp-api-0123456789abcdef"]);
+            denied.sort();
+            assert_eq!(
+                denied,
+                [
+                    "sp-api-0123456789abcdef",
+                    "wasm-macro-0123456789abcdef",
+                ]
+            );
 
             assert_eq!(
                 failure_hint("error: mismatched types", &externs, &root, None),
@@ -2275,7 +2317,6 @@ mod tests {
                 let before = invocation.vars_os().collect::<Vec<_>>();
                 let mut config = Config::load_for(&invocation).unwrap();
                 config.cache_dir = layout.root.parent().unwrap().to_path_buf();
-                config.out_dir_alias = true;
                 // The host gate is separately tested. Exercise the filesystem
                 // decision core as well on CI runners whose uid is zero.
                 assert_eq!(
@@ -2334,23 +2375,12 @@ mod tests {
         }
 
         #[test]
-        fn disabled_and_invalid_requests_do_not_reuse_a_workers_alias_plan() {
+        fn invalid_requests_do_not_reuse_a_workers_alias_plan() {
             let layout = layout("proc-macro");
             let mut invocation = invocation_for_layout(&layout);
             let mut config = Config::load_for(&invocation).unwrap();
             config.cache_dir = layout.root.parent().unwrap().to_path_buf();
-            config.out_dir_alias = false;
             let _request = InvocationAliasScope::enter();
-            replace_plan(Some(test_plan("previous")));
-            assert_eq!(
-                apply_for(&config, &invocation_argv(&layout), &mut invocation),
-                None
-            );
-            assert!(active_alias().is_none());
-            assert_eq!(
-                invocation.var_os("OUT_DIR"),
-                Some(layout.out_dir.clone().into_os_string())
-            );
             replace_plan(Some(test_plan("previous")));
             assert_eq!(apply_for(&config, &[], &mut invocation), None);
             assert!(active_alias().is_none());

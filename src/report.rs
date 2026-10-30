@@ -191,8 +191,8 @@ pub fn record_gc_run(
     crate::events::append_json_line(&path, &GcRunRecord::new(source, stats))?;
     crate::events::rotate_if_needed(
         &path,
-        config.event_log_max_size,
-        config.event_log_keep_lines,
+        crate::config::DEFAULT_EVENT_LOG_MAX_SIZE,
+        crate::config::DEFAULT_EVENT_LOG_KEEP_LINES,
     )
 }
 
@@ -1137,7 +1137,7 @@ pub fn generate_report_with_filter(
     {
         suggestions.insert(
             0,
-            rotation_cut_notice(config.event_log_max_size),
+            rotation_cut_notice(crate::config::DEFAULT_EVENT_LOG_MAX_SIZE),
         );
     }
 

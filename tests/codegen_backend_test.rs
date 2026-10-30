@@ -16,7 +16,6 @@ fn untrusted_codegen_backend_runs_rustc_directly_every_time() {
     let dir = tempfile::tempdir().unwrap();
     let _daemon = common::DaemonGuard::new(env!("CARGO_BIN_EXE_kache"), dir.path().join("cache"));
     let rustc = dir.path().join("rustc");
-    let fallback = dir.path().join("fallback");
     let calls = dir.path().join("calls");
     // The fake backend writes a device artifact beside the source, which is
     // what a cache hit would fail to restore.
@@ -34,7 +33,6 @@ printf 'device' > kernel.ptx
 printf 'binary' > app
 "#,
     );
-    script(&fallback, r#"printf 'fallback\n' >> "$TEST_CALLS"; exit 0"#);
     fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
     fs::write(dir.path().join("backend.so"), "backend").unwrap();
 
@@ -64,7 +62,6 @@ printf 'binary' > app
         .env("KACHE_CONFIG", dir.path().join("absent.toml"))
         .env("KACHE_HOST_CONFIG", "")
         .env("KACHE_CACHE_DIR", dir.path().join("cache"))
-        .env("KACHE_FALLBACK", &fallback)
         .env("KACHE_CACHE_EXECUTABLES", "true")
         .env("KACHE_REMOTE", "")
         .env_remove("KACHE_DISABLED")

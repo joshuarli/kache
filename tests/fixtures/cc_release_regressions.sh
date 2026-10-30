@@ -12,11 +12,10 @@ export KACHE_CACHE_DIR="$repro_root/cache"
 export KACHE_RUNTIME_DIR="$repro_root/cache"
 export KACHE_CONFIG="$repro_root/config.toml"
 export KACHE_HOST_CONFIG="$repro_root/no-host-config.toml"
-export KACHE_DAEMON_PUBLISH=0
 export KACHE_MIN_STORE_COMPILE_MS=0
 export KACHE_LOG='kache::wrapper=debug'
 unset KACHE_BASE_DIR KACHE_ACTIVE KACHE_SOCKET_PATH KACHE_EVENT_ROOT
-printf '[cache]\ndaemon_publish = false\n' > "$KACHE_CONFIG"
+printf "[cache]\n" > "$KACHE_CONFIG"
 printf 'Issue #%s evidence: %s\n' "$issue" "$repro_root"
 cd "$repro_root"
 

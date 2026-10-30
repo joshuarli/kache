@@ -5,8 +5,7 @@ use std::sync::atomic::AtomicU64;
 #[test]
 fn compiler_request_capacity_handles_bursts_and_recovers_after_drop() {
     let root = tempfile::tempdir().unwrap();
-    let mut config = test_config(root.path());
-    config.daemon_execution_concurrency = Some(32);
+    let config = test_config(root.path());
     let provenance = crate::config::ConfigFileProvenance::current();
     let capacity = DaemonCapacity::for_resources(Some(32), 1, Some(640));
     let daemon = Daemon::new_with_provenance(config, &provenance, capacity);
@@ -690,28 +689,15 @@ fn test_send_request_with_timeout_bounds_unresponsive_daemon() {
 
 pub(super) fn test_config(dir: &Path) -> Config {
     Config {
-        readonly_store: None,
-        fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        input_predictions: false,
         volume_stores: Vec::new(),
-        deferred_discovery: true,
-        out_dir_alias: true,
-        deferred_durability: false,
-        daemon_publish: false,
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: crate::config::ProjectRules::default(),
-        auto_gc: true,
-        index_auto_compact: true,
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
-        scheduler: true,
+
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -721,9 +707,6 @@ pub(super) fn test_config(dir: &Path) -> Config {
         max_size: 50 * 1024 * 1024, // 50 MiB
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 10 * 1024 * 1024,
-        event_log_keep_lines: 1000,
-        compression_level: 3,
     }
 }
 
@@ -883,7 +866,7 @@ fn server_main_binds_socket_and_handles_shutdown() {
             &provenance,
             coord,
             None,
-            DaemonCapacity::discover(server_config.daemon_execution_concurrency),
+            DaemonCapacity::discover(None),
         )
     });
 
@@ -1487,35 +1470,10 @@ fn gc_does_not_hold_the_daemon_store_mutex() {
     );
 }
 
-/// The daemon's GC sweeps shared build-script runs too: a sandbox a
-/// crashed hermetic attempt left is gone after a run.
-#[test]
-fn daemon_gc_sweeps_hermetic_build_script_runs() {
-    let dir = tempfile::tempdir().unwrap();
-    let daemon = Daemon::new(test_config(dir.path()));
-    let leftover = daemon
-        .config
-        .cache_dir
-        .join("out-dirs/v2")
-        .join("ab".repeat(16));
-    std::fs::create_dir_all(leftover.join("out")).unwrap();
-    daemon
-        .run_gc(
-            GcPolicy::Automatic { max_age_hours: 0 },
-            GcDriver::Requested,
-        )
-        .unwrap();
-    assert!(!leftover.exists());
-}
-
-/// The daemon's sweep is what flushes entries a miss stored without an
-/// fsync: it marks them durable, does nothing once the queue is empty,
-/// and stands aside while another flusher holds the lock.
 #[test]
 fn the_daemon_sweep_flushes_entries_pending_durability() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.deferred_durability = true;
+    let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
     let output = dir.path().join("out.rlib");
     std::fs::write(&output, b"artifact-bytes").unwrap();
@@ -1562,7 +1520,6 @@ fn the_daemon_sweep_flushes_entries_pending_durability() {
 fn the_daemon_sweep_flushes_volume_shards_and_skips_busy_or_missing_stores() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = test_config(&dir.path().join("main"));
-    config.deferred_durability = true;
     config.volume_stores = ["busy", "missing", "ready"]
         .into_iter()
         .map(|name| crate::config::VolumeStore {
@@ -2334,10 +2291,8 @@ fn gc_hints_coalesce_while_a_sweep_is_pending() {
 fn delegated_gc_uses_the_invocation_budget_without_changing_daemon_policy() {
     let dir = tempfile::tempdir().unwrap();
     let mut startup = test_config(dir.path());
-    startup.auto_gc = false;
     startup.max_size = 10_000;
     let mut invocation = startup.clone();
-    invocation.auto_gc = true;
     invocation.max_size = 1_000;
     let store = Store::open(&invocation).unwrap();
     put_upload_evict_entry(&store, dir.path(), "evictable", 1_200, false);
@@ -2348,7 +2303,6 @@ fn delegated_gc_uses_the_invocation_budget_without_changing_daemon_policy() {
         .unwrap();
     assert!(!store.contains("evictable"));
     assert!(store.physical_size().unwrap() <= 1_000);
-    assert!(!daemon.config.auto_gc);
     assert_eq!(daemon.config.max_size, 10_000);
 }
 

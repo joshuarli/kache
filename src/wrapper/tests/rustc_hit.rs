@@ -35,8 +35,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = test_config(dir.path().join("cache"));
-        config.input_predictions = true;
+        let config = test_config(dir.path().join("cache"));
         let store = Store::open(&config).unwrap();
         let out_dir = dir.path().join("target/debug/deps");
         let incremental = dir.path().join("incremental");

@@ -850,13 +850,13 @@ fn a_header_created_after_preprocessing_cannot_publish_an_incomplete_read_set() 
         .args([
             compiler.to_str().unwrap(),
             "-c",
+            "-MMD",
             "unit.c",
             "-Iinc",
             "-o",
             "unit.o",
         ])
         .env("HOME", root.join("home"))
-        .env("KACHE_DEFERRED_DISCOVERY", "0")
         .env("KACHE_DAEMON_PUBLISH", "0")
         .env("KACHE_MIN_STORE_COMPILE_MS", "0")
         .output()
@@ -1036,8 +1036,7 @@ exec cc "$@"
     );
     let output = cacheable_cc_command(&root)
         .arg(&compiler)
-        .args(["-c", "unit.c", "-o", "unit.o"])
-        .env("KACHE_DEFERRED_DISCOVERY", "0")
+        .args(["-c", "-MMD", "unit.c", "-o", "unit.o"])
         .env("KACHE_LOG", "kache=debug")
         .output()
         .unwrap();
@@ -1119,8 +1118,7 @@ exec cc "$@"
         let _ = fs::remove_file(root.join("unit.o"));
         let output = cacheable_cc_command(&root)
             .arg(&compiler)
-            .args(["-c", "unit.c", "-o", "unit.o"])
-            .env("KACHE_DEFERRED_DISCOVERY", "0")
+            .args(["-c", "-MMD", "unit.c", "-o", "unit.o"])
             .env("KACHE_LOG", "kache=debug")
             .output()
             .unwrap();
@@ -1180,8 +1178,7 @@ fn key_first_cc_caches_a_header_stamped_ahead_of_the_clock() {
     for expected in ["miss", "local_hit"] {
         let _ = fs::remove_file(root.join("unit.o"));
         let output = cacheable_cc_command(&root)
-            .args(["cc", "-c", "unit.c", "-o", "unit.o"])
-            .env("KACHE_DEFERRED_DISCOVERY", "0")
+            .args(["cc", "-c", "-MMD", "unit.c", "-o", "unit.o"])
             .env("KACHE_LOG", "kache=debug")
             .output()
             .unwrap();

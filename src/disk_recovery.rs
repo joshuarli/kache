@@ -53,7 +53,7 @@ fn keep_recovering(floor: u64, elapsed: Duration, usage: Option<VolumeUsage>) ->
 /// Cheap check shared by wrappers and collectors. An unreadable timestamp
 /// or volume skips recovery. The collector checks again under `gc.lock`.
 pub(crate) fn wanted(config: &Config) -> bool {
-    if !config.auto_gc || config.auto_recover_min_free_bytes == 0 {
+    if config.auto_recover_min_free_bytes == 0 {
         return false;
     }
     let now = crate::maintenance::unix_now_secs();
@@ -226,6 +226,7 @@ mod tests {
     fn a_full_disk_that_refuses_the_timestamp_still_recovers_once_an_interval() {
         let dir = tempfile::tempdir().unwrap();
         let mut config = crate::test_support::test_config(dir.path().join("cache"));
+        config.auto_recover_min_free_bytes = 100;
         let store = Store::open(&config).unwrap();
         let _volume = kache_fs::testutil::VolumeUsageGuard::new(
             dir.path(),
@@ -234,7 +235,6 @@ mod tests {
                 free: 10,
             }),
         );
-        config.auto_recover_min_free_bytes = 100;
         let full = |_: &Path, _: u64| -> Result<()> {
             Err(std::io::Error::from(std::io::ErrorKind::StorageFull).into())
         };

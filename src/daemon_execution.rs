@@ -1163,7 +1163,7 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let config = super::super::tests::test_config(root.path());
-        let capacity = DaemonCapacity::discover(config.daemon_execution_concurrency);
+        let capacity = DaemonCapacity::discover(None);
         let daemon = Arc::new(Daemon::new_with_provenance(
             config,
             &crate::config::ConfigFileProvenance {

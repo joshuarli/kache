@@ -4237,45 +4237,18 @@ impl StaticLibUse {
     }
 }
 
-/// Whether `archive` is reached under the `-oso_prefix` root as spelled but
-/// resolves into a sealed hermetic build-script `OUT_DIR`. The linker names
-/// it by the spelled path, which the prefix strips, and the directory it
-/// resolves to is read-only and has the same path in every target directory
-/// that shares it, so its bytes decide the link as much as a copy under the
-/// profile directory would.
-#[cfg(all(test, unix))]
-fn hermetic_archive_under(archive: &Path, resolved: &Path, spelled_root: &Path) -> bool {
-    hermetic_archive_under_for(archive, resolved, spelled_root, &InvocationEnv::capture())
-}
-
-fn hermetic_archive_under_for(
-    archive: &Path,
-    resolved: &Path,
-    spelled_root: &Path,
-    env: &InvocationEnv,
-) -> bool {
-    env.resolve(archive)
-        .is_some_and(|spelled| spelled.starts_with(spelled_root))
-        && !resolved.starts_with(spelled_root)
-        && crate::build_script::in_sealed_out_dir(resolved)
-}
-
 /// [`linked_archive_use`] for a link that gets `-oso_prefix` at
 /// `spelled_root`, which resolves to `root`. Compared resolved, like OUT_DIR
-/// in [`dirs_under`], except for an archive in a sealed hermetic `OUT_DIR`.
+/// in [`dirs_under`].
 fn oso_archive_use(
     args: &RustcArgs,
     archive: &Path,
-    spelled_root: &Path,
+    _spelled_root: &Path,
     root: &Path,
 ) -> StaticLibUse {
     let resolved =
         resolved_path_for(archive, args.invocation_env()).unwrap_or_else(|| archive.to_path_buf());
-    if hermetic_archive_under_for(archive, &resolved, spelled_root, args.invocation_env()) {
-        linked_archive_use(args, archive, Some(spelled_root))
-    } else {
-        linked_archive_use(args, &resolved, Some(root))
-    }
+    linked_archive_use(args, &resolved, Some(root))
 }
 
 /// How this invocation uses `archive`. A unit that does not link bundles it.
@@ -7260,7 +7233,7 @@ impl FileHasher<'static> {
             invocation_env: env.clone(),
             cache: None,
             daemon_socket: None,
-            use_input_predictions: false,
+            use_input_predictions: true,
             prediction_flight_dir: None,
             discovery_flight: RefCell::new(None),
             prefetched: RefCell::new(HashMap::new()),
@@ -7282,7 +7255,7 @@ impl FileHasher<'static> {
                 invocation_env: InvocationEnv::capture(),
                 cache: Some(cache),
                 daemon_socket: None,
-                use_input_predictions: false,
+                use_input_predictions: true,
                 prediction_flight_dir: None,
                 discovery_flight: RefCell::new(None),
                 prefetched: RefCell::new(HashMap::new()),
@@ -7368,7 +7341,7 @@ impl<'db> FileHasher<'db> {
             invocation_env: env.clone(),
             cache: Some(cache),
             daemon_socket: None,
-            use_input_predictions: false,
+            use_input_predictions: true,
             prediction_flight_dir: None,
             discovery_flight: RefCell::new(None),
             prefetched: RefCell::new(HashMap::new()),
@@ -7428,19 +7401,16 @@ impl<'db> FileHasher<'db> {
         }
     }
 
-    /// Let key computation derive its input set from a recorded closure
-    /// instead of spawning the dep-info pre-pass.
-    ///
-    /// A property of the hasher because the hasher is what reaches the
-    /// prediction table: without an index DB there is nothing to read, and
-    /// asking is always allowed to answer "run the pre-pass".
-    pub(crate) fn with_input_predictions(mut self, enabled: bool) -> Self {
-        self.use_input_predictions = enabled;
+    pub(crate) fn with_prediction_flights(mut self, cache_dir: Option<PathBuf>) -> Self {
+        self.prediction_flight_dir = cache_dir;
         self
     }
 
-    pub(crate) fn with_prediction_flights(mut self, cache_dir: Option<PathBuf>) -> Self {
-        self.prediction_flight_dir = cache_dir;
+    /// Internal bypass for key re-derivation: recompute from the pre-pass,
+    /// ignoring any recorded closure. Not a user setting; predictions are
+    /// otherwise always on.
+    pub(crate) fn with_input_predictions(mut self, enabled: bool) -> Self {
+        self.use_input_predictions = enabled;
         self
     }
 

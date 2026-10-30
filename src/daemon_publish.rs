@@ -1397,8 +1397,7 @@ mod tests {
     ) else {
         return;
     };
-    let mut config = crate::test_support::test_config(dir.join("cache"));
-    config.auto_gc = false;
+    let config = crate::test_support::test_config(dir.join("cache"));
     let daemon = Arc::new(Daemon::new(config.clone()));
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     daemon.publish_queue().set_sender(tx, 4);

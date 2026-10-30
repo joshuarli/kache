@@ -26,9 +26,7 @@
 //! package directory, exactly as in Cargo. Serving a recorded run under those
 //! rules is no less correct than Cargo skipping the rerun, which is what it
 //! does with a warm target directory. A run is recorded in the local store
-//! and is never published to a remote. A local miss is restored from
-//! `readonly_store` when that store has the run; the read-only store is not
-//! written.
+//! and is never published to a remote.
 //!
 //! The named files are the link search paths and `-L` flags in the script's
 //! stdout. A directory Cargo fills itself (`deps`, `incremental`, `build`,
@@ -51,7 +49,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(crate) mod declarations;
-mod hermetic;
 pub(crate) mod inputs;
 mod outside;
 mod restore;
@@ -537,9 +534,6 @@ fn run_cached(real: &Path, argv: &[std::ffi::OsString]) -> Result<i32> {
     let environment = Environment::capture()?;
     let options = crate::store::StoreOptions::from_env(|name| std::env::var(name).ok());
     let store = Store::open_with_options(&config, options.clone())?;
-    // Same directory as the local store, or unset: no second store, and the
-    // lookup below is the local one this function has always done.
-    let readonly = crate::wrapper::open_readonly_store(&config, options);
     let binary_hash = stored_binary_hash(real)?;
     let run = Run {
         config,
@@ -549,23 +543,8 @@ fn run_cached(real: &Path, argv: &[std::ffi::OsString]) -> Result<i32> {
         start,
     };
 
-    let local_prediction = run.prediction()?;
-    if let Some(prediction) = &local_prediction
-        && run.config.build_script_hermetic
-        && let Some(code) = hermetic::run(&run, real, argv, prediction)?
-    {
-        return Ok(code);
-    }
-    // The action key folds the declarations stored with the run. A reader
-    // that has never run this script takes them from the read-only store,
-    // which is where the entry lives too.
-    let prediction = match local_prediction {
-        Some(prediction) => Some(prediction),
-        None => match &readonly {
-            Some(store) => stored_prediction(store, &run.identity())?,
-            None => None,
-        },
-    };
+    // The action key folds the declarations stored with the run.
+    let prediction = run.prediction()?;
     // Everything below writes into `OUT_DIR` itself.
     detach_out_dir(&run.environment.out_dir)?;
     if let Some(prediction) = &prediction {
@@ -573,7 +552,7 @@ fn run_cached(real: &Path, argv: &[std::ffi::OsString]) -> Result<i32> {
         let key = run.action_key(prediction)?;
         let key_ms = key_start.elapsed().as_millis() as u64;
         let lookup_start = std::time::Instant::now();
-        let found = lookup_recorded_run(&run.store, readonly.as_ref(), &key)?;
+        let found = lookup_recorded_run(&run.store, &key)?;
         let lookup_ms = lookup_start.elapsed().as_millis() as u64;
         if let Some((blobs, meta)) = found {
             let restore_start = std::time::Instant::now();
@@ -723,18 +702,8 @@ fn continue_after_restore_failure(error: anyhow::Error) -> Result<()> {
 
 /// The local store answers first. The read-only store is only a miss there,
 /// and it is never the store a new run is recorded into.
-fn lookup_recorded_run<'a>(
-    local: &'a Store,
-    readonly: Option<&'a Store>,
-    key: &str,
-) -> Result<Option<(&'a Store, EntryMeta)>> {
-    if let Some(meta) = local.get(key)? {
-        return Ok(Some((local, meta)));
-    }
-    let Some(readonly) = readonly else {
-        return Ok(None);
-    };
-    Ok(readonly.get(key)?.map(|meta| (readonly, meta)))
+fn lookup_recorded_run<'a>(local: &'a Store, key: &str) -> Result<Option<(&'a Store, EntryMeta)>> {
+    Ok(local.get(key)?.map(|meta| (local, meta)))
 }
 
 fn stored_prediction(store: &Store, identity: &str) -> Result<Option<Prediction>> {
@@ -2217,34 +2186,6 @@ fn collect_out_dir_inner(
         symlinks,
         rooted_symlinks,
     })
-}
-
-/// How long a hermetic run no target directory links to stays for the next
-/// worktree that needs it.
-pub(crate) const HERMETIC_UNLINKED_RETENTION: std::time::Duration =
-    std::time::Duration::from_secs(604_800);
-
-/// Remove hermetic runs no target directory links to that have gone
-/// unlinked for `keep_unlinked`. See [`hermetic::sweep`].
-pub(crate) fn sweep_hermetic_out_dirs(
-    cache_dir: &Path,
-    keep_unlinked: std::time::Duration,
-) -> Result<hermetic::Sweep> {
-    hermetic::sweep(cache_dir, std::time::SystemTime::now(), keep_unlinked)
-}
-
-/// [`sweep_hermetic_out_dirs`] with the standing retention, for the GC
-/// drivers. A failed sweep leaves the runs in place for the next one.
-pub(crate) fn sweep_hermetic_out_dirs_for_gc(cache_dir: &Path) {
-    match sweep_hermetic_out_dirs(cache_dir, HERMETIC_UNLINKED_RETENTION) {
-        Ok(sweep) => log::debug!("build-script run sweep: {sweep:?}"),
-        Err(error) => log::warn!("build-script run sweep failed: {error:#}"),
-    }
-}
-
-/// Whether `path` lies in a sealed hermetic build-script `OUT_DIR`.
-pub(crate) fn in_sealed_out_dir(path: &Path) -> bool {
-    hermetic::in_sealed_out_dir(path)
 }
 
 /// Turn an `OUT_DIR` that a hermetic run left as a symlink to its shared,
@@ -3951,33 +3892,26 @@ mod tests {
         };
         let prediction = prediction_with(Some(Vec::new()), true);
         let keys = || {
-            [
-                run.action_key_with(&prediction, None, &ToolSnapshot::new())
-                    .unwrap(),
-                hermetic::key(&run, &prediction, Path::new("debug/build/x-1/out")).unwrap(),
-            ]
+            run.action_key_with(&prediction, None, &ToolSnapshot::new())
+                .unwrap()
         };
         let absent = keys();
         std::fs::write(&absolute, "one").unwrap();
         let before = keys();
-        for (absent, before) in absent.iter().zip(&before) {
-            assert_ne!(absent, before, "an absent dependency path becomes present");
-        }
+        assert_ne!(absent, before, "an absent dependency path becomes present");
         std::fs::write(&absolute, "two").unwrap();
         let after = keys();
-        for (before, after) in before.iter().zip(&after) {
-            assert_ne!(
-                before, after,
-                "the file behind an absolute DEP_ path is keyed"
-            );
-        }
+        assert_ne!(
+            before, after,
+            "the file behind an absolute DEP_ path is keyed"
+        );
         std::fs::write(dir.path().join("relative.h"), "unrelated").unwrap();
         assert_eq!(after, keys());
     }
 
     #[cfg(unix)]
     #[test]
-    fn non_utf8_dependency_values_are_distinct_in_both_action_keys() {
+    fn non_utf8_dependency_values_are_distinct_in_the_action_key() {
         use std::os::unix::ffi::OsStringExt;
 
         let _lock = crate::test_support::process_state_test_lock();
@@ -4005,11 +3939,8 @@ mod tests {
                     std::ffi::OsString::from_vec(value),
                 );
             }
-            [
-                run.action_key_with(&prediction, None, &ToolSnapshot::new())
-                    .unwrap(),
-                hermetic::key(&run, &prediction, Path::new("debug/build/x-1/out")).unwrap(),
-            ]
+            run.action_key_with(&prediction, None, &ToolSnapshot::new())
+                .unwrap()
         });
         unsafe {
             match saved {
@@ -4017,12 +3948,10 @@ mod tests {
                 None => std::env::remove_var("DEP_KT_BINARY_METADATA"),
             }
         }
-        for (a, b) in keys[0].iter().zip(&keys[1]) {
-            assert_ne!(
-                a, b,
-                "non-UTF-8 dependency metadata is an environment input"
-            );
-        }
+        assert_ne!(
+            keys[0], keys[1],
+            "non-UTF-8 dependency metadata is an environment input"
+        );
     }
 
     #[cfg(unix)]
@@ -4249,108 +4178,6 @@ mod tests {
         );
     }
 
-    /// A hermetic key sees values as the script does: two target directories
-    /// agree except where a value the script reads spells its own target
-    /// directory, which the regular key maps away. `OUT_DIR` itself is left
-    /// out, and where it sits below the target directory is in.
-    #[test]
-    fn a_hermetic_key_leaves_out_only_the_out_dir() {
-        let _lock = crate::test_support::process_state_test_lock();
-        let dir = tempfile::tempdir().unwrap();
-        let config = crate::test_support::test_config(dir.path().join("cache"));
-        let run = |target: &str, cargo_home: &str| Run {
-            store: Store::open(&config).unwrap(),
-            config: config.clone(),
-            binary_hash: "aaaa".to_string(),
-            environment: checkout_environment(
-                &dir.path().join(target),
-                &dir.path().join(cargo_home),
-            ),
-            start: std::time::Instant::now(),
-        };
-        let prediction = prediction_with(Some(Vec::new()), true);
-        let below = Path::new("debug/build/x-1/out");
-        let saved = std::env::var_os("CARGO_MANIFEST_DIR");
-        let key = |run: &Run, below: &Path| {
-            // SAFETY: the process-state lock serialises environment edits.
-            unsafe { std::env::set_var("CARGO_MANIFEST_DIR", &run.environment.manifest_dir) };
-            hermetic::key(run, &prediction, below).unwrap()
-        };
-        let (a, b, elsewhere) = (
-            run("a/target", "cargo"),
-            run("b/target", "cargo"),
-            run("b/target", "other-cargo"),
-        );
-        assert_eq!(key(&a, below), key(&b, below), "OUT_DIR is not keyed");
-        assert_ne!(key(&a, below), key(&a, Path::new("release/build/x-1/out")));
-        assert_ne!(
-            key(&b, below),
-            key(&elsewhere, below),
-            "the manifest directory is keyed as the script sees it"
-        );
-
-        let spelled = |run: &Run, target: &str| {
-            let value = dir.path().join(target).join("debug/build/y-1/out");
-            // SAFETY: the process-state lock serialises environment edits.
-            unsafe { std::env::set_var("DEP_Y_ROOT", &value) };
-            let keys = (key(run, below), run.action_key(&prediction).unwrap());
-            unsafe { std::env::remove_var("DEP_Y_ROOT") };
-            keys
-        };
-        let (hermetic_a, regular_a) = spelled(&a, "a/target");
-        let (hermetic_b, regular_b) = spelled(&b, "b/target");
-
-        // What the script declared: an env var's value, an input's content,
-        // and what sits behind a `DEP_*` path.
-        let input = dir.path().join("input.txt");
-        std::fs::write(&input, b"one").unwrap();
-        let mut declared = prediction.clone();
-        declared.env = vec!["KACHE_TEST_HERMETIC_VAR".into()];
-        declared.inputs = vec![input.to_string_lossy().into_owned()];
-        let declared_key = || {
-            unsafe { std::env::set_var("CARGO_MANIFEST_DIR", &a.environment.manifest_dir) };
-            hermetic::key(&a, &declared, below).unwrap()
-        };
-        unsafe { std::env::set_var("KACHE_TEST_HERMETIC_VAR", "x") };
-        let base = declared_key();
-        unsafe { std::env::set_var("KACHE_TEST_HERMETIC_VAR", "y") };
-        assert_ne!(declared_key(), base, "a declared variable's value");
-        unsafe { std::env::set_var("KACHE_TEST_HERMETIC_VAR", "x") };
-        std::fs::write(&input, b"two").unwrap();
-        assert_ne!(declared_key(), base, "a declared input's content");
-        std::fs::write(&input, b"one").unwrap();
-        assert_eq!(declared_key(), base);
-        let dep = dir.path().join("dep-out");
-        std::fs::create_dir(&dep).unwrap();
-        std::fs::write(dep.join("z.h"), b"1").unwrap();
-        unsafe { std::env::set_var("DEP_Y_ROOT", &dep) };
-        let mut dependent = run("a/target", "cargo");
-        dependent.environment.dependency_roots =
-            outside::dependency_roots([("DEP_Y_ROOT".into(), dep.clone().into_os_string())]);
-        let with_dep = hermetic::key(&dependent, &declared, below).unwrap();
-        std::fs::write(dep.join("z.h"), b"2").unwrap();
-        assert_ne!(
-            hermetic::key(&dependent, &declared, below).unwrap(),
-            with_dep,
-            "what a captured DEP_ path holds"
-        );
-        unsafe {
-            std::env::remove_var("DEP_Y_ROOT");
-            std::env::remove_var("KACHE_TEST_HERMETIC_VAR");
-        }
-
-        match saved {
-            Some(value) => unsafe { std::env::set_var("CARGO_MANIFEST_DIR", value) },
-            None => unsafe { std::env::remove_var("CARGO_MANIFEST_DIR") },
-        }
-        assert_eq!(regular_a, regular_b, "the regular key maps the target away");
-        assert_ne!(hermetic_a, hermetic_b, "the script reads each spelling");
-    }
-
-    /// libgit2-sys reads libz-sys's `OUT_DIR` through `DEP_Z_ROOT`, and
-    /// zlib's pkg-config file there names that directory. The same file in
-    /// two target directories keys the dependent the same; other content
-    /// does not.
     #[test]
     fn a_links_dependency_is_keyed_by_its_text_with_the_roots_mapped() {
         let mut lock = crate::test_support::process_state_test_lock();
@@ -6462,15 +6289,11 @@ mod tests {
     /// `readonly` of `None` writes an empty value so a host config cannot
     /// fill one in. An empty value is the same as leaving it unset.
     #[cfg(unix)]
-    fn write_reader_config(path: &Path, cache: &Path, readonly: Option<&Path>) {
-        let readonly = match readonly {
-            Some(dir) => format!("readonly_store = {}\n", quote_path(dir)),
-            None => "readonly_store = \"\"\n".to_string(),
-        };
+    fn write_reader_config(path: &Path, cache: &Path) {
         std::fs::write(
             path,
             format!(
-                "[cache]\nignore_env = true\nbuild_script_hermetic = false\nlocal_store = {}\nruntime_dir = {}\n{readonly}",
+                "[cache]\nignore_env = true\nbuild_script_hermetic = false\nlocal_store = {}\nruntime_dir = {}\n",
                 quote_path(cache),
                 quote_path(cache),
             ),
@@ -6553,104 +6376,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn entry_metas(cache: &Path) -> Vec<(String, Vec<u8>)> {
-        let store = cache.join("store");
-        let mut found = Vec::new();
-        if !store.is_dir() {
-            return found;
-        }
-        let mut dirs: Vec<_> = std::fs::read_dir(&store)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .collect();
-        dirs.sort();
-        for dir in dirs {
-            let meta = dir.join("meta.json");
-            if meta.is_file() {
-                found.push((
-                    dir.file_name().unwrap().to_string_lossy().into_owned(),
-                    std::fs::read(meta).unwrap(),
-                ));
-            }
-        }
-        found
-    }
-
-    /// The entry is only in the read-only store. The reader restores it and
-    /// that store gains no entry.
-    #[cfg(unix)]
     #[test]
-    fn build_script_readonly_store_restores_and_gains_no_entry() {
-        let _lock = crate::test_support::process_state_test_lock();
-        let mut env = EnvRestore::new();
-        let fixture = script_fixture();
-        let root = fixture.dir.path();
-        let host = root.join("host");
-        let job = root.join("job");
-        let host_out = root.join("host-out");
-        let job_out = root.join("job-out");
-        prepare_out(&host_out);
-        prepare_out(&job_out);
-        let host_config = root.join("host.toml");
-        let job_config = root.join("job.toml");
-        write_reader_config(&host_config, &host, None);
-        write_reader_config(&job_config, &job, Some(&host));
-
-        let code = run_reader(
-            &mut env,
-            &host_config,
-            &host_out,
-            &fixture.package,
-            &fixture.script,
-            &fixture.sentinel,
-        );
-        assert_eq!(code, 0, "{}", event_results(&host).join(","));
-        assert_eq!(
-            std::fs::read(host_out.join("marker")).unwrap(),
-            b"from-script"
-        );
-        assert_eq!(std::fs::read(&fixture.sentinel).unwrap(), b"x");
-        assert_eq!(event_results(&host), ["miss"]);
-
-        let host_store = Store::open(&Config::load().unwrap()).unwrap();
-        let entries = host_store.entry_count().unwrap();
-        assert_eq!(entries, 1);
-        let metas = entry_metas(&host);
-
-        let code = run_reader(
-            &mut env,
-            &job_config,
-            &job_out,
-            &fixture.package,
-            &fixture.script,
-            &fixture.sentinel,
-        );
-        assert_eq!(
-            code,
-            0,
-            "job {:?}; host {:?}",
-            event_results(&job),
-            event_results(&host)
-        );
-        assert_eq!(
-            std::fs::read(job_out.join("marker")).unwrap(),
-            b"from-script"
-        );
-        assert_eq!(
-            std::fs::read(&fixture.sentinel).unwrap(),
-            b"x",
-            "the script ran instead of restoring from the read-only store"
-        );
-        assert_eq!(host_store.entry_count().unwrap(), entries);
-        assert_eq!(entry_metas(&host), metas);
-        assert_eq!(event_results(&job), ["local_hit"]);
-    }
-
-    /// No read-only store is configured. A miss still records into the local
-    /// store, and the next run restores that entry instead of running again.
-    #[cfg(unix)]
-    #[test]
-    fn build_script_readonly_store_unset_still_records_locally() {
+    fn build_script_miss_still_records_locally() {
         let _lock = crate::test_support::process_state_test_lock();
         let mut env = EnvRestore::new();
         let fixture = script_fixture();
@@ -6659,7 +6386,7 @@ mod tests {
         let out = root.join("out");
         prepare_out(&out);
         let config = root.join("kache.toml");
-        write_reader_config(&config, &cache, None);
+        write_reader_config(&config, &cache);
 
         let code = run_reader(
             &mut env,

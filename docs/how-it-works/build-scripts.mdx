@@ -108,9 +108,7 @@ Targets must exist and remain in an allowed root; links into the target
 directory, unknown roots, and dangling external targets refuse the run.
 The most specific root decides, so a target directory inside the package is
 still excluded. Relative links confined to `OUT_DIR` keep their original
-text, including ordinary dangling links. These rules apply to the regular
-build-script cache. Hermetic runs still refuse links that leave `OUT_DIR`
-and fall back to the regular path.
+text, including ordinary dangling links. These rules apply to the build-script cache.
 Entries stay in the local store.
 
 Runs appear in build reports (`kache stats --full`) as `build_script_run`, with
@@ -197,7 +195,7 @@ The inputs are read again after a compile. When anything Kache keyed changed
 while rustc ran, the result is not stored, and the event is `skipped` with the
 reason `build-script-inputs-changed`.
 
-A unit compiles without Kache and without a fallback wrapper when its declared
+A unit compiles without Kache when its declared
 paths hold more than 20,000 entries or cannot be read for another reason, such
 as a directory the user may search but not list. Its passthrough reason
 starts with `uncacheable|build-script inputs:`. A package whose script declares
@@ -207,10 +205,8 @@ Printing `cargo:rerun-if-changed` for `build.rs` and for each file the
 script or the package's macros read keys such a package precisely. Declare
 directories when new files in them should trigger a rerun.
 
-A unit whose script declares a path or a variable never goes to a configured
-[fallback wrapper](/docs/getting-started/comparison#use-sccache-as-a-fallback),
-which would key it without them. When Kache does not cache such a unit, rustc
-runs directly.
+A unit whose script declares a path or a variable is never handed off:
+when Kache does not cache such a unit, rustc runs directly.
 
 Each unit pays for this on every compile Cargo asks for. Kache reads Cargo's
 record of the run and checks each declared file. A declared directory, or the
@@ -234,60 +230,9 @@ This does not cover:
   tool variables their scripts declare (`CC`, `CFLAGS`, `PKG_CONFIG_PATH`)
   would split their keys between machines.
 
-## Hermetic runs
-
-Set `KACHE_BUILD_SCRIPT_HERMETIC=1`, or `[cache] build_script_hermetic = true`
-(Unix, not as root), to share runs through
-one `OUT_DIR` path instead. The script runs with `OUT_DIR` in a directory named by its
-key, under `out-dirs/v2/` in the cache directory, so every target directory that
-shares the key sees the same path. Values the script derives from `OUT_DIR`
-(its length, a hash, an escaped spelling) are then the same everywhere too.
-The regular cache cannot check for such values.
-
-- The key covers everything the regular key does, with every value as the
-  script sees it rather than with roots replaced. `OUT_DIR` counts only by
-  where it sits below the target directory, and
-  `cargo:rerun-if-env-changed=OUT_DIR` by its name.
-- The key's directory repeats the layout below the target directory, with
-  `OUT_DIR` at the same place. The script runs from a copy of its binary in
-  that directory, with `CARGO_TARGET_DIR` set to it, without `PWD` and
-  `OLDPWD`, and with entries under the real target directory removed from
-  `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH` and `DYLD_FALLBACK_LIBRARY_PATH`.
-- A run is kept only when it succeeds, declares the inputs its key was computed
-  from, leaves them unchanged, writes nothing outside `OUT_DIR`, and creates
-  only relative symlinks that climb no higher than `OUT_DIR` with leading `..`
-  and then only descend (`lib/foo -> sub/../libfoo.so.1` does not). Otherwise
-  the script runs as usual.
-- A kept run is made read-only, and Cargo's `OUT_DIR` becomes a symlink to it.
-  A hit creates that link: nothing is copied, and every worktree shares one
-  copy. `rustc-link-search` lines are replayed with Cargo's own `OUT_DIR`, so
-  `cargo run` and `cargo test` still find libraries there.
-- The first run of a script records what it declares, so hermetic runs start
-  with the second.
-
-Registry and Git dependencies live under the Cargo home, so their keys match
-across worktrees. A workspace member's manifest directory is part of its key,
-so it shares only between target directories of the same checkout.
-
-Every link is recorded beside the shared directory. GC (`kache gc` and the
-daemon's sweeps) keeps a directory while any recorded `OUT_DIR` still links to
-it, and removes it once none has for seven days. Emptying the cache with `kache clean --cache` removes every
-directory no target directory links to. A directory a build is using is left
-for the next sweep.
-
-Shared directories are read-only: make them writable (`chmod -R u+w`) before
-deleting the cache directory by hand. Target directories keep their links, so
-run `cargo clean` in them afterwards. Run it before building without Kache too:
-Cargo considers the linked runs fresh and would run a script directly against a
-read-only `OUT_DIR`.
-
-A run that cannot be kept is remembered per key for seven days, or until the
-cache is emptied, so its script runs once, as usual, on later builds instead of
-twice.
-
 ## Limits
 
-Without hermetic runs, a result restores in another target directory when each
+A result restores in another target directory when each
 recorded file that names a machine-local root is text Kache rewrote, or that
 root has the same value there, such as a Cargo home both checkouts share. A
 value the script derives from a root without spelling it, such as its length or

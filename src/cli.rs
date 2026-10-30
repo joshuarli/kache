@@ -314,8 +314,8 @@ pub(crate) fn record_session(config: &Config, report: &crate::report::BuildRepor
     crate::events::append_json_line(&path, &record)?;
     crate::events::rotate_if_needed(
         &path,
-        config.event_log_max_size,
-        config.event_log_keep_lines,
+        crate::config::DEFAULT_EVENT_LOG_MAX_SIZE,
+        crate::config::DEFAULT_EVENT_LOG_KEEP_LINES,
     )
 }
 
@@ -2690,7 +2690,6 @@ pub fn run_gc_local(config: &Config, mode: GcMode) -> Result<crate::store::GcSta
         crate::wrapper::SESSION_MARKER_RETENTION,
         std::time::SystemTime::now(),
     );
-    crate::build_script::sweep_hermetic_out_dirs_for_gc(&config.cache_dir);
     let backfilled = store.backfill_content_hashes().unwrap_or(0);
     if verbose {
         if backfilled > 0 {
@@ -3289,16 +3288,6 @@ pub fn purge(config: &Config, crate_filter: Option<&str>) -> Result<()> {
     } else {
         store.clear()?;
         println!("Cleared entire local store.");
-        // Runs a target directory still links to stay: removing them would
-        // break its next build.
-        let sweep = crate::build_script::sweep_hermetic_out_dirs(
-            &config.cache_dir,
-            std::time::Duration::ZERO,
-        )?;
-        println!(
-            "Removed {} build-script runs; kept {} that target directories link to.",
-            sweep.removed, sweep.kept
-        );
     }
 
     Ok(())
@@ -3595,12 +3584,6 @@ fn retry_with_yes(outcome: &str, why: &str, args: &[String], preview: bool) -> a
         "{outcome}: {why}. Run `{}` to go ahead without asking{preview}.",
         command_line(&argv)
     )
-}
-
-fn fallback_is_sccache(config: Option<&crate::config::Config>) -> bool {
-    config
-        .and_then(|cfg| cfg.fallback.as_deref())
-        .is_some_and(is_sccache_program)
 }
 
 fn is_sccache_program(value: &str) -> bool {
@@ -4382,7 +4365,6 @@ pub fn doctor(
         .map_or((None, None), |(config, provenance)| {
             (Some(config), Some(provenance))
         });
-    let sccache_is_fallback = fallback_is_sccache(config.as_ref());
 
     // The daemon is optional (see README): `kache doctor` shows its checks
     // for diagnostics but never counts them as issues. See #443.
@@ -4617,22 +4599,13 @@ pub fn doctor(
         .output()
         && output.status.success()
     {
-        if sccache_is_fallback {
-            checks.push(Check {
-                label: "sccache",
-                pass: true,
-                detail: "daemon is running as fallback wrapper".into(),
-                fix: None,
-            });
-        } else {
-            fix_repairs.push("sccache");
-            checks.push(Check {
-                label: "sccache",
-                pass: false,
-                detail: "daemon is running".into(),
-                fix: Some("sccache --stop-server".into()),
-            });
-        }
+        fix_repairs.push("sccache");
+        checks.push(Check {
+            label: "sccache",
+            pass: false,
+            detail: "daemon is running".into(),
+            fix: Some("sccache --stop-server".into()),
+        });
     }
 
     // 8. Daemon version match

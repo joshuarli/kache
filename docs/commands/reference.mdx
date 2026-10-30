@@ -68,7 +68,7 @@ kache clean --cache --dry-run
 kache clean --cache
 ```
 
-`kache clean` empties the main store; volume shards keep their entries. It asks first, and without a terminal it removes nothing unless `--yes` is set. It also deletes the index files kept after index corruption, and says how many before it asks. It removes hermetic build-script runs that no target directory links to.
+`kache clean` empties the main store; volume shards keep their entries. It asks first, and without a terminal it removes nothing unless `--yes` is set. It also deletes the index files kept after index corruption, and says how many before it asks.
 
 You rarely need `--cache`: the daemon evicts entries on its own to keep the cache under `cache.local_max_size`, starting with stale, rarely hit entries that free the most space. For scripts, `--cache --stale 30d` evicts older entries and `--cache --stale-schema` removes entries created with old or unrecorded key schemas without asking. `--crate serde` removes one crate's entries after asking.
 
@@ -138,7 +138,7 @@ Doctor reports issues and still exits 0; scripts read them from `kache doctor --
 
 Doctor checks cache-directory write access and read/write access to existing index, WAL and SHM files. On Unix it also shows this process's soft and hard open-file limits. Run it as the same user and in the same environment as the failing build.
 
-Where volume information is available, doctor checks free space for the cache, Cargo outputs and temporary files, using existing ancestor directories for paths not created yet. The cache warning uses `cache.auto_recover_min_free_bytes`, with a minimum working reserve of 1 GiB even when automatic recovery is off. Cargo output and temporary volumes use the 1 GiB reserve.
+Where volume information is available, doctor checks free space for the cache, Cargo outputs and temporary files, using existing ancestor directories for paths not created yet. The cache warning uses the free-space floor (10 GiB, none in CI), with a minimum working reserve of 1 GiB. Cargo output and temporary volumes use the 1 GiB reserve.
 
 Storage rows include the volume identity when reported. Unix rows show available and total inode counts; exhausted inodes are an issue even when bytes remain free. Unreported inode capacity stays unavailable. Distinct volume identities can share capacity through an APFS container, so their free-space figures are not independent. These checks do not remove anything.
 

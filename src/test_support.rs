@@ -26,28 +26,14 @@ pub(crate) fn without_terminal(command: &mut std::process::Command) -> &mut std:
 
 pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
     crate::config::Config {
-        fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        readonly_store: None,
-        input_predictions: false,
         volume_stores: Vec::new(),
-        deferred_discovery: true,
-        out_dir_alias: true,
-        deferred_durability: false,
-        daemon_publish: true,
         trust_daemon_execution: false,
-        daemon_execution_concurrency: None,
         project_rules: crate::config::ProjectRules::default(),
-        auto_gc: true,
-        index_auto_compact: true,
-
         auto_recover_min_free_bytes: 0,
 
-        scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
-        scheduler: true,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -57,9 +43,6 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
-        event_log_max_size: 10 * 1024 * 1024,
-        event_log_keep_lines: 1000,
-        compression_level: 3,
     }
 }
 

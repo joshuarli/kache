@@ -527,7 +527,7 @@ fn units_that_bake_an_empty_out_dir_hit_in_another_checkout() {
     // loads bake in: dumpmac's, and helper's through `pm2`.
     assert!(
         stderr
-            .contains("`cargo clean -p dumpmac -p helper` and rebuild with KACHE_OUT_DIR_ALIAS=0"),
+            .contains("`cargo clean -p dumpmac -p helper` and rebuild"),
         "{stderr}"
     );
     let cleaned = cargo(
@@ -541,10 +541,7 @@ fn units_that_bake_an_empty_out_dir_hit_in_another_checkout() {
         &tree("d"),
         &cache,
         &["build", "--offline", "--workspace"],
-        &[
-            ("DUMPMAC_WRITE", Path::new("1")),
-            ("KACHE_OUT_DIR_ALIAS", Path::new("0")),
-        ],
+        &[("DUMPMAC_WRITE", Path::new("1"))],
     );
     assert_built(&hinted, "d with the hint");
     let own = printed_paths(&tree("d").join("target/debug/app"));
@@ -573,7 +570,7 @@ fn units_that_bake_an_empty_out_dir_hit_in_another_checkout() {
     write(&probe, "probe");
     let tripped = cargo_build(&tree("f"), &cache);
     let stderr = String::from_utf8_lossy(&tripped.stderr);
-    assert!(!tripped.status.success(), "f built with an aliased helper");
+    assert!(!tripped.status.success(), "f built with an aliased helper: {}", String::from_utf8_lossy(&tripped.stderr));
     assert!(
         stderr.contains("helper was built with a shared read-only OUT_DIR"),
         "{stderr}"
@@ -594,19 +591,19 @@ fn units_that_bake_an_empty_out_dir_hit_in_another_checkout() {
     assert_eq!(inc, ["skipped"], "inc was stored");
     assert!(out_dirs.join("v1/deny/probe-0123456789abcdef").is_file());
 
-    // With the alias off, `helper` in `c` is still the aliased build, so a
-    // new bin that links it trips all the same.
-    let off = [("KACHE_OUT_DIR_ALIAS", Path::new("0"))];
+    // `helper` in `c` is still the aliased build, so a new bin that links
+    // it trips all the same.
     let build = ["build", "--offline", "--workspace"];
+    let no_extra: &[(&str, &Path)] = &[];
     add_hbin(&tree("c"));
-    let tripped = cargo(&tree("c"), &cache, &build, &off);
+    let tripped = cargo(&tree("c"), &cache, &build, no_extra);
     let stderr = String::from_utf8_lossy(&tripped.stderr);
-    assert!(!tripped.status.success(), "c linked the alias with it off");
+    assert!(!tripped.status.success(), "c linked the aliased helper");
     assert!(
         stderr.contains("helper was built with a shared read-only OUT_DIR"),
         "{stderr}"
     );
-    assert_built(&cargo(&tree("c"), &cache, &build, &off), "c again");
+    assert_built(&cargo(&tree("c"), &cache, &build, no_extra), "c again");
     let hbin = printed_paths(&tree("c").join("target/debug/hbin"));
     assert!(hbin[0].starts_with(tree("c").join("target")), "{hbin:?}");
 
@@ -621,7 +618,7 @@ fn units_that_bake_an_empty_out_dir_hit_in_another_checkout() {
     );
     assert_built(&cleaned, "e clean");
     assert_built(
-        &cargo(&tree("e"), &cache, &build, &off),
+        &cargo(&tree("e"), &cache, &build, no_extra),
         "e without the alias",
     );
     assert_eq!(alias_markers(&tree("e")), Vec::<PathBuf>::new());
@@ -753,7 +750,7 @@ fn a_failed_rederivation_hints_and_denies_the_alias() {
         "usemac did not key from its prediction"
     );
     assert!(
-        stderr.contains("`cargo clean -p expmac` and rebuild with KACHE_OUT_DIR_ALIAS=0"),
+        stderr.contains("`cargo clean -p expmac` and rebuild"),
         "{stderr}"
     );
     let denied: Vec<String> = std::fs::read_dir(out_dirs.join("v1/deny"))

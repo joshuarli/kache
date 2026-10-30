@@ -66,6 +66,9 @@ fn absolutize_volume_path(path: &Path) -> PathBuf {
 /// 20,000 of the usual 1.4 KB (kunobi-ninja/kache#1209).
 pub const DEFAULT_EVENT_LOG_MAX_SIZE: u64 = 64 * 1024 * 1024;
 
+/// Default `[cache] event_log_keep_lines`.
+pub const DEFAULT_EVENT_LOG_KEEP_LINES: usize = 1000;
+
 /// The free-space floor below which builds evict cache entries, unless
 /// `cache.auto_recover_min_free_bytes` says otherwise.
 pub const DEFAULT_RECOVERY_FLOOR: u64 = 10 << 30;
@@ -97,13 +100,6 @@ pub struct Config {
     pub max_size: u64,
     pub disabled: bool,
     pub cache_executables: bool,
-    pub event_log_max_size: u64,
-    pub event_log_keep_lines: usize,
-    /// Zstd compression level (1-19, default 3). Lower = faster, higher = smaller.
-    pub compression_level: i32,
-    /// Secondary wrapper for ordinary uncached compiles. Incremental compiles
-    /// go directly to the compiler. Set with `KACHE_FALLBACK` or `[cache] fallback`.
-    pub fallback: Option<String>,
     /// An opaque string folded into every cache key. Lets a project
     /// force a cold cache on a change kache cannot otherwise observe —
     /// e.g. a cross-target libc/sysroot change, a toolchain-closure bump
@@ -171,113 +167,28 @@ pub struct Config {
     /// constant string but compile to per-CPU objects; folded verbatim
     /// they collide across machines. List explicit values, not `native`.
     pub cc_extra_allowlist_flags: Vec<String>,
-    /// Another local store this process only reads, after its own: the
-    /// directory that holds that store's `index.db`. For a CI container given
-    /// the host's store through a read-only mount. A hit there is restored by
-    /// private copy. The mount must enforce filesystem protection because
-    /// SQLite can create WAL side files on a writable mount. Set via
-    /// `KACHE_READONLY_STORE` or `[cache] readonly_store`; env wins over the
-    /// file, and an empty value turns it off.
-    pub readonly_store: Option<PathBuf>,
-    /// Input-set predictions: each eligible rustc invocation remembers
-    /// the source closure its dep-info pre-pass discovered, and a later build
-    /// of the same unit derives the key from that record instead of spawning
-    /// the pre-pass (kunobi-ninja/kache#939). Every path and env value in the
-    /// record is re-validated first, and any doubt runs the pre-pass;
-    /// `KACHE_VERIFY_INPUT_PREDICTIONS=sampled|always` cross-checks records
-    /// against it and counts disagreements. Enabled by default; disable with
-    /// `KACHE_INPUT_PREDICTIONS=0` or `[cache] input_predictions = false`.
-    /// The environment overrides the file.
-    pub input_predictions: bool,
-    /// Compile before keying when a unit has no closure record and no remote
-    /// could hold its entry (a certain miss), then key from the dep-info
-    /// rustc emitted instead of spawning the dep-info pre-pass first. On by
-    /// default; `KACHE_DEFERRED_DISCOVERY=0` or
-    /// `[cache] deferred_discovery = false` keeps the pre-pass on every miss.
-    pub deferred_discovery: bool,
-    /// Compile a registry proc macro, or a lib only proc macros link, whose
-    /// `OUT_DIR` is empty against one shared read-only directory under the
-    /// cache dir (or `out_dir_alias_root`), so the path it bakes is the same
-    /// in checkouts sharing that root. On by
-    /// default on Unix; `KACHE_OUT_DIR_ALIAS=0` or
-    /// `[cache] out_dir_alias = false` turns it off.
-    pub out_dir_alias: bool,
-    /// Store new and downloaded entries without an fsync on the build path.
-    /// The daemon (or the next `kache gc`) flushes them shortly after; until
-    /// then a hit on such an entry verifies its bytes before restoring. On by
-    /// default; `KACHE_DEFERRED_DURABILITY=0` or
-    /// `[cache] deferred_durability = false` flushes every entry inside the
-    /// compile or download that stored it.
-    pub deferred_durability: bool,
-    /// Hand a finished cc compile's store put to the daemon so the wrapper
-    /// returns as soon as the object is written (see `daemon_publish`). On
-    /// by default; `KACHE_DAEMON_PUBLISH=0` or `[cache] daemon_publish =
-    /// false` keeps every put in the wrapper. Without a reachable daemon the
-    /// wrapper stores on its own either way.
-    pub daemon_publish: bool,
-    /// Permit a trusted daemon's pipeline to access the workspace under its
-    /// own restrictions. Native children and restores still run in the client.
     /// Disabled unless `KACHE_TRUST_DAEMON_EXECUTION=1` or
     /// `[cache] trust_daemon_execution = true` is set on both peers.
     pub trust_daemon_execution: bool,
-    /// Concurrent daemon pipeline requests. None selects a CPU-based default.
-    /// Zero in the file or environment selects automatic sizing too.
-    /// The daemon can lower this to fit its open-file limit.
-    pub daemon_execution_concurrency: Option<usize>,
     /// The project's `[cache] exclude` and `bypass_*` rule lists, read once
     /// with the rest of the file. Every wrapper invocation consults them
     /// before any key work; re-reading the file for each list cost a C
     /// compile four config parses.
     pub project_rules: ProjectRules,
-    /// Opportunistic size-pressure GC (kunobi-ninja/kache#497): when on (the
-    /// default), the compiler wrapper — after storing a new entry — performs a
-    /// cheap, throttled store-size check and, if the store has grown past
-    /// `max_size` (plus slack), spawns a detached `kache gc` in the
-    /// background. This applies size pressure for local-only builds where no
-    /// daemon is running (the daemon's periodic GC and post-upload sweep
-    /// were previously the *only* eviction triggers, so a daemon-less store
-    /// grew without bound). GC never runs inside the compile hot path — the
-    /// wrapper only pays one `stat()` per compile (plus one SQLite `SUM` at
-    /// most once per check interval) and the actual eviction happens in the
-    /// spawned process, serialized by `gc.lock`. Set via `KACHE_AUTO_GC=0`/
-    /// `=false` or `[cache] auto_gc = false` to disable.
-    pub auto_gc: bool,
-    /// Daemon-side index maintenance: when on (the default), the daemon
-    /// VACUUMs `index.db` once free pages dominate the file, either while the
-    /// machine is quiet or, for a small live index, after it has stayed over
-    /// the threshold for hours. The same switch covers the blob index heal
-    /// that runs before it on a quiet machine: both take the index write lock
-    /// unasked, which is the one reason to turn either off. Set via
-    /// `KACHE_INDEX_AUTO_COMPACT=0`/`=false` or `[cache] index_auto_compact =
-    /// false` to disable. `kache doctor --repair` does both on demand either
-    /// way.
-    pub index_auto_compact: bool,
     /// Minimum free bytes on the store's volume. Below it, builds have
-    /// auto-GC evict eligible store entries. Default 10 GiB; `0` disables. Set via
-    /// `KACHE_AUTO_RECOVER_MIN_FREE_BYTES` or `[cache]
-    /// auto_recover_min_free_bytes`.
+    /// auto-GC evict eligible store entries: [`DEFAULT_RECOVERY_FLOOR`],
+    /// or none in CI.
     pub auto_recover_min_free_bytes: u64,
-    /// Under memory pressure, admit a compile only when no other compile
-    /// holds a scheduler slot. On by default. Set via
-    /// `KACHE_SCHEDULER_MEMORY_PRESSURE=0`/`=false` or `[cache]
-    /// scheduler_memory_pressure = false` to disable.
-    pub scheduler_memory_pressure: bool,
-    /// Run cached build scripts with `OUT_DIR` in a shared directory named by
-    /// their inputs, so a run is shared across target directories (Unix).
-    /// Off by default. Set via `KACHE_BUILD_SCRIPT_HERMETIC=1`/`=true` or
-    /// `[cache] build_script_hermetic = true`.
-    pub build_script_hermetic: bool,
-    /// Storage-layout advisories (kunobi-ninja/kache#551): when on (the
-    /// default), a cache hit restored by COPY because the storage *layout*
-    /// prevents zero-copy dedup — no copy-on-write on the volume, cache and
-    /// build tree on different volumes, or an inconclusive capability probe —
-    /// is surfaced as a deduplicated advisory with fix suggestions. CLI
-    /// Machine-wide miss-path scheduler (default on). After a local and remote
-    /// miss, the wrapper joins a flight and takes a memory-weighted permit
-    /// before the per-key build lock. Hits and passthroughs never wait. Set
-    /// `KACHE_SCHEDULER=0`/`false` or `[cache] scheduler = false` to disable.
-    /// An unusable scheduler directory fails open and compiles without a permit.
-    pub scheduler: bool,
+    // Under memory pressure, admit a compile only when no other compile
+    // holds a scheduler slot.
+    // Storage-layout advisories (kunobi-ninja/kache#551) are always on: a
+    // cache hit restored by COPY because the storage *layout* prevents
+    // zero-copy dedup is surfaced as a deduplicated advisory with fix
+    // suggestions. The machine-wide miss-path scheduler is always on. After a
+    // local and remote miss, the wrapper joins a flight and takes a
+    // memory-weighted permit before the per-key build lock. Hits and
+    // passthroughs never wait. An unusable scheduler directory fails open
+    // and compiles without a permit.
 }
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -310,35 +221,11 @@ pub struct CacheFileConfig {
     pub local_store: Option<String>,
     /// Job/process-lifetime state, separate from the persistent local store.
     pub runtime_dir: Option<String>,
-    /// Another store read after the local one. See [`Config::readonly_store`].
-    pub readonly_store: Option<String>,
     pub local_max_size: Option<String>,
     /// Volume-local store shards. See [`Config::volume_stores`]: keys are
     /// volume roots (`"D:"`, `"/mnt/biglake"`), values shard store dirs.
     pub volumes: Option<HashMap<String, String>>,
-    /// Input-set predictions. See [`Config::input_predictions`].
-    pub input_predictions: Option<bool>,
-    /// Compile-before-key toggle. See [`Config::deferred_discovery`].
-    pub deferred_discovery: Option<bool>,
-    /// Shared read-only OUT_DIR toggle. See [`Config::out_dir_alias`].
-    pub out_dir_alias: Option<bool>,
-    /// Deferred store flush toggle. See [`Config::deferred_durability`].
-    pub deferred_durability: Option<bool>,
-    /// Daemon hand-off toggle. See [`Config::daemon_publish`].
-    pub daemon_publish: Option<bool>,
     pub trust_daemon_execution: Option<bool>,
-    /// See [`Config::daemon_execution_concurrency`].
-    pub daemon_execution_concurrency: Option<usize>,
-    /// Opportunistic size-pressure GC toggle. See [`Config::auto_gc`].
-    pub auto_gc: Option<bool>,
-    /// Daemon index compaction toggle. See [`Config::index_auto_compact`].
-    pub index_auto_compact: Option<bool>,
-    /// See [`Config::auto_recover_min_free_bytes`].
-    pub auto_recover_min_free_bytes: Option<u64>,
-    /// See [`Config::scheduler_memory_pressure`].
-    pub scheduler_memory_pressure: Option<bool>,
-    /// See [`Config::build_script_hermetic`].
-    pub build_script_hermetic: Option<bool>,
     /// Ignore `KACHE_*` env overrides for file-backed settings. File-only by
     /// design (env must not re-enable env). See [`Config::ignore_env_enabled`].
     pub ignore_env: Option<bool>,
@@ -351,20 +238,12 @@ pub struct CacheFileConfig {
     pub bypass_env: Option<Vec<String>>,
     pub bypass_argv: Option<Vec<String>>,
     pub bypass_crates: Option<Vec<String>>,
-    pub event_log_max_size: Option<String>,
-    pub event_log_keep_lines: Option<usize>,
-    pub compression_level: Option<i32>,
-    /// Secondary compiler-wrapper for passed-through compiles.
-    /// See [`Config::fallback`].
-    pub fallback: Option<String>,
     /// Opaque cache-key salt. See [`Config::key_salt`].
     pub key_salt: Option<String>,
     /// Path-only env-var allowlist. See [`Config::path_only_env_vars`].
     pub path_only_env_vars: Option<Vec<String>>,
     /// Env vars folded into every cache key. See [`Config::key_env_vars`].
     pub key_env_vars: Option<Vec<String>>,
-    /// Machine-wide miss-path scheduler. See [`Config::scheduler`].
-    pub scheduler: Option<bool>,
 }
 
 /// Tracks which config fields have active env var overrides.
@@ -372,7 +251,6 @@ pub struct EnvOverrides {
     pub cache_dir: bool,
     pub max_size: bool,
     pub cache_executables: bool,
-    pub fallback: bool,
     pub key_salt: bool,
 }
 
@@ -385,7 +263,6 @@ impl EnvOverrides {
             cache_dir: env_or_ignored("KACHE_CACHE_DIR", ignore_env).is_ok(),
             max_size: env_or_ignored("KACHE_MAX_SIZE", ignore_env).is_ok(),
             cache_executables: env_or_ignored("KACHE_CACHE_EXECUTABLES", ignore_env).is_ok(),
-            fallback: env_or_ignored("KACHE_FALLBACK", ignore_env).is_ok(),
             key_salt: env_or_ignored("KACHE_KEY_SALT", ignore_env).is_ok(),
         }
     }
@@ -533,31 +410,16 @@ fn normalize_base_dirs(raw: impl IntoIterator<Item = String>) -> Result<Vec<Stri
 const IGNORE_ENV_GATED_VARS: &[&str] = &[
     "KACHE_CACHE_DIR",
     "KACHE_RUNTIME_DIR",
-    "KACHE_READONLY_STORE",
     "KACHE_MAX_SIZE",
     "KACHE_CACHE_EXECUTABLES",
 
-    "KACHE_COMPRESSION_LEVEL",
-    "KACHE_FALLBACK",
     "KACHE_KEY_SALT",
     "KACHE_CC_EXTRA_ALLOWLIST_FLAGS",
     "KACHE_PATH_ONLY_ENV_VARS",
 
     "KACHE_KEY_ENV_VARS",
-    "KACHE_INPUT_PREDICTIONS",
-    "KACHE_DEFERRED_DISCOVERY",
-    "KACHE_DAEMON_PUBLISH",
     "KACHE_TRUST_DAEMON_EXECUTION",
-    "KACHE_DAEMON_EXECUTION_CONCURRENCY",
-    "KACHE_OUT_DIR_ALIAS",
-    "KACHE_DEFERRED_DURABILITY",
-    "KACHE_AUTO_GC",
-    "KACHE_INDEX_AUTO_COMPACT",
-    "KACHE_AUTO_RECOVER_MIN_FREE_BYTES",
-    "KACHE_SCHEDULER_MEMORY_PRESSURE",
-    "KACHE_BUILD_SCRIPT_HERMETIC",
     "KACHE_HEARTBEAT_SECS",
-    "KACHE_SCHEDULER",
 ];
 
 /// Every file-backed `KACHE_*` variable and the config key it overrides, as
@@ -567,42 +429,18 @@ const IGNORE_ENV_GATED_VARS: &[&str] = &[
 const ENV_FILE_KEYS: &[(&str, &str)] = &[
     ("KACHE_CACHE_DIR", "cache.local_store"),
     ("KACHE_RUNTIME_DIR", "cache.runtime_dir"),
-    ("KACHE_READONLY_STORE", "cache.readonly_store"),
     ("KACHE_MAX_SIZE", "cache.local_max_size"),
     ("KACHE_CACHE_EXECUTABLES", "cache.cache_executables"),
 
-    ("KACHE_COMPRESSION_LEVEL", "cache.compression_level"),
-    ("KACHE_FALLBACK", "cache.fallback"),
     ("KACHE_KEY_SALT", "cache.key_salt"),
     ("KACHE_CC_EXTRA_ALLOWLIST_FLAGS", "cc.extra_allowlist_flags"),
     ("KACHE_PATH_ONLY_ENV_VARS", "cache.path_only_env_vars"),
 
     ("KACHE_KEY_ENV_VARS", "cache.key_env_vars"),
-    ("KACHE_INPUT_PREDICTIONS", "cache.input_predictions"),
-    ("KACHE_DEFERRED_DISCOVERY", "cache.deferred_discovery"),
-    ("KACHE_OUT_DIR_ALIAS", "cache.out_dir_alias"),
-    ("KACHE_DEFERRED_DURABILITY", "cache.deferred_durability"),
-    ("KACHE_DAEMON_PUBLISH", "cache.daemon_publish"),
     (
         "KACHE_TRUST_DAEMON_EXECUTION",
         "cache.trust_daemon_execution",
     ),
-    (
-        "KACHE_DAEMON_EXECUTION_CONCURRENCY",
-        "cache.daemon_execution_concurrency",
-    ),
-    ("KACHE_AUTO_GC", "cache.auto_gc"),
-    ("KACHE_INDEX_AUTO_COMPACT", "cache.index_auto_compact"),
-    (
-        "KACHE_AUTO_RECOVER_MIN_FREE_BYTES",
-        "cache.auto_recover_min_free_bytes",
-    ),
-    (
-        "KACHE_SCHEDULER_MEMORY_PRESSURE",
-        "cache.scheduler_memory_pressure",
-    ),
-    ("KACHE_BUILD_SCRIPT_HERMETIC", "cache.build_script_hermetic"),
-    ("KACHE_SCHEDULER", "cache.scheduler"),
 ];
 
 /// Read a `KACHE_*` env var, unless the pinned config asked to ignore env
@@ -627,15 +465,6 @@ fn env_or_ignored_for(
         Err(std::env::VarError::NotPresent)
     } else {
         invocation.var(name)
-    }
-}
-
-/// The OUT_DIR alias setting from an env value, else the file, else on. Only
-/// `0` and `false` turn it off.
-fn out_dir_alias_setting(env: Option<&str>, file: Option<bool>) -> bool {
-    match env {
-        Some(value) => !(value == "0" || value.eq_ignore_ascii_case("false")),
-        None => file.unwrap_or(true),
     }
 }
 
@@ -713,19 +542,6 @@ impl Config {
 
         let cache_dir = resolve_invocation_path(invocation, &cache_dir)?;
 
-        let readonly_store = env_or_ignored_for(invocation, "KACHE_READONLY_STORE", ignore_env)
-            .ok()
-            .or_else(|| {
-                file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|c| c.cache.as_ref())
-                    .and_then(|c| c.readonly_store.clone())
-            })
-            .filter(|s| !s.is_empty())
-            .map(|s| resolve_invocation_path(invocation, &shellexpand_for(invocation, &s)))
-            .transpose()?;
-
         // Keep the historical single-directory layout unless explicitly split.
         // Resolve this once alongside `cache_dir`: wrappers and their daemon must
         // agree on every runtime path even if ambient env changes later.
@@ -786,51 +602,6 @@ impl Config {
                         .and_then(|c| c.cache_executables)
                         .unwrap_or(default_cache_executables())
                 });
-
-        let event_log_max_size = file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.event_log_max_size.as_ref())
-            .and_then(|s| parse_size_checked(s, "[cache] event_log_max_size"))
-            .unwrap_or(DEFAULT_EVENT_LOG_MAX_SIZE);
-
-        let event_log_keep_lines = file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.event_log_keep_lines)
-            .unwrap_or(1000);
-
-        let compression_level =
-            env_or_ignored_for(invocation, "KACHE_COMPRESSION_LEVEL", ignore_env)
-                .ok()
-                .and_then(|s| s.parse::<i32>().ok())
-                .or_else(|| {
-                    file_config
-                        .as_ref()
-                        .ok()
-                        .and_then(|c| c.cache.as_ref())
-                        .and_then(|c| c.compression_level)
-                })
-                .unwrap_or(3)
-                .clamp(1, 22);
-
-        // Fallback compiler-wrapper for passed-through compiles. Env
-        // wins over the file; empty / "off" / "none" disables it.
-        let fallback = env_or_ignored_for(invocation, "KACHE_FALLBACK", ignore_env)
-            .ok()
-            .or_else(|| {
-                file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|c| c.cache.as_ref())
-                    .and_then(|c| c.fallback.clone())
-            })
-            .map(|s| s.trim().to_string())
-            .filter(|s| {
-                !s.is_empty() && !s.eq_ignore_ascii_case("off") && !s.eq_ignore_ascii_case("none")
-            });
 
         // Cache-key salt. Env wins over the file; an empty / whitespace
         // value is treated as unset so it never silently shifts the key.
@@ -922,55 +693,25 @@ impl Config {
             );
         }
 
-        let input_predictions = Self::input_predictions_enabled_for(invocation, &file_config);
-        let deferred_discovery = Self::deferred_discovery_enabled_for(invocation, &file_config);
-        let out_dir_alias = Self::out_dir_alias_enabled_for(invocation, &file_config);
-        let deferred_durability = Self::deferred_durability_enabled_for(invocation, &file_config);
-        let daemon_publish = Self::daemon_publish_enabled_for(invocation, &file_config);
         let trust_daemon_execution = Self::trust_daemon_execution_for(invocation, &file_config);
-        let daemon_execution_concurrency =
-            Self::daemon_execution_concurrency_for(invocation, &file_config)?;
         let project_rules = ProjectRules::from_file_config(&file_config);
-        let auto_gc = Self::auto_gc_enabled_for(invocation, &file_config);
-        let index_auto_compact = Self::index_auto_compact_enabled_for(invocation, &file_config);
-        let auto_recover_min_free_bytes =
-            Self::auto_recover_min_free_bytes_for(invocation, &file_config);
-        let scheduler_memory_pressure =
-            Self::scheduler_memory_pressure_enabled_for(invocation, &file_config);
-        let build_script_hermetic =
-            Self::build_script_hermetic_enabled_for(invocation, &file_config);
         let mut volume_stores = Self::load_volume_stores(&file_config, explicit_max_size);
         for shard in &mut volume_stores {
             shard.store = resolve_invocation_path(invocation, &shard.store)?;
         }
-        let scheduler = Self::scheduler_enabled_for(invocation, &file_config);
         Ok(Config {
             cache_dir,
             runtime_dir,
             socket_path_override,
             max_size,
             disabled,
-            readonly_store,
-            input_predictions,
-            deferred_discovery,
-            out_dir_alias,
-            deferred_durability,
-            daemon_publish,
             trust_daemon_execution,
-            daemon_execution_concurrency,
             project_rules,
-            auto_gc,
-            index_auto_compact,
-            auto_recover_min_free_bytes,
-            scheduler_memory_pressure,
-            build_script_hermetic,
+            auto_recover_min_free_bytes: default_recovery_floor(
+                crate::policy::running_in_ci_with(|name| invocation.var(name).ok()),
+            ),
             volume_stores,
-            scheduler,
             cache_executables,
-            event_log_max_size,
-            event_log_keep_lines,
-            compression_level,
-            fallback,
             key_salt,
             path_only_env_vars,
             key_env_vars,
@@ -982,32 +723,6 @@ impl Config {
     #[cfg(test)]
     fn load_resolved(file_config: Result<FileConfig>) -> Result<Self> {
         Self::load_resolved_for(&InvocationEnv::capture(), file_config)
-    }
-
-    #[cfg(test)]
-    fn input_predictions_enabled(file_config: &Result<FileConfig>) -> bool {
-        Self::input_predictions_enabled_for(&InvocationEnv::capture(), file_config)
-    }
-
-    #[cfg(test)]
-    #[cfg(test)]
-    fn deferred_discovery_enabled(file_config: &Result<FileConfig>) -> bool {
-        Self::deferred_discovery_enabled_for(&InvocationEnv::capture(), file_config)
-    }
-
-    #[cfg(test)]
-    fn daemon_publish_enabled(file_config: &Result<FileConfig>) -> bool {
-        Self::daemon_publish_enabled_for(&InvocationEnv::capture(), file_config)
-    }
-
-    #[cfg(test)]
-    fn out_dir_alias_enabled(file_config: &Result<FileConfig>) -> bool {
-        Self::out_dir_alias_enabled_for(&InvocationEnv::capture(), file_config)
-    }
-
-    #[cfg(test)]
-    fn deferred_durability_enabled(file_config: &Result<FileConfig>) -> bool {
-        Self::deferred_durability_enabled_for(&InvocationEnv::capture(), file_config)
     }
 
     #[cfg(test)]
@@ -1153,88 +868,6 @@ impl Config {
             .unwrap_or(false)
     }
 
-    /// Whether input-set predictions are recorded. Env wins over the file:
-    /// `KACHE_INPUT_PREDICTIONS=1`/`=true`, else `[cache] input_predictions`,
-    /// else on.
-    fn input_predictions_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_INPUT_PREDICTIONS", ignore_env) {
-            return v == "1" || v.eq_ignore_ascii_case("true");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.input_predictions)
-            .unwrap_or(true)
-    }
-
-    /// Whether every `kache report` records its session. Env wins over the
-    /// file: `KACHE_RECORD_SESSIONS=1`/`=true`, else `[cache] record_sessions`,
-    /// else off.
-    fn deferred_discovery_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_DEFERRED_DISCOVERY", ignore_env) {
-            return !(v == "0" || v.eq_ignore_ascii_case("false"));
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.deferred_discovery)
-            .unwrap_or(true)
-    }
-
-    fn daemon_publish_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_DAEMON_PUBLISH", ignore_env) {
-            return !(v == "0" || v.eq_ignore_ascii_case("false"));
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.daemon_publish)
-            .unwrap_or(true)
-    }
-
-    fn daemon_execution_concurrency_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> Result<Option<usize>> {
-        let configured =
-            match env_or_ignored_for(
-                invocation,
-                "KACHE_DAEMON_EXECUTION_CONCURRENCY",
-                Self::ignore_env_enabled(file_config),
-            ) {
-                Ok(value) => Some(value.parse::<usize>().context(
-                    "KACHE_DAEMON_EXECUTION_CONCURRENCY must be a non-negative integer",
-                )?),
-                Err(_) => file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|config| config.cache.as_ref())
-                    .and_then(|cache| cache.daemon_execution_concurrency),
-            };
-        // Four RPC handlers per pipeline must fit Tokio's semaphore limit
-        // (usize::MAX >> 3), including on 32-bit clients.
-        anyhow::ensure!(
-            configured.is_none_or(|value| value <= usize::MAX >> 5),
-            "cache.daemon_execution_concurrency is too large"
-        );
-        Ok(configured.filter(|value| *value != 0))
-    }
-
     fn trust_daemon_execution_for(
         invocation: &InvocationEnv,
         file_config: &Result<FileConfig>,
@@ -1252,168 +885,6 @@ impl Config {
             .and_then(|config| config.cache.as_ref())
             .and_then(|cache| cache.trust_daemon_execution)
             .unwrap_or(false)
-    }
-
-    /// Shared read-only OUT_DIR: `KACHE_OUT_DIR_ALIAS` (env wins), else
-    /// `[cache] out_dir_alias`, else on. See [`Config::out_dir_alias`].
-    fn out_dir_alias_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        out_dir_alias_setting(
-            env_or_ignored_for(invocation, "KACHE_OUT_DIR_ALIAS", ignore_env)
-                .ok()
-                .as_deref(),
-            file_config
-                .as_ref()
-                .ok()
-                .and_then(|c| c.cache.as_ref())
-                .and_then(|c| c.out_dir_alias),
-        )
-    }
-
-    fn deferred_durability_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_DEFERRED_DURABILITY", ignore_env) {
-            return !(v == "0" || v.eq_ignore_ascii_case("false"));
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.deferred_durability)
-            .unwrap_or(true)
-    }
-
-    /// Opportunistic size-pressure GC (kunobi-ninja/kache#497): on by default so
-    /// size pressure also runs for daemon-less, local-only builds.
-    /// `KACHE_AUTO_GC=0`/`=false` (env wins), else `[cache] auto_gc`, else on.
-    /// See [`Config::auto_gc`].
-    fn auto_gc_enabled_for(invocation: &InvocationEnv, file_config: &Result<FileConfig>) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_AUTO_GC", ignore_env) {
-            return v != "0" && !v.eq_ignore_ascii_case("false");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.auto_gc)
-            .unwrap_or(true)
-    }
-
-    /// Daemon-side index compaction, on by default.
-    /// `KACHE_INDEX_AUTO_COMPACT=0`/`=false` (env wins), else
-    /// `[cache] index_auto_compact`, else on. See [`Config::index_auto_compact`].
-    fn index_auto_compact_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_INDEX_AUTO_COMPACT", ignore_env) {
-            return v != "0" && !v.eq_ignore_ascii_case("false");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.index_auto_compact)
-            .unwrap_or(true)
-    }
-
-    /// Hermetic build-script runs, off by default.
-    /// `KACHE_BUILD_SCRIPT_HERMETIC=1`/`=true` turns them on and any other
-    /// value off (env wins), else `[cache] build_script_hermetic`, else off.
-    fn build_script_hermetic_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_BUILD_SCRIPT_HERMETIC", ignore_env) {
-            return v == "1" || v == "true";
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.build_script_hermetic)
-            .unwrap_or(false)
-    }
-
-    /// Memory-pressure admission, on by default.
-    /// `KACHE_SCHEDULER_MEMORY_PRESSURE=0`/`=false` (env wins), else
-    /// `[cache] scheduler_memory_pressure`, else on.
-    fn scheduler_memory_pressure_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_SCHEDULER_MEMORY_PRESSURE", ignore_env)
-        {
-            return v != "0" && !v.eq_ignore_ascii_case("false");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.scheduler_memory_pressure)
-            .unwrap_or(true)
-    }
-
-    /// Free-space threshold for store and target recovery, `0` (off) by
-    /// default. `KACHE_AUTO_RECOVER_MIN_FREE_BYTES` (env wins), else
-    /// `[cache] auto_recover_min_free_bytes`.
-    fn auto_recover_min_free_bytes_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> u64 {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        env_or_ignored_for(invocation, "KACHE_AUTO_RECOVER_MIN_FREE_BYTES", ignore_env)
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .or_else(|| {
-                file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|c| c.cache.as_ref())
-                    .and_then(|c| c.auto_recover_min_free_bytes)
-            })
-            .unwrap_or_else(|| {
-                default_recovery_floor(crate::policy::running_in_ci_with(|name| {
-                    invocation.var(name).ok()
-                }))
-            })
-    }
-
-    /// Preserve externally retained entries by default. The opt-in restores
-    /// the older namespace-first policy for installations that require the
-    /// registered store size to fall below `max_size` even when no filesystem
-    /// blocks would be reclaimed.
-    /// Storage-layout advisories (kunobi-ninja/kache#551): on by default so
-    /// users who *can* fix their layout hear about the dedup they're missing.
-    /// `KACHE_STORAGE_LAYOUT_ADVICE=0`/`=false` (env wins), else
-    /// `[cache] storage_layout_advice`, else on.
-    /// See [`Config::storage_layout_advice`].
-    /// Opt-in miss diagnostics (kunobi-ninja/kache#131). Env wins over the
-    /// file: `KACHE_EXPLAIN_MISS=1`/`=true`, else `[cache] explain_miss`,
-    /// else off. See [`Config::explain_miss`].
-    /// Machine-wide miss-path scheduler: on by default.
-    /// `KACHE_SCHEDULER=0`/`=false` (env wins), else `[cache] scheduler`, else on.
-    fn scheduler_enabled_for(invocation: &InvocationEnv, file_config: &Result<FileConfig>) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_SCHEDULER", ignore_env) {
-            return v != "0" && !v.eq_ignore_ascii_case("false");
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.scheduler)
-            .unwrap_or(true)
     }
 
     pub fn store_dir(&self) -> PathBuf {
@@ -2802,7 +2273,6 @@ impl From<&Config> for kache_core::store_config::Config {
             max_size: config.max_size,
             gc_evict_shared: false,
             upload_spool_max_jobs: UPLOAD_SPOOL_MAX_JOBS,
-            deferred_durability: config.deferred_durability,
         }
     }
 }
@@ -2848,7 +2318,6 @@ mod invocation_tests {
 [cache]
 local_store = "~/store"
 runtime_dir = "run"
-readonly_store = "~/read"
 local_max_size = "1GiB"
 exclude = ["$CARGO_HOME/**", "$CUSTOM/**"]
 bypass_env = ["SKIP=1"]
@@ -2880,7 +2349,6 @@ bypass_env = ["SKIP=1"]
         assert_eq!(a.cache_dir, first.path().join("home/store/one"));
         assert_eq!(b.cache_dir, second.path().join("home/store/two"));
         assert_eq!(a.runtime_dir, first.path().join("run"));
-        assert_eq!(b.readonly_store, Some(second.path().join("home/read")));
         assert_eq!(a.key_salt.as_deref(), Some("first"));
         assert_eq!(b.key_salt.as_deref(), Some("second"));
         assert_eq!(a.max_size, 1 << 30);

@@ -20,8 +20,7 @@ compiler delegation is unavailable.
 - Exit when its config file changes, so the next start loads the new settings.
 
 For delegated compiles, the daemon's pipeline already owns publication. A local
-C/C++ engine can also hand its private output snapshots to the daemon when
-`cache.daemon_publish` is enabled (the default). If the daemon cannot accept that
+C/C++ engine also hands its private output snapshots to the daemon. If the daemon cannot accept that
 handoff within 25 ms, the engine publishes locally. Local execution using a
 `[cache.volumes]` shard publishes from the engine.
 
