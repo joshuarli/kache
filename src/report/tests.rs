@@ -407,8 +407,6 @@ fn write_test_events(dir: &std::path::Path) -> Config {
         .into_owned();
 
     let config = Config {
-        readonly_store: None,
-        fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
@@ -1587,8 +1585,6 @@ fn test_markdown_contains_sections() {
 fn test_missing_transfer_data() {
     let dir = tempfile::tempdir().unwrap();
     let config = Config {
-        readonly_store: None,
-        fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
@@ -1634,8 +1630,6 @@ fn test_missing_transfer_data() {
 fn test_suggestion_high_miss_share() {
     let dir = tempfile::tempdir().unwrap();
     let config = Config {
-        readonly_store: None,
-        fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
@@ -1690,8 +1684,6 @@ fn test_suggestion_high_miss_share() {
 fn test_suggestion_high_hit_overhead() {
     let dir = tempfile::tempdir().unwrap();
     let config = Config {
-        readonly_store: None,
-        fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
@@ -1747,8 +1739,6 @@ fn test_suggestion_high_hit_overhead() {
 fn test_suggestion_network_download_failures_and_fanout() {
     let dir = tempfile::tempdir().unwrap();
     let config = Config {
-        readonly_store: None,
-        fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
@@ -1809,8 +1799,6 @@ fn test_suggestion_network_latency_thresholds() {
     // fixed-ratio test_transfer helper can't reach.
     let dir = tempfile::tempdir().unwrap();
     let config = Config {
-        readonly_store: None,
-        fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
@@ -2272,8 +2260,6 @@ fn render_network_and_error_sections_with_all_optional_fields() {
 fn test_empty_report() {
     let dir = tempfile::tempdir().unwrap();
     let config = Config {
-        readonly_store: None,
-        fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),
@@ -2376,7 +2362,7 @@ fn fallback_recovery_survives_report_conversion_and_formatting() {
     assert_eq!(plain.package, "fixture-package");
     event.fallback_attempt = Some(crate::fallback::Attempt {
         wrapper: "sccache".into(),
-        outcome: crate::fallback::Outcome::Failed,
+        outcome: kache_protocol::fallback::Outcome::Failed,
         exit_code: Some(42),
         detail: "exit status: 42".into(),
     });
@@ -2696,8 +2682,6 @@ fn report_counts_each_download_transfer_format() {
     // the other tests use).
     let dir = tempfile::tempdir().unwrap();
     let config = Config {
-        readonly_store: None,
-        fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
         volume_stores: Vec::new(),

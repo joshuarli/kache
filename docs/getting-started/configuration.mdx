@@ -87,7 +87,6 @@ disagree — not settings you can set.
 | `KACHE_CACHE_DIR` | `cache.local_store` | OS cache directory | Persistent store |
 | `KACHE_TRUST_DOMAIN` | none | unset | Isolate the local store under `<cache dir>/<label>/`; a runtime dir left at its default moves with it. The label is one path component of up to 64 characters from `[A-Za-z0-9._-]`, and not `.` or `..`. Invalid labels are ignored with a warning. Do not set this on public or fork jobs. |
 | `KACHE_RUNTIME_DIR` | `cache.runtime_dir` | local store | Socket, locks, logs, state, and session markers |
-| `KACHE_READONLY_STORE` | `cache.readonly_store` | unset | Another store on this machine to read after the local one, never written. See [Read-only store](#read-only-store). |
 | none | `cache.volumes` | unset | Volume-local store shards, e.g. `[cache.volumes] "D:" = "D:/kache-store"`. Builds on a mapped volume share inodes there instead of copying across mounts. Unmapped volumes use the main store. GC sweeps each shard with its own budget; see [Volume shards](#volume-shards). |
 | `KACHE_SOCKET_PATH` | none | `<runtime_dir>/daemon.sock` | Absolute daemon endpoint override |
 | `KACHE_MAX_SIZE` | `cache.local_max_size` | 5% of the cache disk, rounded to the nearest GiB, floored at 5GiB and capped at 100GiB; 50GiB when the disk size cannot be read | Registered blob bytes allowed before GC. An explicit size always wins. `none` is not allowed. |
@@ -148,27 +147,6 @@ GC skips a shard whose store dir has no `index.db`: a missing directory, an unmo
 
 `kache gc --json`, `kache gc --stale-schema` and emptying the cache with `kache clean --cache` still cover only the main store.
 
-### Read-only store
-
-Set `readonly_store` to read another store on the same machine after your own. Mount that store read-only, for example by giving a CI container the build host's store through a `:ro` volume:
-
-```toml title="~/.config/kache/config.toml"
-[cache]
-readonly_store = "/kache-host"
-```
-
-The equivalent environment setting is `KACHE_READONLY_STORE=/kache-host`. The value is the directory that holds that store's `index.db`. An empty value turns it off.
-
-- Rust and C/C++ lookups ask the local store first (a volume shard, then the main store), then the read-only store.
-- A hit there is restored as a private copy (a reflink where the filesystem supports it), never a hardlink into that store.
-- Kache skips index writes, hit stamps and maintenance there. A damaged or legacy entry is a miss. A rejected hit compiles and caches in your own writable store.
-- Its owner must keep the WAL side files available. A WAL-mode index without `index.db-wal` and `index.db-shm` is skipped with a warning. A read-only mount is required to prevent SQLite from creating side files if the owner removes them during an open. The connection alone cannot enforce that protection on a writable mount.
-- With a read-only store set, a unit with no record in the local store is keyed before it compiles, so it can still hit there.
-
-The read-only path is used as configured. `KACHE_TRUST_DOMAIN` isolates your writable store and runtime, but does not change this path. Mount a store that the job is allowed to read for its trust domain.
-
-The local store is not designed for sharing across machines. Each machine keeps its own store.
-
 ### Daemon index maintenance
 
 The daemon looks after `index.db` on its own. It checks 60 seconds after it starts, every 5 minutes after that, and once at shutdown. Each check runs two steps in order: it heals the blob index, then compacts the file. Both steps hold the index write lock while they work, so both wait for a quiet machine. A machine is quiet when no compile holds a scheduler slot, and the daemon has received no build request for 60 seconds. Stats polling does not count as a build request. Neither step overlaps a GC sweep.
@@ -212,7 +190,6 @@ Set `cache.auto_recover_min_free_bytes` to the minimum free space on the store's
 | `KACHE_VERIFY_INPUT_PREDICTIONS` | none | off | `sampled` or `always`: also run the dep-info pre-pass alongside a prediction and count disagreements in the report. The pre-pass result is the one used |
 | `KACHE_BUILD_SCRIPT_HERMETIC` | `cache.build_script_hermetic` | `false` | On Unix, run cached build scripts with `OUT_DIR` in a shared directory named by their inputs, so a run is shared across target directories. See [Build scripts](/docs/how-it-works/build-scripts). |
 | `KACHE_BUILD_SCRIPT_CACHE` | none | `true` on Linux and macOS | Cache build-script runs: restore `OUT_DIR` and the script's output instead of running it when its binary, Cargo environment and declared `rerun-if-*` inputs match a recorded run. See [Build scripts](/docs/how-it-works/build-scripts). |
-| `KACHE_FALLBACK` | `cache.fallback` | none | Wrapper used for ordinary Kache passthroughs |
 | none | `cache.exclude` | `[]` | Source-path globs that bypass Kache |
 | none | `cache.bypass_crates` | `[]` | Exact rustc crate names that bypass Kache |
 | none | `cache.bypass_argv` | `[]` | Argument substrings that bypass Kache |

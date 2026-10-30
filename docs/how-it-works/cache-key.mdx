@@ -126,8 +126,7 @@ build.
 ### Misses without a record
 
 The first time a unit is built on a machine, Kache has no recorded closure to
-derive a key from. When no fallback wrapper or read-only store is
-configured and the store holds no entry for the unit, the miss is certain.
+derive a key from. When the store holds no entry for the unit, the miss is certain.
 Kache then compiles first and keys from the dep-info the compile emitted,
 instead of spawning `rustc --emit=dep-info` to discover the closure before
 compiling. When an entry could exist, because the store holds one for the unit

@@ -1796,26 +1796,6 @@ fn test_sccache_rc_detection_ignores_fallback_setting() {
 }
 
 #[test]
-fn test_fallback_is_sccache() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut cfg = save_manifest_config(dir.path().to_path_buf());
-
-    // No config / no fallback -> false.
-    assert!(!fallback_is_sccache(None));
-    assert!(!fallback_is_sccache(Some(&cfg)));
-
-    // Fallback set to an sccache binary (incl. a full path) -> true.
-    cfg.fallback = Some("sccache".to_string());
-    assert!(fallback_is_sccache(Some(&cfg)));
-    cfg.fallback = Some("/usr/local/bin/sccache".to_string());
-    assert!(fallback_is_sccache(Some(&cfg)));
-
-    // A non-sccache fallback -> false.
-    cfg.fallback = Some("/usr/bin/gcc".to_string());
-    assert!(!fallback_is_sccache(Some(&cfg)));
-}
-
-#[test]
 fn test_dir_size_empty() {
     let dir = tempfile::tempdir().unwrap();
     assert_eq!(dir_size(dir.path()), 0);
@@ -2164,10 +2144,8 @@ fn save_manifest_config(
 ) -> Config {
     Config {
         socket_path_override: None,
-        fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        readonly_store: None,
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
         daemon_execution_concurrency: None,

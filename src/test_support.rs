@@ -26,10 +26,8 @@ pub(crate) fn without_terminal(command: &mut std::process::Command) -> &mut std:
 
 pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
     crate::config::Config {
-        fallback: None,
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
-        readonly_store: None,
         volume_stores: Vec::new(),
         trust_daemon_execution: false,
         daemon_execution_concurrency: None,

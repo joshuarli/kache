@@ -101,9 +101,6 @@ pub struct Config {
     pub event_log_keep_lines: usize,
     /// Zstd compression level (1-19, default 3). Lower = faster, higher = smaller.
     pub compression_level: i32,
-    /// Secondary wrapper for ordinary uncached compiles. Incremental compiles
-    /// go directly to the compiler. Set with `KACHE_FALLBACK` or `[cache] fallback`.
-    pub fallback: Option<String>,
     /// An opaque string folded into every cache key. Lets a project
     /// force a cold cache on a change kache cannot otherwise observe —
     /// e.g. a cross-target libc/sysroot change, a toolchain-closure bump
@@ -171,14 +168,6 @@ pub struct Config {
     /// constant string but compile to per-CPU objects; folded verbatim
     /// they collide across machines. List explicit values, not `native`.
     pub cc_extra_allowlist_flags: Vec<String>,
-    /// Another local store this process only reads, after its own: the
-    /// directory that holds that store's `index.db`. For a CI container given
-    /// the host's store through a read-only mount. A hit there is restored by
-    /// private copy. The mount must enforce filesystem protection because
-    /// SQLite can create WAL side files on a writable mount. Set via
-    /// `KACHE_READONLY_STORE` or `[cache] readonly_store`; env wins over the
-    /// file, and an empty value turns it off.
-    pub readonly_store: Option<PathBuf>,
     /// Disabled unless `KACHE_TRUST_DAEMON_EXECUTION=1` or
     /// `[cache] trust_daemon_execution = true` is set on both peers.
     pub trust_daemon_execution: bool,
@@ -246,8 +235,6 @@ pub struct CacheFileConfig {
     pub local_store: Option<String>,
     /// Job/process-lifetime state, separate from the persistent local store.
     pub runtime_dir: Option<String>,
-    /// Another store read after the local one. See [`Config::readonly_store`].
-    pub readonly_store: Option<String>,
     pub local_max_size: Option<String>,
     /// Volume-local store shards. See [`Config::volume_stores`]: keys are
     /// volume roots (`"D:"`, `"/mnt/biglake"`), values shard store dirs.
@@ -276,9 +263,6 @@ pub struct CacheFileConfig {
     pub event_log_max_size: Option<String>,
     pub event_log_keep_lines: Option<usize>,
     pub compression_level: Option<i32>,
-    /// Secondary compiler-wrapper for passed-through compiles.
-    /// See [`Config::fallback`].
-    pub fallback: Option<String>,
     /// Opaque cache-key salt. See [`Config::key_salt`].
     pub key_salt: Option<String>,
     /// Path-only env-var allowlist. See [`Config::path_only_env_vars`].
@@ -292,7 +276,6 @@ pub struct EnvOverrides {
     pub cache_dir: bool,
     pub max_size: bool,
     pub cache_executables: bool,
-    pub fallback: bool,
     pub key_salt: bool,
 }
 
@@ -305,7 +288,6 @@ impl EnvOverrides {
             cache_dir: env_or_ignored("KACHE_CACHE_DIR", ignore_env).is_ok(),
             max_size: env_or_ignored("KACHE_MAX_SIZE", ignore_env).is_ok(),
             cache_executables: env_or_ignored("KACHE_CACHE_EXECUTABLES", ignore_env).is_ok(),
-            fallback: env_or_ignored("KACHE_FALLBACK", ignore_env).is_ok(),
             key_salt: env_or_ignored("KACHE_KEY_SALT", ignore_env).is_ok(),
         }
     }
@@ -453,12 +435,10 @@ fn normalize_base_dirs(raw: impl IntoIterator<Item = String>) -> Result<Vec<Stri
 const IGNORE_ENV_GATED_VARS: &[&str] = &[
     "KACHE_CACHE_DIR",
     "KACHE_RUNTIME_DIR",
-    "KACHE_READONLY_STORE",
     "KACHE_MAX_SIZE",
     "KACHE_CACHE_EXECUTABLES",
 
     "KACHE_COMPRESSION_LEVEL",
-    "KACHE_FALLBACK",
     "KACHE_KEY_SALT",
     "KACHE_CC_EXTRA_ALLOWLIST_FLAGS",
     "KACHE_PATH_ONLY_ENV_VARS",
@@ -479,12 +459,10 @@ const IGNORE_ENV_GATED_VARS: &[&str] = &[
 const ENV_FILE_KEYS: &[(&str, &str)] = &[
     ("KACHE_CACHE_DIR", "cache.local_store"),
     ("KACHE_RUNTIME_DIR", "cache.runtime_dir"),
-    ("KACHE_READONLY_STORE", "cache.readonly_store"),
     ("KACHE_MAX_SIZE", "cache.local_max_size"),
     ("KACHE_CACHE_EXECUTABLES", "cache.cache_executables"),
 
     ("KACHE_COMPRESSION_LEVEL", "cache.compression_level"),
-    ("KACHE_FALLBACK", "cache.fallback"),
     ("KACHE_KEY_SALT", "cache.key_salt"),
     ("KACHE_CC_EXTRA_ALLOWLIST_FLAGS", "cc.extra_allowlist_flags"),
     ("KACHE_PATH_ONLY_ENV_VARS", "cache.path_only_env_vars"),
@@ -608,19 +586,6 @@ impl Config {
 
         let cache_dir = resolve_invocation_path(invocation, &cache_dir)?;
 
-        let readonly_store = env_or_ignored_for(invocation, "KACHE_READONLY_STORE", ignore_env)
-            .ok()
-            .or_else(|| {
-                file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|c| c.cache.as_ref())
-                    .and_then(|c| c.readonly_store.clone())
-            })
-            .filter(|s| !s.is_empty())
-            .map(|s| resolve_invocation_path(invocation, &shellexpand_for(invocation, &s)))
-            .transpose()?;
-
         // Keep the historical single-directory layout unless explicitly split.
         // Resolve this once alongside `cache_dir`: wrappers and their daemon must
         // agree on every runtime path even if ambient env changes later.
@@ -710,22 +675,6 @@ impl Config {
                 })
                 .unwrap_or(3)
                 .clamp(1, 22);
-
-        // Fallback compiler-wrapper for passed-through compiles. Env
-        // wins over the file; empty / "off" / "none" disables it.
-        let fallback = env_or_ignored_for(invocation, "KACHE_FALLBACK", ignore_env)
-            .ok()
-            .or_else(|| {
-                file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|c| c.cache.as_ref())
-                    .and_then(|c| c.fallback.clone())
-            })
-            .map(|s| s.trim().to_string())
-            .filter(|s| {
-                !s.is_empty() && !s.eq_ignore_ascii_case("off") && !s.eq_ignore_ascii_case("none")
-            });
 
         // Cache-key salt. Env wins over the file; an empty / whitespace
         // value is treated as unset so it never silently shifts the key.
@@ -837,7 +786,6 @@ impl Config {
             socket_path_override,
             max_size,
             disabled,
-            readonly_store,
             trust_daemon_execution,
             daemon_execution_concurrency,
             project_rules,
@@ -849,7 +797,6 @@ impl Config {
             event_log_max_size,
             event_log_keep_lines,
             compression_level,
-            fallback,
             key_salt,
             path_only_env_vars,
             key_env_vars,
@@ -2548,7 +2495,6 @@ mod invocation_tests {
 [cache]
 local_store = "~/store"
 runtime_dir = "run"
-readonly_store = "~/read"
 local_max_size = "1GiB"
 exclude = ["$CARGO_HOME/**", "$CUSTOM/**"]
 bypass_env = ["SKIP=1"]
@@ -2580,7 +2526,6 @@ bypass_env = ["SKIP=1"]
         assert_eq!(a.cache_dir, first.path().join("home/store/one"));
         assert_eq!(b.cache_dir, second.path().join("home/store/two"));
         assert_eq!(a.runtime_dir, first.path().join("run"));
-        assert_eq!(b.readonly_store, Some(second.path().join("home/read")));
         assert_eq!(a.key_salt.as_deref(), Some("first"));
         assert_eq!(b.key_salt.as_deref(), Some("second"));
         assert_eq!(a.max_size, 1 << 30);

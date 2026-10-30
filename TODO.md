@@ -1,14 +1,5 @@
 Prefix: KACH
 Next: 5
-### KACH-2 · P3 · Remove narrow chaining and second-store knobs
-
-- **Area:** Config
-- **Where:** `crates/kache-config/src/config.rs:123`, `crates/kache-config/src/config.rs:198`
-- **Problem:** `fallback` (secondary wrapper for passthroughs, sccache chaining) and `readonly_store` (CI read-only mount) serve narrow setups. Each adds a second lookup path, WAL handling, and e2e coverage (`e2e-rust-sccache`, `readonly_store_test.rs`). Unproven that either carries production load.
-- **Recommendation:** Delete both knobs; passthroughs run the compiler directly, lookups use the single local store. Remove e2e sccache scenario and readonly-store test.
-- **Fix with:** delete
-- **Effort:** M
-
 ### KACH-3 · P3 · Delete hermetic build-script runs or enable by default
 
 - **Area:** Config

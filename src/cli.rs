@@ -3597,12 +3597,6 @@ fn retry_with_yes(outcome: &str, why: &str, args: &[String], preview: bool) -> a
     )
 }
 
-fn fallback_is_sccache(config: Option<&crate::config::Config>) -> bool {
-    config
-        .and_then(|cfg| cfg.fallback.as_deref())
-        .is_some_and(is_sccache_program)
-}
-
 fn is_sccache_program(value: &str) -> bool {
     let name = std::path::Path::new(value)
         .file_name()
@@ -4382,7 +4376,6 @@ pub fn doctor(
         .map_or((None, None), |(config, provenance)| {
             (Some(config), Some(provenance))
         });
-    let sccache_is_fallback = fallback_is_sccache(config.as_ref());
 
     // The daemon is optional (see README): `kache doctor` shows its checks
     // for diagnostics but never counts them as issues. See #443.
@@ -4617,22 +4610,13 @@ pub fn doctor(
         .output()
         && output.status.success()
     {
-        if sccache_is_fallback {
-            checks.push(Check {
-                label: "sccache",
-                pass: true,
-                detail: "daemon is running as fallback wrapper".into(),
-                fix: None,
-            });
-        } else {
-            fix_repairs.push("sccache");
-            checks.push(Check {
-                label: "sccache",
-                pass: false,
-                detail: "daemon is running".into(),
-                fix: Some("sccache --stop-server".into()),
-            });
-        }
+        fix_repairs.push("sccache");
+        checks.push(Check {
+            label: "sccache",
+            pass: false,
+            detail: "daemon is running".into(),
+            fix: Some("sccache --stop-server".into()),
+        });
     }
 
     // 8. Daemon version match

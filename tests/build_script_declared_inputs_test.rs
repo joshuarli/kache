@@ -484,17 +484,15 @@ fn script(path: &Path, body: &str) {
     kache_fs::testutil::write_executable(path, format!("#!/bin/sh\n{body}\n"));
 }
 
-/// A fallback cache keys without the inputs a package's build script
-/// declares. A unit whose script declares some never reaches it, even on a
-/// route kache does not cache; a unit whose script declares nothing keeps it.
+/// A unit whose script declares inputs is never cached from a key that
+/// ignores them. On a route kache does not cache, the compile runs directly.
 #[test]
-fn a_unit_with_declared_inputs_never_reaches_a_fallback_cache() {
+fn a_unit_with_declared_inputs_compiles_directly() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     let cache = root.join("cache");
     let _daemon = CacheGuard(cache.clone());
     let rustc = root.join("rustc");
-    let fallback = root.join("fallback");
     let calls = root.join("calls");
     script(
         &rustc,
@@ -508,7 +506,6 @@ done
 printf 'direct\n' >> "$TEST_CALLS"
 "#,
     );
-    script(&fallback, r#"printf 'fallback\n' >> "$TEST_CALLS""#);
     let package = root.join("app");
     write(&package.join("src/main.rs"), "fn main() {}\n");
     let out_dir = root.join("target/debug/build/app-0123456789abcdef/out");
@@ -523,7 +520,6 @@ printf 'direct\n' >> "$TEST_CALLS"
             .args(["--emit=link", "--out-dir"])
             .arg(&deps)
             .current_dir(&package)
-            .env("KACHE_FALLBACK", &fallback)
             .env("KACHE_CACHE_EXECUTABLES", "false")
             .env("KACHE_REMOTE", "")
             .env_remove("KACHE_DISABLED")
@@ -548,7 +544,7 @@ printf 'direct\n' >> "$TEST_CALLS"
     );
     assert_eq!(
         compile("cargo:rustc-cfg=x\n"),
-        "fallback\n",
-        "a script that declares nothing"
+        "direct\n",
+        "a script that declares nothing compiles directly"
     );
 }

@@ -26,9 +26,7 @@
 //! package directory, exactly as in Cargo. Serving a recorded run under those
 //! rules is no less correct than Cargo skipping the rerun, which is what it
 //! does with a warm target directory. A run is recorded in the local store
-//! and is never published to a remote. A local miss is restored from
-//! `readonly_store` when that store has the run; the read-only store is not
-//! written.
+//! and is never published to a remote.
 //!
 //! The named files are the link search paths and `-L` flags in the script's
 //! stdout. A directory Cargo fills itself (`deps`, `incremental`, `build`,
@@ -537,9 +535,6 @@ fn run_cached(real: &Path, argv: &[std::ffi::OsString]) -> Result<i32> {
     let environment = Environment::capture()?;
     let options = crate::store::StoreOptions::from_env(|name| std::env::var(name).ok());
     let store = Store::open_with_options(&config, options.clone())?;
-    // Same directory as the local store, or unset: no second store, and the
-    // lookup below is the local one this function has always done.
-    let readonly = crate::wrapper::open_readonly_store(&config, options);
     let binary_hash = stored_binary_hash(real)?;
     let run = Run {
         config,
@@ -556,16 +551,8 @@ fn run_cached(real: &Path, argv: &[std::ffi::OsString]) -> Result<i32> {
     {
         return Ok(code);
     }
-    // The action key folds the declarations stored with the run. A reader
-    // that has never run this script takes them from the read-only store,
-    // which is where the entry lives too.
-    let prediction = match local_prediction {
-        Some(prediction) => Some(prediction),
-        None => match &readonly {
-            Some(store) => stored_prediction(store, &run.identity())?,
-            None => None,
-        },
-    };
+    // The action key folds the declarations stored with the run.
+    let prediction = local_prediction;
     // Everything below writes into `OUT_DIR` itself.
     detach_out_dir(&run.environment.out_dir)?;
     if let Some(prediction) = &prediction {
@@ -573,7 +560,7 @@ fn run_cached(real: &Path, argv: &[std::ffi::OsString]) -> Result<i32> {
         let key = run.action_key(prediction)?;
         let key_ms = key_start.elapsed().as_millis() as u64;
         let lookup_start = std::time::Instant::now();
-        let found = lookup_recorded_run(&run.store, readonly.as_ref(), &key)?;
+        let found = lookup_recorded_run(&run.store, &key)?;
         let lookup_ms = lookup_start.elapsed().as_millis() as u64;
         if let Some((blobs, meta)) = found {
             let restore_start = std::time::Instant::now();
@@ -723,18 +710,8 @@ fn continue_after_restore_failure(error: anyhow::Error) -> Result<()> {
 
 /// The local store answers first. The read-only store is only a miss there,
 /// and it is never the store a new run is recorded into.
-fn lookup_recorded_run<'a>(
-    local: &'a Store,
-    readonly: Option<&'a Store>,
-    key: &str,
-) -> Result<Option<(&'a Store, EntryMeta)>> {
-    if let Some(meta) = local.get(key)? {
-        return Ok(Some((local, meta)));
-    }
-    let Some(readonly) = readonly else {
-        return Ok(None);
-    };
-    Ok(readonly.get(key)?.map(|meta| (readonly, meta)))
+fn lookup_recorded_run<'a>(local: &'a Store, key: &str) -> Result<Option<(&'a Store, EntryMeta)>> {
+    Ok(local.get(key)?.map(|meta| (local, meta)))
 }
 
 fn stored_prediction(store: &Store, identity: &str) -> Result<Option<Prediction>> {
@@ -6462,15 +6439,11 @@ mod tests {
     /// `readonly` of `None` writes an empty value so a host config cannot
     /// fill one in. An empty value is the same as leaving it unset.
     #[cfg(unix)]
-    fn write_reader_config(path: &Path, cache: &Path, readonly: Option<&Path>) {
-        let readonly = match readonly {
-            Some(dir) => format!("readonly_store = {}\n", quote_path(dir)),
-            None => "readonly_store = \"\"\n".to_string(),
-        };
+    fn write_reader_config(path: &Path, cache: &Path) {
         std::fs::write(
             path,
             format!(
-                "[cache]\nignore_env = true\nbuild_script_hermetic = false\nlocal_store = {}\nruntime_dir = {}\n{readonly}",
+                "[cache]\nignore_env = true\nbuild_script_hermetic = false\nlocal_store = {}\nruntime_dir = {}\n",
                 quote_path(cache),
                 quote_path(cache),
             ),
@@ -6553,104 +6526,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn entry_metas(cache: &Path) -> Vec<(String, Vec<u8>)> {
-        let store = cache.join("store");
-        let mut found = Vec::new();
-        if !store.is_dir() {
-            return found;
-        }
-        let mut dirs: Vec<_> = std::fs::read_dir(&store)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .collect();
-        dirs.sort();
-        for dir in dirs {
-            let meta = dir.join("meta.json");
-            if meta.is_file() {
-                found.push((
-                    dir.file_name().unwrap().to_string_lossy().into_owned(),
-                    std::fs::read(meta).unwrap(),
-                ));
-            }
-        }
-        found
-    }
-
-    /// The entry is only in the read-only store. The reader restores it and
-    /// that store gains no entry.
-    #[cfg(unix)]
     #[test]
-    fn build_script_readonly_store_restores_and_gains_no_entry() {
-        let _lock = crate::test_support::process_state_test_lock();
-        let mut env = EnvRestore::new();
-        let fixture = script_fixture();
-        let root = fixture.dir.path();
-        let host = root.join("host");
-        let job = root.join("job");
-        let host_out = root.join("host-out");
-        let job_out = root.join("job-out");
-        prepare_out(&host_out);
-        prepare_out(&job_out);
-        let host_config = root.join("host.toml");
-        let job_config = root.join("job.toml");
-        write_reader_config(&host_config, &host, None);
-        write_reader_config(&job_config, &job, Some(&host));
-
-        let code = run_reader(
-            &mut env,
-            &host_config,
-            &host_out,
-            &fixture.package,
-            &fixture.script,
-            &fixture.sentinel,
-        );
-        assert_eq!(code, 0, "{}", event_results(&host).join(","));
-        assert_eq!(
-            std::fs::read(host_out.join("marker")).unwrap(),
-            b"from-script"
-        );
-        assert_eq!(std::fs::read(&fixture.sentinel).unwrap(), b"x");
-        assert_eq!(event_results(&host), ["miss"]);
-
-        let host_store = Store::open(&Config::load().unwrap()).unwrap();
-        let entries = host_store.entry_count().unwrap();
-        assert_eq!(entries, 1);
-        let metas = entry_metas(&host);
-
-        let code = run_reader(
-            &mut env,
-            &job_config,
-            &job_out,
-            &fixture.package,
-            &fixture.script,
-            &fixture.sentinel,
-        );
-        assert_eq!(
-            code,
-            0,
-            "job {:?}; host {:?}",
-            event_results(&job),
-            event_results(&host)
-        );
-        assert_eq!(
-            std::fs::read(job_out.join("marker")).unwrap(),
-            b"from-script"
-        );
-        assert_eq!(
-            std::fs::read(&fixture.sentinel).unwrap(),
-            b"x",
-            "the script ran instead of restoring from the read-only store"
-        );
-        assert_eq!(host_store.entry_count().unwrap(), entries);
-        assert_eq!(entry_metas(&host), metas);
-        assert_eq!(event_results(&job), ["local_hit"]);
-    }
-
-    /// No read-only store is configured. A miss still records into the local
-    /// store, and the next run restores that entry instead of running again.
-    #[cfg(unix)]
-    #[test]
-    fn build_script_readonly_store_unset_still_records_locally() {
+    fn build_script_miss_still_records_locally() {
         let _lock = crate::test_support::process_state_test_lock();
         let mut env = EnvRestore::new();
         let fixture = script_fixture();
@@ -6659,7 +6536,7 @@ mod tests {
         let out = root.join("out");
         prepare_out(&out);
         let config = root.join("kache.toml");
-        write_reader_config(&config, &cache, None);
+        write_reader_config(&config, &cache);
 
         let code = run_reader(
             &mut env,

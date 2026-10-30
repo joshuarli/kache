@@ -886,8 +886,8 @@ fn volume_cache_dirs_match(routed: &Path, main: &Path) -> bool {
     routed == main
 }
 
-/// Open the volume shard (or main store) plus the stores read after it: the
-/// main store when the route maps to a shard, then [`Config::readonly_store`].
+/// Open the volume shard (or main store) plus the main store when the route
+/// maps to a shard.
 #[cfg(test)]
 fn open_primary_and_fallback(config: &Config, route: &Path) -> Result<(Store, Vec<Store>)> {
     open_primary_and_fallback_for(config, route, &crate::invocation::InvocationEnv::capture())
@@ -912,7 +912,6 @@ fn open_primary_and_fallback_for(
             ),
         }
     }
-    fallbacks.extend(open_readonly_store(config, options));
     Ok((primary, fallbacks))
 }
 
@@ -984,30 +983,8 @@ fn lookup_or_miss_with_clock<T>(
     None
 }
 
-/// The store named by [`Config::readonly_store`], opened read-only, or `None`
-/// when none is set, when it is this process's own store, or when it cannot be
-/// opened that way (said at warn level).
-pub(crate) fn open_readonly_store(
-    config: &Config,
-    options: crate::store::StoreOptions,
-) -> Option<Store> {
-    let dir = config.readonly_store.as_ref()?;
-    if *dir == config.cache_dir {
-        return None;
-    }
-    let mut readonly = config.clone();
-    readonly.cache_dir = dir.clone();
-    match Store::open_read_only_with_options(&readonly, options) {
-        Ok(store) => Some(store),
-        Err(e) => {
-            log::warn!("read-only store {} unavailable: {e:#}", dir.display());
-            None
-        }
-    }
-}
-
-/// Local lookup: volume shard first, then the main store, then the read-only
-/// store. The returned store is the one whose blobs must be restored.
+/// Local lookup: volume shard first, then the main store.
+/// The returned store is the one whose blobs must be restored.
 fn lookup_local_entry<'a>(
     primary: &'a Store,
     fallbacks: &'a [Store],
@@ -1139,7 +1116,7 @@ fn run_cc_inner(
             .and_then(|s| s.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "unknown".to_string());
-        return cc_direct_passthrough_with_event(
+        return cc_passthrough_with_event(
             config,
             &parsed,
             &crate_name,
@@ -1172,18 +1149,7 @@ fn run_cc_inner(
             reasons.join("; ")
         );
         let reason = refuse_reason_string(&refuse);
-        return if parsed.requires_compiler_output_semantics() {
-            cc_direct_passthrough_with_event(
-                config,
-                &parsed,
-                &crate_name,
-                &event_root,
-                start,
-                reason,
-            )
-        } else {
-            cc_passthrough_with_event(config, &parsed, &crate_name, &event_root, start, reason)
-        };
+        return cc_passthrough_with_event(config, &parsed, &crate_name, &event_root, start, reason);
     }
 
     // User bypass rules (#222): declared per project, evaluated before any key
@@ -1311,10 +1277,8 @@ fn run_cc_with_store(
         }
         // Compiling first forgoes the lookup a key would have allowed, so it
         // is only for a certain miss: nowhere but this store could hold the
-        // entry, and no fallback wrapper is waiting to be asked.
+        // entry.
         None if precompiled.is_none()
-            && config.fallback.is_none()
-            && config.readonly_store.is_none()
             && crate::compiler::cc::cc_direct_key_eligible(parsed) =>
         {
             crate::compiler::cc::CcKeyDiscovery::Deferrable
@@ -1364,13 +1328,7 @@ fn run_cc_with_store(
                 e
             );
             let reason = format!("uncacheable|{e}");
-            return if cc_key_error_skips_fallback(&e) {
-                cc_direct_passthrough_with_event(
-                    config, parsed, crate_name, event_root, start, reason,
-                )
-            } else {
-                cc_passthrough_with_event(config, parsed, crate_name, event_root, start, reason)
-            };
+            return cc_passthrough_with_event(config, parsed, crate_name, event_root, start, reason);
         }
     };
     let key_ms = key_start.elapsed().as_millis() as u64;
@@ -1468,7 +1426,7 @@ fn run_cc_with_store(
     // create an output. Recheck at the last possible wrapper boundary and run
     // the selected compiler directly if its pathname semantics are now needed.
     if precompiled.is_none() && parsed.requires_compiler_output_semantics() {
-        return cc_direct_passthrough_with_event(
+        return cc_passthrough_with_event(
             config,
             parsed,
             crate_name,
@@ -1804,15 +1762,6 @@ fn run_cc_with_store(
     Ok(result.exit_code)
 }
 
-/// Whether a failed cc key must bypass the fallback wrapper: the key could not
-/// see a file the assembler reads, and a wrapper keyed on the same
-/// preprocessor output cannot see it either (kunobi-ninja/kache#1015).
-fn cc_key_error_skips_fallback(error: &anyhow::Error) -> bool {
-    error
-        .downcast_ref::<crate::compiler::cc::CcHiddenInput>()
-        .is_some()
-}
-
 /// Format a refusal as the structured passthrough reason `category|detail`
 /// the report renderers parse into columns. `category` is the coarse class
 /// (`unsupported` / `not-a-compile`) of the first reason; `detail` joins the
@@ -1835,60 +1784,6 @@ fn cc_passthrough(
     config: &Config,
     parsed: &crate::compiler::cc::CcArgs,
 ) -> Result<PassthroughOutput> {
-    cc_passthrough_impl(config, parsed, false)
-}
-
-fn cc_direct_passthrough(
-    config: &Config,
-    parsed: &crate::compiler::cc::CcArgs,
-) -> Result<PassthroughOutput> {
-    cc_passthrough_impl(config, parsed, true)
-}
-
-fn cc_passthrough_impl(
-    config: &Config,
-    parsed: &crate::compiler::cc::CcArgs,
-    force_direct: bool,
-) -> Result<PassthroughOutput> {
-    let mut fallback_attempt = None;
-    // Configured fallback wrapper: `<fallback> <cc> <args>`.
-    // kache's C/C++ coverage is narrower than its rustc support, so
-    // the fallback is most valuable on this path. Falls through to a
-    // direct compilation if the fallback fails.
-    if let Some(fb) = config.fallback.as_deref()
-        && !force_direct
-        && !parsed.requires_compiler_output_semantics()
-    {
-        let mut cmd = parsed.invocation_env.command(fb);
-        if let Ok(cmd) = &mut cmd {
-            cmd.arg(&parsed.program);
-            cmd.args(&parsed.rest);
-        }
-        let outputs: Vec<PathBuf> = parsed
-            .output
-            .as_deref()
-            .map(Path::new)
-            .into_iter()
-            .map(|path| {
-                parsed
-                    .invocation_env
-                    .resolve(path)
-                    .context("resolving C fallback output path")
-            })
-            .collect::<Result<_>>()?;
-        let outputs: Vec<_> = outputs.iter().map(PathBuf::as_path).collect();
-        let attempt =
-            crate::fallback::run_for(cmd, fb, &outputs, &parsed.rest, &parsed.invocation_env);
-        if let Some(exit_code) = attempt.terminal_code() {
-            return Ok(PassthroughOutput {
-                exit_code,
-                fallback: true,
-                fallback_attempt: Some(attempt),
-            });
-        }
-        fallback_attempt = Some(attempt);
-    }
-
     // A refusal means Kache has promised to preserve the selected compiler's
     // behavior exactly. The cache-miss execution path injects prefix-map flags
     // and SOURCE_DATE_EPOCH for reproducible cache entries, so it cannot be
@@ -1906,7 +1801,7 @@ fn cc_passthrough_impl(
     Ok(PassthroughOutput {
         exit_code: status.code().unwrap_or(1),
         fallback: false,
-        fallback_attempt,
+        fallback_attempt: None,
     })
 }
 
@@ -2559,27 +2454,8 @@ pub(crate) fn run_for(
     let extra_inputs_too_new = extra_inputs_hasher.too_new();
     let extra_inputs_guard_inputs = extra_inputs_hasher.take_guarded_inputs();
     let extra_inputs_key_ms = extra_inputs_key_start.elapsed().as_millis() as u64;
-    // A fallback cache does not know Kache's extra-input digest, nor the
-    // inputs the unit's own build script declared. If Kache declines an
-    // invocation, delegating it could restore the exact stale artifact those
-    // inputs are keyed to prevent. Keep the fallback for ordinary crates, but
-    // use a plain compiler passthrough for these.
-    let drop_fallback = config.fallback.is_some()
-        && (extra_inputs.is_some() || build_script_declares_inputs(&args));
-    let mut safe_extra_inputs_config = None;
-    if drop_fallback {
-        let mut safe = config.clone();
-        if drop_fallback {
-            log::debug!(
-                "disabling fallback cache for {crate_name}: its key holds inputs the fallback does not know"
-            );
-            safe.fallback = None;
-        }
-        safe_extra_inputs_config = Some(safe);
-    }
-    let effective_config = safe_extra_inputs_config.as_ref().unwrap_or(config);
     let exit = run_parsed_rustc(
-        effective_config,
+        config,
         &compiler,
         &args,
         start,
@@ -2594,9 +2470,9 @@ pub(crate) fn run_for(
     )?;
 
     if exit == 0 {
-        retire_prestaged_executables(effective_config, &compiler, &args);
+        retire_prestaged_executables(config, &compiler, &args);
         complete_current_extra_inputs_after_success(
-            effective_config,
+            config,
             &args,
             extra_inputs.as_ref(),
         )?;
@@ -2605,20 +2481,6 @@ pub(crate) fn run_for(
         crate::build_script::install_shim(&args);
     }
     Ok(exit)
-}
-
-/// Whether the unit's own build script declared inputs its key folds (see
-/// [`crate::build_script_inputs`]), judged before any route that can hand
-/// the compile to a fallback cache.
-fn build_script_declares_inputs(args: &RustcArgs) -> bool {
-    let cwd = args.invocation_env().cwd().map(Path::to_owned);
-    crate::build_script_inputs::locate(
-        args,
-        &|name: &str| args.invocation_env().var_os(name),
-        cwd.as_deref(),
-        crate::out_dir_alias::active_alias().is_some(),
-    )
-    .is_some_and(|located| crate::build_script_inputs::declares_inputs(&located))
 }
 
 /// Event root for a build-script run: the workspace whose target holds its
@@ -3162,7 +3024,7 @@ fn run_parsed_rustc(
             .and_then(|pre| Some((pre.dep_info.take()?, pre.tree_guard.take())))
         {
             Some((dep_info, tree)) => KeyDiscovery::Emitted(dep_info, tree),
-            None if deferral_allowed(config, args, extra_inputs) => {
+            None if deferral_allowed(args, extra_inputs) => {
                 KeyDiscovery::Deferrable {
                     stop_on_hit: stop_on_hit_allowed(args),
                 }
@@ -3272,7 +3134,7 @@ fn run_parsed_rustc(
     let mut lookup_ms = 0_u64;
     let mut record_closure = should_record_closure(predicted, false);
     let mut rederived = false;
-    let may_defer = deferral_allowed(config, args, extra_inputs);
+    let may_defer = deferral_allowed(args, extra_inputs);
     // `Some(stop_on_hit)` once the miss is to compile before its key.
     let mut compile_then_key = None;
     while precompiled.is_none() {
@@ -5364,16 +5226,12 @@ fn emitted_dep_info(args: &RustcArgs) -> Option<crate::cache_key::DepInfo> {
 }
 
 fn deferral_allowed(
-    config: &Config,
     args: &RustcArgs,
     extra_inputs: Option<&crate::extra_inputs::ExtraInputsSnapshot>,
 ) -> bool {
     // The compile must emit the dep-info the key is derived from afterwards
     // (Cargo always asks for it; a bare rustc invocation may not).
-    args.dep_info_path().is_some()
-        && config.fallback.is_none()
-        && config.readonly_store.is_none()
-        && extra_inputs.is_none()
+    args.dep_info_path().is_some() && extra_inputs.is_none()
 }
 
 /// Remember the input closure this invocation discovered, so a later build of
@@ -6437,7 +6295,7 @@ struct PassthroughOutput {
     fallback_attempt: Option<crate::fallback::Attempt>,
 }
 
-fn passthrough(args: &RustcArgs, fallback: Option<&str>) -> Result<PassthroughOutput> {
+fn passthrough(args: &RustcArgs) -> Result<PassthroughOutput> {
     let compiler_args = if args.has_expanded_argfiles() {
         args.raw_args()
     } else {
@@ -6477,34 +6335,6 @@ fn passthrough(args: &RustcArgs, fallback: Option<&str>) -> Result<PassthroughOu
         &args.emit,
     );
 
-    let mut fallback_attempt = None;
-    // Configured fallback wrapper: `<fallback> <rustc> [<inner-rustc>]
-    // <args>`. Failures fall through to direct compilation.
-    if let Some(fb) = fallback {
-        let mut cmd = env.command(fb);
-        if let Ok(cmd) = &mut cmd {
-            cmd.arg(&args.rustc);
-            if let Some(inner) = &args.inner_rustc {
-                cmd.arg(inner);
-            }
-            cmd.args(compiler_args);
-        }
-        let outputs: Vec<&Path> = output
-            .as_deref()
-            .into_iter()
-            .chain(out_dir.as_deref())
-            .collect();
-        let attempt = crate::fallback::run_for(cmd, fb, &outputs, &args.all_args, env);
-        if let Some(exit_code) = attempt.terminal_code() {
-            return Ok(PassthroughOutput {
-                exit_code,
-                fallback: true,
-                fallback_attempt: Some(attempt),
-            });
-        }
-        fallback_attempt = Some(attempt);
-    }
-
     let mut cmd = env.command(&args.rustc)?;
     crate::toolchain_dylib::apply_for(&mut cmd, &args.rustc, env);
     // Double-wrapper: pass the inner rustc path as first arg to the workspace wrapper
@@ -6517,7 +6347,7 @@ fn passthrough(args: &RustcArgs, fallback: Option<&str>) -> Result<PassthroughOu
     Ok(PassthroughOutput {
         exit_code: status.code().unwrap_or(1),
         fallback: false,
-        fallback_attempt,
+        fallback_attempt: None,
     })
 }
 
@@ -6646,10 +6476,7 @@ fn passthrough_with_event<R: Into<String>>(
         return Ok(exit_code);
     }
     let reason = reason.into();
-    let output = passthrough(
-        args,
-        config.fallback.as_deref(),
-    )?;
+    let output = passthrough(args)?;
     let elapsed = start.elapsed().as_millis() as u64;
     after_rustc_exit(output.exit_code, rustc_output_in(&reason), &args.externs);
     log_event(
@@ -6677,7 +6504,7 @@ fn rustc_direct_passthrough_with_event(
     if PRECOMPILED_EXIT.with(std::cell::Cell::get).is_some() {
         return passthrough_with_event(config, args, crate_name, root, start, reason, key_record);
     }
-    let output = passthrough(args, None)?;
+    let output = passthrough(args)?;
     log_event(
         config,
         EventInputs::passthrough(
@@ -6700,7 +6527,7 @@ fn incremental_passthrough_with_event(
     start: std::time::Instant,
     key_record: KeyEventRecord,
 ) -> Result<i32> {
-    let output = passthrough(args, None)?;
+    let output = passthrough(args)?;
     log_event(
         config,
         EventInputs::passthrough(
@@ -6863,39 +6690,6 @@ fn cc_passthrough_with_event<R: Into<String>>(
     Ok(output.exit_code)
 }
 
-fn cc_direct_passthrough_with_event<R: Into<String>>(
-    config: &Config,
-    parsed: &crate::compiler::cc::CcArgs,
-    crate_name: &str,
-    root: &str,
-    start: std::time::Instant,
-    reason: R,
-) -> Result<i32> {
-    if let Some(exit_code) = CC_PRECOMPILED_EXIT.with(std::cell::Cell::get) {
-        return cc_precompiled_skipped(
-            config,
-            crate_name,
-            root,
-            start,
-            reason.into(),
-            exit_code,
-            CC_PRECOMPILED_REBUILT.with(|cell| cell.borrow().clone()),
-        );
-    }
-    let output = cc_direct_passthrough(config, parsed)?;
-    log_event(
-        config,
-        EventInputs::passthrough(
-            root,
-            crate_name,
-            start.elapsed().as_millis() as u64,
-            reason.into(),
-            &output,
-        )
-        .object_output(&recorded_object_output(parsed.object_output_path())),
-    );
-    Ok(output.exit_code)
-}
 
 /// Compiler outputs already observed by the execution adapter.
 #[derive(Clone, Debug, Default)]

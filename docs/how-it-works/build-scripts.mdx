@@ -197,7 +197,7 @@ The inputs are read again after a compile. When anything Kache keyed changed
 while rustc ran, the result is not stored, and the event is `skipped` with the
 reason `build-script-inputs-changed`.
 
-A unit compiles without Kache and without a fallback wrapper when its declared
+A unit compiles without Kache when its declared
 paths hold more than 20,000 entries or cannot be read for another reason, such
 as a directory the user may search but not list. Its passthrough reason
 starts with `uncacheable|build-script inputs:`. A package whose script declares
@@ -207,10 +207,8 @@ Printing `cargo:rerun-if-changed` for `build.rs` and for each file the
 script or the package's macros read keys such a package precisely. Declare
 directories when new files in them should trigger a rerun.
 
-A unit whose script declares a path or a variable never goes to a configured
-[fallback wrapper](/docs/getting-started/comparison#use-sccache-as-a-fallback),
-which would key it without them. When Kache does not cache such a unit, rustc
-runs directly.
+A unit whose script declares a path or a variable is never handed off:
+when Kache does not cache such a unit, rustc runs directly.
 
 Each unit pays for this on every compile Cargo asks for. Kache reads Cargo's
 record of the run and checks each declared file. A declared directory, or the

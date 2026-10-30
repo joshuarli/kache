@@ -1940,8 +1940,6 @@ fn prestage_target_dir_is_the_target_root_for_every_unit() {
 
 #[test]
 fn compile_before_key_needs_a_local_store() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().to_path_buf());
     let parse = |argv: &[&str]| {
         RustcArgs::parse(&argv.iter().map(|a| (*a).to_string()).collect::<Vec<_>>()).unwrap()
     };
@@ -1963,23 +1961,11 @@ fn compile_before_key_needs_a_local_store() {
         "--out-dir",
         "/t/debug/deps",
     ]);
-    assert!(deferral_allowed(&config, &cargo_like, None));
+    assert!(deferral_allowed(&cargo_like, None));
     assert!(
-        !deferral_allowed(&config, &no_dep_info, None),
+        !deferral_allowed(&no_dep_info, None),
         "nothing to key from"
     );
-    config.fallback = Some("sccache".to_string());
-    assert!(
-        !deferral_allowed(&config, &cargo_like, None),
-        "fallback store"
-    );
-    config.fallback = None;
-    config.readonly_store = Some(PathBuf::from("/srv/host-store"));
-    assert!(
-        !deferral_allowed(&config, &cargo_like, None),
-        "a read-only store may hold the entry: key before compiling"
-    );
-    config.readonly_store = None;
 }
 
 fn test_config(cache_dir: PathBuf) -> Config {
@@ -5675,30 +5661,15 @@ fn cc_passthrough_forwards_the_original_arguments_only() {
         ]))
         .unwrap();
 
-    let mut config = test_config(dir.path().join("cache"));
-    config.fallback = fallback.to_str().map(ToOwned::to_owned);
+    let config = test_config(dir.path().join("cache"));
     let result = cc_passthrough(&config, &parsed).unwrap();
 
     assert_eq!(result.exit_code, 0);
     assert_eq!(
         std::fs::read_to_string(&capture).unwrap(),
         format!("-c\n-o\n{output_arg}\n"),
-        "unsafe output passthrough must bypass fallback and cache-only flags"
+        "unsafe output passthrough must compile directly without cache-only flags"
     );
-}
-
-/// #1015: a fallback wrapper such as sccache keys on the same preprocessor
-/// output, so it would serve the stale object kache just refused to cache.
-/// Only that refusal skips it; other key failures keep the fallback.
-#[test]
-fn only_hidden_input_key_failures_skip_the_fallback() {
-    let hidden = anyhow::Error::new(crate::compiler::cc::CcHiddenInput {
-        construct: ".incbin",
-    });
-    assert!(cc_key_error_skips_fallback(&hidden));
-    assert!(!cc_key_error_skips_fallback(&anyhow::anyhow!(
-        "cc -E key probe exited 1"
-    )));
 }
 
 #[test]
@@ -5709,12 +5680,10 @@ fn untrusted_codegen_backend_bypasses_unless_trusted_and_keyable() {
 
 #[cfg(unix)]
 #[test]
-fn cc_direct_passthrough_bypasses_configured_fallback() {
+fn cc_passthrough_compiles_directly() {
     let dir = tempfile::tempdir().unwrap();
     let fake_cc = dir.path().join("cc");
-    let fallback = dir.path().join("fallback");
     let compiler_marker = dir.path().join("compiler-ran");
-    let fallback_marker = dir.path().join("fallback-ran");
     let output = dir.path().join("output.o");
     let shell =
         crate::compiler::resolve_program_on_path("sh").expect("sh must be available on PATH");
@@ -5725,14 +5694,6 @@ fn cc_direct_passthrough_bypasses_configured_fallback() {
             "#!{}\nprintf direct > '{}'\n",
             shell.display(),
             compiler_marker.display()
-        ),
-    );
-    kache_fs::testutil::write_executable(
-        &fallback,
-        format!(
-            "#!{}\nprintf fallback > '{}'\n",
-            shell.display(),
-            fallback_marker.display()
         ),
     );
 
@@ -5747,17 +5708,15 @@ fn cc_direct_passthrough_bypasses_configured_fallback() {
         .unwrap();
     assert!(
         !parsed.requires_compiler_output_semantics(),
-        "the fallback branch must be eligible except for force_direct"
+        "ordinary compiles take the direct path"
     );
 
-    let mut config = test_config(dir.path().join("cache"));
-    config.fallback = fallback.to_str().map(ToOwned::to_owned);
-    let result = cc_direct_passthrough(&config, &parsed).unwrap();
+    let config = test_config(dir.path().join("cache"));
+    let result = cc_passthrough(&config, &parsed).unwrap();
 
     assert_eq!(result.exit_code, 0);
     assert!(!result.fallback);
     assert!(compiler_marker.exists());
-    assert!(!fallback_marker.exists());
 }
 
 #[cfg(unix)]
@@ -5803,7 +5762,7 @@ fn cc_direct_passthrough_refuses_legacy_cache_blob_hardlink() {
             &output.to_string_lossy(),
         ]))
         .unwrap();
-    let error = cc_direct_passthrough(&config, &parsed).unwrap_err();
+    let error = cc_passthrough(&config, &parsed).unwrap_err();
 
     assert!(
         error
@@ -6243,7 +6202,7 @@ fn log_passthrough_event_persists_reason_fallback_and_exit_code() {
     let config = test_config(dir.path().join("cache"));
     let attempt = crate::fallback::Attempt {
         wrapper: "fallback-wrapper".to_string(),
-        outcome: crate::fallback::Outcome::Failed,
+        outcome: kache_protocol::fallback::Outcome::Failed,
         exit_code: Some(42),
         detail: "fallback detail".to_string(),
     };
@@ -8778,50 +8737,7 @@ fn a_passthrough_reason_is_classified_on_the_event() {
     );
 }
 
-// ---- read-only store ------------------------------------------------------
-
-/// `readonly_store` adds the other store, opened read-only, after this
-/// process's own; never this process's own store, and nothing when unset or
-/// when it cannot be opened.
-#[test]
-fn readonly_store_is_opened_read_only_after_the_own_store() {
-    let host = tempfile::tempdir().unwrap();
-    let host_store = Store::open(&test_config(host.path().to_path_buf())).unwrap();
-    let job = tempfile::tempdir().unwrap();
-    let mut cfg = test_config(job.path().to_path_buf());
-    let route = Path::new("/unmapped/out.rlib");
-
-    cfg.readonly_store = Some(host.path().to_path_buf());
-    let (primary, fallbacks) = super::open_primary_and_fallback(&cfg, route).unwrap();
-    assert!(
-        !primary.is_read_only(),
-        "the job's own store stays the one it writes"
-    );
-    assert_eq!(fallbacks.len(), 1);
-    assert!(fallbacks[0].is_read_only());
-
-    cfg.readonly_store = Some(job.path().to_path_buf());
-    let (_, fallbacks) = super::open_primary_and_fallback(&cfg, route).unwrap();
-    assert!(
-        fallbacks.is_empty(),
-        "a store is never its own read-only fallback"
-    );
-
-    cfg.readonly_store = Some(host.path().join("missing"));
-    let (_, fallbacks) = super::open_primary_and_fallback(&cfg, route).unwrap();
-    assert!(
-        fallbacks.is_empty(),
-        "a store that cannot be opened is no tier"
-    );
-    assert!(!host.path().join("missing").exists());
-
-    cfg.readonly_store = None;
-    let (_, fallbacks) = super::open_primary_and_fallback(&cfg, route).unwrap();
-    assert!(fallbacks.is_empty());
-    drop(host_store);
-}
-
-/// The own store answers first; the read-only store serves what it lacks.
+/// The own store answers first; a second tier serves what it lacks.
 #[test]
 fn lookup_local_entry_reads_the_readonly_store_last() {
     let dir = tempfile::tempdir().unwrap();
@@ -9780,14 +9696,12 @@ fn executable_retirement_covers_windows_output_names_and_implicit_bin_outputs() 
 
 #[cfg(unix)]
 #[test]
-fn concurrent_passthroughs_and_fallbacks_use_each_clients_environment_and_directory() {
+fn concurrent_passthroughs_use_each_clients_environment_and_directory() {
     let first = tempfile::tempdir().unwrap();
     let second = tempfile::tempdir().unwrap();
     let barrier = std::sync::Barrier::new(2);
     std::thread::scope(|threads| {
-        for (root, client, fail_fallback) in
-            [(first.path(), "first", "0"), (second.path(), "second", "1")]
-        {
+        for (root, client) in [(first.path(), "first"), (second.path(), "second")] {
             std::fs::create_dir(root.join("bin")).unwrap();
             for compiler in ["cc", "rustc"] {
                 kache_fs::testutil::write_executable(
@@ -9795,10 +9709,6 @@ fn concurrent_passthroughs_and_fallbacks_use_each_clients_environment_and_direct
                     "#!/bin/sh\nout=\nwhile [ $# -gt 0 ]; do if [ \"$1\" = -o ]; then out=$2; shift 2; else shift; fi; done\nprintf '%s:%s' \"$CLIENT\" \"$CARGO_INCREMENTAL\" > \"$out\"\n",
                 );
             }
-            kache_fs::testutil::write_executable(
-                &root.join("bin/fallback"),
-                "#!/bin/sh\nprintf '%s' \"$CLIENT\" > fallback-seen\nif [ \"$FAIL_FALLBACK\" = 1 ]; then exit 42; fi\nexec \"$@\"\n",
-            );
             std::fs::write(root.join("input.c"), "int value;\n").unwrap();
             std::fs::write(root.join("input.rs"), "pub fn value() {}\n").unwrap();
             let barrier = &barrier;
@@ -9807,15 +9717,13 @@ fn concurrent_passthroughs_and_fallbacks_use_each_clients_environment_and_direct
                     [
                         ("PATH", "bin"),
                         ("CLIENT", client),
-                        ("FAIL_FALLBACK", fail_fallback),
                         ("CARGO_INCREMENTAL", "1"),
                     ],
                     Some(root.to_owned()),
                     None,
                     root.to_owned(),
                 );
-                let mut config = test_config(root.join("cache"));
-                config.fallback = Some("fallback".into());
+                let config = test_config(root.join("cache"));
                 let cc = crate::compiler::cc::CcArgs::parse_for(
                     &[
                         "cc".into(),
@@ -9844,21 +9752,15 @@ fn concurrent_passthroughs_and_fallbacks_use_each_clients_environment_and_direct
                 barrier.wait();
                 let cc_result = cc_passthrough(&config, &cc).unwrap();
                 assert_eq!(cc_result.exit_code, 0);
-                assert_eq!(cc_result.fallback, fail_fallback == "0");
                 assert_eq!(
                     std::fs::read_to_string(root.join("output.o")).unwrap(),
                     format!("{client}:1")
                 );
-                let rust_result = passthrough(&rustc, config.fallback.as_deref()).unwrap();
+                let rust_result = passthrough(&rustc).unwrap();
                 assert_eq!(rust_result.exit_code, 0);
-                assert_eq!(rust_result.fallback, fail_fallback == "0");
                 assert_eq!(
                     std::fs::read_to_string(root.join("output.rlib")).unwrap(),
                     format!("{client}:1")
-                );
-                assert_eq!(
-                    std::fs::read_to_string(root.join("fallback-seen")).unwrap(),
-                    client
                 );
             });
         }

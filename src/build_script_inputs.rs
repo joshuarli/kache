@@ -426,6 +426,7 @@ fn oversized_marker(cache_dir: &Path, manifest_dir: &Path, max_entries: usize) -
 
 /// Whether `located`'s script declared any input, by Cargo's record of the
 /// run alone. A record that cannot be read counts as declaring some.
+#[cfg(test)]
 pub(crate) fn declares_inputs(located: &Located) -> bool {
     match read_record(&located.stdout) {
         Ok(Some(stdout)) => {
