@@ -382,8 +382,8 @@ fn test_event(
     cache_key: &str,
 ) -> BuildEvent {
     BuildEvent {
-        ts: UtcTime::now(),
         session_id: String::new(),
+        ts: UtcTime::now(),
         demands: Vec::new(),
         rebuilt_package: None,
         rebuilt_fingerprint: None,
@@ -1088,7 +1088,7 @@ fn test_validator_rejects_invalid_schema_version() {
 
     let json = format_json(&report).unwrap();
     let mut val: deser_value::Value = deser_json::from_str(&json).unwrap();
-    val["schema_version"] = deser_value::value!(3);
+    val["schema_version"] = deser_value::value!(4);
     let schema: deser_value::Value = deser_json::from_str(REPORT_SCHEMA_JSON).unwrap();
 
     validate_json_value(&val, &schema, &schema, "report");
@@ -1117,7 +1117,7 @@ fn test_json_roundtrip() {
 
     let json = format_json(&report).unwrap();
     let raw: deser_value::Value = deser_json::from_str(&json).unwrap();
-    assert_eq!(raw["schema_version"], 2);
+    assert_eq!(raw["schema_version"], 3);
     assert!(raw.get("traceEvents").is_some());
     assert!(raw.get("trace_events").is_none());
     assert_eq!(raw["displayTimeUnit"], "ms");
@@ -1194,161 +1194,6 @@ fn window_label_falls_back_to_whole_hours() {
     assert_eq!(current.window_label(), "15m");
 }
 
-fn session_event(root: &str, session: &str, second: i64, elapsed_ms: u64) -> BuildEvent {
-    let mut event = test_event("fixture", EventResult::Miss, elapsed_ms, 10, 100, "key");
-    event.root = root.to_string();
-    event.session_id = session.to_string();
-    event.ts = UtcTime::from_timestamp(1_700_000_000 + second, 0).unwrap();
-    event
-}
-
-#[test]
-fn last_build_selects_recorded_root_and_id_by_timestamp() {
-    let mut events = vec![
-        session_event("/repo", "new", 900, 100),
-        session_event("/repo/nested", "new", 899, 100),
-        session_event("/other", "new", 898, 100),
-        session_event("/repo", "old", 897, 100),
-        session_event("/repo", "", 896, 100),
-        session_event("/repo", "new", 0, 100),
-    ];
-    let session = select_last_build(&mut events).unwrap();
-    assert_eq!(session.root, "/repo");
-    assert_eq!(session.session_id, "new");
-    assert!(!session.inferred);
-    assert_eq!(session.inactivity_secs, 300);
-    assert_eq!(events.len(), 2);
-    assert_eq!(events[0].ts.timestamp(), 1_700_000_900);
-    assert_eq!(events[1].ts.timestamp(), 1_700_000_000);
-    assert!(session.description().contains("recorded new; root: /repo"));
-}
-
-#[test]
-fn last_build_infers_local_activity_with_idle_and_recorded_boundaries() {
-    for (old_id, old_second) in [("", 0), ("recorded", 299)] {
-        let mut events = vec![
-            session_event("/repo", "", 1_199, 0),
-            session_event("/repo", old_id, old_second, 0),
-            // A ten-minute compile overlaps the preceding activity: do not
-            // split merely because its completion is more than 5m later.
-            session_event("/repo", "", 900, 600_000),
-            session_event("/repo", "", 300, 0),
-            session_event("/other", "", 1_198, 0),
-        ];
-        let session = select_last_build(&mut events).unwrap();
-        assert!(session.inferred);
-        assert!(session.session_id.is_empty());
-        assert_eq!(session.inactivity_secs, 300);
-        assert_eq!(events.len(), 3);
-        assert_eq!(events[0].ts.timestamp(), 1_700_000_300);
-        assert_eq!(events[2].ts.timestamp(), 1_700_001_199);
-        assert!(
-            session
-                .description()
-                .contains("inferred from activity (300s idle gap)")
-        );
-    }
-}
-
-#[test]
-fn last_build_does_not_fall_back_to_an_older_known_root() {
-    assert!(
-        select_last_build(&mut Vec::new())
-            .unwrap_err()
-            .to_string()
-            .contains("no recorded compiler events")
-    );
-    let mut events = vec![
-        session_event("/repo", "known", 0, 0),
-        session_event("", "", 1, 0),
-    ];
-    assert!(
-        select_last_build(&mut events)
-            .unwrap_err()
-            .to_string()
-            .contains("--root")
-    );
-}
-
-#[test]
-fn last_build_report_uses_retained_history_and_omits_unscoped_data() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = write_test_events(dir.path());
-    let root = dir.path().join("checkout-a").canonicalize().unwrap();
-    let root_str = root.to_str().unwrap();
-    let mut hit = session_event(root_str, "selected", 10, 100);
-    hit.result = EventResult::LocalHit;
-    hit.compile_time_ms = 4_000;
-    hit.reflinked_bytes = 128;
-    hit.hardlinked_bytes = 256;
-    hit.copied_bytes = 512;
-    let mut miss = session_event(root_str, "selected", 0, 200);
-    miss.crate_name = "compiled".to_string();
-    let mut bypass = session_event(root_str, "selected", 5, 50);
-    bypass.result = EventResult::Passthrough;
-    bypass.passthrough_reason = "fixture bypass".to_string();
-    let old = session_event(root_str, "old", -1, 0);
-    let other = session_event("/other", "selected", 9, 0);
-    let lines =
-        [&hit, &miss, &bypass, &old, &other].map(|event| deser_json::to_string(event).unwrap());
-    std::fs::write(config.event_log_path(), lines.join("\n") + "\n").unwrap();
-    write_gc_stats(dir.path(), UtcTime::now());
-
-    let report = generate_report_with_filter(
-        &config,
-        SinceWindow::DEFAULT,
-        10,
-        &ReportFilter {
-            root: None,
-            last_build: true,
-        },
-    )
-    .unwrap();
-    assert_eq!(report.meta.root_filter.as_deref(), Some(root_str));
-    assert_eq!(report.meta.session.as_ref().unwrap().session_id, "selected");
-    assert!(report.meta.since_secs > 86_400);
-    assert_eq!(report.summary.local_hits, 1);
-    assert_eq!(report.summary.misses, 1);
-    assert_eq!(report.summary.passthroughs, 1);
-    assert_eq!(report.summary.time_saved_ms, 4_000);
-    assert_eq!(report.storage.restored_bytes, 896);
-    assert_eq!(report.timeline.event_count, 3);
-    assert_eq!(report.timeline.duration_ms, 10_200);
-    assert!(report.network.is_none());
-    assert!(report.gc.is_none());
-    for text in [
-        format_text(&report),
-        format_markdown(&report),
-        format_github(&report),
-    ] {
-        assert!(text.contains("last build session"));
-        assert!(text.contains("recorded selected"));
-        assert!(text.contains("May include multiple Cargo commands"));
-        assert!(text.contains("fixture bypass"));
-    }
-    let json: deser_value::Value = deser_json::from_str(&format_json(&report).unwrap()).unwrap();
-    assert_eq!(json["meta"]["session"]["inferred"], false);
-    let trace: deser_value::Value =
-        deser_json::from_str(&format_trace_json(&report).unwrap()).unwrap();
-    assert_eq!(trace["session"]["session_id"], "selected");
-
-    let absent = generate_report_with_filter(
-        &config,
-        SinceWindow::DEFAULT,
-        10,
-        &ReportFilter {
-            root: Some(dir.path().join("missing")),
-            last_build: true,
-        },
-    );
-    assert!(
-        absent
-            .unwrap_err()
-            .to_string()
-            .contains("no recorded compiler events")
-    );
-}
-
 #[test]
 fn test_report_filters_by_root() {
     let dir = tempfile::tempdir().unwrap();
@@ -1362,7 +1207,6 @@ fn test_report_filters_by_root() {
         10,
         &ReportFilter {
             root: Some(root.clone()),
-            ..ReportFilter::default()
         },
     )
     .unwrap();
@@ -3639,32 +3483,6 @@ fn test_build_bypass_analysis_respects_top_limit() {
 }
 
 #[test]
-fn unexplained_suggestion_names_a_repeat() {
-    let mut first = test_event("a", EventResult::Miss, 10, 10, 1, "k1");
-    first.root = "/w".to_string();
-    let mut second = test_event("a", EventResult::Miss, 10, 10, 1, "k2");
-    second.root = "/w".to_string();
-    assert_eq!(
-        unexplained_suggestion(&[first, second]).as_deref(),
-        Some("1 unexplained misses (50% of misses) have no recorded cause")
-    );
-}
-
-#[test]
-fn unexplained_alarm_line_needs_both_counts() {
-    assert_eq!(unexplained_alarm_line(0, 4), None);
-    assert_eq!(unexplained_alarm_line(2, 0), None);
-    assert_eq!(
-        unexplained_alarm_line(1, 4).as_deref(),
-        Some("1 unexplained misses (25% of misses) have no recorded cause")
-    );
-    assert_eq!(
-        unexplained_alarm_line(2, 4).as_deref(),
-        Some("2 unexplained misses (50% of misses) have no recorded cause")
-    );
-}
-
-#[test]
 fn timed_transfers_are_async_spans_and_a_zero_timestamp_is_skipped() {
     let dir = tempfile::tempdir().unwrap();
     let config = write_test_events(dir.path());
@@ -4361,6 +4179,14 @@ fn only_compiles_kache_ran_and_did_not_store_are_uncached_compiles() {
         uncached_compile_words(&passthrough("unsupported|assembly", false)),
         "unsupported: assembly"
     );
+    for (reason, expected) in [
+        ("", "unknown"),
+        ("refused: unsupported flag", "unsupported flag"),
+        (" unsupported | assembly ", "unsupported: assembly"),
+        ("build-script cache bypassed: no such column: prediction_json in index.db", "build-script cache bypassed: incompatible prediction metadata in the cache index"),
+    ] {
+        assert_eq!(uncached_compile_words(&passthrough(reason, false)), expected);
+    }
     for result in [EventResult::Miss, EventResult::LocalHit, EventResult::Error] {
         let mut event = test_event("c", result, 1, 0, 0, "");
         event.skip_reason = "x".into();
@@ -4465,9 +4291,5 @@ fn a_windowed_report_counts_archived_events_without_claiming_they_are_lost() {
             .suggestions
             .iter()
             .any(|notice| notice.contains("counts above are incomplete"))
-    );
-    assert!(
-        rotation_cut_notice(config.event_log_max_size, true)
-            .contains("counts above are incomplete")
     );
 }

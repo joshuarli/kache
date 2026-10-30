@@ -60,7 +60,7 @@ their width in the key, as do malformed or repeated width options and repeated l
 
 Explicit per-kind Rust output destinations, such as `--emit=metadata=custom.rmeta`, pass through to rustc so it writes the requested file. Emit kinds without destinations still use the cache. This fix changes Rust cache keys, so existing Rust entries miss once after upgrading.
 
-Use `kache explain` and trace logging to see the components for a particular build.
+Use `kache explain <crate>` and trace logging to see the components for a particular build.
 
 Input predictions are enabled by default for eligible Rust units. Kache
 revalidates their recorded inputs and falls back to dependency discovery when
@@ -241,7 +241,7 @@ See [Configuration](/docs/getting-started/configuration) for syntax and safety l
 kache explain my_crate
 ```
 
-`kache explain` with no crate explains the latest build: each cause of its misses, costliest first, against the build before it. `--root` limits it to one build tree. `kache explain my_crate` says why that crate's last compile missed and how its stored entries differ in target, profile, features and crate type.
+`kache explain my_crate` says why that crate’s last compile missed and how its stored entries differ in target, profile, features and crate type.
 
 To have explain name the input groups that changed, turn on `[cache] explain_miss` (or `KACHE_EXPLAIN_MISS=1`) before the builds you want to compare; both builds need it. It records which groups changed since the last hit, plus the dependency digests and unit ids that let explain follow a miss down to the dependency that changed and, in a second checkout with no earlier build of the crate, compare with the same unit built in another checkout. Groups are hashed after path normalization, so the checkout path alone does not change them. The exception is `remap` when path remapping is off: that group keys the checkout path on purpose. Any other group that differs between checkouts is a real input difference or a path that normalization missed.
 

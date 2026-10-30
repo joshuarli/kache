@@ -7,7 +7,7 @@ Run `kache <command> --help` for the exact syntax in your installed version.
 
 Human output uses section headings, aligned values and status colors. Colors are disabled when stdout is redirected, `NO_COLOR` is nonempty, or `TERM=dumb`. Long summary notes wrap to the terminal width; paths remain complete.
 
-`--json` emits one versioned JSON document for `init`, `list`, `stats`, `report`, `clean`, `gc`, `doctor`, `explain`, `diff`, and `daemon status`. It works before or after the command. Use `init --json --check` to preview setup, or `init --json --yes` to apply it without prompts. `init --shims` has no JSON form. `doctor --json` only reports; combined with `--fix`, `--purge-sccache`, `--verify`, `--checksums` or `--repair` it exits with an error.
+`--json` emits one versioned JSON document for `init`, `list`, `stats`, `report`, `clean`, `gc`, `doctor`, `explain`, and `daemon status`. It works before or after the command. Use `init --json --check` to preview setup, or `init --json --yes` to apply it without prompts. `init --shims` has no JSON form. `doctor --json` only reports; combined with `--fix`, `--purge-sccache`, `--verify`, `--checksums` or `--repair` it exits with an error.
 
 `clean --dry-run --json` previews cache removal. `clean --json` and `clean --crate <name> --json` are refused without `--dry-run`. `clean --cache --stale <age> --json` and `clean --cache --stale-schema --json` evict immediately and print GC fields.
 
@@ -22,7 +22,7 @@ The envelope is documented in [`cli.schema.json`](https://github.com/kunobi-ninj
 | `config` | Inspect or change configuration |
 | `stats` | Hit rate, time saved and cache size; `--full` for the full build report. Alias: `status` |
 | `clean` | Remove cache entries |
-| `explain` | Explain why a crate, or the latest build, missed the cache |
+| `explain` | Explain why a crate missed the cache |
 | `list` | Inspect local entries |
 | `daemon` | Inspect and manage the background daemon |
 | `completions` | Generate shell completion scripts |
@@ -37,7 +37,6 @@ These are for CI, scripts and integrations, and are not listed by `kache --help`
 | `report` | Same report as `kache stats --full`, kept for scripts |
 | `gc`, `purge` | Evict cache entries by policy or remove them explicitly |
 | `install-shims` | What `kache init --shims` does, kept for scripts |
-| `diff` | Misses and the share of unexplained misses in the latest build against the one before; exits 1 when either grew. Kept for scripts |
 | `why-miss` | The earlier name of `kache explain` |
 
 ## `kache cargo`
@@ -148,7 +147,7 @@ When a daemon answers, doctor compares its reported configuration with this proc
 
 If a build emitted a store-open warning in the last 24 hours, doctor reports that history even when the database opens now. The history is informational and depends on the warning marker remaining in the same temporary directory. To capture the full error, rerun the failing Cargo command with `KACHE_LOG_FILE=kache=debug,kache_store=debug` and inspect `kache.log` (see [diagnostic logs](/docs/daemon/lifecycle)).
 
-Doctor also reports, for information, how many misses in the latest build differ from the same crates built in another checkout ("Other checkouts"); `kache explain` says what to set. It reports where the running binary is installed ("Install path"), whether the C/C++ shims are active, broken, not first on `PATH` or not installed, and whether the login service runs a binary that no longer exists, is not executable, or is a different file from the running Kache. Run `kache daemon install` to fix the last one.
+Doctor reports where the running binary is installed ("Install path"), whether the C/C++ shims are active, broken, not first on `PATH` or not installed, and whether the login service runs a binary that no longer exists, is not executable, or is a different file from the running Kache. Run `kache daemon install` to fix the last one.
 
 ## `kache daemon`
 
@@ -172,7 +171,6 @@ See [Daemon lifecycle](/docs/daemon/lifecycle).
 kache stats
 kache stats --since 15m
 kache stats --full
-kache stats --last-build --root "$PWD"
 ```
 
 `kache stats` (alias `status`) groups its summary into Builds, Lifetime, Storage and Services. The Builds section shows local hit counts, duplicates and misses in its `Sources` row. `Cache` counts registered, deduplicated blob bytes. GC compares them with `Limit`, leaving out blobs that a `target/` directory still holds as a clone, because evicting those frees no disk; `On disk` shows that split, so `Cache` can stay above `Limit` with nothing left to evict. `Volume` shows the free and total space of the volume holding the cache, and whether [free-space recovery](/docs/getting-started/configuration#free-space-recovery) is on; JSON carries it as `volume` (`total_bytes`, `free_bytes`, `recovery_floor_bytes`, `below_floor`). `Dedup` shows logical entry bytes and the space saved by sharing blobs. `By time` weights hits by compile work, and `Miss time` shows the time spent on misses with its share of wrapper time. Index size and WAL size stay in the summary; rowid high-water marks appear under `--full` and in JSON. `--full` prints the full build report described below.
@@ -181,8 +179,6 @@ Below the window's rows, a section starting with `Since` shows totals since kach
 
 `--since` accepts `s`, `m`, `h`, and `d` units (`90s`, `15m`, `2h`, `7d`). A bare number is hours. The default is `24h`. The counters and the `last ...` label both describe the requested window. A value that does not parse, or 0, is an argument error. A window reaches past the event log's size rotation: each rotation also keeps the lines it drops as a compressed segment in `events.jsonl.archive/` next to the log. Each rotation prunes the archive to 8 days and 512 MiB.
 
-`--last-build` shows the detailed report for the latest recorded activity session. Add `--root` to choose a build tree; without it, the latest event across all roots chooses the session. It cannot be combined with `--since`. With `--json`, the stats envelope contains a `report` object using the build report schema below.
-
 `--record` also appends one JSON line to `telemetry/sessions.jsonl` in the cache dir. The line holds the report's summary and timing breakdown, and the machine's load average, CPUs and index size at that moment. The root is stored as a hash. The runtime dir a CI job deletes on exit is where the report reads its events; this line is what survives on the machine. `KACHE_RECORD_SESSIONS=1` or `[cache] record_sessions = true` makes every report record the same way without the flag, and appends each GC run to `telemetry/gc-runs.jsonl`; it is off by default. With neither, the command writes nothing.
 
 ### The full report
@@ -190,7 +186,7 @@ Below the window's rows, a section starting with `Since` shows totals since kach
 ```bash
 kache stats --format text --since 24h
 kache stats --format markdown --root "$PWD"
-kache stats --full --last-build --root "$PWD" --format markdown
+kache stats --full --root "$PWD" --format markdown
 kache stats --format json --output report.json
 kache stats --format trace --output trace.json
 ```
@@ -200,21 +196,12 @@ kache stats --format trace --output trace.json
 | `--full` | off | The full report instead of the summary. `--format`, `--output`, `--top`, `--record`, and `--redact` imply it |
 | `--format` | `text` | `json`, `trace` (also `perfetto`, `chrome-trace`), `markdown` (`md`), `github` (`gh`), `text`. Any other value is an argument error. `--json` gives `json`, and combining it with a format other than `json` or `text` is an error |
 | `--since` | `24h` | Event window; same forms as `kache stats` (`15m`, `2h`, `7d`, bare hours) |
-| `--last-build` | off | Latest recorded activity session; conflicts with `--since` |
-| `--root` | all roots | Only events from that build tree and the trees below it. Remote transfers are left out because the transfer log records no root. On `stats` it needs `--full` or `--last-build` |
+| `--root` | all roots | Only events from that build tree and the trees below it. Remote transfers are left out because the transfer log records no root. On `stats` it needs `--full` |
 | `--output`, `-o` | stdout | Write to a file |
 | `--top` | `10` | Number of ranked entries |
 | `--redact` | off | Replace cache keys, roots, object keys, and object paths with `redacted` |
 
 `trace`, `perfetto`, and `chrome-trace` select the same trace representation. `kache report` takes the same flags and prints the same report, for scripts written before `--full`. The JSON contract is documented by [`report.schema.json`](https://github.com/kunobi-ninja/kache/blob/main/docs/commands/report.schema.json).
-
-`--last-build` selects by the latest compiler event timestamp across the retained log, including events older than 24 hours. It includes only that root and session ID. For local or older events without session IDs, it infers a session from overlapping compiler activity and gaps shorter than five minutes, stopping at an event with a recorded ID. The report states which rule it used. `--root` limits the search to that tree and its descendants; the selected session still belongs to one exact root.
-
-A session can span concurrent or nearby Cargo commands. This flag does not identify one Cargo invocation. A Cargo command that does no compiler work produces no new events. Compiles still running have not been logged yet. Log rotation can remove the start of a session. An empty selection is an error.
-
-The session report includes cache hits, misses, bypass reasons, restored bytes and the observed compiler wall span. Compile work avoided is an aggregate estimate, not elapsed build time saved. Remote transfer totals and GC are omitted because those logs cannot identify the selected session. Store inventory and deduplication totals still describe the whole cache.
-
-JSON exposes the selection in `meta.session` (`root`, optional `session_id`, `inferred`, `inactivity_secs`); trace output carries it as `session`. In session reports, `since_secs` and `since_hours` describe the lookback to the first retained compiler start; `meta.session` defines the selection.
 
 Raw compiler events at schema 26 add `rebuilt_package`, `rebuilt_fingerprint`, `rebuilt_path` and `rebuilt_paths` when an actual successful compile produced outputs. Unknown package metadata is omitted. `rebuilt_fingerprint` is Kache's input cache key, not Cargo's on-disk freshness hash. Cache restores and Fresh Cargo artifacts do not report a rebuild. Tagged cleanup records report removed units separately from compiler `BuildEvent` records.
 
@@ -239,32 +226,7 @@ The payload also carries this host's local store: registered blob bytes (`kache.
 
 With `[cache] explain_miss = true`, `kache explain <crate>` names compiler-reported environment variables that differ from the prior build of that unit. It compares normalized value hashes, so the log keeps variable names without their values. Older events without these hashes cannot supply the hints. The same hints appear in the JSON report.
 
-```bash
-kache explain
-kache explain --root "$PWD"
-kache --json explain
-```
-
-Without a crate, `explain` reads the latest recorded build and says why it missed:
-
-- how many misses it had, against the build before it of the same tree, and the share with no recorded cause
-- its misses grouped by cause, costliest compile time first, with the crates in each group
-- what would help with each cause
-- crates that keep missing across builds of the tree
-- compilations that were not cached and why, with compiler queries counted on one line because there is nothing to cache in them
-
-| Cause | Meaning |
-| --- | --- |
-| compiled but not cached | The result could not be stored, so the crate misses again next build |
-| entry rejected at lookup | An entry with this key existed but could not serve the build |
-| built before with this exact key, but the entry was gone | Nothing in its inputs changed; the entry was evicted or never reached this machine |
-| downstream of a crate | A dependency changed and every crate built on it recompiled; the crate where the change started is named |
-| own inputs changed | Its sources, compiler flags, profile or features, an environment variable it reads, its linker, or its path remapping changed |
-| differs from the build in another checkout | The first build of the crate in this tree, and its inputs differ from the same crate built in another checkout. `kache explain <crate>` names the input. A path into the checkout that Kache did not map needs `KACHE_BASE_DIR`; a C or C++ library a build script generated with the checkout's path or a timestamp in it needs prefix maps and `ZERO_AR_DATE`; a flag or file that really differs needs nothing |
-| no earlier compile | The first build of the crate in this tree, or older history was rotated away |
-| unexplained | Nothing recorded why; `[cache] explain_miss = true` records it from the next build |
-
-The report ends with the command that explains the costliest crate, and the one that writes the build's timeline as a Perfetto trace. `--root` limits it to builds of one tree. It exits 0; the hidden `kache diff` prints the miss counts and unexplained shares of the two builds and exits 1 when either grew, for scripts that gate on that. `kache why-miss` is the same command under its earlier name.
+`kache why-miss` is the same command under its earlier name.
 
 ### One crate
 
@@ -275,7 +237,7 @@ kache --json explain serde
 
 Explains the latest recorded miss using the event log and stored entries. Store failures and rejected entries take precedence over key comparisons. Repeated misses under the same key in older logs retain an unknown cause when those logs cannot explain what happened.
 
-The terminal report has the same sections as the report for the latest build: the last miss, the diagnosis, the comparison with another build tree and the dependency cascade when there is one, then the stored entries and recent events.
+The terminal report shows the last miss, its diagnosis, comparison with another build tree and dependency cascade when available, followed by stored entries and recent events.
 
 When the crate's newest compile was not cached, such as an edit rebuild that rustc compiled incrementally or a compile kache declined to store, `explain` reports that compile and why it was not cached instead of the older miss. JSON carries it in `latest_uncached_compile`, which is `null` otherwise.
 

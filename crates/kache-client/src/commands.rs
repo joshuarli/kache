@@ -1,6 +1,6 @@
 // Engine command schema; build.rs exports the enum and derives client routing names.
 pub(crate) enum Commands {
-    /// Run Cargo with canonical duplicate Cargo-home rustflags collapsed once
+    /// Run Cargo with Kache as the compiler wrapper
     Cargo {
         /// Built-in build/check arguments passed verbatim to Cargo (use `--` first)
         args: Vec<std::ffi::OsString>,
@@ -123,12 +123,7 @@ pub(crate) enum Commands {
         /// Event window (e.g. 15m, 2h, 7d; a bare number is hours)
         since: String,
 
-        /// Report the latest recorded activity session. Sessions may span Cargo
-        /// commands; events without IDs use a five-minute idle gap per root.
-        last_build: bool,
-
-        /// Only this build tree/root: the latest session in it with
-        /// `--last-build`, its compiler events with `--full`
+        /// Only include compiler events from this build tree with `--full`
         root: Option<PathBuf>,
 
         /// The full build report instead of the summary
@@ -159,25 +154,9 @@ pub(crate) enum Commands {
         command: TelemetryCommands,
     },
 
-    /// Explain why a crate, or the latest build, missed the cache
+    /// Explain why a crate missed the cache
     Explain {
-        /// The crate to explain. Without one, compare the latest build's
-        /// misses with the build before it
-        crate_name: Option<String>,
-
-        /// List every skip and passthrough across the retained build history,
-        /// with counts by reason and the affected crates
-        all: bool,
-
-        /// Without a crate: only builds recorded for this build tree
-        root: Option<PathBuf>,
-    },
-
-    /// Compare misses in the two newest sessions of one build root. Kept
-    /// for scripts; `kache explain` with no crate explains the same build
-    Diff {
-        /// Only sessions recorded for this build tree
-        root: Option<PathBuf>,
+        crate_name: String,
     },
 
     /// The full build report. Kept for scripts; `kache stats --full` is the
@@ -189,10 +168,6 @@ pub(crate) enum Commands {
 
         /// Event window (e.g. 15m, 2h, 7d; a bare number is hours)
         since: String,
-
-        /// Report the latest recorded activity session. Sessions may span Cargo
-        /// commands; events without IDs use a five-minute idle gap per root.
-        last_build: bool,
 
         /// Only include compiler events from this build tree/root
         root: Option<PathBuf>,

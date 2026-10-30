@@ -148,7 +148,7 @@ When the automatic roots do not cover a container mount or out-of-tree layout, s
 KACHE_BASE_DIR="$PWD" cmake --build build
 ```
 
-`KACHE_CC_PATH_NORMALIZE=0` turns the mapping off, and keys then depend on absolute paths. clang-cl ignores `-ffile-prefix-map`, so clang-cl keys always keep absolute paths and its entries are reused only from the same paths. When a miss traces to another checkout, `kache explain` names the setting to change.
+`KACHE_CC_PATH_NORMALIZE=0` turns the mapping off, and keys then depend on absolute paths. clang-cl ignores `-ffile-prefix-map`, so clang-cl keys always keep absolute paths and its entries are reused only from the same paths. When a miss traces to another checkout, `kache explain <crate>` names the setting to change.
 
 clang-cl debug objects stay on the machine because CodeView records paths that clang-cl does not remap.
 

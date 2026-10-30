@@ -9,7 +9,7 @@ copy-on-write restores, e2e) stay strict throughout.
 ## Status
 
 - Goal: land deletion slices S1–S9 on `main`, each with narrow acceptance green.
-- Accepted: S1 (rustdoc deletion), S2 (remote/prefetch accounting deletion; report schema 1→2), S3 (no changes), S4 (target management deletion), S5 (incremental passthrough), S7 (remove unsupported non-Unix fallbacks).
+- Accepted: S1 (rustdoc deletion), S2 (remote/prefetch accounting deletion; report schema 1→2), S3 (no changes), S4 (target management deletion), S5 (incremental passthrough), S7 (remove unsupported non-Unix fallbacks), S9 (diagnostics consolidation).
 - S4 contract: remove `kache targets`, target-directory `clean` modes and options, target seeding/tracking from `kache cargo`, and the seven `[cache]` settings `target_liveness`, `auto_clean_orphaned_targets`, `auto_share_target_files`, `auto_clean_idle_targets_days`, `auto_clean_unused_units_days`, `seed_new_targets`, and `auto_recover_targets` and their corresponding `KACHE_` environment variables. `kache cargo` passes Cargo arguments through and sets `RUSTC_WRAPPER`; cache cleaning remains.
 - S4 evidence: affected tests and docs check pass; macOS e2e passes all executed fixtures including cross-tree (six skipped: Linux-only cases and missing CMake/Ninja/sccache). Linux clippy, client checks, resource guard and workspace tests ran; two engine tests and eight C/C++ integration tests fail identically on untouched `d02affd` in the container. All other test targets pass. The earlier sandbox-preflight baseline failure remains environment-dependent.
 - Loop timings: incremental build 10.6s; lib suite ~36s; clippy ~17s; `make check` ~5–8min; `make e2e` ~6min.
@@ -17,7 +17,10 @@ copy-on-write restores, e2e) stay strict throughout.
 - S5 evidence: config and store suites, Linux clippy/client/resource checks, focused wrapper, cache, incremental, extra-input and macOS debug tests pass. Linux workspace tests pass apart from two pre-existing engine failures in the container; the three changed-contract assertions and 43 C/C++ integration tests passed on rerun. The macOS scenario corpus passes all executed fixtures including cross-tree (six skipped for platform or missing tools); seven cache-specific debug fixtures explicitly disable Cargo incremental compilation without weakening their assertions.
 - S6 parked: no cached benchmark worktrees are available. The offline OpenDAL profile failed before measurement with `--skip-clone set but clones are missing`; retry with cached `clone-a` and `clone-b` and its prerequisites. Build-script replay remains in place pending the required measurement.
 - S7 evidence: release targets are macOS/aarch64 and Linux/aarch64 and x86-64; GNU, Clang, Clang's compatible driver, ordinary objects and links all have live callers or scenarios. Only non-Unix fallbacks were removed. macOS C/C++ scenarios pass all executed fixtures (five platform/tool skips), and Linux clippy, client checks, resource guard, 3,221 library tests and the CLI suite pass; `make check` stops at the same two baseline engine failures.
-- Next: S8's measured comparison requires the unavailable S6 benchmark environment. Keep the daemon and continue S9; retry S8 when the offline Rust and native profiles and S6 verdict are available.
+- S8 parked: its prerequisite S6 and offline Rust/native benchmark profiles are unavailable. The daemon remains; retry after the S6 verdict and both profiles can be measured.
+- S9 contract: remove `diff`, no-crate `explain`, `explain --all` and `--root`, `stats --last-build`, `report --last-build`, and doctor’s session-based Other checkouts row. Per-crate `explain` and its `why-miss` alias remain. Report JSON schema 2→3 removes `meta.session`; trace output removes the session field. Recorded report lines no longer include session IDs.
+- S9 evidence: the CLI suite (122 tests), report suite (108 tests), benchmark report reader tests (6), clippy, and docs check pass. OTLP and Perfetto exporters remain because the benchmark runner consumes them.
+- Next: S10 closeout and final checks; S6 and S8 remain parked until their offline benchmark prerequisites are available.
 
 ## Charter
 

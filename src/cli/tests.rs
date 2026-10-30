@@ -287,8 +287,6 @@ fn doctor_check_optionality_truth_table() {
     assert_eq!(doctor_section("Compiler execution"), "Services");
     // An install path an upgrade may break is information, not an issue.
     assert!(doctor_check_is_optional("Install path", false, false));
-    // So is a build that could reuse another checkout with a setting changed.
-    assert!(doctor_check_is_optional(OTHER_CHECKOUTS, false, false));
     // Daemon labels downgrade exactly when the daemon is optional.
     assert!(doctor_check_is_optional("Daemon version", true, false));
     assert!(!doctor_check_is_optional("Daemon version", false, false));
@@ -1445,7 +1443,6 @@ fn report_run(config: &Config, out: &std::path::Path, record: bool) {
         SinceWindow::DEFAULT,
         crate::report::ReportFilter {
             root: Some(std::path::PathBuf::from("/ci/runner-3/_work/secret-repo")),
-            last_build: false,
         },
         Some(out.join("report.json")),
         10,
@@ -1472,44 +1469,6 @@ fn tree_contents(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
     }
     files.sort();
     files
-}
-
-/// `kache stats --last-build` is not the full report, but a host that turned
-/// `record_sessions` on still gets the session. `--record` never reaches
-/// this function: it selects the full report instead.
-#[test]
-fn stats_last_build_records_when_record_sessions_is_on() {
-    let cache = tempfile::tempdir().unwrap();
-    let mut config = save_manifest_config(cache.path().to_path_buf());
-    config.record_sessions = true;
-    plant_last_build(&config);
-    stats_last_build(&config, None, false).unwrap();
-    stats_last_build(&config, None, true).unwrap();
-    let log = std::fs::read_to_string(session_log_path(&config)).unwrap();
-    assert_eq!(log.lines().count(), 2, "{log}");
-
-    let quiet = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(quiet.path().to_path_buf());
-    plant_last_build(&config);
-    stats_last_build(&config, None, true).unwrap();
-    assert!(
-        !session_log_path(&config).exists(),
-        "a last-build summary records only when record_sessions is on"
-    );
-}
-
-fn plant_last_build(config: &Config) {
-    let mut event = build_event(
-        "demo",
-        crate::events::EventResult::LocalHit,
-        4,
-        5,
-        64,
-        "key",
-    );
-    event.root = "/repo".to_string();
-    event.session_id = "build".to_string();
-    crate::events::log_event(&config.event_log_path(), &event).unwrap();
 }
 
 /// `record_sessions` (env or config) makes a plain `kache report` record
@@ -1600,7 +1559,6 @@ fn report_record_that_cannot_write_still_delivers_the_report() {
         SinceWindow::DEFAULT,
         crate::report::ReportFilter {
             root: None,
-            last_build: false,
         },
         Some(out.path().join("report.json")),
         10,
@@ -3995,58 +3953,6 @@ fn cache_counts_cover_one_crate_or_the_whole_cache() {
     );
     assert_eq!(cache_counts(&store, &CacheClean::All).unwrap().0, 2);
     assert!(cache_counts(&store, &CacheClean::All).unwrap().1 > 0);
-}
-
-/// The "Other checkouts" line names the count, both trees and where to look,
-/// in the singular and the plural, and says nothing when nothing traced there.
-#[test]
-fn checkout_check_wording() {
-    let clean = checkout_check("/w/b", 0, None);
-    assert!(clean.pass);
-    assert_eq!(clean.fix, None);
-
-    let one = checkout_check("/w/b", 1, Some("/w/a"));
-    assert!(!one.pass);
-    assert_eq!(one.label, OTHER_CHECKOUTS);
-    assert_eq!(one.detail, "1 miss in /w/b differs from the build in /w/a");
-    assert!(one.fix.as_deref().unwrap().contains("kache explain"));
-
-    let many = checkout_check("/w/b", 3, None);
-    assert_eq!(
-        many.detail,
-        "3 misses in /w/b differ from the build in other checkouts"
-    );
-}
-
-/// Read from a real event log: a second checkout whose first build of a crate
-/// differs from the first checkout's is reported; no log reports nothing.
-#[test]
-fn doctor_reads_cross_checkout_misses_from_the_event_log() {
-    use crate::events::{BuildEvent, EventResult};
-    let dir = tempfile::tempdir().unwrap();
-    let log = dir.path().join("events.jsonl");
-    assert!(doctor_checkout_check(&log).is_none());
-
-    let built = |root: &str, session: &str, sources: &str| {
-        let mut e = BuildEvent::new_for_test("one", EventResult::Miss);
-        e.root = root.to_string();
-        e.session_id = session.to_string();
-        e.unit_id = "uone".to_string();
-        e.key_fields = [("sources".to_string(), sources.to_string())]
-            .into_iter()
-            .collect();
-        e.key_externs_recorded = true;
-        e
-    };
-    for event in [built("/first", "a", "1111"), built("/second", "b", "2222")] {
-        crate::events::log_event(&log, &event).unwrap();
-    }
-    let check = doctor_checkout_check(&log).unwrap();
-    assert!(!check.pass);
-    assert_eq!(
-        check.detail,
-        "1 miss in /second differs from the build in /first"
-    );
 }
 
 #[test]

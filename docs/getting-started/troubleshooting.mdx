@@ -7,15 +7,13 @@ Start at the root of the affected workspace:
 
 ```bash
 kache doctor
-kache stats --last-build --root "$PWD"
-kache explain --root "$PWD"
+kache stats --full --root "$PWD"
+kache explain my_crate
 ```
 
-`doctor` checks setup and cache access. Stats show the latest recorded build
-session; `explain` compares recorded inputs to find miss causes. `--root` names
-the directory that holds the build's target directory, which is the workspace
-for the default `target/`. Without it, both commands describe the newest build
-Kache recorded, from any project.
+`doctor` checks setup and cache access. Stats show recorded events for the
+workspace within the selected time window; `explain` examines the named crate
+across recorded builds. Replace `my_crate` with a name from the report.
 
 For a functional check of the installed Rust cache pipeline, run `kache doctor --probe`.
 It compiles a temporary library twice in an isolated local cache and checks the
@@ -39,10 +37,10 @@ active in that shell, or that `CC`/`CXX` name Kache as in the
 
 ## Some units always compile
 
-Run `kache explain` to check why the latest build missed, or save a report:
+Save a report to identify units that missed:
 
 ```bash
-kache stats --full --last-build --format markdown --output kache-report.md
+kache stats --full --format markdown --output kache-report.md
 ```
 
 A passthrough means the invocation was outside the caching policy. It is
@@ -94,7 +92,7 @@ allocated disk space.
 ## Share a useful report
 
 ```bash
-kache stats --full --last-build --redact --format markdown --output kache-report.md
+kache stats --full --redact --format markdown --output kache-report.md
 ```
 
 Review the file before sharing it. Include your OS, Kache and toolchain versions,

@@ -24,9 +24,9 @@
     "schema_version": {
       "type": "integer",
       "enum": [
-        2
+        3
       ],
-      "description": "Report schema version (currently 2). Incremented on breaking changes."
+      "description": "Report schema version (currently 3). Incremented on breaking changes."
     },
     "meta": {
       "type": "object",
@@ -63,38 +63,7 @@
             "string",
             "null"
           ],
-          "description": "Root path filter; for --last-build, the exact selected root."
-        },
-        "session": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "description": "Selection for --last-build. May span Cargo commands and only covers retained, completed compiler events. When present, since_secs is the lookback to the earliest selected compiler start, not the selection rule.",
-          "required": [
-            "root",
-            "inferred",
-            "inactivity_secs"
-          ],
-          "properties": {
-            "root": {
-              "type": "string",
-              "description": "Exact root of the selected session."
-            },
-            "session_id": {
-              "type": "string",
-              "description": "Recorded ID; absent for inferred sessions."
-            },
-            "inferred": {
-              "type": "boolean",
-              "description": "True when events without IDs were grouped by activity."
-            },
-            "inactivity_secs": {
-              "type": "integer",
-              "minimum": 1,
-              "description": "Idle gap that separates activity sessions."
-            }
-          }
+          "description": "Root path filter for compiler events."
         }
       }
     },

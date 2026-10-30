@@ -19,7 +19,6 @@ mod daemon_publish;
 mod demand;
 mod disk_recovery;
 mod events;
-mod explain;
 mod extra_inputs;
 mod fallback;
 mod heartbeat;
@@ -47,7 +46,6 @@ mod prestage;
 mod probe;
 mod probe_memo;
 mod report;
-mod run_diff;
 mod savings;
 mod scheduler;
 mod service;
@@ -62,7 +60,6 @@ mod test_support;
 mod toolchain_dylib;
 use kache_ipc as transport;
 mod tree_stamp;
-mod sessions;
 mod cli_args;
 mod verify_compare;
 mod volume_gc;
@@ -176,7 +173,6 @@ fn command_supports_json(command: &Option<Commands>) -> bool {
         | Commands::Doctor { .. }
         | Commands::Stats { .. }
         | Commands::Explain { .. }
-        | Commands::Diff { .. }
         | Commands::Report { .. } => true,
         Commands::Init { shims, .. } => shims.is_none(),
         Commands::Config { .. } => true,
@@ -785,7 +781,6 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
         Some(Commands::Report {
             format,
             since,
-            last_build,
             root,
             output,
             top,
@@ -797,7 +792,7 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
                 &config,
                 report_format(Some(format), json)?,
                 window,
-                report::ReportFilter { root, last_build },
+                report::ReportFilter { root },
                 output,
                 top,
                 record,
@@ -806,7 +801,6 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
         }
         Some(Commands::Stats {
             since,
-            last_build,
             root,
             full,
             format,
@@ -830,19 +824,16 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
                     &config,
                     format,
                     window,
-                    report::ReportFilter { root, last_build },
+                    report::ReportFilter { root },
                     output,
                     top.unwrap_or(DEFAULT_REPORT_TOP),
                     record,
                     redact,
                 );
             }
-            if last_build {
-                return cli::stats_last_build(&config, root, json);
-            }
             if root.is_some() {
                 return Err(machine::invalid_arguments(
-                    "`--root` needs `--last-build` or `--full`",
+                    "`--root` needs `--full`",
                 ));
             }
             let window = parse_since_window(&since)?;
@@ -861,24 +852,7 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
             scenario.as_deref(),
             phase.map(BenchPhase::as_str),
         ),
-        Some(Commands::Explain {
-            all: true, root, ..
-        }) => explain::run_all(&config, root.as_deref(), json),
-        Some(Commands::Explain {
-            crate_name: Some(crate_name),
-            ..
-        }) => cli::why_miss(&config, &crate_name, json),
-        Some(Commands::Explain {
-            crate_name: None,
-            root,
-            ..
-        }) => explain::run(&config, root.as_deref(), json),
-        Some(Commands::Diff { root }) => {
-            if run_diff::run(&config, root.as_deref(), json)? {
-                std::process::exit(1);
-            }
-            Ok(())
-        }
+        Some(Commands::Explain { crate_name }) => cli::why_miss(&config, &crate_name, json),
         #[cfg(unix)]
         Some(Commands::InstallShims {
             dir,
@@ -2208,7 +2182,6 @@ mod tests {
         assert!(json_refusal(&shims.command).unwrap().contains("--shims"));
         let init = parse(&["kache", "init", "--check"]);
         assert_eq!(json_refusal(&init.command), None);
-        assert_eq!(json_refusal(&Some(Commands::Diff { root: None })), None);
     }
 
     #[test]
@@ -2363,19 +2336,9 @@ mod tests {
             ])
             .is_err()
         );
-        let build = parse(&["kache", "why-miss", "--root", "x"]);
-        assert!(matches!(
-            build.command,
-            Some(Commands::Explain {
-                crate_name: None,
-                root: Some(_),
-                ..
-            })
-        ));
+        assert!(parsed(&["kache", "why-miss", "--root", "x"]).is_err());
         assert!(parsed(&["kache", "why-miss", "serde", "--root", "x"]).is_err());
-        for hidden in ["install-shims", "diff"] {
-            assert!(parsed(&["kache", hidden]).is_ok(), "{hidden}");
-        }
+        assert!(parsed(&["kache", "install-shims"]).is_ok());
     }
 
     #[test]
@@ -2467,10 +2430,8 @@ mod tests {
 
     #[test]
     fn json_support_is_limited_to_machine_readable_commands() {
-        assert!(command_supports_json(&Some(Commands::Diff { root: None })));
         assert!(command_supports_json(&Some(Commands::Stats {
             since: "24h".to_string(),
-            last_build: false,
             root: None,
             full: false,
             format: None,

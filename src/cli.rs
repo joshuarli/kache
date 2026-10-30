@@ -1058,41 +1058,6 @@ fn format_epoch_ms_utc(ms: u64) -> String {
 
 // ── kache report ──────────────────────────────────────────────────────────
 
-pub fn stats_last_build(
-    config: &Config,
-    root: Option<std::path::PathBuf>,
-    json: bool,
-) -> Result<()> {
-    let filter = crate::report::ReportFilter {
-        root,
-        last_build: true,
-    };
-    let report =
-        crate::report::generate_report_with_filter(config, SinceWindow::DEFAULT, 10, &filter)?;
-    // `--record` takes the full-report path. This summary is what
-    // `kache stats --last-build` prints, and a host that set
-    // `record_sessions` still needs the session written.
-    let recorded = if config.record_sessions {
-        record_session(config, &report)
-    } else {
-        Ok(())
-    };
-    let printed = if json {
-        #[derive(deser::Serialize)]
-        struct Body {
-            report: crate::report::BuildReport,
-        }
-        crate::machine::emit("stats", Body { report }, Vec::new())
-    } else {
-        println!("{}", crate::report::format_text(&report));
-        Ok(())
-    };
-    if let Err(error) = recorded {
-        eprintln!("warning: this session was not recorded: {error:#}");
-    }
-    printed
-}
-
 /// The full build report's output formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReportFormat {
@@ -1156,7 +1121,7 @@ pub fn report(
     record: bool,
     redact: bool,
 ) -> Result<()> {
-    let mut report = if filter.root.is_some() || filter.last_build {
+    let mut report = if filter.root.is_some() {
         crate::report::generate_report_with_filter(config, window, top, &filter)?
     } else {
         crate::report::generate_report(config, window, top)?
@@ -3913,14 +3878,11 @@ fn doctor_check_is_optional(label: &str, daemon_optional: bool, probe_no_compile
         || label == "C/C++ shims"
         || label == "Install path"
         || label == "Compiler execution"
-        || label == OTHER_CHECKOUTS
         || label == "Store build warning"
         || label == "Store file limits"
         || label == "Store volume probe"
         || label == "Daemon process"
 }
-
-const OTHER_CHECKOUTS: &str = "Other checkouts";
 
 /// Only native Linux links key their linker, and without a `cc` there is no
 /// driver to ask.
@@ -3985,56 +3947,6 @@ fn native_linker_check(env: &crate::invocation::InvocationEnv) -> Check {
                     .into(),
             ),
         },
-    }
-}
-
-/// Whether the latest recorded build missed crates that another checkout of
-/// the project had built, for a reason `kache explain` can name. `None` when
-/// there is no recorded build to look at.
-fn doctor_checkout_check(event_log: &std::path::Path) -> Option<Check> {
-    let events = crate::events::read_events(event_log).ok()?;
-    let sessions = crate::sessions::group(
-        &events,
-        std::time::Duration::from_secs(crate::wrapper::BUILD_SESSION_SECS),
-    );
-    let builds = crate::explain::latest_builds(&sessions, None)?;
-    let (count, baseline) =
-        crate::sessions::other_checkout_misses(&events, &builds.latest.events);
-    Some(checkout_check(
-        &builds.latest.root,
-        count,
-        baseline.as_deref(),
-    ))
-}
-
-/// Wording for the "Other checkouts" check. Informational: the misses are
-/// real, but whether to normalize paths is the user's call.
-fn checkout_check(root: &str, count: usize, baseline: Option<&str>) -> Check {
-    if count == 0 {
-        return Check {
-            label: OTHER_CHECKOUTS,
-            pass: true,
-            detail: "no miss in the latest build traces to another checkout".into(),
-            fix: None,
-        };
-    }
-    let other = baseline.map_or_else(
-        || "other checkouts".to_string(),
-        |path| crate::term::home_path(std::path::Path::new(path)),
-    );
-    Check {
-        label: OTHER_CHECKOUTS,
-        pass: false,
-        detail: format!(
-            "{} {} in {} differ{} from the build in {other}",
-            count,
-            if count == 1 { "miss" } else { "misses" },
-            crate::term::home_path(std::path::Path::new(root)),
-            if count == 1 { "s" } else { "" },
-        ),
-        fix: Some(
-            "`kache explain` says what to set, often `KACHE_BASE_DIR` or C/C++ prefix maps".into(),
-        ),
     }
 }
 
@@ -4883,12 +4795,6 @@ pub fn doctor(
     #[cfg(unix)]
     if let Some(dir) = crate::compiler::shim::default_shim_dir()
         && let Some(check) = stale_shims_check(&dir, &std::env::var_os("PATH").unwrap_or_default())
-    {
-        checks.push(check);
-    }
-
-    if let Some(ref cfg) = config
-        && let Some(check) = doctor_checkout_check(&cfg.event_log_path())
     {
         checks.push(check);
     }

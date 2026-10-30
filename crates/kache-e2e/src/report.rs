@@ -11,7 +11,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// Expected report schema version supported by this E2E reader.
-pub const SUPPORTED_REPORT_SCHEMA_VERSION: u32 = 2;
+pub const SUPPORTED_REPORT_SCHEMA_VERSION: u32 = 3;
 
 /// Raw `kache report --format json` document, deserialized with the
 /// summary surface lifted out for assertions and the full body kept as
@@ -255,9 +255,15 @@ mod tests {
     }
 
     #[test]
+    fn supported_report_version_matches_published_schema() {
+        let schema: deser_value::Value = deser_json::from_str(include_str!("../../../docs/commands/report.schema.json")).unwrap();
+        assert_eq!(schema["properties"]["schema_version"]["enum"], deser_value::value!([SUPPORTED_REPORT_SCHEMA_VERSION]));
+    }
+
+    #[test]
     fn kache_report_deserialization_accepts_supported_schema_version_and_additive_fields() {
         let json = deser_value::value!({
-            "schema_version": 2,
+            "schema_version": 3,
             "summary": {
                 "hit_rate_pct": 50.0,
                 "total_crates": 2,
@@ -282,7 +288,7 @@ mod tests {
         });
 
         let typed: KacheReport = deser_value::from_value(&json).expect("should deserialize");
-        assert_eq!(typed.schema_version, 2);
+        assert_eq!(typed.schema_version, 3);
         assert_eq!(typed.summary.total_crates, 2);
         assert_eq!(typed.all_events.len(), 1);
         assert_eq!(typed.all_events[0].crate_name, "foo");

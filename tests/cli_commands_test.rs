@@ -30,6 +30,20 @@ const KACHE_BIN: &str = env!("CARGO_BIN_EXE_kache");
 /// the idle timeout is off by default (#662).
 const DAEMON_IDLE_BACKSTOP_SECS: &str = "60";
 
+#[test]
+fn diagnostics_require_a_crate_and_do_not_select_recorded_sessions() {
+    let e = env();
+    for args in [
+        &["stats", "--last-build"][..],
+        &["report", "--last-build"][..],
+        &["explain"][..],
+        &["explain", "--all"][..],
+        &["diff"][..],
+    ] {
+        e.cmd().args(args).assert().failure();
+    }
+}
+
 /// A `kache` invocation wired to a throwaway environment: its own cache dir,
 /// config path, and HOME/CARGO_HOME so nothing touches the developer's real
 /// setup and no background daemon is contacted.
@@ -1129,7 +1143,7 @@ fn report_json_on_empty_cache_is_valid_json() {
         .stdout
         .clone();
     let v: deser_value::Value = deser_json::from_slice(&out).expect("valid json");
-    assert_eq!(v["schema_version"].as_u64(), Some(2));
+    assert_eq!(v["schema_version"].as_u64(), Some(3));
     assert_eq!(v["summary"]["misses"].as_u64(), Some(0));
     assert_eq!(v["summary"]["local_hits"].as_u64(), Some(0));
 
@@ -1137,115 +1151,8 @@ fn report_json_on_empty_cache_is_valid_json() {
     let schema: deser_value::Value = deser_json::from_str(schema_text).expect("valid schema json");
     assert_eq!(
         schema["properties"]["schema_version"]["enum"],
-        deser_value::value!([2])
+        deser_value::value!([3])
     );
-}
-
-#[test]
-fn last_build_commands_select_one_root_and_describe_session_scope() {
-    for recorded in [false, true] {
-        let e = env();
-        let root = e.home.canonicalize().unwrap();
-        let other = e.cache.canonicalize().unwrap();
-        let events = [
-            (3, &root, "local_hit", "selected"),
-            (1, &root, "miss", "older"),
-            (4, &other, "miss", "selected"),
-            (2, &root, "miss", "selected"),
-        ]
-        .map(|(minute, path, result, session)| {
-            deser_json::to_string(&deser_value::value!({
-                "ts": format!("2026-01-01T00:{:02}:00Z", minute * 10),
-                "root": path.to_str().unwrap(),
-                "session_id": if recorded { session } else { "" },
-                "crate_name": format!("fixture{minute}"),
-                "result": result,
-                // The selected miss runs until 00:20; the hit at 00:30
-                // starts at 00:19, so local activity remains contiguous.
-                "elapsed_ms": if minute == 3 { 660_000 } else { 0 },
-                "compile_time_ms": 100,
-                "size": 128,
-                "cache_key": "fixture-key",
-                "schema": 18,
-            }))
-            .unwrap()
-        });
-        std::fs::write(e.cache.join("events.jsonl"), events.join("\n") + "\n").unwrap();
-
-        for command in ["stats", "report"] {
-            e.cmd()
-                .args([command, "--last-build", "--root"])
-                .arg(&root)
-                .assert()
-                .success()
-                .stdout(predicates::str::contains("last build session"))
-                .stdout(predicates::str::contains(
-                    "May include multiple Cargo commands",
-                ))
-                .stdout(predicates::str::contains(if recorded {
-                    "recorded selected"
-                } else {
-                    "inferred from activity"
-                }));
-
-            let mut cmd = e.cmd();
-            cmd.args([command, "--last-build", "--root"]).arg(&root);
-            if command == "stats" {
-                cmd.arg("--json");
-            } else {
-                cmd.args(["--format", "json"]);
-            }
-            let output = cmd.assert().success().get_output().stdout.clone();
-            let raw: deser_value::Value = deser_json::from_slice(&output).unwrap();
-            let report = if command == "stats" {
-                assert_eq!(raw["command"], "stats");
-                assert_eq!(raw["schema_version"], 1);
-                &raw["report"]
-            } else {
-                &raw
-            };
-            assert_eq!(report["summary"]["local_hits"], 1);
-            assert_eq!(report["summary"]["misses"], 1);
-            assert_eq!(report["timeline"]["event_count"], 2);
-            assert_eq!(report["meta"]["session"]["root"], root.to_str().unwrap());
-            assert_eq!(report["meta"]["session"]["inferred"], !recorded);
-            assert!(report["network"].is_null());
-        }
-
-        let output = e
-            .cmd()
-            .args(["report", "--last-build", "--format", "json"])
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let report: deser_value::Value = deser_json::from_slice(&output).unwrap();
-        assert_eq!(report["meta"]["session"]["root"], other.to_str().unwrap());
-        assert_eq!(report["timeline"]["event_count"], 1);
-    }
-}
-
-#[test]
-fn last_build_requires_recorded_events_and_conflicts_with_since() {
-    let e = env();
-    for command in ["stats", "report"] {
-        e.cmd()
-            .args([command, "--last-build"])
-            .assert()
-            .failure()
-            .stderr(predicates::str::contains("no recorded compiler events"));
-        e.cmd()
-            .args([command, "--last-build", "--since", "24h"])
-            .assert()
-            .failure()
-            .stderr(predicates::str::contains("cannot be used with"));
-    }
-    e.cmd()
-        .args(["stats", "--root", "."])
-        .assert()
-        .failure()
-        .stderr(predicates::str::contains("--last-build"));
 }
 
 #[test]
@@ -3369,7 +3276,7 @@ fn commands_operate_on_a_populated_cache() {
         .stdout
         .clone();
     let v: deser_value::Value = deser_json::from_slice(&out).expect("valid json");
-    assert_eq!(v["schema_version"].as_u64(), Some(2));
+    assert_eq!(v["schema_version"].as_u64(), Some(3));
     // The clean+rebuild produced exactly one cache miss (cold) and one local
     // hit (warm) for our crate, with the artifact blobs stored.
     assert_eq!(v["summary"]["local_hits"].as_u64(), Some(1), "report: {v:?}");
@@ -4436,72 +4343,6 @@ fn daemon_readiness_channel_precedes_a_fresh_running_status() {
     assert_eq!(status["daemon_running"], true, "{status:?}");
 }
 
-fn write_diff_sessions(e: &Env, sessions: &[(&str, &[&str])]) {
-    let mut lines = Vec::new();
-    let mut second = 1u32;
-    for &(session, crates) in sessions {
-        for crate_name in crates {
-            lines.push(
-                deser_json::to_string(&deser_value::value!({
-                    "ts": format!("2026-01-01T00:00:{second:02}Z"),
-                    "root": "/w",
-                    "session_id": session,
-                    "crate_name": *crate_name,
-                    "result": "miss",
-                    "elapsed_ms": 1,
-                    "size": 1,
-                    "cache_key": *crate_name,
-                    "schema": 22
-                }))
-                .unwrap(),
-            );
-            second += 1;
-        }
-    }
-    std::fs::write(e.cache.join("events.jsonl"), lines.join("\n") + "\n").unwrap();
-}
-
-#[test]
-fn diff_exits_when_the_later_session_misses_more() {
-    let e = env();
-    write_diff_sessions(&e, &[("s1", &["a"]), ("s2", &["b", "c"])]);
-    e.cmd()
-        .arg("diff")
-        .assert()
-        .failure()
-        .stdout(predicates::str::contains("EXCESS later misses 2 earlier 1"));
-}
-
-/// A reader that stops early does not turn a regression into success.
-#[test]
-fn diff_still_fails_when_stdout_is_closed() {
-    let e = env();
-    for (later, code) in [(&["b", "c"][..], 1), (&["b"][..], 0)] {
-        write_diff_sessions(&e, &[("s1", &["a"]), ("s2", later)]);
-        let mut command = kache_process_as(Path::new(KACHE_BIN), &e.home, &e.cache);
-        command
-            .args(["--json", "diff"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        let mut child = command.spawn().unwrap();
-        drop(child.stdout.take());
-        let output = child.wait_with_output().unwrap();
-        assert_eq!(output.status.code(), Some(code), "{later:?}: {output:?}");
-    }
-}
-
-#[test]
-fn diff_is_quiet_when_the_sessions_match() {
-    let e = env();
-    write_diff_sessions(&e, &[("s1", &["a"]), ("s2", &["b"])]);
-    e.cmd()
-        .arg("diff")
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("EXCESS").not())
-        .stdout(predicates::str::contains("misses 1 -> 1"));
-}
-
 /// Copy both binaries. A child writes executable files on Unix so another
 /// test thread cannot fork with a writable descriptor and cause ETXTBSY.
 fn copy_kache_binary(path: &Path) {
@@ -4790,179 +4631,4 @@ fn quarantine_backups_are_reported_and_only_removed_by_confirmed_full_clean() {
     }
     assert!(e.cache.join("index.db").is_file());
     e.cmd().args(["--json", "list"]).assert().success();
-}
-
-/// The skips view must retain every reason and invocation, including fast
-/// entries below the full report's slowest-table threshold.
-#[test]
-fn explain_all_lists_complete_history() {
-    let e = env();
-    let root_a = e.home.join("a").to_string_lossy().into_owned();
-    let root_b = e.home.join("b").to_string_lossy().into_owned();
-    let mut events = (0..15)
-        .map(|index| {
-            deser_value::value!({
-                "ts": format!("2026-01-01T00:00:{index:02}Z"),
-                "crate_name": format!("crate_{index}"),
-                "root": &root_a,
-                "session_id": "earlier",
-                "result": "passthrough",
-                "passthrough_reason": format!("unsupported|flag {index}"),
-                "elapsed_ms": index + 1,
-                "size": 0,
-                "cache_key": "",
-                "schema": 14
-            })
-        })
-        .collect::<Vec<_>>();
-    let mut skipped = events[0].clone();
-    skipped["ts"] = "2026-01-01T01:00:00Z".into();
-    skipped["root"] = root_b.clone().into();
-    skipped["session_id"] = "latest".into();
-    skipped["crate_name"] = "store_declined".into();
-    skipped["result"] = "skipped".into();
-    skipped["skip_reason"] = "inputs-changed".into();
-    events.push(skipped.clone());
-    let mut probe = skipped.clone();
-    probe["result"] = "passthrough".into();
-    probe["crate_name"] = "rustc".into();
-    probe["passthrough_reason"] = "not-a-compile|--print cfg".into();
-    events.push(probe);
-    let mut hit = skipped.clone();
-    hit["result"] = "local_hit".into();
-    events.push(hit);
-    let mut repeated = skipped;
-    repeated["crate_name"] = "another_declined".into();
-    events.push(repeated);
-    std::fs::write(
-        e.cache.join("events.jsonl"),
-        events
-            .iter()
-            .map(|event| format!("{}\n", deser_json::to_string(event).unwrap()))
-            .collect::<String>(),
-    )
-    .unwrap();
-
-    let read = |args: &[&str]| {
-        let output = e.cmd().args(args).output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        deser_json::from_slice::<deser_value::Value>(&output.stdout).unwrap()
-    };
-    let all = read(&["--json", "explain", "--all"]);
-    assert_eq!(all["command"], "explain");
-    assert_eq!(all["scope"], "retained history");
-    assert_eq!(all["passthroughs"], 15);
-    assert_eq!(all["skipped"], 2);
-    assert_eq!(all["probes"], 1);
-    assert_eq!(all["entries"].as_seq().unwrap().len(), 18);
-    assert_eq!(all["reasons"].as_seq().unwrap().len(), 17);
-    assert_eq!(all["reasons"][0]["reason"], "inputs-changed");
-    assert_eq!(all["reasons"][0]["count"], 2);
-    assert_eq!(all["entries"][0]["crate_name"], "crate_14");
-    assert_eq!(all["entries"][0]["root"], root_a);
-
-    let latest = read(&["--json", "explain"]);
-    assert_eq!(latest["root"], root_b);
-    assert_eq!(latest["misses"], 0);
-    assert!(
-        latest.get("entries").is_none(),
-        "plain explain keeps its build summary"
-    );
-    let rooted = read(&["--json", "explain", "--all", "--root", &root_a]);
-    assert_eq!(rooted["entries"].as_seq().unwrap().len(), 15);
-    assert_eq!(rooted["root"], root_a);
-    let rooted_all = read(&["--json", "explain", "--all", "--root", &root_b]);
-    assert_eq!(rooted_all["entries"].as_seq().unwrap().len(), 3);
-    let missing_root = e.home.join("missing");
-    let empty = read(&[
-        "--json",
-        "explain",
-        "--all",
-        "--root",
-        missing_root.to_str().unwrap(),
-    ]);
-    assert!(empty["entries"].as_seq().unwrap().is_empty());
-
-    e.cmd()
-        .args(["explain", "--all"])
-        .assert()
-        .success()
-        .stdout(predicates::str::contains(
-            "15 passthroughs, 2 skipped, 1 compiler queries",
-        ))
-        .stdout(predicates::str::contains("crate_0"))
-        .stdout(predicates::str::contains("crate_14"))
-        .stdout(predicates::str::contains("store_declined"))
-        .stdout(predicates::str::contains("inputs-changed"))
-        .stdout(predicates::str::contains("--print cfg"))
-        .stdout(predicates::str::contains(
-            "These records describe past builds. Rebuild to check the installed version.",
-        ))
-        .stdout(predicates::str::contains("retained event-log history"));
-    e.cmd()
-        .args(["explain", "--all", "--root", missing_root.to_str().unwrap()])
-        .assert()
-        .success()
-        .stdout(predicates::str::contains(
-            "No skips or passthroughs recorded",
-        ));
-    for args in [
-        vec!["explain", "serde", "--all"],
-        vec!["explain", "--skips"],
-    ] {
-        e.cmd().args(args).assert().failure().code(2);
-    }
-}
-
-#[test]
-fn explain_all_includes_rotated_history() {
-    let e = env();
-    let archive = e.cache.join("events.jsonl.archive");
-    std::fs::create_dir(&archive).unwrap();
-    let event = deser_value::value!({
-        "ts": "2026-01-01T00:00:00Z",
-        "crate_name": "archived_crate",
-        "root": e.home.to_str().unwrap(),
-        "result": "passthrough",
-        "passthrough_reason": "adaptive seed",
-        "elapsed_ms": 2,
-        "size": 0,
-        "cache_key": "",
-        "schema": 14
-    });
-    let compressed = zstd::stream::encode_all(
-        format!("{}\n", deser_json::to_string(&event).unwrap()).as_bytes(),
-        1,
-    )
-    .unwrap();
-    std::fs::write(
-        archive.join("1767225600-1767225600-1-1.jsonl.zst"),
-        compressed,
-    )
-    .unwrap();
-    // An archived-only history is still available after the live log is gone.
-    let output = e
-        .cmd()
-        .args(["--json", "explain", "--all"])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["entries"].as_seq().unwrap().len(), 1);
-    assert_eq!(value["entries"][0]["crate_name"], "archived_crate");
-    e.cmd()
-        .args(["explain", "--all"])
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("edit rebuild:"))
-        .stdout(predicates::str::contains("archived_crate"));
-    e.cmd()
-        .args(["explain"])
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("no recorded build to explain"));
 }

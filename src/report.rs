@@ -239,15 +239,12 @@ pub struct SessionRecord {
     pub ts: String,
     pub schema: u32,
     pub kache_version: String,
-    /// The report window as its heading shows it: `24h`, `build session`.
     pub window: String,
     /// First 16 hex digits of blake3(root), never the path itself: enough to
     /// tell builds of one tree apart across jobs without recording where the
     /// tree lives.
     #[deser(default, skip_serializing_if = Option::is_none)]
     pub root_hash: Option<String>,
-    #[deser(default, skip_serializing_if = String::is_empty)]
-    pub session_id: String,
     pub summary: ReportSummary,
     pub timing: TimingBreakdown,
     pub machine: SessionMachine,
@@ -270,10 +267,7 @@ impl SessionRecord {
     pub fn from_report(report: &BuildReport, machine: SessionMachine) -> Self {
         let meta = &report.meta;
         let window = meta.window_label();
-        let (root, session_id) = match &meta.session {
-            Some(session) => (Some(session.root.clone()), session.session_id.clone()),
-            None => (meta.root_filter.clone(), String::new()),
-        };
+        let root = meta.root_filter.clone();
         let root_hash = root
             .filter(|root| !root.is_empty())
             .map(|root| blake3::hash(root.as_bytes()).to_hex().as_str()[..16].to_string());
@@ -283,7 +277,6 @@ impl SessionRecord {
             kache_version: meta.kache_version.clone(),
             window,
             root_hash,
-            session_id,
             summary: report.summary.clone(),
             timing: report.timing.clone(),
             machine,
@@ -309,7 +302,7 @@ pub struct GcSummary {
 /// non-breaking telemetry metrics) do not increment this version. Version 2
 /// drops the stale remote/prefetch accounting (`prefetch_hits`,
 /// `remote_hits`, `prefetch` block, `prefetch_hit`/`remote_hit` results).
-pub const REPORT_SCHEMA_VERSION: u32 = 2;
+pub const REPORT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BuildReport {
@@ -361,45 +354,12 @@ pub struct ReportMeta {
     pub since: String,
     #[deser(default, skip_serializing_if = Option::is_none)]
     pub root_filter: Option<String>,
-    /// Present when the report selects one activity session instead of a window.
-    #[deser(default, skip_serializing_if = Option::is_none)]
-    pub session: Option<ReportSession>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ReportSession {
-    pub root: String,
-    #[deser(default, skip_serializing_if = String::is_empty)]
-    pub session_id: String,
-    /// Local and older events lack session IDs; group their activity by idle gap.
-    pub inferred: bool,
-    pub inactivity_secs: u64,
-}
-
-impl ReportSession {
-    fn description(&self) -> String {
-        let identity = if self.inferred {
-            format!(
-                "inferred from activity ({}s idle gap)",
-                self.inactivity_secs
-            )
-        } else {
-            format!("recorded {}", self.session_id)
-        };
-        format!(
-            "Session: {identity}; root: {}. May include multiple Cargo commands. Only retained, completed compiler events are included. Store inventory covers the whole cache.",
-            self.root
-        )
-    }
 }
 
 impl ReportMeta {
     /// The window for headings: `since` when present, else the whole-hour
     /// value an older report carried.
     pub fn window_label(&self) -> String {
-        if self.session.is_some() {
-            return "build session".to_string();
-        }
         if self.since.is_empty() {
             format!("{}h", self.since_hours)
         } else {
@@ -1060,7 +1020,6 @@ pub struct ErrorDetail {
 #[derive(Debug, Clone, Default)]
 pub struct ReportFilter {
     pub root: Option<PathBuf>,
-    pub last_build: bool,
 }
 
 pub fn generate_report(config: &Config, window: SinceWindow, top: usize) -> Result<BuildReport> {
@@ -1075,28 +1034,11 @@ pub fn generate_report_with_filter(
 ) -> Result<BuildReport> {
     let now = UtcTime::now();
     let since = window.cutoff(now);
-    let mut build_events = if filter.last_build {
-        events::read_events(&config.event_log_path())?
-    } else {
-        events::read_events_since(&config.event_log_path(), since)?
-    };
-    let mut root_filter = filter.root.as_deref().map(normalize_filter_root);
+    let mut build_events = events::read_events_since(&config.event_log_path(), since)?;
+    let root_filter = filter.root.as_deref().map(normalize_filter_root);
     if let Some(root) = root_filter.as_deref() {
         build_events.retain(|event| event_matches_root(event, root));
     }
-    let session = if filter.last_build {
-        let session = select_last_build(&mut build_events)?;
-        root_filter = Some(session.root.clone());
-        Some(session)
-    } else {
-        None
-    };
-    let window = if filter.last_build {
-        let start = build_events.iter().map(event_start).min().unwrap();
-        SinceWindow::from_secs(now.saturating_duration_since(start).as_secs())
-    } else {
-        window
-    };
     let since_ts = window.cutoff_unix_secs(now);
     let transfers = if root_filter.is_some() {
         Vec::new()
@@ -1190,15 +1132,12 @@ pub fn generate_report_with_filter(
         total_cacheable,
         total_hits,
     );
-    if let Some(alarm) = unexplained_suggestion(&build_events) {
-        suggestions.push(alarm);
-    }
     if let Some(cut) = events::session_cut_by_rotation(&config.event_log_path())
         && build_events.iter().any(|event| event.session_id == cut)
     {
         suggestions.insert(
             0,
-            rotation_cut_notice(config.event_log_max_size, filter.last_build),
+            rotation_cut_notice(config.event_log_max_size),
         );
     }
 
@@ -1273,7 +1212,6 @@ pub fn generate_report_with_filter(
             since_secs: window.secs(),
             since: window.label(),
             root_filter: root_filter.clone(),
-            session,
         },
         summary: ReportSummary {
             hit_rate_pct: (hit_rate * 10.0).round() / 10.0,
@@ -1358,53 +1296,9 @@ pub fn generate_report_with_filter(
         bypass,
         errors_detail,
         suggestions,
-        gc: if filter.last_build {
-            None
-        } else {
-            load_gc_summary_all(config, since)
-        },
+        gc: load_gc_summary_all(config, since),
         timed_transfers: timed_transfer_spans(&transfers),
     })
-}
-
-/// Select by completion timestamp, not append order: wrappers finish in parallel.
-/// Session IDs belong to a root. Events without IDs can only support an inferred
-/// activity group; they cannot identify individual Cargo invocations.
-fn select_last_build(events: &mut Vec<BuildEvent>) -> Result<ReportSession> {
-    let latest = events
-        .iter()
-        .max_by_key(|event| event.ts)
-        .ok_or_else(|| anyhow::anyhow!("no recorded compiler events match the selection"))?;
-    anyhow::ensure!(
-        !latest.root.is_empty(),
-        "The latest compiler event has no recorded root; use --root to select a known build tree."
-    );
-    let session = ReportSession {
-        root: latest.root.clone(),
-        session_id: latest.session_id.clone(),
-        inferred: latest.session_id.is_empty(),
-        inactivity_secs: crate::wrapper::BUILD_SESSION_SECS,
-    };
-    events.retain(|event| event.root == session.root);
-    if session.inferred {
-        events.sort_by_key(|event| event.ts);
-        let mut start = event_start(events.last().unwrap());
-        let mut first = events.len();
-        for (index, event) in events.iter().enumerate().rev() {
-            if !event.session_id.is_empty()
-                || start.saturating_duration_since(event.ts)
-                    >= std::time::Duration::from_secs(session.inactivity_secs)
-            {
-                break;
-            }
-            first = index;
-            start = start.min(event_start(event));
-        }
-        events.drain(..first);
-    } else {
-        events.retain(|event| event.session_id == session.session_id);
-    }
-    Ok(session)
 }
 
 pub(crate) fn normalize_filter_root(root: &Path) -> String {
@@ -1902,13 +1796,26 @@ pub(crate) fn ran_compiler_uncached(event: &BuildEvent) -> bool {
     }
 }
 
-/// Why a compile was not cached, in words: the passthrough reason, or the
-/// reason kache declined to store it.
+fn passthrough_reason_words(reason: &str) -> String {
+    let reason = reason.trim();
+    let (kind, detail) = if reason.is_empty() {
+        ("", "unknown")
+    } else {
+        reason.split_once('|').map_or(("", reason.strip_prefix("refused: ").unwrap_or(reason)), |(kind, detail)| (kind.trim(), detail.trim()))
+    };
+    let detail = if detail.starts_with("build-script cache bypassed: no such column: prediction_json in ") {
+        "build-script cache bypassed: incompatible prediction metadata in the cache index"
+    } else {
+        detail
+    };
+    if kind.is_empty() { uncached_reason_words(detail) } else { format!("{kind}: {detail}") }
+}
+
 pub(crate) fn uncached_compile_words(event: &BuildEvent) -> String {
     if matches!(event.result, EventResult::Skipped) {
         format!("compiled, not stored: {}", event.skip_reason)
     } else {
-        crate::sessions::passthrough_words(&event.passthrough_reason)
+        passthrough_reason_words(&event.passthrough_reason)
     }
 }
 
@@ -2344,19 +2251,9 @@ fn build_network_analysis(transfers: &[TransferEvent], top: usize) -> NetworkAna
     }
 }
 
-/// The report covers a build whose early events the event log rotated
-/// away (kunobi-ninja/kache#1209).
-fn rotation_cut_notice(max_size: u64, last_build: bool) -> String {
-    if !last_build {
-        return format!(
-            "this build outgrew the event log ({}); counts include retained archives, but \
-             expired or unreadable events may be missing",
-            kache_core::size::format_bytes(max_size)
-        );
-    }
+fn rotation_cut_notice(max_size: u64) -> String {
     format!(
-        "this build outgrew the event log ({}), so its earliest events were rotated away and \
-         the counts above are incomplete; raise [cache] event_log_max_size",
+        "this build outgrew the event log ({}); counts include retained archives, but expired or unreadable events may be missing",
         kache_core::size::format_bytes(max_size)
     )
 }
@@ -2794,28 +2691,6 @@ fn transfer_edge(span: &TransferSpan, ph: &str, id: &str) -> deser_value::Value 
     })
 }
 
-fn unexplained_suggestion(events: &[BuildEvent]) -> Option<String> {
-    let indices: Vec<usize> = (0..events.len()).collect();
-    let unexplained = crate::sessions::unexplained_misses(events, &indices);
-    let misses = events
-        .iter()
-        .filter(|event| matches!(event.result, EventResult::Miss | EventResult::Dup))
-        .count();
-    unexplained_alarm_line(unexplained, misses)
-}
-
-/// The report line for unexplained misses, or nothing when there is no count
-/// to compare.
-pub(crate) fn unexplained_alarm_line(unexplained: usize, misses: usize) -> Option<String> {
-    if unexplained == 0 || misses == 0 {
-        return None;
-    }
-    let share = (unexplained as u64).saturating_mul(100) / (misses as u64);
-    Some(format!(
-        "{unexplained} unexplained misses ({share}% of misses) have no recorded cause"
-    ))
-}
-
 fn redact_owned(value: &mut String) {
     if !value.is_empty() {
         *value = "redacted".to_string();
@@ -2844,9 +2719,6 @@ pub fn redaction_terms(report: &BuildReport, extra: &[&std::path::Path]) -> Vec<
     };
     if let Some(root) = &report.meta.root_filter {
         add(root);
-    }
-    if let Some(session) = &report.meta.session {
-        add(&session.root);
     }
     for detail in report
         .top_misses
@@ -2908,9 +2780,6 @@ pub fn redact_report(report: &mut BuildReport) {
     if let Some(root) = report.meta.root_filter.as_mut() {
         redact_owned(root);
     }
-    if let Some(session) = report.meta.session.as_mut() {
-        redact_owned(&mut session.root);
-    }
     for event in &mut report.trace_events {
         redact_trace_args(&mut event.args);
     }
@@ -2956,8 +2825,6 @@ pub fn format_trace_json(report: &BuildReport) -> Result<String> {
         display_time_unit: &'a str,
         #[deser(rename = "traceEvents")]
         trace_events: Vec<deser_value::Value>,
-        #[deser(skip_serializing_if = Option::is_none)]
-        session: Option<&'a ReportSession>,
     }
 
     // Lead with chrome-trace metadata events that name the process and each
@@ -2989,7 +2856,6 @@ pub fn format_trace_json(report: &BuildReport) -> Result<String> {
     Ok(deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&TraceOutput {
         display_time_unit: &report.display_time_unit,
         trace_events,
-        session: report.meta.session.as_ref(),
     })?)
 }
 
@@ -3073,12 +2939,6 @@ pub fn format_markdown(report: &BuildReport) -> String {
     lines.push("| Metric | Value |".to_string());
     lines.push("|---|---|".to_string());
     lines.push(format!("| Window | last {} |", report.meta.window_label()));
-    if let Some(session) = &report.meta.session {
-        lines.push(format!(
-            "| Scope | {} |",
-            markdown_cell(&session.description())
-        ));
-    }
     lines.push(format!("| Hit rate (count) | {:.1}% |", s.hit_rate_pct));
     if let Some(w) = s.weighted_hit_rate_pct {
         lines.push(format!("| Hit rate (compile-cost weighted) | {:.1}% |", w));
@@ -3421,12 +3281,6 @@ pub fn format_github(report: &BuildReport) -> String {
         "| **Window** | last {} |",
         report.meta.window_label()
     ));
-    if let Some(session) = &report.meta.session {
-        lines.push(format!(
-            "| **Scope** | {} |",
-            markdown_cell(&session.description())
-        ));
-    }
     lines.push(format!(
         "| **Crates** | {} cached / {} compiled / {} total |",
         total_hits, total_compiled, s.total_crates
@@ -3906,9 +3760,6 @@ pub fn format_text(report: &BuildReport) -> String {
         "kache · last {} · full report",
         report.meta.window_label()
     ))];
-    if let Some(session) = &report.meta.session {
-        lines.push(format!("  {}", session.description()));
-    }
     lines.push(String::new());
 
     // The summary, then remote transfer and storage, on shared columns.

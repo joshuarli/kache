@@ -53,7 +53,6 @@ impl Cli {
                 }
             }
             Some(Commands::Explain { .. }) => names.push("explain"),
-            Some(Commands::Diff { .. }) => names.push("diff"),
             Some(Commands::Report { .. }) => names.push("report"),
             Some(Commands::Config { command }) => {
                 names.push("config");
@@ -103,7 +102,6 @@ fn dispatch(name: &str, parser: &mut lexopt::Parser, json: bool) -> ParseResult 
         "telemetry" => parse_telemetry(parser, json),
         "why-miss" => parse_explain(parser, json),
         "explain" => parse_explain(parser, json),
-        "diff" => parse_diff(parser, json),
         "report" => parse_report(parser, json),
         "config" => parse_config(parser, json),
         "install-shims" => parse_install_shims(parser, json),
@@ -649,8 +647,6 @@ fn parse_telemetry(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
 
 fn parse_stats(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
     let mut since = "24h".to_owned();
-    let mut since_set = false;
-    let mut last_build = false;
     let mut root = None;
     let mut full = false;
     let mut format = None;
@@ -678,12 +674,7 @@ fn parse_stats(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             },
             lexopt::Arg::Long("since") => {
                 since = next_string(&mut *parser, "since", json)?;
-                since_set = true;
             },
-            lexopt::Arg::Long("last-build") => {
-                no_value(&mut *parser, "last-build", json)?;
-                last_build = true;
-            }
             lexopt::Arg::Long("root") => root = Some(next_path(&mut *parser, "root", json)?),
             lexopt::Arg::Long("full") => {
                 no_value(&mut *parser, "full", json)?;
@@ -718,14 +709,10 @@ fn parse_stats(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             },
         }
     }
-    if last_build && since_set {
-        return Err(conflict(json, "'--last-build'", "'--since'"));
-    }
     run(
         json,
         Commands::Stats {
             since,
-            last_build,
             root,
             full,
             format,
@@ -739,8 +726,6 @@ fn parse_stats(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
 
 fn parse_explain(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
     let mut crate_name = None;
-    let mut all = false;
-    let mut root = None;
     loop {
         let Some(arg) = parser.next().map_err(|error| lexopt_error(error, json))? else {
             break;
@@ -759,11 +744,6 @@ fn parse_explain(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
-            lexopt::Arg::Long("all") => {
-                no_value(&mut *parser, "all", json)?;
-                all = true;
-            }
-            lexopt::Arg::Long("root") => root = Some(next_path(&mut *parser, "root", json)?),
             lexopt::Arg::Value(value) => {
                 if crate_name.is_some() {
                     return Err(fail(
@@ -781,58 +761,13 @@ fn parse_explain(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             },
         }
     }
-    if all && crate_name.is_some() {
-        return Err(conflict(json, "'--all'", "'<CRATE>'"));
-    }
-    if root.is_some() && crate_name.is_some() {
-        return Err(conflict(json, "'--root'", "'<CRATE>'"));
-    }
-    run(json, Commands::Explain { crate_name, all, root })
-}
-
-fn parse_diff(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
-    let mut root = None;
-    loop {
-        let Some(arg) = parser.next().map_err(|error| lexopt_error(error, json))? else {
-            break;
-        };
-        match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
-                return Ok(ParseOutcome::Help {
-                    text: diff_help(),
-                    json,
-                });
-            }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
-                return Ok(ParseOutcome::Version { json });
-            }
-            lexopt::Arg::Long("json") => {
-                no_value(&mut *parser, "json", json)?;
-                json = true;
-            },
-            lexopt::Arg::Long("root") => root = Some(next_path(&mut *parser, "root", json)?),
-            lexopt::Arg::Value(value) => {
-                return Err(fail(
-                    json,
-                    format!("unexpected argument '{}'", value.to_string_lossy()),
-                ));
-            }
-            lexopt::Arg::Short(flag) => {
-                return Err(fail(json, format!("unrecognized flag '-{flag}'")));
-            }
-            lexopt::Arg::Long(flag) => {
-                return Err(fail(json, format!("unrecognized option '--{flag}'")));
-            },
-        }
-    }
-    run(json, Commands::Diff { root })
+    let crate_name = crate_name.ok_or_else(|| missing(json, "crate name"))?;
+    run(json, Commands::Explain { crate_name })
 }
 
 fn parse_report(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
     let mut format = crate::cli::ReportFormat::Text;
     let mut since = "24h".to_owned();
-    let mut since_set = false;
-    let mut last_build = false;
     let mut root = None;
     let mut output = None;
     let mut top = 10;
@@ -861,12 +796,7 @@ fn parse_report(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             }
             lexopt::Arg::Long("since") => {
                 since = next_string(&mut *parser, "since", json)?;
-                since_set = true;
             },
-            lexopt::Arg::Long("last-build") => {
-                no_value(&mut *parser, "last-build", json)?;
-                last_build = true;
-            }
             lexopt::Arg::Long("root") => root = Some(next_path(&mut *parser, "root", json)?),
             lexopt::Arg::Short('o') | lexopt::Arg::Long("output") => {
                 output = Some(next_path(&mut *parser, "output", json)?);
@@ -894,15 +824,11 @@ fn parse_report(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             },
         }
     }
-    if last_build && since_set {
-        return Err(conflict(json, "'--last-build'", "'--since'"));
-    }
     run(
         json,
         Commands::Report {
             format,
             since,
-            last_build,
             root,
             output,
             top,
@@ -1095,7 +1021,7 @@ Commands:
   config       Inspect or change configuration values
   stats        Show hit rate, time saved and cache size [alias: status]
   clean        Remove cache entries
-  explain      Explain why a crate, or the latest build, missed the cache
+  explain      Explain why a crate missed the cache
   list         List cache entries, or one crate's entries in detail
   daemon       Show the background daemon's status, or start, stop or install it
 
@@ -1256,7 +1182,6 @@ Usage: kache stats [OPTIONS]
 
 Options:
   --since <SINCE>    Event window (e.g. 15m, 2h, 7d; a bare number is hours) [default: 24h]
-  --last-build       Report the latest recorded activity session
   --root <PATH>      Only this build tree/root
   --full             The full build report instead of the summary
   --format <FORMAT>  Write the full report as json, markdown, github, or trace (Perfetto / Chrome trace)
@@ -1304,36 +1229,7 @@ Options:
 }
 
 fn explain_help() -> String {
-    "\
-Explain why a crate, or the latest build, missed the cache [alias: why-miss]
-
-Usage: kache explain [OPTIONS] [CRATE]
-
-Arguments:
-  [CRATE]  The crate to explain. Without one, compare the latest build's misses with the build before it
-
-Options:
-  --all         List every skip and passthrough across the retained build history, with counts by reason
-  --root <PATH> Without a crate: only builds recorded for this build tree
-  --json        Machine-readable JSON on stdout
-  -h, --help    Print help
-"
-    .to_owned()
-}
-
-fn diff_help() -> String {
-    "\
-Compare misses in the two newest sessions of one build root. Kept
-for scripts; `kache explain` with no crate explains the same build
-
-Usage: kache diff [OPTIONS]
-
-Options:
-  --root <PATH>  Only sessions recorded for this build tree
-  --json         Machine-readable JSON on stdout
-  -h, --help     Print help
-"
-    .to_owned()
+    "Explain why a crate missed the cache [alias: why-miss]\n\nUsage: kache explain [OPTIONS] <CRATE>\n\nOptions:\n  --json        Machine-readable JSON on stdout\n  -h, --help    Print help\n".to_owned()
 }
 
 fn report_help() -> String {
@@ -1346,7 +1242,6 @@ Usage: kache report [OPTIONS]
 Options:
   --format <FORMAT>  Output format: json, trace (also perfetto, chrome-trace), markdown, github, text [default: text]
   --since <SINCE>    Event window (e.g. 15m, 2h, 7d; a bare number is hours) [default: 24h]
-  --last-build       Report the latest recorded activity session
   --root <PATH>      Only include compiler events from this build tree/root
   -o, --output <PATH>
                      Write output to a file instead of stdout
@@ -1438,7 +1333,6 @@ fn command_help(name: &str, json: bool) -> Result<String, ParseFail> {
         "daemon" => Ok(daemon_help()),
         "telemetry" => Ok(telemetry_help()),
         "why-miss" | "explain" => Ok(explain_help()),
-        "diff" => Ok(diff_help()),
         "report" => Ok(report_help()),
         "config" => Ok(config_help()),
         "install-shims" => Ok(install_shims_help()),
@@ -1653,7 +1547,6 @@ pub(crate) fn help_tree() -> HelpCommand {
                 usage: "Usage: kache stats [OPTIONS]",
                 arguments: vec![
                     arg("since", Some("since"), None, false, "Event window", &[]),
-                    flag("last-build", "last-build", "Report the latest recorded activity session"),
                     arg("root", Some("root"), None, false, "Only this build tree/root", &[]),
                     flag("full", "full", "The full build report instead of the summary"),
                     arg("format", Some("format"), None, false, "Write the full report in this format", crate::cli::ReportFormat::spellings()),
@@ -1679,12 +1572,10 @@ pub(crate) fn help_tree() -> HelpCommand {
             },
             HelpCommand {
                 name: "explain",
-                description: Some("Explain why a crate, or the latest build, missed the cache"),
-                usage: "Usage: kache explain [OPTIONS] [CRATE]",
+                description: Some("Explain why a crate missed the cache"),
+                usage: "Usage: kache explain [OPTIONS] <CRATE>",
                 arguments: vec![
-                    arg("crate-name", None, None, false, "The crate to explain", &[]),
-                    flag("all", "all", "List every skip and passthrough across the retained build history"),
-                    arg("root", Some("root"), None, false, "Only builds recorded for this build tree", &[]),
+                    arg("crate-name", None, None, true, "The crate to explain", &[]),
                     json_arg(),
                 ],
                 subcommands: vec![],
