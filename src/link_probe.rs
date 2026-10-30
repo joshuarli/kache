@@ -110,15 +110,8 @@ pub fn probe_link_layout(build_dir: &Path, staging_dir: &Path) -> LinkLayoutRepo
     report
 }
 
-/// `path` as doctor shows it. On Unix it is resolved, so one directory
-/// reached through a symlink such as macOS's `/var` is named one way;
-/// unresolvable paths are shown as given. Windows shows it as given:
-/// resolving would replace a `subst` drive or short name with another
-/// spelling and add the `\\?\` prefix.
 pub(crate) fn shown_path(path: &Path) -> String {
-    if cfg!(unix)
-        && let Ok(real) = std::fs::canonicalize(path)
-    {
+    if let Ok(real) = std::fs::canonicalize(path) {
         return real.display().to_string();
     }
     path.display().to_string()
@@ -304,28 +297,13 @@ pub(crate) fn parse_protected_hardlinks(content: &str) -> Option<String> {
 }
 
 fn current_uid() -> Option<u32> {
-    #[cfg(unix)]
-    {
-        // SAFETY: getuid is async-signal-safe and has no failure mode.
-        Some(unsafe { libc::getuid() })
-    }
-    #[cfg(not(unix))]
-    {
-        None
-    }
+    // SAFETY: getuid is async-signal-safe and has no failure mode.
+    Some(unsafe { libc::getuid() })
 }
 
 fn file_owner(path: &Path) -> Option<u32> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        std::fs::metadata(path).ok().map(|m| m.uid())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        None
-    }
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|m| m.uid())
 }
 
 /// Whether FICLONE works in `dir`: create two temps and try to clone one into

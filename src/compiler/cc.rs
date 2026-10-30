@@ -1194,19 +1194,11 @@ fn regular_output_is_owner_writable(meta: &std::fs::Metadata) -> bool {
         return false;
     }
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-        // SAFETY: geteuid has no arguments, pointers, or preconditions.
-        let current_uid = unsafe { libc::geteuid() };
-        meta.uid() == current_uid && meta.permissions().mode() & 0o200 != 0
-    }
-
-    #[cfg(not(unix))]
-    {
-        true
-    }
+    // SAFETY: geteuid has no arguments, pointers, or preconditions.
+    let current_uid = unsafe { libc::geteuid() };
+    meta.uid() == current_uid && meta.permissions().mode() & 0o200 != 0
 }
 
 fn regular_output_is_independent(_path: &Path, meta: &std::fs::Metadata) -> bool {
