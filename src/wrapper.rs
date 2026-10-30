@@ -6701,8 +6701,6 @@ fn passthrough_with_event<R: Into<String>>(
     Ok(output.exit_code)
 }
 
-/// The codegen backend dylib that keeps a rustc compile out of the cache.
-
 /// Passthrough reason for a rustc compile whose codegen backend dylib is not
 /// trusted. The string is a contract: reports group passthroughs by it.
 const UNTRUSTED_CODEGEN_BACKEND_REASON: &str = "unsupported|rustc codegen backend dylib (-Zcodegen-backend=<path>) may write files kache cannot restore";
