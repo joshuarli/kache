@@ -12929,14 +12929,12 @@ fn injected_cross_device_ingest_advises_but_other_errors_do_not() {
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
     crate::link::set_cow_warn_marker(base.join("warn"));
-    crate::link::set_storage_layout_advice(true);
     let marker_written = || std::fs::read_dir(&base).unwrap().next().is_some();
 
     let source = dir.path().join("libv.rlib");
     fs::write(&source, b"cross-volume-bytes").unwrap();
 
     // Muted layout advice stays silent even on EXDEV.
-    crate::link::set_storage_layout_advice(false);
     let _force = ForceStoreHardlink::enable();
     let _inject = InjectStoreHardlinkError::enable(std::io::ErrorKind::CrossesDevices);
     let (_, ingest) = store.stage_blob_from_source(&source, true).unwrap();
@@ -12948,7 +12946,6 @@ fn injected_cross_device_ingest_advises_but_other_errors_do_not() {
         !marker_written(),
         "a muted advisory must not write a marker"
     );
-    crate::link::set_storage_layout_advice(true);
 
     // A non-cross-device failure records its reason but advises nothing.
     let _force = ForceStoreHardlink::enable();
@@ -12982,7 +12979,6 @@ fn injected_cross_device_ingest_advises_but_other_errors_do_not() {
         marker_written(),
         "a cross-device ingest fallback must advise"
     );
-    crate::link::set_storage_layout_advice(true);
     let _ = std::fs::remove_dir_all(&base);
 }
 

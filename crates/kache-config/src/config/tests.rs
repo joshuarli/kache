@@ -263,6 +263,7 @@ fn the_event_log_rotates_at_64_mib_by_default() {
     std::fs::write(&config_path, "[cache]\nevent_log_max_size = \"8MiB\"\n").unwrap();
     assert_eq!(Config::load().unwrap().event_log_max_size, 8 * 1024 * 1024);
 }
+#[test]
 fn index_auto_compact_is_on_by_default_and_obeys_env_precedence() {
     let _lock = config_path_lock();
     let dir = tempfile::tempdir().unwrap();

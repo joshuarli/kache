@@ -1843,7 +1843,6 @@ mod tests {
     fn configure_invocation_policy(enabled: bool, marker: &Path) {
         set_shared_hardlink_restores(enabled);
         set_cow_warn_marker(marker.to_path_buf());
-        set_storage_layout_advice(!enabled);
         set_mapped_target(enabled);
         set_layout_advice_to_log(enabled);
     }
@@ -1851,7 +1850,7 @@ mod tests {
     fn assert_invocation_policy(enabled: bool, marker: &Path) {
         assert_eq!(shared_hardlink_restores_enabled(), enabled);
         assert_eq!(cow_warn_marker().as_deref(), Some(marker));
-        assert_eq!(storage_layout_advice_enabled(), !enabled);
+        assert!(storage_layout_advice_enabled());
         assert_eq!(mapped_target(), enabled);
         assert_eq!(
             layout_advice_sink(),
@@ -1946,11 +1945,6 @@ mod tests {
         let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
         let cross_device = std::io::Error::from(std::io::ErrorKind::CrossesDevices);
         let _ = crate::markers::take_emitted();
-        set_storage_layout_advice(false);
-        warn_hardlink_fallback_once(&source, &target, HardlinkIoReason::Permission, &denied);
-        assert!(!bucket_marker(&marker, "hardlink-eperm").exists());
-        assert!(crate::markers::take_emitted().is_empty());
-        set_storage_layout_advice(true);
         set_mapped_target(true);
         warn_hardlink_fallback_once(
             &source,
