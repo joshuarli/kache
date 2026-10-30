@@ -15,7 +15,6 @@ use crate::compiler::{
 };
 use crate::config::Config;
 use crate::events::{self, BuildEvent, EventResult};
-use crate::incremental_policy::{AdaptiveUnit, CompileOutcome, Lease, compile_outcome};
 use crate::key_env::KeyEnv;
 use crate::link;
 use crate::maintenance::unix_now_secs;
@@ -125,135 +124,6 @@ fn store_unavailable_message(err: &anyhow::Error) -> String {
 /// same trade-off `maybe_trigger_prefetch` and the store advisory already make,
 /// and it still turns #508's 670 lines into a handful.
 pub(crate) use kache_store::markers::WARN_SESSION_SECS;
-
-/// Kache-only semantic inputs that rustc incremental compilation cannot infer
-/// from argv. A change selects a fresh per-unit incremental directory before
-/// the early adaptive path can run.
-fn adaptive_policy_guard(config: &Config) -> [u8; 32] {
-    fn fold(hasher: &mut blake3::Hasher, label: &[u8], value: &[u8]) {
-        hasher.update(&(label.len() as u64).to_le_bytes());
-        hasher.update(label);
-        hasher.update(&(value.len() as u64).to_le_bytes());
-        hasher.update(value);
-    }
-
-    let mut hasher = blake3::Hasher::new();
-    fold(&mut hasher, b"policy", b"adaptive-incremental-v1");
-    fold(
-        &mut hasher,
-        b"worktree-seeding",
-        if config.seed_incremental {
-            b"on"
-        } else {
-            b"off"
-        },
-    );
-    if let Some(salt) = config.key_salt.as_deref() {
-        fold(&mut hasher, b"key-salt", salt.as_bytes());
-    }
-    if let Some(env_guard) = crate::cache_key::key_env_guard(&config.key_env_vars) {
-        fold(&mut hasher, b"key-env", env_guard.as_bytes());
-    }
-    for base_dir in &config.base_dirs {
-        fold(&mut hasher, b"base-dir", base_dir.as_bytes());
-    }
-    *hasher.finalize().as_bytes()
-}
-
-fn adaptive_mode_enabled(config: &Config) -> bool {
-    config.adaptive_incremental && !config.preserve_incremental
-}
-
-fn preserve_incremental_requested(config: &Config, args: &RustcArgs) -> bool {
-    config.preserve_incremental && args.incremental.is_some()
-}
-
-fn force_incremental_requested(config: &Config, args: &RustcArgs) -> bool {
-    args.incremental.is_some()
-        && args
-            .crate_name
-            .as_deref()
-            .is_some_and(|crate_name| config.incremental_crate_forced(crate_name))
-}
-
-fn adaptive_seed_allowed(config: &Config, args: &RustcArgs) -> bool {
-    adaptive_mode_enabled(config) && !force_incremental_requested(config, args)
-}
-
-/// Whether a managed unit must key before it compiles. Without recorded
-/// policy state no seed can run, so a unit that is not force-listed may
-/// compile first; a force-listed unit keeps keying first. A managed unit that
-/// is not force-listed implies adaptive mode is on, so the seed policy adds
-/// nothing here.
-fn managed_unit_keys_first(managed: bool, force_listed: bool, policy_state: bool) -> bool {
-    managed && (force_listed || policy_state)
-}
-
-/// Build the one safety-checked unit used by both adaptive and force-list
-/// incremental compiles. Declared inputs are checked only after the narrow
-/// Cargo layout is known to be eligible; rejecting them also clears any old
-/// private state for that unit.
-fn managed_incremental_unit<F>(
-    config: &Config,
-    args: &RustcArgs,
-    extra_inputs_declared: F,
-) -> Option<AdaptiveUnit>
-where
-    F: FnOnce() -> bool,
-{
-    if !adaptive_mode_enabled(config) && !force_incremental_requested(config, args) {
-        return None;
-    }
-    let guard = adaptive_policy_guard(config);
-    let unit = AdaptiveUnit::eligible(args, &guard)?;
-    if extra_inputs_declared() {
-        let _ = unit.reset();
-        return None;
-    }
-    Some(unit)
-}
-
-/// Whether the pre-key incremental lanes may run. Never on a re-entry after a
-/// deferred compile: that compile already ran, and with a result it already
-/// reached Cargo, so no lane may start a second one.
-fn incremental_fast_path_allowed(
-    has_refuse_reasons: bool,
-    source_excluded: bool,
-    skip_user_facing: bool,
-    reentered: bool,
-) -> bool {
-    !has_refuse_reasons && !source_excluded && !skip_user_facing && !reentered
-}
-
-/// Whether this is the keyed flow [`compile_before_key`] re-entered: with the
-/// compile's result after a miss, or with its emitted closure after it
-/// stopped the compile on a hit.
-fn reentered_after_deferred_compile(precompiled: bool, emitted_closure_waiting: bool) -> bool {
-    precompiled || emitted_closure_waiting
-}
-
-/// Whether an adaptive compile takes a slot in the scheduler's pool. A seed
-/// runs after a local and a remote miss, often as a full compile, so it waits
-/// for a slot like any other miss. The active and immediate lanes run before
-/// any key work, as passthroughs do.
-fn adaptive_lane_takes_permit(kind: crate::incremental_policy::LeaseKind) -> bool {
-    kind == crate::incremental_policy::LeaseKind::Seed
-}
-
-/// Whether this unit is refused caching outright: the compiler's own refusal
-/// list, or a codegen backend dylib kache will not replay. Either one also
-/// keeps the unit off the managed-incremental fast path.
-fn unit_refuses_caching(has_refuse_reasons: bool, untrusted_codegen_backend: bool) -> bool {
-    has_refuse_reasons || untrusted_codegen_backend
-}
-
-fn incremental_cleanup_enabled(config: &Config) -> bool {
-    config.clean_incremental && !config.preserve_incremental
-}
-
-fn disable_incremental_env(incremental_preserved: bool) -> bool {
-    !incremental_preserved
-}
 
 /// Dedup-marker path for a warn-once-per-build-session message of `kind`
 /// (`"store"`, `"cow"`, …).
@@ -2708,21 +2578,14 @@ pub(crate) fn run_for(
     // use a plain compiler passthrough for these.
     let drop_fallback = config.fallback.is_some()
         && (extra_inputs.is_some() || build_script_declares_inputs(&args));
-    let drop_incremental = extra_inputs.is_some() && config.preserve_incremental;
     let mut safe_extra_inputs_config = None;
-    if drop_fallback || drop_incremental {
+    if drop_fallback {
         let mut safe = config.clone();
         if drop_fallback {
             log::debug!(
                 "disabling fallback cache for {crate_name}: its key holds inputs the fallback does not know"
             );
             safe.fallback = None;
-        }
-        if drop_incremental {
-            log::debug!(
-                "disabling preserved incremental state for active extra_inputs crate {crate_name}"
-            );
-            safe.preserve_incremental = false;
         }
         safe_extra_inputs_config = Some(safe);
     }
@@ -3102,39 +2965,11 @@ fn run_parsed_rustc(
         heartbeat_lines_enabled(progress_level()),
     );
     maybe_notice_unknown_layout(config, args, &event_root, now_epoch_secs());
-    // Mutation testing repeatedly changes a local crate while keeping its
-    // dependencies stable. Exact artifact keys necessarily miss for each new
-    // mutant, while rustc's incremental state is designed for this workload.
-    // In the explicit hybrid mode, bypass before opening the store or running
-    // the dep-info key pass; non-incremental dependencies still use kache.
-    let preserve_incremental = preserve_incremental_requested(config, args);
-    if preserve_incremental && compile::isolate_incremental_flags(&args.all_args).is_some() {
-        log::debug!("preserving incremental compilation for {crate_name}");
-        return preserved_incremental_with_event(
-            config,
-            args,
-            crate_name,
-            &event_root,
-            start,
-            key_record,
+    if args.incremental.is_some() {
+        return incremental_passthrough_with_event(
+            config, args, crate_name, &event_root, start, key_record,
         );
     }
-    if preserve_incremental {
-        log::warn!(
-            "[kache] incremental directory for {crate_name} has no safe sibling path; stripping incremental flags"
-        );
-    }
-    // A force-listed unit may skip the cache only through the same narrow,
-    // policy-owned layout as adaptive incremental. Unsafe/non-Cargo paths,
-    // hidden inputs, and lease contention simply leave `adaptive_unit` empty
-    // (or fail to grant a lease) and continue through the normal cache path,
-    // where Cargo's original incremental argument is stripped.
-    let force_incremental = force_incremental_requested(config, args);
-    let adaptive_policy_for_invocation = adaptive_seed_allowed(config, args);
-    let trace_adaptive = crate::phase_trace::phase("adaptive_unit");
-    let adaptive_unit = managed_incremental_unit(config, args, || extra_inputs.is_some());
-    drop(trace_adaptive);
-
     // Evaluate every cheap cache-eligibility gate before the learned fast
     // path. In particular, changing an exclusion or executable-cache policy
     // must take effect immediately even when this unit was already active.
@@ -3159,79 +2994,16 @@ fn run_parsed_rustc(
             .project_rules
             .source_excluded_for(source, &exclude_roots, args.invocation_env())
     });
-    // User bypass rules (#222). Same fail-closed contract as `exclude`, and
-    // gating the incremental fast path on it too: a bypassed unit must not
-    // slip back into caching through the managed-incremental route.
     let user_bypass = config.project_rules.user_bypass_reason_for(
         crate_name,
         &args.all_args,
         args.invocation_env(),
     );
     let skip_user_facing = args.is_user_facing_executable() && !config.cache_executables;
-    // Read before the key takes the closure a stopped compile left.
-    let reentered = reentered_after_deferred_compile(
-        precompiled.is_some(),
-        crate::cache_key::dep_info_provided(),
-    );
-
-    if incremental_fast_path_allowed(
-        unit_refuses_caching(!refuse.is_empty(), untrusted_codegen_backend.is_some()),
-        excluded_source.is_some() || user_bypass.is_some(),
-        skip_user_facing,
-        reentered,
-    ) {
-        if force_incremental {
-            if let Some(lease) = adaptive_unit.as_ref().and_then(AdaptiveUnit::try_immediate) {
-                return adaptive_incremental_with_event(
-                    config,
-                    args,
-                    crate_name,
-                    &event_root,
-                    start,
-                    lease,
-                    format!("incremental force-list: {crate_name}"),
-                    None,
-                    key_record,
-                );
-            }
-        } else if let Some(lease) = adaptive_unit.as_ref().and_then(AdaptiveUnit::try_active) {
-            return adaptive_incremental_with_event(
-                config,
-                args,
-                crate_name,
-                &event_root,
-                start,
-                lease,
-                "adaptive active",
-                None,
-                key_record,
-            );
-        } else if let Some(unit) = adaptive_unit.as_ref()
-            && automatic_seeding_enabled(config, args)
-            && let Some(mut lease) = unit.try_source_changed_seed()
-        {
-            let _ = prepare_worktree_compiler_args(config, args, &mut lease);
-            if lease.worktree_portable() && !lease.needs_worktree_donor() {
-                return adaptive_incremental_with_event(
-                    config,
-                    args,
-                    crate_name,
-                    &event_root,
-                    start,
-                    lease,
-                    "automatic worktree seed",
-                    None,
-                    key_record,
-                );
-            }
-            // No compatible donor: preserve learning and use the usual key.
-            let _ = lease.finish(CompileOutcome::CompileError);
-        }
-    }
     let rustc_route = volume_route_path_rustc(args);
     let mut fallback_stores = Vec::new();
     let trace_store_open = crate::phase_trace::phase("store_open");
-    let store = if args.is_primary || (config.clean_incremental && args.incremental.is_some()) {
+    let store = if args.is_primary {
         match open_primary_and_fallback_for(config, &rustc_route, args.invocation_env()) {
             Ok((primary, fallbacks)) => {
                 fallback_stores = fallbacks;
@@ -3246,23 +3018,11 @@ fn run_parsed_rustc(
         None
     };
 
-    if incremental_cleanup_enabled(config)
-        && let Some(incr_dir) = &args.incremental
-        && let Some(store) = &store
-        && let Err(e) = store.remember_incremental_dir(incr_dir)
-    {
-        log::warn!(
-            "failed to register incremental dir {}: {}",
-            incr_dir.display(),
-            e
-        );
-    }
     // Checked before the refusals below: those may hand the compile to a
     // configured fallback cache, which would replay the same incomplete
     // outputs.
     if untrusted_codegen_backend.is_some() {
         log::debug!("rustc codegen backend dylib not trusted; running rustc directly");
-        reset_adaptive_unit(adaptive_unit.as_ref());
         return rustc_direct_passthrough_with_event(
             config,
             args,
@@ -3284,7 +3044,6 @@ fn run_parsed_rustc(
             compiler.id().as_str(),
             reasons.join("; ")
         );
-        reset_adaptive_unit(adaptive_unit.as_ref());
         return passthrough_with_event(
             config,
             args,
@@ -3298,7 +3057,6 @@ fn run_parsed_rustc(
 
     if let Some(source) = excluded_source {
         log::debug!("rustc source excluded from cache: {}", source.display());
-        reset_adaptive_unit(adaptive_unit.as_ref());
         return passthrough_with_event(
             config,
             args,
@@ -3312,7 +3070,6 @@ fn run_parsed_rustc(
 
     if let Some(reason) = user_bypass {
         log::debug!("rustc invocation bypassed by user rule: {reason}");
-        reset_adaptive_unit(adaptive_unit.as_ref());
         return passthrough_with_event(
             config,
             args,
@@ -3333,13 +3090,12 @@ fn run_parsed_rustc(
     // that broke downstream cache keys via `extern:` hashes.
     if skip_user_facing {
         log::debug!("skipping cache for user-facing executable: {}", crate_name);
-        return intentional_passthrough_with_event(
+        return passthrough_with_event(
             config,
             args,
             crate_name,
             &event_root,
             start,
-            adaptive_unit.as_ref(),
             "user-facing executable (cache_executables=false)",
             key_record,
         );
@@ -3398,31 +3154,6 @@ fn run_parsed_rustc(
         extra_inputs_too_new,
         false,
     );
-    // Taken after the fast path, which resets corrupt or interrupted state:
-    // a unit left without state has no lane its key could open. When no lane
-    // takes its miss, such a unit compiles before keying again after all
-    // ([`compile_before_key_after_miss`]).
-    // A learning unit has no graph to reuse. Reserve a cold private compile
-    // before discovery, then qualify its seed from rustc's emitted closure.
-    let mut deferred_seed = if adaptive_policy_for_invocation
-        && precompiled.is_none()
-        && stop_on_hit_allowed(args)
-        && deferral_allowed(config, args, false, extra_inputs)
-    {
-        adaptive_unit
-            .as_ref()
-            .and_then(AdaptiveUnit::try_deferred_seed)
-    } else {
-        None
-    };
-    let keys_first = deferred_seed.is_none()
-        && managed_unit_keys_first(
-            adaptive_unit.is_some(),
-            force_incremental,
-            adaptive_unit
-                .as_ref()
-                .is_some_and(AdaptiveUnit::has_policy_state),
-        );
     let keyed = match compute_rustc_cache_key(
         config,
         compiler,
@@ -3444,7 +3175,7 @@ fn run_parsed_rustc(
             .and_then(|pre| Some((pre.dep_info.take()?, pre.tree_guard.take())))
         {
             Some((dep_info, tree)) => KeyDiscovery::Emitted(dep_info, tree),
-            None if deferral_allowed(config, args, keys_first, extra_inputs) => {
+            None if deferral_allowed(config, args, extra_inputs) => {
                 KeyDiscovery::Deferrable {
                     stop_on_hit: stop_on_hit_allowed(args),
                 }
@@ -3455,9 +3186,6 @@ fn run_parsed_rustc(
     ) {
         Ok(keyed) => keyed,
         Err(e) => {
-            if let Some(lease) = deferred_seed.take() {
-                let _ = lease.finish(CompileOutcome::Abnormal);
-            }
             // `{:#}` walks the cause chain; see `uncacheable_reason`.
             log::warn!("failed to compute cache key for {}: {:#}", crate_name, e);
             return passthrough_with_event(
@@ -3475,7 +3203,7 @@ fn run_parsed_rustc(
         mut cache_key,
         deferred,
         stop_on_hit,
-        discovery_flight,
+        discovery_flight: _discovery_flight,
         predicted,
         outputs: mut key_outputs,
         mut key_ms,
@@ -3503,20 +3231,6 @@ fn run_parsed_rustc(
         event_root: &event_root,
     };
     if deferred {
-        if let Some(lease) = deferred_seed.take() {
-            // Private incremental output is never published. Peers cannot
-            // wait on this compile to record an artifact or closure.
-            drop(discovery_flight);
-            return adaptive_compile_before_key(
-                &compile_first,
-                lease,
-                key_outputs.tree_guard,
-                guard_inputs,
-                key_record,
-                key_ms,
-                key_hash_stats,
-            );
-        }
         // No record and nowhere else the entry could be: compile now, then
         // key from what rustc emitted. `discovery_flight` stays held across
         // the recursion so peers wait for this compile.
@@ -3531,20 +3245,7 @@ fn run_parsed_rustc(
             key_hash_stats,
         );
     }
-    if let Some(lease) = deferred_seed.take() {
-        let _ = lease.finish(CompileOutcome::Abnormal);
-    }
     crate::out_dir_alias::register_after_key(key_outputs.bakes_out_dir);
-    // A force-list request that could not obtain its immediate lease must not
-    // retry through the post-key adaptive seed path in the same invocation.
-    // It stays on the normal cache path with incremental stripped.
-    let adaptive_key_fields = if adaptive_policy_for_invocation {
-        adaptive_unit
-            .as_ref()
-            .and_then(|_| key_outputs.fields.clone())
-    } else {
-        None
-    };
 
     let hit_context = RustcHitContext {
         config,
@@ -3558,32 +3259,9 @@ fn run_parsed_rustc(
     };
 
     drop(trace_store_open);
-    let trace_remember = crate::phase_trace::phase("remember_target_root");
-    // Any unit may be a build's first; the hint is rate-limited per target.
     if let Some(target_dir) = prestage_target_dir(args) {
         crate::prestage::maybe_hint(config, &target_dir);
     }
-    if args.is_primary
-        && let Some(target_dir) = args.target_dir()
-        && let Some(workspace_root) = workspace_root.as_deref()
-        && owns_its_target(
-            workspace_root,
-            crate::build_script_inputs::cargo_home(&|name| args.invocation_env().var_os(name))
-                .as_deref(),
-        )
-        && let Err(e) = store.remember_target_root_built_by(
-            &target_dir,
-            workspace_root,
-            crate::cache_key::rustc_version_text_for(&args.rustc, args.invocation_env()).as_deref(),
-        )
-    {
-        log::warn!(
-            "failed to register target root {}: {}",
-            target_dir.display(),
-            e
-        );
-    }
-    drop(trace_remember);
 
     log::debug!("cache key for {}: {}", crate_name, &cache_key[..16]);
 
@@ -3607,11 +3285,7 @@ fn run_parsed_rustc(
     let mut lookup_ms = 0_u64;
     let mut record_closure = should_record_closure(predicted, false);
     let mut rederived = false;
-    // A unit that keyed first only so that its miss could take an
-    // incremental lane. A re-entry keys from the closure of a compile it
-    // stopped, and never compiles before its key again.
-    let keyed_first = keys_first && !reentered;
-    let may_defer = deferral_allowed(config, args, false, extra_inputs);
+    let may_defer = deferral_allowed(config, args, extra_inputs);
     // `Some(stop_on_hit)` once the miss is to compile before its key.
     let mut compile_then_key = None;
     while precompiled.is_none() {
@@ -3651,11 +3325,6 @@ fn run_parsed_rustc(
                     &key_record,
                 ) {
                     Ok(()) => {
-                        observe_adaptive_hit(
-                            adaptive_unit.as_ref(),
-                            adaptive_key_fields.as_ref(),
-                            &cache_key,
-                        );
                         return Ok(0);
                     }
                     Err(e) => {
@@ -3682,33 +3351,9 @@ fn run_parsed_rustc(
             }
         }
 
-        // Both lookups missed. Incremental compilation needs no artifact key
-        // re-derivation: rustc reads the current inputs and this result is never
-        // stored. Keep the ordinary lookup first so a hit still restores.
-        if let (Some(unit), Some(fields)) = (adaptive_unit.as_ref(), adaptive_key_fields.as_ref())
-            && let Some(lease) = unit.try_seed(&cache_key, fields)
-        {
-            // A seed stores no entry and records no closure, so a peer
-            // waiting on this unit's discovery flight would wait for nothing.
-            // Release it before the seed waits for a permit and compiles.
-            drop(discovery_flight);
-            return adaptive_incremental_with_event(
-                config,
-                args,
-                crate_name,
-                &event_root,
-                start,
-                lease,
-                "adaptive seed",
-                Some((&cache_key, key_ms, key_hash_stats, lookup_ms)),
-                key_record,
-            );
-        }
-
-        // Every incremental lane has declined by now.
         let owes = owes_rederivation(predicted, rederived);
         compile_then_key =
-            compile_before_key_after_miss(may_defer, stop_on_hit_allowed(args), owes, keyed_first);
+            compile_before_key_after_miss(may_defer, stop_on_hit_allowed(args), owes);
         if compile_then_key.is_some() || !owes {
             break;
         }
@@ -3768,13 +3413,12 @@ fn run_parsed_rustc(
                 may_defer,
                 stop_on_hit_allowed(args),
                 false,
-                keyed_first,
             );
             break;
         }
     }
     if let Some(stop_on_hit) = compile_then_key {
-        log::debug!("{crate_name}: no lane took the miss; compiling before keying again");
+        log::debug!("{crate_name}: compiling before keying again");
         return compile_before_key(
             &compile_first,
             stop_on_hit,
@@ -3852,11 +3496,6 @@ fn run_parsed_rustc(
                 key_record,
             );
         }
-        observe_adaptive_hit(
-            adaptive_unit.as_ref(),
-            adaptive_key_fields.as_ref(),
-            &cache_key,
-        );
         return Ok(0);
     }
 
@@ -4104,13 +3743,8 @@ fn run_parsed_rustc(
                 .key_record(key_record),
         );
         print_progress(crate_name, EventResult::Skipped, elapsed, 0);
-        clean_incremental_dir(config, args);
         drop(lock);
         return Ok(result.exit_code);
-    }
-
-    if let (Some(unit), Some(fields)) = (adaptive_unit.as_ref(), adaptive_key_fields.as_ref()) {
-        let _ = unit.observe_build(&cache_key, fields);
     }
 
     // 5. Store the output files
@@ -4222,7 +3856,6 @@ fn run_parsed_rustc(
                     .key_record(key_record),
             );
             print_progress(crate_name, EventResult::Skipped, elapsed, 0);
-            clean_incremental_dir(config, args);
             drop(lock);
             return Ok(result.exit_code);
         }
@@ -4251,7 +3884,6 @@ fn run_parsed_rustc(
                 .key_record(key_record),
         );
         print_progress(crate_name, EventResult::Skipped, elapsed, 0);
-        clean_incremental_dir(config, args);
         return Ok(result.exit_code);
     };
 
@@ -4314,9 +3946,6 @@ fn run_parsed_rustc(
     let store_ms = store_start.elapsed().as_millis() as u64;
 
     record_input_prediction(config, Some(&store), args, record_closure, &key_outputs);
-
-    // 7. Remove Cargo's own incremental directory; see `clean_incremental_dir`.
-    clean_incremental_dir(config, args);
 
     let elapsed = start.elapsed().as_millis() as u64;
     let size = result.artifacts.total_size();
@@ -4849,17 +4478,6 @@ fn take_prestaged(
     strategy == link::LinkStrategy::Copy
         && cached_file.size >= crate::prestage::MIN_BYTES
         && crate::prestage::take(target_path, &cached_file.hash)
-}
-
-/// Whether a primary unit rooted at `workspace_root` owns the target it
-/// builds into. A dependency built on its own (`cargo build -p serde`) is
-/// primary too, but its root is its source in Cargo's registry or Git
-/// checkouts; recording that as the target's workspace would hide the real
-/// one from orphan checks and Git discovery.
-fn owns_its_target(workspace_root: &Path, cargo_home: Option<&Path>) -> bool {
-    !crate::cache_key::is_registry_package(workspace_root)
-        && !cargo_home
-            .is_some_and(|home| crate::build_script_inputs::under_cargo_home(home, workspace_root))
 }
 
 /// The target directory a compile writes under, for [`crate::prestage`].
@@ -5567,212 +5185,6 @@ fn emitted_compile_key(
     )
 }
 
-/// Discover the exact key during a cold incremental compile. A local hit
-/// stops rustc before Cargo sees outputs; a qualifying miss activates only
-/// private state and never enters the artifact-store path.
-#[allow(clippy::too_many_arguments)]
-fn adaptive_compile_before_key(
-    ctx: &CompileFirst<'_>,
-    mut lease: Lease,
-    tree_guard: Option<crate::cache_key::TreeGuard>,
-    guard_inputs: Vec<crate::cache_key::ObservedFingerprint>,
-    mut key_record: KeyEventRecord,
-    mut key_ms: u64,
-    mut key_hash_stats: FileHashStats,
-) -> Result<i32> {
-    crate::out_dir_alias::register_before_compile();
-    let permit = scheduler::begin_keyless_compile(
-        &ctx.config.cache_dir,
-        ctx.config.scheduler,
-        ctx.crate_name,
-        ctx.args.invokes_linker(),
-        ctx.config.test_lease.as_deref(),
-    );
-    let mut compiler_args = prepare_worktree_compiler_args(ctx.config, ctx.args, &mut lease);
-    let bootstrap = std::cell::Cell::new(lease.worktree_bootstrap());
-    let bootstrap_observed = std::cell::Cell::new(false);
-    let caller_left_bootstrap_unset = ctx
-        .args
-        .invocation_env()
-        .var_os("RUSTC_BOOTSTRAP")
-        .is_none();
-    let observe_bootstrap = std::cell::Cell::new(
-        caller_left_bootstrap_unset && (bootstrap.get() || lease.worktree_portable()),
-    );
-    let ready = !bootstrap.get()
-        || clear_incremental_bootstrap_dep_info(ctx.args)
-        || if lease.decline_worktree_bootstrap() {
-            bootstrap.set(false);
-            compiler_args = lease.compiler_args(ctx.args);
-            true
-        } else {
-            false
-        };
-    let mut hit_closure = None;
-    let mut observed = None;
-    let mut lookup_ms = 0_u64;
-    let compile_start = std::time::Instant::now();
-    let mut on_dep_info = || {
-        let Some(dep_info) = emitted_dep_info(ctx.args) else {
-            return true;
-        };
-        if observe_bootstrap.get()
-            && dep_info
-                .env_deps
-                .iter()
-                .any(|(name, _)| name == "RUSTC_BOOTSTRAP")
-        {
-            bootstrap_observed.set(true);
-            return false;
-        }
-        let Ok(keyed) =
-            emitted_compile_key(ctx, dep_info.clone(), tree_guard.clone(), &mut key_record)
-        else {
-            return true;
-        };
-        let lookup_start = std::time::Instant::now();
-        let stored = ctx.store.get(&keyed.cache_key);
-        lookup_ms = lookup_ms.saturating_add(lookup_start.elapsed().as_millis() as u64);
-        (key_ms, key_hash_stats, _) = combine_key_measurements(
-            key_ms,
-            keyed.key_ms,
-            key_hash_stats,
-            keyed.key_hash_stats,
-            false,
-            false,
-        );
-        match stored {
-            Ok(Some(meta)) if cache_entry_has_files(&meta) => {
-                hit_closure = Some((dep_info, tree_guard.clone()));
-                false
-            }
-            Ok(_) => {
-                if let Some(fields) = &keyed.outputs.fields {
-                    observed = Some((keyed.cache_key, fields.clone()));
-                }
-                true
-            }
-            Err(_) => true,
-        }
-    };
-    let portable = RustcCompiler::new_for(ctx.args.invocation_env())
-        .with_base_dirs(ctx.config.base_dirs.clone())
-        .with_incremental_bootstrap(bootstrap.get());
-    let mut executed = if !ready {
-        Err(anyhow::anyhow!("cannot prepare private bootstrap dep-info"))
-    } else if lease.worktree_portable() {
-        portable.execute_portable_incremental(ctx.args, &compiler_args, Some(&mut on_dep_info))
-    } else {
-        ctx.compiler.execute_preserving_incremental_until_dep_info(
-            ctx.args,
-            &compiler_args,
-            &mut on_dep_info,
-        )
-    };
-    if observe_bootstrap.get()
-        && (bootstrap_observed.get()
-            || emitted_dep_info(ctx.args).is_some_and(|info| {
-                info.env_deps
-                    .iter()
-                    .any(|(name, _)| name == "RUSTC_BOOTSTRAP")
-            }))
-    {
-        let cleared = executed
-            .as_ref()
-            .is_ok_and(|result| discard_bootstrap_outputs(&result.artifacts));
-        if cleared && lease.decline_worktree_bootstrap() {
-            bootstrap.set(false);
-            observe_bootstrap.set(false);
-            compiler_args = lease.compiler_args(ctx.args);
-            executed = ctx.compiler.execute_preserving_incremental_until_dep_info(
-                ctx.args,
-                &compiler_args,
-                &mut on_dep_info,
-            );
-        } else {
-            executed = Err(anyhow::anyhow!(
-                "cannot retire bootstrap-observing private state"
-            ));
-        }
-    }
-    if hit_closure.is_none()
-        && let Some((cache_key, fields)) = &observed
-    {
-        // The original in-flight marker and receiver lock cover the child.
-        // Qualify only the final attempt, after any bootstrap retry.
-        let _ = lease.qualify_deferred_seed(cache_key, fields);
-    }
-    if hit_closure.is_none() && executed.is_ok() {
-        permit.record_compile_rss(ctx.crate_name);
-    }
-    drop(permit);
-    if let Some((dep_info, tree)) = hit_closure {
-        let _ = lease.finish(CompileOutcome::Abnormal);
-        crate::cache_key::provide_dep_info(dep_info, tree);
-        return run_parsed_rustc(
-            ctx.config,
-            ctx.compiler,
-            ctx.args,
-            ctx.start,
-            ctx.invocation_start_ns,
-            ctx.extra_inputs,
-            ctx.extra_inputs_hash_stats,
-            ctx.extra_inputs_too_new,
-            ctx.extra_inputs_key_ms,
-            guard_inputs,
-            Some(ctx.build_script_inputs),
-            None,
-        );
-    }
-    let result = match executed {
-        Ok(result) => result,
-        Err(error) => {
-            let _ = lease.finish(CompileOutcome::Abnormal);
-            return passthrough_with_event(
-                ctx.config,
-                ctx.args,
-                ctx.crate_name,
-                ctx.event_root,
-                ctx.start,
-                format!("adaptive compiler spawn failed: {error}"),
-                key_record,
-            );
-        }
-    };
-    let compile_time_ms = compile_start.elapsed().as_millis() as u64;
-    replay_diagnostics(
-        &result.stdout,
-        result.pending_stderr(),
-        crate::invocation::io::stdout(),
-        crate::invocation::io::stderr(),
-    );
-    after_rustc_exit(result.exit_code, &result.stderr, &ctx.args.externs);
-    let outcome = compile_outcome(result.exit_code, result.signaled, &result.stderr);
-    let _ = lease.finish(outcome);
-    let cache_key = observed.as_ref().map_or("", |(key, _)| key.as_str());
-    log_event(
-        ctx.config,
-        EventInputs::new(
-            ctx.event_root,
-            ctx.crate_name,
-            EventResult::Passthrough,
-            ctx.start.elapsed().as_millis() as u64,
-        )
-        .rebuilt(
-            result.exit_code == 0,
-            &result.artifacts,
-            ctx.key_env.var("CARGO_PKG_NAME"),
-        )
-        .compile_time_ms(compile_time_ms)
-        .keyed(cache_key, key_ms, key_hash_stats)
-        .lookup_ms(lookup_ms)
-        .passthrough_reason("adaptive seed".to_owned())
-        .exit_code(result.exit_code)
-        .key_record(key_record),
-    );
-    Ok(result.exit_code)
-}
-
 /// Compile before the key is known, then key from the dep-info the compile
 /// wrote and store as usual (re-entering [`run_parsed_rustc`] with the
 /// result). With `stop_on_hit`, key as soon as rustc reports that dep-info
@@ -5974,15 +5386,9 @@ fn emitted_dep_info(args: &RustcArgs) -> Option<crate::cache_key::DepInfo> {
     .ok()
 }
 
-/// Compile-before-key needs a miss the local store can prove, or a compile it
-/// can stop on a hit. That rules out a remote, a fallback store, a read-only
-/// host store, an extra-inputs declaration (whose key covers more than the
-/// closure), and a managed unit that must key first
-/// ([`managed_unit_keys_first`]) so a miss can take its incremental lane.
 fn deferral_allowed(
     config: &Config,
     args: &RustcArgs,
-    keys_first: bool,
     extra_inputs: Option<&crate::extra_inputs::ExtraInputsSnapshot>,
 ) -> bool {
     // The compile must emit the dep-info the key is derived from afterwards
@@ -5991,7 +5397,6 @@ fn deferral_allowed(
         && config.deferred_discovery
         && config.fallback.is_none()
         && config.readonly_store.is_none()
-        && !keys_first
         && extra_inputs.is_none()
 }
 
@@ -6441,34 +5846,12 @@ fn owes_rederivation(predicted: bool, already_rederived: bool) -> bool {
     predicted && !already_rederived
 }
 
-/// Does a miss that no incremental lane took compile before its key after
-/// all, and may that compile stop on a hit? `Some(stop_on_hit)` if so.
-/// `deferral_allowed` is [`deferral_allowed`] for a unit that need not key
-/// first.
-///
-/// A predicted key must be re-derived before anything is stored, and the
-/// running compile writes the closure the pre-pass would. A compile that
-/// links cannot stop on a hit, so a guess is re-derived through the pre-pass
-/// first, where a lookup can still find the entry under the real key.
-///
-/// A unit that keyed first did so only so that its miss could take an
-/// incremental lane, and none did. Its key was taken before the compile, and
-/// by default only a key from the compile's own closure is checked for a
-/// source written while the compile runs, so once the key is no longer a
-/// guess this unit compiles first as well, whether or not it links.
 fn compile_before_key_after_miss(
     deferral_allowed: bool,
     stop_on_hit_allowed: bool,
     owes_rederivation: bool,
-    keyed_first: bool,
 ) -> Option<bool> {
-    if !deferral_allowed {
-        return None;
-    }
-    if owes_rederivation {
-        return stop_on_hit_allowed.then_some(true);
-    }
-    keyed_first.then_some(stop_on_hit_allowed)
+    (deferral_allowed && stop_on_hit_allowed && owes_rederivation).then_some(true)
 }
 
 /// Should this invocation write what it discovered back to the record?
@@ -7100,114 +6483,12 @@ struct PassthroughOutput {
     fallback_attempt: Option<crate::fallback::Attempt>,
 }
 
-/// Pass through to rustc without caching.
-///
-/// If a fallback wrapper is configured, the compile is handed to it
-/// (`<fallback> <rustc> <args>`) instead — kache declined to cache it,
-/// so the fallback gets a chance. By default, even plain passthroughs
-/// strip incremental flags to prevent APFS-related corruption in git
-/// worktrees on macOS. The explicit preservation mode instead moves
-/// incremental state to a stable path that kache never registers for GC.
-fn passthrough(
-    args: &RustcArgs,
-    fallback: Option<&str>,
-    preserve_incremental: bool,
-) -> Result<PassthroughOutput> {
-    let isolated_args = preserve_incremental
-        .then(|| compile::isolate_incremental_flags(&args.all_args))
-        .flatten();
-    let incremental_preserved = args.incremental.is_some() && isolated_args.is_some();
-    let compiler_args = if let Some(isolated_args) = isolated_args {
-        isolated_args
+fn passthrough(args: &RustcArgs, fallback: Option<&str>) -> Result<PassthroughOutput> {
+    let compiler_args = if args.has_expanded_argfiles() {
+        args.raw_args()
     } else {
-        compile::strip_incremental_flags(&args.all_args)
-            .into_iter()
-            .cloned()
-            .collect()
+        &args.all_args
     };
-    passthrough_args(args, fallback, &compiler_args, incremental_preserved)
-}
-
-fn passthrough_direct_args<'a>(
-    args: &'a RustcArgs,
-    compiler_args: &'a [String],
-    compiler_args_changed: bool,
-) -> Vec<&'a String> {
-    if args.has_expanded_argfiles() && !compiler_args_changed {
-        args.raw_args().iter().collect()
-    } else {
-        compiler_args.iter().collect()
-    }
-}
-
-fn compiler_args_changed(args: &RustcArgs, compiler_args: &[String]) -> bool {
-    compiler_args != args.all_args.as_slice()
-}
-
-fn stripped_incremental_count(args: &RustcArgs, compiler_args: &[String]) -> Option<usize> {
-    let count = args.all_args.len().saturating_sub(compiler_args.len());
-    (count > 0).then_some(count)
-}
-
-fn handle_response_file_error(
-    error: anyhow::Error,
-    compiler_args_changed: bool,
-) -> Result<Option<compile::RustcResponseFile>> {
-    if compiler_args_changed {
-        return Err(error)
-            .context("materializing rustc response file after rewriting incremental arguments");
-    }
-    log::warn!(
-        "failed to materialize expanded rustc response file; using unchanged original argv: {error:#}"
-    );
-    Ok(None)
-}
-
-/// Run a rustc passthrough with an already-decided argument vector.
-///
-/// Explicit preservation may supply an already-isolated argument vector.
-/// Ordinary passthroughs retain the configured fallback-wrapper contract.
-fn passthrough_args(
-    args: &RustcArgs,
-    fallback: Option<&str>,
-    compiler_args: &[String],
-    incremental_preserved: bool,
-) -> Result<PassthroughOutput> {
-    let compiler_args_changed = compiler_args_changed(args, compiler_args);
-    let stripped_incremental = stripped_incremental_count(args, compiler_args);
-    if incremental_preserved {
-        log::info!(
-            "[kache] passthrough: preserving isolated incremental state for {}",
-            args.crate_name.as_deref().unwrap_or("unknown")
-        );
-    } else if let Some(stripped) = stripped_incremental {
-        log::info!(
-            "[kache] passthrough: stripped {} incremental flag(s) for {}",
-            stripped,
-            args.crate_name.as_deref().unwrap_or("unknown")
-        );
-    }
-
-    // Keep successfully-expanded invocations compact and apply Kache's
-    // incremental policy before re-serializing them. On a temp-file failure,
-    // reuse the original compact argv only if no effective argument changed.
-    // A rewritten invocation fails closed: expanded argv could promote a
-    // nested `@file` to top-level expansion or exceed the platform argv limit,
-    // while raw argv could leak Cargo's non-isolated incremental directory.
-    let response_file = if args.has_expanded_argfiles() {
-        match compile::RustcResponseFile::new_in(
-            args.invocation_env().temp_dir(),
-            compiler_args.iter().map(|arg| arg.as_str()),
-        ) {
-            Ok(response) => Some(response),
-            Err(error) => handle_response_file_error(error, compiler_args_changed)?,
-        }
-    } else {
-        None
-    };
-    let direct_args = response_file
-        .is_none()
-        .then(|| passthrough_direct_args(args, compiler_args, compiler_args_changed));
 
     // A prior cache hit may have restored read-only (0444) hardlinks into the
     // target dir; rustc can't overwrite those and fails with EACCES. The cached
@@ -7248,25 +6529,18 @@ fn passthrough_args(
     if let Some(fb) = fallback {
         let mut cmd = env.command(fb);
         if let Ok(cmd) = &mut cmd {
-            if disable_incremental_env(incremental_preserved) {
-                cmd.env("CARGO_INCREMENTAL", "0");
-            }
             cmd.arg(&args.rustc);
             if let Some(inner) = &args.inner_rustc {
                 cmd.arg(inner);
             }
-            if let Some(response) = &response_file {
-                cmd.arg(response.argument());
-            } else if let Some(direct) = &direct_args {
-                cmd.args(direct);
-            }
+            cmd.args(compiler_args);
         }
         let outputs: Vec<&Path> = output
             .as_deref()
             .into_iter()
             .chain(out_dir.as_deref())
             .collect();
-        let attempt = crate::fallback::run_for(cmd, fb, &outputs, compiler_args, env);
+        let attempt = crate::fallback::run_for(cmd, fb, &outputs, &args.all_args, env);
         if let Some(exit_code) = attempt.terminal_code() {
             return Ok(PassthroughOutput {
                 exit_code,
@@ -7279,18 +6553,11 @@ fn passthrough_args(
 
     let mut cmd = env.command(&args.rustc)?;
     crate::toolchain_dylib::apply_for(&mut cmd, &args.rustc, env);
-    if disable_incremental_env(incremental_preserved) {
-        cmd.env("CARGO_INCREMENTAL", "0");
-    }
     // Double-wrapper: pass the inner rustc path as first arg to the workspace wrapper
     if let Some(inner) = &args.inner_rustc {
         cmd.arg(inner);
     }
-    if let Some(response) = &response_file {
-        cmd.arg(response.argument());
-    } else if let Some(direct) = &direct_args {
-        cmd.args(direct);
-    }
+    cmd.args(compiler_args);
     let status = crate::invocation::io::status(&mut cmd)
         .with_context(|| format!("executing {}", args.rustc.display()))?;
     Ok(PassthroughOutput {
@@ -7298,312 +6565,6 @@ fn passthrough_args(
         fallback: false,
         fallback_attempt,
     })
-}
-
-/// A hit restored a unit's outputs without its incremental state. Count it as
-/// the unit's first build, so the next edit seeds state instead of first
-/// compiling once more without it.
-fn observe_adaptive_hit(
-    unit: Option<&AdaptiveUnit>,
-    fields: Option<&std::collections::BTreeMap<String, String>>,
-    cache_key: &str,
-) {
-    match (unit, fields) {
-        (Some(unit), Some(fields)) => {
-            let _ = unit.observe_build(cache_key, fields);
-        }
-        (unit, _) => reset_adaptive_unit(unit),
-    }
-}
-
-fn reset_adaptive_unit(unit: Option<&AdaptiveUnit>) {
-    if let Some(unit) = unit {
-        let _ = unit.reset();
-    }
-}
-
-/// Run a user-facing executable that artifact caching already excludes.
-/// Eligible units preserve isolated incremental state immediately when no
-/// configured fallback owns declined compilations. Other rejection classes
-/// keep the configured fallback contract and do not call this helper.
-#[allow(clippy::too_many_arguments)]
-fn intentional_passthrough_with_event<R: Into<String>>(
-    config: &Config,
-    args: &RustcArgs,
-    crate_name: &str,
-    root: &str,
-    start: std::time::Instant,
-    adaptive_unit: Option<&AdaptiveUnit>,
-    reason: R,
-    key_record: KeyEventRecord,
-) -> Result<i32> {
-    let reason = reason.into();
-    if config.fallback.is_none()
-        && let Some(lease) = adaptive_unit.and_then(AdaptiveUnit::try_immediate)
-    {
-        return adaptive_incremental_with_event(
-            config,
-            args,
-            crate_name,
-            root,
-            start,
-            lease,
-            format!("adaptive passthrough: {reason}"),
-            None,
-            key_record,
-        );
-    }
-    passthrough_with_event(config, args, crate_name, root, start, reason, key_record)
-}
-
-/// Only a fresh dep-info file can identify observations in this attempt.
-fn clear_incremental_bootstrap_dep_info(args: &RustcArgs) -> bool {
-    let Some(path) = args.dep_info_path() else {
-        return false;
-    };
-    match std::fs::remove_file(path) {
-        Ok(()) => true,
-        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
-    }
-}
-
-fn discard_bootstrap_outputs(outputs: &ArtifactSet) -> bool {
-    for artifact in outputs.outputs() {
-        if let Err(error) = std::fs::remove_file(&artifact.path)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            return false;
-        }
-    }
-    true
-}
-
-fn prepare_worktree_compiler_args(
-    config: &Config,
-    args: &RustcArgs,
-    lease: &mut Lease,
-) -> Vec<String> {
-    let automatic = automatic_seeding_enabled(config, args);
-    if !automatic {
-        return lease.worktree_compiler_args(
-            args,
-            config.incremental_seed_from.as_deref(),
-            config.unstable,
-        );
-    }
-    let donors = if let Some(profile) = &config.incremental_seed_from {
-        vec![profile.clone()]
-    } else if lease.needs_worktree_donor() {
-        automatic_worktree_donors(config, args)
-    } else {
-        Vec::new()
-    };
-    lease.worktree_compiler_args_from(args, &donors, true)
-}
-
-fn automatic_seeding_enabled(config: &Config, args: &RustcArgs) -> bool {
-    config.seed_incremental
-        && args.inner_rustc.is_none()
-        && crate::cache_key::rustc_version_text_for(&args.rustc, args.invocation_env()).is_some_and(
-            |version| crate::incremental_policy::compiler_supports_automatic_seed(&version),
-        )
-}
-
-fn automatic_worktree_donors(config: &Config, args: &RustcArgs) -> Vec<PathBuf> {
-    let Some(target) = args.target_dir() else {
-        return Vec::new();
-    };
-    let Some(profile) = args.incremental.as_deref().and_then(Path::parent) else {
-        return Vec::new();
-    };
-    let Ok(suffix) = profile.strip_prefix(&target) else {
-        return Vec::new();
-    };
-    let routed = config.routed_for_path_for(&volume_route_path_rustc(args), args.invocation_env());
-    let Ok(store) = Store::open(&routed) else {
-        return Vec::new();
-    };
-    if let Some(workspace) = args.path_normalization_root()
-        && owns_its_target(
-            workspace,
-            crate::build_script_inputs::cargo_home(&|name| args.invocation_env().var_os(name))
-                .as_deref(),
-        )
-    {
-        let _ = store.remember_target_root_built_by(
-            &target,
-            workspace,
-            crate::cache_key::rustc_version_text_for(&args.rustc, args.invocation_env()).as_deref(),
-        );
-    }
-    let Ok(targets) = store.tracked_target_roots(0) else {
-        return Vec::new();
-    };
-    worktree_donor_profiles(&target, suffix, targets)
-}
-
-fn worktree_donor_profiles(
-    target: &Path,
-    suffix: &Path,
-    targets: Vec<crate::store::TrackedTargetRoot>,
-) -> Vec<PathBuf> {
-    let Some(current) = kache_store::filesystem::directory_identity(target) else {
-        return Vec::new();
-    };
-    targets
-        .into_iter()
-        .rev()
-        .filter(|entry| {
-            !entry.discovered
-                && entry.identity != current
-                && kache_store::filesystem::directory_identity(&entry.path) == Some(entry.identity)
-        })
-        .map(|entry| entry.path.join(suffix))
-        .take(8)
-        .collect()
-}
-
-/// Compile under the private lease; no result enters the artifact cache.
-#[allow(clippy::too_many_arguments)]
-fn adaptive_incremental_with_event<R: Into<String>>(
-    config: &Config,
-    args: &RustcArgs,
-    crate_name: &str,
-    root: &str,
-    start: std::time::Instant,
-    mut lease: Lease,
-    reason: R,
-    keyed: Option<(&str, u64, FileHashStats, u64)>,
-    key_record: KeyEventRecord,
-) -> Result<i32> {
-    let reason = reason.into();
-    let kind = lease.kind();
-    let mut compiler_args = prepare_worktree_compiler_args(config, args, &mut lease);
-    let permit = adaptive_lane_takes_permit(kind).then(|| {
-        scheduler::begin_keyless_compile(
-            &config.cache_dir,
-            config.scheduler,
-            crate_name,
-            args.invokes_linker(),
-            config.test_lease.as_deref(),
-        )
-    });
-    let compile_start = std::time::Instant::now();
-    let mut compiler = RustcCompiler::new_for(args.invocation_env())
-        .with_base_dirs(config.base_dirs.clone())
-        .with_incremental_bootstrap(lease.worktree_bootstrap());
-    let rebuilt_package = args.invocation_env().var("CARGO_PKG_NAME").ok();
-    // Only this attempt's dep-info may prove that source read our override.
-    if lease.worktree_bootstrap() && !clear_incremental_bootstrap_dep_info(args) {
-        if !lease.decline_worktree_bootstrap() {
-            let _ = lease.finish(CompileOutcome::Abnormal);
-            return passthrough_with_event(
-                config,
-                args,
-                crate_name,
-                root,
-                start,
-                "cannot prepare private bootstrap dep-info",
-                key_record,
-            );
-        }
-        compiler_args = lease.compiler_args(args);
-        compiler =
-            RustcCompiler::new_for(args.invocation_env()).with_base_dirs(config.base_dirs.clone());
-    }
-    let mut compile =
-        if kind == crate::incremental_policy::LeaseKind::Immediate || lease.worktree_portable() {
-            compiler.execute_passthrough_preserving_incremental(args, &compiler_args)
-        } else {
-            compiler.execute_preserving_incremental(args, &compiler_args)
-        };
-    if compile.is_ok()
-        && args.invocation_env().var_os("RUSTC_BOOTSTRAP").is_none()
-        && (lease.worktree_bootstrap() || lease.worktree_portable())
-        && emitted_dep_info(args).is_some_and(|info| {
-            info.env_deps
-                .iter()
-                .any(|(name, _)| name == "RUSTC_BOOTSTRAP")
-        })
-    {
-        let cleared = compile
-            .as_ref()
-            .is_ok_and(|result| discard_bootstrap_outputs(&result.artifacts));
-        if !cleared || !lease.decline_worktree_bootstrap() {
-            let _ = lease.finish(CompileOutcome::Abnormal);
-            return passthrough_with_event(
-                config,
-                args,
-                crate_name,
-                root,
-                start,
-                "cannot retire bootstrap-observing private state",
-                key_record,
-            );
-        }
-        compiler_args = lease.compiler_args(args);
-        let native =
-            RustcCompiler::new_for(args.invocation_env()).with_base_dirs(config.base_dirs.clone());
-        compile = if kind == crate::incremental_policy::LeaseKind::Immediate {
-            native.execute_passthrough_preserving_incremental(args, &compiler_args)
-        } else {
-            native.execute_preserving_incremental(args, &compiler_args)
-        };
-    }
-    if let (Some(permit), Ok(_)) = (&permit, &compile) {
-        permit.record_compile_rss(crate_name);
-    }
-    drop(permit);
-    let result = match compile {
-        Ok(result) => result,
-        Err(error) => {
-            // rustc never ran, or a pipe failure made kache kill it mid-session.
-            let _ = lease.finish(CompileOutcome::Abnormal);
-            log::warn!("adaptive incremental compiler spawn failed for {crate_name}: {error}");
-            return passthrough_with_event(
-                config,
-                args,
-                crate_name,
-                root,
-                start,
-                format!("adaptive compiler spawn failed: {error}"),
-                key_record,
-            );
-        }
-    };
-    let compile_time_ms = compile_start.elapsed().as_millis() as u64;
-    replay_diagnostics(
-        &result.stdout,
-        result.pending_stderr(),
-        crate::invocation::io::stdout(),
-        crate::invocation::io::stderr(),
-    );
-    after_rustc_exit(result.exit_code, &result.stderr, &args.externs);
-    let outcome = compile_outcome(result.exit_code, result.signaled, &result.stderr);
-    let kept = lease.finish(outcome);
-    log::debug!(
-        "adaptive incremental compiler lease finished; kind={kind:?} outcome={outcome:?} kept={kept}"
-    );
-
-    let (cache_key, key_ms, key_hash_stats, lookup_ms) =
-        keyed.unwrap_or(("", 0, FileHashStats::default(), 0));
-    log_event(
-        config,
-        EventInputs::new(
-            root,
-            crate_name,
-            EventResult::Passthrough,
-            start.elapsed().as_millis() as u64,
-        )
-        .rebuilt(result.exit_code == 0, &result.artifacts, rebuilt_package)
-        .compile_time_ms(compile_time_ms)
-        .keyed(cache_key, key_ms, key_hash_stats)
-        .lookup_ms(lookup_ms)
-        .passthrough_reason(reason)
-        .exit_code(result.exit_code)
-        .key_record(key_record),
-    );
-    Ok(result.exit_code)
 }
 
 thread_local! {
@@ -7701,17 +6662,6 @@ fn rustc_output_in(reason: &str) -> &str {
     reason.strip_prefix(UNCACHEABLE_REASON).unwrap_or_default()
 }
 
-/// After a failed compile, the hint and the deny markers for a shared
-/// read-only `OUT_DIR` a macro could not write into. Both need rustc's words.
-/// `rustc_output` is the captured stderr of a keyed, deferred or adaptive
-/// compile, or the key error an `uncacheable|` passthrough reason quotes (see
-/// `rustc_output_in`).
-///
-/// Every other passthrough sends rustc's stderr straight to Cargo: a
-/// compiler refusal such as `--unpretty`, a user bypass or exclude rule, the
-/// preserve-incremental and untrusted-backend lanes, and kache's own errors.
-/// A write failure there gets rustc's error alone. Covering those lanes would
-/// mean capturing their stderr.
 fn after_rustc_exit(exit_code: i32, rustc_output: &str, externs: &[ExternDep]) {
     if exit_code != 0 {
         crate::out_dir_alias::after_failed_compile(rustc_output, externs);
@@ -7745,7 +6695,6 @@ fn passthrough_with_event<R: Into<String>>(
     let output = passthrough(
         args,
         config.fallback.as_deref(),
-        config.preserve_incremental,
     )?;
     let elapsed = start.elapsed().as_millis() as u64;
     after_rustc_exit(output.exit_code, rustc_output_in(&reason), &args.externs);
@@ -7780,7 +6729,7 @@ fn rustc_direct_passthrough_with_event(
     if PRECOMPILED_EXIT.with(std::cell::Cell::get).is_some() {
         return passthrough_with_event(config, args, crate_name, root, start, reason, key_record);
     }
-    let output = passthrough(args, None, config.preserve_incremental)?;
+    let output = passthrough(args, None)?;
     log_event(
         config,
         EventInputs::passthrough(
@@ -7795,10 +6744,7 @@ fn rustc_direct_passthrough_with_event(
     Ok(output.exit_code)
 }
 
-/// Run the explicit preserve-incremental lane directly. Kache owns this
-/// compiler strategy; ordinary rejected invocations still use the configured
-/// fallback pipeline.
-fn preserved_incremental_with_event(
+fn incremental_passthrough_with_event(
     config: &Config,
     args: &RustcArgs,
     crate_name: &str,
@@ -7806,14 +6752,14 @@ fn preserved_incremental_with_event(
     start: std::time::Instant,
     key_record: KeyEventRecord,
 ) -> Result<i32> {
-    let output = passthrough(args, None, true)?;
+    let output = passthrough(args, None)?;
     log_event(
         config,
         EventInputs::passthrough(
             root,
             crate_name,
             start.elapsed().as_millis() as u64,
-            "incremental preserved".to_string(),
+            "incremental compilation".to_string(),
             &output,
         )
         .key_record(key_record),
@@ -8858,25 +7804,6 @@ pub(crate) fn prune_session_markers(
 
 /// The build-session inactivity window (shared by trigger + attribution).
 pub(crate) const BUILD_SESSION_SECS: u64 = 300;
-
-/// Remove the directory passed as `-C incremental`. Cargo passes
-/// `<profile>/incremental`, which every unit of the profile shares. Normal
-/// compiles strip the flag, so what is there comes from builds without Kache
-/// and only takes disk space. Adaptive and preserved state live in sibling
-/// directories and stay.
-fn clean_incremental_dir(config: &Config, args: &RustcArgs) {
-    if incremental_cleanup_enabled(config)
-        && let Some(incr_dir) = &args.incremental
-        && incr_dir.is_dir()
-        && let Err(e) = std::fs::remove_dir_all(incr_dir)
-    {
-        log::debug!(
-            "failed to clean incremental dir {}: {}",
-            incr_dir.display(),
-            e
-        );
-    }
-}
 
 #[cfg(test)]
 mod tests;

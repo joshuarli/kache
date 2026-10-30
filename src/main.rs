@@ -23,7 +23,6 @@ mod explain;
 mod extra_inputs;
 mod fallback;
 mod heartbeat;
-mod incremental_policy;
 mod index_compact;
 #[cfg(unix)]
 mod init_shell;
@@ -945,17 +944,9 @@ fn check_wrapper_depth(above: u32, compiler: Option<&str>) -> Result<()> {
     )
 }
 
-/// Run the requested compiler directly, with no caching: `args[0]` is
-/// the compiler, `args[1..]` its arguments.
-///
-/// Incremental flags are stripped by default (rustc-only — a no-op on cc
-/// args) to prevent APFS-related corruption in git worktrees on macOS. The
-/// explicit preservation mode isolates the incremental directory instead.
-/// Returns the child's exit code.
 fn run_compiler_directly_for(
     config: &config::Config,
     args: &[String],
-    preserve_incremental: bool,
     env: &invocation::InvocationEnv,
 ) -> Result<i32> {
     if is_cc_compiler_invocation_for(args, env) {
@@ -963,7 +954,7 @@ fn run_compiler_directly_for(
         wrapper::refuse_legacy_cc_blob_outputs(config, &parsed)?;
     }
 
-    run_compiler_process_directly_for(args, preserve_incremental, env)
+    run_compiler_process_directly_for(args, env)
 }
 
 #[cfg(test)]
@@ -982,15 +973,6 @@ fn is_cc_compiler_invocation_for(args: &[String], env: &invocation::InvocationEn
         .is_some_and(|adapter| adapter.id() == compiler::cc::CC_ID)
 }
 
-/// Run a Cargo `RUSTC_WRAPPER + RUSTC_WORKSPACE_WRAPPER` chain uncached while
-/// retaining Kache-owned freshness for an active `extra_inputs` declaration.
-fn preserve_workspace_wrapper_incremental(
-    preserve_requested: bool,
-    extra_inputs_active: bool,
-) -> bool {
-    preserve_requested && !extra_inputs_active
-}
-
 fn run_workspace_wrapper_chain_for(
     config: &config::Config,
     args: &[String],
@@ -999,9 +981,7 @@ fn run_workspace_wrapper_chain_for(
     let parsed =
         args::RustcArgs::parse_for(args, env).context("parsing workspace-wrapper rustc chain")?;
     let extra_inputs = wrapper::resolve_extra_inputs_for_passthrough(config, &parsed)?;
-    let preserve_incremental =
-        preserve_workspace_wrapper_incremental(config.preserve_incremental, extra_inputs.is_some());
-    let exit = run_compiler_directly_for(config, args, preserve_incremental, env)?;
+    let exit = run_compiler_directly_for(config, args, env)?;
     if exit == 0 {
         wrapper::complete_current_extra_inputs_after_success(
             config,
@@ -1013,17 +993,12 @@ fn run_workspace_wrapper_chain_for(
 }
 
 #[cfg(all(test, unix))]
-fn run_compiler_process_directly(args: &[String], preserve_incremental: bool) -> Result<i32> {
-    run_compiler_process_directly_for(
-        args,
-        preserve_incremental,
-        &invocation::InvocationEnv::capture(),
-    )
+fn run_compiler_process_directly(args: &[String], _preserve_incremental: bool) -> Result<i32> {
+    run_compiler_process_directly_for(args, &invocation::InvocationEnv::capture())
 }
 
 fn run_compiler_process_directly_for(
     args: &[String],
-    preserve_incremental: bool,
     env: &invocation::InvocationEnv,
 ) -> Result<i32> {
     // A previous cache-on build may have restored this crate's outputs
@@ -1080,88 +1055,12 @@ fn run_compiler_process_directly_for(
         );
     }
 
-    // Standard rustc response files must be expanded before applying the
-    // incremental policy; filtering the compact `@file` argv cannot see a
-    // `-C incremental=...` stored inside it. Recreate a compact response file
-    // after rewriting. An unchanged invocation can safely fall back to its
-    // original compact argv; a rewritten invocation fails closed because
-    // promoting nested `@file` arguments or exceeding argv limits is unsafe.
-    let effective_args = parsed
-        .as_ref()
-        .map_or(&args[1..], |parsed| parsed.all_args.as_slice());
-    let isolated_args = if preserve_incremental {
-        match compile::isolate_incremental_flags(effective_args) {
-            Some(isolated) => Some(isolated),
-            None => {
-                log::warn!(
-                    "[kache] incremental directory has no safe sibling path; stripping incremental flags"
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let incremental_preserved = isolated_args.is_some();
-    let compiler_args = if let Some(isolated_args) = isolated_args {
-        isolated_args
-    } else {
-        compile::strip_incremental_flags(effective_args)
-            .into_iter()
-            .cloned()
-            .collect()
-    };
-    let compiler_args_changed = compiler_args != effective_args;
-    let response_file = if parsed
-        .as_ref()
-        .is_some_and(args::RustcArgs::has_expanded_argfiles)
-    {
-        match compile::RustcResponseFile::new_in(
-            env.temp_dir(),
-            compiler_args.iter().map(|arg| arg.as_str()),
-        ) {
-            Ok(response) => Some(response),
-            Err(error) => {
-                if compiler_args_changed {
-                    return Err(error).context(
-                        "materializing rustc response file after rewriting incremental arguments",
-                    );
-                }
-                log::warn!(
-                    "failed to materialize expanded rustc response file; using unchanged original argv: {error:#}"
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
     let program = env
         .resolve_program(std::path::Path::new(&args[0]))
         .unwrap_or_else(|| std::path::PathBuf::from(&args[0]));
-    let mut invocation_env = env.clone();
-    if !incremental_preserved {
-        invocation_env.set("CARGO_INCREMENTAL", "0");
-    }
-    let mut command = invocation_env.command(&program)?;
-    toolchain_dylib::apply_for(&mut command, &program, &invocation_env);
-    if let Some(inner) = parsed
-        .as_ref()
-        .and_then(|parsed| parsed.inner_rustc.as_ref())
-    {
-        command.arg(inner);
-    }
-    if let Some(response) = &response_file {
-        command.arg(response.argument());
-    } else if !compiler_args_changed
-        && let Some(parsed) = parsed
-            .as_ref()
-            .filter(|parsed| parsed.has_expanded_argfiles())
-    {
-        command.args(parsed.raw_args());
-    } else {
-        command.args(&compiler_args);
-    }
+    let mut command = env.command(&program)?;
+    toolchain_dylib::apply_for(&mut command, &program, env);
+    command.args(&args[1..]);
     let status = invocation::io::status(&mut command)?;
     Ok(status.code().unwrap_or(1))
 }
@@ -1363,11 +1262,7 @@ fn run_compiler_invocation_inner(
         check_wrapper_depth(above, args.first().map(String::as_str))?;
         env.set(KACHE_ACTIVE_ENV, next_wrapper_depth(above).to_string());
         let config = config::Config::load_for(&env)?;
-        // No preservation here: the outer kache already applied the
-        // incremental policy, and `isolate_incremental_flags` is
-        // not idempotent — a second rewrite would relocate the state to a
-        // `.kache-preserved.kache-preserved` sibling nothing else reuses.
-        return run_compiler_directly_for(&config, args, false, &env);
+        return run_compiler_directly_for(&config, args, &env);
     }
     // Every compiler child gets this request's re-entrancy depth.
     env.set(KACHE_ACTIVE_ENV, "1");
@@ -1385,10 +1280,7 @@ fn run_compiler_invocation_inner(
         scheduler::pressure::InvocationPressureScope::enter(config.scheduler_memory_pressure);
 
     if config.disabled {
-        // Caching off — pass straight through to the real compiler. The
-        // per-crate force list is a managed-cache policy and is inactive here;
-        // only the explicit global preservation mode may retain incremental.
-        return run_compiler_directly_for(&config, args, config.preserve_incremental, &env);
+        return run_compiler_directly_for(&config, args, &env);
     }
 
     // Compiler-family probe (`kache -E <file>` from the `cc` Rust
@@ -1417,7 +1309,7 @@ fn run_compiler_invocation_inner(
             "compiler has no cache adapter; passing through uncached; program={:?}",
             args.first()
         );
-        return run_compiler_directly_for(&config, args, config.preserve_incremental, &env);
+        return run_compiler_directly_for(&config, args, &env);
     }
 
     let Some(adapter) = compiler::detect_compiler_for(args, &env) else {
@@ -1826,65 +1718,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn local_fallback_reuses_its_config_snapshot_but_new_requests_reload() {
-        let root = tempfile::tempdir().unwrap();
-        let root = root.path().canonicalize().unwrap();
-        std::fs::create_dir(root.join("bin")).unwrap();
-        kache_fs::testutil::write_executable(
-            &root.join("bin/rustc"),
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > observed-args\nexit 23\n",
-        );
-        let config_path = root.join(".kache.toml");
-        std::fs::write(&config_path, "[cache]\npreserve_incremental = false\n").unwrap();
-        let mut env = invocation::InvocationEnv::from_parts(
-            [("PATH", "bin"), ("KACHE_DISABLED", "1")],
-            Some(root.clone()),
-            Some(root.clone()),
-            root.clone(),
-        );
-        env.set("KACHE_CONFIG", &config_path);
-        env.set("KACHE_CACHE_DIR", root.join("cache"));
-        let prepared = config::Config::load_for(&env).unwrap();
-        assert!(!prepared.preserve_incremental);
-        std::fs::write(&config_path, "[cache]\npreserve_incremental = true\n").unwrap();
-
-        for (snapshot, preserved) in [(Some(prepared), false), (None, true)] {
-            let exit = run_compiler_invocation_with_config(
-                &[
-                    "rustc".into(),
-                    "--crate-name".into(),
-                    "demo".into(),
-                    "--crate-type".into(),
-                    "lib".into(),
-                    "lib.rs".into(),
-                    "-C".into(),
-                    format!("incremental={}", root.join("incremental").display()),
-                ],
-                invocation::InvocationContext {
-                    daemon: None,
-                    env: env.clone(),
-                    io: invocation::io::InvocationIo::process(),
-                    cancellation: None,
-                    jobserver: kache_ipc::jobserver::Descriptors::default(),
-                    started_at: std::time::Instant::now(),
-                    shim_stem: "kache".into(),
-                },
-                snapshot,
-            )
-            .unwrap();
-            assert_eq!(exit, 23);
-            let observed = std::fs::read_to_string(root.join("observed-args")).unwrap();
-            assert_eq!(observed.contains("incremental="), preserved, "{observed}");
-            assert_eq!(
-                observed.contains(".kache-preserved"),
-                preserved,
-                "{observed}"
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
     fn compiler_entry_returns_each_clients_status_and_restores_request_state() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -1917,7 +1750,6 @@ mod tests {
                                 ("PATH", "bin"),
                                 ("CLIENT", client),
                                 ("CARGO_INCREMENTAL", "1"),
-                                ("KACHE_PRESERVE_INCREMENTAL", "0"),
                             ],
                             Some(root.to_owned()),
                             Some(root.to_owned()),
@@ -1969,7 +1801,7 @@ mod tests {
                         assert_eq!(
                             std::fs::read_to_string(root.join("observed-env")).unwrap(),
                             format!(
-                                "{client}|{}|0|{}",
+                                "{client}|{}|1|{}",
                                 if nested { "3" } else { "1" },
                                 physical_root.display()
                             )
@@ -2676,21 +2508,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn workspace_wrapper_incremental_preservation_requires_opt_in_and_no_extra_inputs() {
-        for (requested, extra_inputs_active, expected) in [
-            (false, false, false),
-            (false, true, false),
-            (true, false, true),
-            (true, true, false),
-        ] {
-            assert_eq!(
-                preserve_workspace_wrapper_incremental(requested, extra_inputs_active),
-                expected
-            );
-        }
-    }
-
     #[cfg(unix)]
     #[test]
     fn run_compiler_directly_propagates_exit_code() {
@@ -2918,7 +2735,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn run_compiler_directly_rewrites_double_wrapper_rustc_response_file() {
+    fn run_compiler_directly_preserves_double_wrapper_rustc_response_file() {
         let dir = tempfile::tempdir().unwrap();
         let outer = dir.path().join("workspace-wrapper");
         let inner = dir.path().join("rustc");
@@ -2959,14 +2776,8 @@ mod tests {
             argv.starts_with(&format!("{}\n", inner.display())),
             "{argv}"
         );
-        assert!(
-            argv.contains(&format!(
-                "-Cincremental={}.kache-preserved",
-                incremental.display()
-            )),
-            "{argv}"
-        );
-        assert!(!argv.contains(&format!("-Cincremental={}\n", incremental.display())));
+        assert!(argv.contains(&format!("-Cincremental={}\n", incremental.display())));
+
     }
 
     #[test]

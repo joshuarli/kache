@@ -27,6 +27,7 @@ path = "source"
 
 [env]
 RUSTC_WRAPPER = "$KACHE"
+CARGO_INCREMENTAL = "0"
 # Cross-platform fallback wrapper (`e2e-fallback`), built next to the
 # harness; `$FALLBACK` expands to its absolute path, so the relocated
 # build finds it too — no per-fixture script to `cp -R`, and it runs on

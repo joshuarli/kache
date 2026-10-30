@@ -787,7 +787,6 @@ edition = "2021"
         "v6",
         &[
             ("KACHE_CACHE_EXECUTABLES", "0"),
-            ("KACHE_ADAPTIVE_INCREMENTAL", "0"),
         ],
         "passthrough",
         Some("cache_executables=false"),
@@ -800,11 +799,10 @@ edition = "2021"
         "v7",
         &[
             ("KACHE_CACHE_EXECUTABLES", "0"),
-            ("KACHE_PRESERVE_INCREMENTAL", "1"),
             ("CARGO_INCREMENTAL", "1"),
         ],
         "passthrough",
-        Some("cache_executables=false"),
+        Some("incremental compilation"),
     );
     exercise_workspace_wrapper_lane(
         relocated_project.path(),

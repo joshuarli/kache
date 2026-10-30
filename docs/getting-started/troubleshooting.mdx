@@ -62,16 +62,7 @@ new key. Explanation needs recorded key material; enable `[cache] explain_miss`
 when collecting builds to compare. See [cache keys](/docs/how-it-works/cache-key)
 and [build-script inputs](/docs/how-it-works/build-scripts).
 
-Adaptive incremental mode can also compile a unit you are editing using its
-private incremental state. See [Executables and incremental builds](/docs/getting-started/quick-start#executables-and-incremental-builds).
-
-## A crate fails only with Kache
-
-If one crate keeps failing with an error that goes away with
-`KACHE_DISABLED=1`, the incremental state Kache keeps for it may be damaged.
-Delete `target/<profile>/incremental.kache-auto` or run `cargo clean`.
-`cargo clean -p` does not remove that directory, and
-`KACHE_ADAPTIVE_INCREMENTAL=0` only skips it until you turn the mode back on.
+Cargo's incremental compiles pass through Kache unchanged. See [Executables and incremental builds](/docs/getting-started/quick-start#executables-and-incremental-builds).
 
 ## Cargo fix cannot write old metadata
 
@@ -91,11 +82,6 @@ Match the affected build's target and profile when cleaning, and use its feature
 options when rebuilding. This keeps the shared artifact cache; deleting that
 cache is unnecessary. The rebuild also reapplies current creation permissions to
 metadata restored by an older Kache. Retry the fix command after the rebuild.
-
-Managed incremental state also starts fresh on each crate's next compilation
-after the managed state format changes to version 2. Older state expires through the usual unused-unit
-cleanup. Finish builds using the older Kache before upgrading so those processes
-cannot keep sharing incremental files with each other.
 
 ## The cache uses more disk than expected
 

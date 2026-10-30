@@ -73,40 +73,12 @@ fn a_predicted_key_owes_a_rederivation_until_it_has_had_one() {
     assert!(!owes_rederivation(false, true));
 }
 
-/// Once both lookups missed and no incremental lane took the miss, a key
-/// taken before the compile is kept only where the compile cannot run first:
-/// a guess on a linking unit, which is re-derived through the pre-pass, and
-/// the discovered key of a unit that never keyed first for a lane.
 #[test]
-fn a_miss_no_lane_took_compiles_before_its_key_unless_that_key_must_stay() {
-    // (deferral allowed, stop on hit allowed, owes a re-derivation, keyed first)
-    let cases = [
-        // A guess re-derives from the running compile, which can stop.
-        ((true, true, true, false), Some(true)),
-        ((true, true, true, true), Some(true)),
-        // A linking compile cannot stop, so a guess takes the pre-pass first.
-        ((true, false, true, false), None),
-        ((true, false, true, true), None),
-        // The lane a unit keyed first for declined: compile first, linking
-        // or not.
-        ((true, true, false, true), Some(true)),
-        ((true, false, false, true), Some(false)),
-        // Any other discovered key is the one the compile runs under.
-        ((true, true, false, false), None),
-        ((true, false, false, false), None),
-    ];
-    for ((deferral, stop, owes, keyed_first), expected) in cases {
-        assert_eq!(
-            compile_before_key_after_miss(deferral, stop, owes, keyed_first),
-            expected,
-            "deferral {deferral}, stop on hit {stop}, owes {owes}, keyed first {keyed_first}"
-        );
-        assert_eq!(
-            compile_before_key_after_miss(false, stop, owes, keyed_first),
-            None,
-            "nothing compiles before its key where deferral is off"
-        );
-    }
+fn a_predicted_miss_can_compile_before_keying_only_when_it_can_stop_on_a_hit() {
+    assert_eq!(compile_before_key_after_miss(true, true, true), Some(true));
+    assert_eq!(compile_before_key_after_miss(false, true, true), None);
+    assert_eq!(compile_before_key_after_miss(true, false, true), None);
+    assert_eq!(compile_before_key_after_miss(true, true, false), None);
 }
 
 #[test]
@@ -407,30 +379,6 @@ fn a_record_keeps_no_guard_once_its_tree_moved() {
     let taken = crate::cache_key::TreeGuard::stamping("after", &root);
     let after = Some("after".to_string());
     assert_eq!(record(taken), (after.clone(), after.clone(), after));
-}
-
-fn eligible_incremental_args(temp: &tempfile::TempDir, crate_name: &str) -> RustcArgs {
-    let profile = temp.path().join("target/debug");
-    let out_dir = profile.join("deps");
-    let incremental = profile.join("incremental");
-    std::fs::create_dir_all(&out_dir).unwrap();
-    std::fs::create_dir_all(&incremental).unwrap();
-    RustcCompiler::new()
-        .parse(&[
-            "rustc".to_string(),
-            "--crate-name".to_string(),
-            crate_name.to_string(),
-            temp.path()
-                .join("src/lib.rs")
-                .to_string_lossy()
-                .into_owned(),
-            "--out-dir".to_string(),
-            out_dir.to_string_lossy().into_owned(),
-            "-C".to_string(),
-            format!("incremental={}", incremental.display()),
-            "-Cextra-filename=-1234abcd".to_string(),
-        ])
-        .unwrap()
 }
 
 #[test]
@@ -2073,23 +2021,6 @@ fn prestaging_relative_outputs_keeps_each_invocations_worktree() {
 /// for a build script compiled into `<profile>/build/<unit>`, where
 /// `RustcArgs::target_dir` answers the profile directory.
 #[test]
-fn only_a_workspace_records_the_target_it_builds_into() {
-    let home = Path::new("/home/dev/.cargo");
-    assert!(owns_its_target(Path::new("/src/app"), Some(home)));
-    assert!(owns_its_target(Path::new("/src/app"), None));
-    // `cargo build -p rand_chacha`: a registry package is primary too.
-    let registry = home.join("registry/src/index.crates.io-1949cf8c6b5b557f/rand_chacha-0.9.0");
-    assert!(!owns_its_target(&registry, Some(home)));
-    assert!(
-        !owns_its_target(&registry, None),
-        "known by its layout alone"
-    );
-    // A Git dependency's checkout, possibly a member below the repository.
-    let git = home.join("git/checkouts/serde-1a2b3c/4d5e6f7/serde_derive");
-    assert!(!owns_its_target(&git, Some(home)));
-}
-
-#[test]
 fn prestage_target_dir_is_the_target_root_for_every_unit() {
     let dir = tempfile::tempdir().unwrap();
     let target_root = dir.path().join("target");
@@ -2156,34 +2087,30 @@ fn compile_before_key_needs_a_local_store() {
         "/t/debug/deps",
     ]);
     assert!(
-        deferral_allowed(&config, &cargo_like, false, None),
+        deferral_allowed(&config, &cargo_like, None),
         "predictions off still defers a provable miss"
     );
     config.input_predictions = true;
-    assert!(deferral_allowed(&config, &cargo_like, false, None));
+    assert!(deferral_allowed(&config, &cargo_like, None));
     assert!(
-        !deferral_allowed(&config, &no_dep_info, false, None),
+        !deferral_allowed(&config, &no_dep_info, None),
         "nothing to key from"
     );
     config.deferred_discovery = false;
     assert!(
-        !deferral_allowed(&config, &cargo_like, false, None),
+        !deferral_allowed(&config, &cargo_like, None),
         "switched off"
     );
     config.deferred_discovery = true;
-    assert!(
-        !deferral_allowed(&config, &cargo_like, true, None),
-        "a managed unit that must key first"
-    );
     config.fallback = Some("sccache".to_string());
     assert!(
-        !deferral_allowed(&config, &cargo_like, false, None),
+        !deferral_allowed(&config, &cargo_like, None),
         "fallback store"
     );
     config.fallback = None;
     config.readonly_store = Some(PathBuf::from("/srv/host-store"));
     assert!(
-        !deferral_allowed(&config, &cargo_like, false, None),
+        !deferral_allowed(&config, &cargo_like, None),
         "a read-only store may hold the entry: key before compiling"
     );
     config.readonly_store = None;
@@ -2511,291 +2438,6 @@ fn only_active_extra_inputs_make_unreadable_cached_dep_info_immediately_fatal() 
     );
 }
 
-#[test]
-fn adaptive_mode_requires_opt_in_without_explicit_preservation() {
-    let mut config = test_config(PathBuf::from("cache"));
-    for (adaptive, preserve, expected) in [
-        (false, false, false),
-        (false, true, false),
-        (true, true, false),
-        (true, false, true),
-    ] {
-        config.adaptive_incremental = adaptive;
-        config.preserve_incremental = preserve;
-        assert_eq!(adaptive_mode_enabled(&config), expected);
-    }
-
-    let without_incremental = rustc_args(&["rustc", "src/lib.rs"]);
-    let with_incremental = rustc_args(&["rustc", "src/lib.rs", "-Cincremental=incremental"]);
-    config.preserve_incremental = false;
-    assert!(!preserve_incremental_requested(&config, &with_incremental));
-    config.preserve_incremental = true;
-    assert!(!preserve_incremental_requested(
-        &config,
-        &without_incremental
-    ));
-    assert!(preserve_incremental_requested(&config, &with_incremental));
-}
-
-#[test]
-fn incremental_force_list_requires_incremental_and_managed_layout() {
-    let mut config = test_config(PathBuf::from("cache"));
-    config.adaptive_incremental = false;
-    assert!(
-        !config.incremental_crate_forced("tap_lib"),
-        "empty force-list must force nothing"
-    );
-    config.incremental_crates =
-        crate::config::normalize_incremental_crates(["tap-lib".to_string()]);
-    // Matching is against rustc's crate name; spelling normalization does
-    // not make the Cargo package name authoritative.
-    assert!(config.incremental_crate_forced("tap_lib"));
-    assert!(config.incremental_crate_forced("tap-lib"));
-    assert!(!config.incremental_crate_forced("other"));
-
-    let no_incremental = rustc_args(&["rustc", "--crate-name", "tap_lib", "src/lib.rs"]);
-    assert!(!force_incremental_requested(&config, &no_incremental));
-    assert!(
-        managed_incremental_unit(&config, &no_incremental, || {
-            panic!("hidden-input discovery must not run for an ineligible invocation")
-        })
-        .is_none()
-    );
-
-    let temp = tempfile::tempdir().unwrap();
-    let args = eligible_incremental_args(&temp, "tap_lib");
-    assert!(force_incremental_requested(&config, &args));
-    let unit = managed_incremental_unit(&config, &args, || false).unwrap();
-    let lease = unit.try_immediate().unwrap();
-    let compiler_args = lease.compiler_args(&args);
-    let original = args.incremental.as_ref().unwrap().display().to_string();
-    assert!(
-        compiler_args
-            .iter()
-            .any(|arg| arg.contains("incremental.kache-auto") && arg.ends_with("rustc")),
-        "force-list must use policy-owned incremental state: {compiler_args:?}"
-    );
-    assert!(
-        !compiler_args.iter().any(|arg| arg.ends_with(&original)),
-        "the original Cargo incremental path must never reach rustc"
-    );
-    assert!(!lease.finish(CompileOutcome::Abnormal));
-}
-
-#[test]
-fn force_list_never_retries_through_adaptive_seed_policy() {
-    let mut config = test_config(PathBuf::from("cache"));
-    config.adaptive_incremental = true;
-    config.incremental_crates = vec!["tap_lib".to_string()];
-    let args = rustc_args(&[
-        "rustc",
-        "--crate-name",
-        "tap_lib",
-        "src/lib.rs",
-        "-Cincremental=incremental",
-    ]);
-
-    assert!(force_incremental_requested(&config, &args));
-    assert!(adaptive_mode_enabled(&config));
-    assert!(
-        !adaptive_seed_allowed(&config, &args),
-        "a force-listed invocation must not enter adaptive seed policy"
-    );
-
-    config.incremental_crates.clear();
-    assert!(adaptive_seed_allowed(&config, &args));
-    config.adaptive_incremental = false;
-    assert!(!adaptive_seed_allowed(&config, &args));
-}
-
-#[test]
-fn only_a_unit_that_can_take_an_incremental_lane_keys_first() {
-    for (managed, force_listed, policy_state, expected) in [
-        (false, true, true, false),
-        (true, false, false, false),
-        (true, true, false, true),
-        (true, false, true, true),
-    ] {
-        assert_eq!(
-            managed_unit_keys_first(managed, force_listed, policy_state),
-            expected,
-            "managed={managed} force_listed={force_listed} policy_state={policy_state}"
-        );
-    }
-}
-
-#[test]
-fn both_deferred_compile_reentries_are_recognized() {
-    for (precompiled, emitted_closure_waiting, expected) in [
-        (false, false, false),
-        (true, false, true),
-        (false, true, true),
-        (true, true, true),
-    ] {
-        assert_eq!(
-            reentered_after_deferred_compile(precompiled, emitted_closure_waiting),
-            expected,
-            "precompiled={precompiled} emitted_closure_waiting={emitted_closure_waiting}"
-        );
-    }
-}
-
-#[test]
-fn force_list_hidden_inputs_and_cache_exclusions_fail_closed() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut config = test_config(temp.path().join("cache"));
-    config.adaptive_incremental = false;
-    config.incremental_crates = vec!["tap_lib".to_string()];
-    let args = eligible_incremental_args(&temp, "tap_lib");
-
-    assert!(managed_incremental_unit(&config, &args, || true).is_none());
-    assert!(incremental_fast_path_allowed(false, false, false, false));
-    assert!(!incremental_fast_path_allowed(false, true, false, false));
-    assert!(!incremental_fast_path_allowed(false, false, true, false));
-    assert!(!incremental_fast_path_allowed(true, false, false, false));
-    assert!(
-        !incremental_fast_path_allowed(false, false, false, true),
-        "a re-entry after a deferred compile must not start a second compile"
-    );
-    // Either refusal alone keeps a unit off the fast path.
-    assert!(!unit_refuses_caching(false, false));
-    assert!(unit_refuses_caching(true, false));
-    assert!(unit_refuses_caching(false, true));
-    assert!(unit_refuses_caching(true, true));
-
-    let stripped: Vec<_> = compile::strip_incremental_flags(&args.all_args)
-        .into_iter()
-        .cloned()
-        .collect();
-    assert!(
-        !stripped.iter().any(|arg| arg.contains("incremental=")),
-        "a rejected force-list invocation must retain the safe cache argv"
-    );
-}
-
-#[test]
-fn incremental_cleanup_requires_opt_in_without_preservation() {
-    let mut config = test_config(PathBuf::from("cache"));
-    for (clean, preserve, expected) in [
-        (false, false, false),
-        (false, true, false),
-        (true, true, false),
-        (true, false, true),
-    ] {
-        config.clean_incremental = clean;
-        config.preserve_incremental = preserve;
-        assert_eq!(incremental_cleanup_enabled(&config), expected);
-    }
-
-    assert!(disable_incremental_env(false));
-    assert!(!disable_incremental_env(true));
-}
-
-#[test]
-fn adaptive_policy_guard_tracks_kache_semantic_inputs() {
-    const ENV_KEY: &str = "KACHE_WRAPPER_POLICY_GUARD_TEST";
-
-    let _lock = crate::test_support::process_state_test_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path().join("cache"));
-    let baseline = adaptive_policy_guard(&config);
-
-    config.seed_incremental = false;
-    assert_ne!(adaptive_policy_guard(&config), baseline);
-    config.seed_incremental = true;
-
-    config.key_salt = Some("salt-a".to_string());
-    assert_ne!(adaptive_policy_guard(&config), baseline);
-    config.key_salt = None;
-
-    let _env = TestEnvGuard::set(ENV_KEY, "value-a");
-    config.key_env_vars = vec![ENV_KEY.to_string()];
-    let env_a = adaptive_policy_guard(&config);
-    unsafe { std::env::set_var(ENV_KEY, "value-b") };
-    assert_ne!(adaptive_policy_guard(&config), env_a);
-    config.key_env_vars.clear();
-
-    config.base_dirs = vec![dir.path().display().to_string()];
-    assert_ne!(adaptive_policy_guard(&config), baseline);
-}
-
-#[test]
-fn automatic_donors_require_built_live_targets_and_keep_the_recent_limit() {
-    let temp = tempfile::tempdir().unwrap();
-    let current = temp.path().join("current");
-    std::fs::create_dir(&current).unwrap();
-    let entry = |path: PathBuf, discovered| crate::store::TrackedTargetRoot {
-        identity: kache_store::filesystem::directory_identity(&path).unwrap(),
-        workspace_root: temp.path().to_path_buf(),
-        path,
-        first_seen: 0,
-        last_seen: 0,
-        rustc: None,
-        discovered,
-    };
-    let mut targets = Vec::new();
-    for index in 0..10 {
-        let path = temp.path().join(format!("target-{index}"));
-        std::fs::create_dir(&path).unwrap();
-        targets.push(entry(path, false));
-    }
-    let discovered = temp.path().join("discovered");
-    std::fs::create_dir(&discovered).unwrap();
-    targets.push(entry(discovered, true));
-    let stale = temp.path().join("replaced");
-    std::fs::create_dir(&stale).unwrap();
-    let mut stale = entry(stale, false);
-    stale.identity.inode = stale.identity.inode.wrapping_add(1);
-    targets.push(stale);
-    targets.push(entry(current.clone(), false));
-    targets.push(entry(current.join("."), false));
-    let chosen = worktree_donor_profiles(&current, Path::new("debug"), targets.clone());
-    assert_eq!(chosen.len(), 8);
-    assert_eq!(chosen[0], temp.path().join("target-9/debug"));
-    assert_eq!(chosen[7], temp.path().join("target-2/debug"));
-    assert!(
-        worktree_donor_profiles(&temp.path().join("missing"), Path::new("debug"), targets)
-            .is_empty()
-    );
-}
-
-#[test]
-fn bootstrap_retry_requires_fresh_dep_info_and_retires_discarded_outputs() {
-    let temp = tempfile::tempdir().unwrap();
-    let args = RustcArgs::parse(&[
-        "rustc".into(),
-        "--crate-name".into(),
-        "probe".into(),
-        "src/lib.rs".into(),
-        "--out-dir".into(),
-        temp.path().display().to_string(),
-        "-Cextra-filename=-1234abcd".into(),
-        "--emit=dep-info,metadata".into(),
-    ])
-    .unwrap();
-    let dep_info = args.dep_info_path().unwrap();
-    std::fs::write(&dep_info, b"old bootstrap observation").unwrap();
-    assert!(clear_incremental_bootstrap_dep_info(&args));
-    assert!(!dep_info.exists());
-    assert!(clear_incremental_bootstrap_dep_info(&args));
-    std::fs::create_dir(&dep_info).unwrap();
-    assert!(!clear_incremental_bootstrap_dep_info(&args));
-    let no_dep_info = RustcArgs::parse(&["rustc".into(), "src/main.rs".into()]).unwrap();
-    assert!(!clear_incremental_bootstrap_dep_info(&no_dep_info));
-
-    let output = temp.path().join("discarded-program");
-    std::fs::write(&output, b"bootstrap-dependent output").unwrap();
-    let artifacts =
-        ArtifactSet::from_output_files(vec![(output.clone(), "program".into())], |_| {
-            ArtifactKind::Executable
-        });
-    assert!(discard_bootstrap_outputs(&artifacts));
-    assert!(!output.exists());
-    assert!(discard_bootstrap_outputs(&artifacts));
-    std::fs::create_dir(output).unwrap();
-    assert!(!discard_bootstrap_outputs(&artifacts));
-}
-
 fn meta_with_diagnostics(stdout: &str, stderr: &str) -> crate::store::EntryMeta {
     crate::store::EntryMeta {
         cache_key: "k".to_string(),
@@ -2921,39 +2563,6 @@ fn replay_diagnostics_forwards_both_compiler_streams() {
     replay_diagnostics("compiler stdout\n", "compiler stderr\n", &mut out, &mut err);
     assert_eq!(out, b"compiler stdout\n");
     assert_eq!(err, b"compiler stderr\n");
-}
-
-#[test]
-fn passthrough_direct_args_preserve_only_unchanged_response_transport() {
-    let dir = tempfile::tempdir().unwrap();
-    let response = dir.path().join("rustc.args");
-    std::fs::write(&response, "--crate-name\nfixture\nsrc/lib.rs\n").unwrap();
-    let response_arg = format!("@{}", response.display());
-    let args = RustcArgs::parse(&["rustc".to_string(), response_arg.clone()]).unwrap();
-
-    let unchanged = passthrough_direct_args(&args, &args.all_args, false);
-    assert!(!compiler_args_changed(&args, &args.all_args));
-    assert_eq!(stripped_incremental_count(&args, &args.all_args), None);
-    assert_eq!(
-        unchanged.iter().map(|arg| arg.as_str()).collect::<Vec<_>>(),
-        vec![response_arg.as_str()]
-    );
-
-    let rewritten = vec!["--crate-name".to_string(), "rewritten".to_string()];
-    assert!(compiler_args_changed(&args, &rewritten));
-    assert_eq!(stripped_incremental_count(&args, &rewritten), Some(1));
-    let changed = passthrough_direct_args(&args, &rewritten, true);
-    assert_eq!(
-        changed.iter().map(|arg| arg.as_str()).collect::<Vec<_>>(),
-        vec!["--crate-name", "rewritten"]
-    );
-
-    assert!(
-        handle_response_file_error(anyhow::anyhow!("unchanged transport"), false)
-            .unwrap()
-            .is_none()
-    );
-    assert!(handle_response_file_error(anyhow::anyhow!("rewritten transport"), true).is_err());
 }
 
 fn cached_file(name: &str, hash: &str) -> crate::store::CachedFile {
@@ -5564,406 +5173,6 @@ fn debug_bundle_round_trip_preserves_dwarf_uuid_on_macos() {
 }
 
 // ── fallback wrapper ─────────────────────────────────────────────
-
-#[cfg(unix)]
-#[test]
-fn stripped_fallback_receives_incremental_disabled_env() {
-    let _lock = crate::test_support::process_state_test_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let fallback = dir.path().join("fallback");
-    let env_dump = dir.path().join("incremental-env.txt");
-    kache_fs::testutil::write_executable(
-        &fallback,
-        format!(
-            "#!/bin/sh\nprintf '%s' \"${{CARGO_INCREMENTAL-unset}}\" > '{}'\nexit 0\n",
-            env_dump.display()
-        ),
-    );
-
-    let source = dir.path().join("lib.rs");
-    std::fs::write(&source, "pub fn answer() -> u8 { 42 }\n").unwrap();
-    let args = RustcArgs::parse(&[
-        dir.path().join("missing-rustc").display().to_string(),
-        source.display().to_string(),
-        format!("-Cincremental={}", dir.path().join("incremental").display()),
-    ])
-    .unwrap();
-    let compiler_args: Vec<String> = compile::strip_incremental_flags(&args.all_args)
-        .into_iter()
-        .cloned()
-        .collect();
-    let _incremental = TestEnvGuard::set("CARGO_INCREMENTAL", "1");
-
-    let output = passthrough_args(&args, fallback.to_str(), &compiler_args, false).unwrap();
-    assert!(output.fallback);
-    assert_eq!(std::fs::read_to_string(env_dump).unwrap(), "0");
-}
-
-#[cfg(unix)]
-#[test]
-fn immediate_adaptive_compile_keeps_passthrough_remap_policy() {
-    let dir = tempfile::tempdir().unwrap();
-    let profile = dir.path().join("target/debug");
-    let deps = profile.join("deps");
-    let incremental = profile.join("incremental");
-    std::fs::create_dir_all(&deps).unwrap();
-    std::fs::create_dir(&incremental).unwrap();
-
-    let source = dir.path().join("lib.rs");
-    let rustc = dir.path().join("rustc");
-    let argv_dump = dir.path().join("argv.txt");
-    std::fs::write(&source, "pub fn answer() -> u8 { 42 }\n").unwrap();
-    kache_fs::testutil::write_executable(
-        &rustc,
-        format!(
-            r#"#!/bin/sh
-printf '%s\n' "$@" > '{}'
-incremental=
-for arg in "$@"; do
-    case "$arg" in
-        -Cincremental=*) incremental=${{arg#-Cincremental=}} ;;
-        --codegen=incremental=*) incremental=${{arg#--codegen=incremental=}} ;;
-    esac
-done
-if [ -n "$incremental" ]; then
-    mkdir -p "$incremental"
-    printf 'state' > "$incremental/state.bin"
-fi
-printf 'metadata' > '{}'
-exit 0
-"#,
-            argv_dump.display(),
-            deps.join("libadaptive_fixture-1234abcd.rmeta").display()
-        ),
-    );
-
-    let mut args = RustcArgs::parse(&[
-        rustc.display().to_string(),
-        "--crate-name".to_string(),
-        "adaptive_fixture".to_string(),
-        "--crate-type".to_string(),
-        "lib".to_string(),
-        source.display().to_string(),
-        "--out-dir".to_string(),
-        deps.display().to_string(),
-        "--emit=metadata".to_string(),
-        "-Cextra-filename=-1234abcd".to_string(),
-        format!("-Cincremental={}", incremental.display()),
-    ])
-    .unwrap();
-    args.is_primary = true;
-    args.path_normalize_disabled = false;
-
-    let mut config = test_config(dir.path().join("cache"));
-    config.base_dirs = vec![dir.path().display().to_string()];
-    let guard = adaptive_policy_guard(&config);
-    let unit = AdaptiveUnit::eligible(&args, &guard).unwrap();
-    let lease = unit.try_immediate().unwrap();
-
-    let mut key_record = KeyEventRecord::default();
-    key_record.absorb(&crate::cache_key::KeyOutputs {
-        fields: Some(std::collections::BTreeMap::from([(
-            "args".to_string(),
-            "aaaa".to_string(),
-        )])),
-        ..Default::default()
-    });
-    let exit = adaptive_incremental_with_event(
-        &config,
-        &args,
-        "adaptive_fixture",
-        &dir.path().display().to_string(),
-        std::time::Instant::now(),
-        lease,
-        "adaptive passthrough",
-        Some(("adaptive-key", 3, FileHashStats::default(), 4)),
-        key_record,
-    )
-    .unwrap();
-    assert_eq!(exit, 0);
-    let events = crate::events::read_events(&config.event_log_path()).unwrap();
-    assert_eq!(events.len(), 1);
-    let event = &events[0];
-    assert_eq!(event.result, EventResult::Passthrough);
-    assert_eq!(event.passthrough_reason, "adaptive passthrough");
-    assert_eq!(event.exit_code, Some(0));
-    assert_eq!(event.cache_key, "adaptive-key");
-    let rebuilt = deps
-        .join("libadaptive_fixture-1234abcd.rmeta")
-        .to_string_lossy()
-        .into_owned();
-    assert_eq!(event.rebuilt_path.as_deref(), Some(rebuilt.as_str()));
-    assert_eq!(event.rebuilt_paths, vec![rebuilt]);
-    assert_eq!(event.rebuilt_fingerprint.as_deref(), Some("adaptive-key"));
-
-    assert_eq!((event.key_ms, event.lookup_ms), (3, 4));
-    assert_eq!(
-        event.key_fields.get("args").map(String::as_str),
-        Some("aaaa")
-    );
-
-    let argv = std::fs::read_to_string(argv_dump).unwrap();
-    let rustc_incremental = argv
-        .lines()
-        .find_map(|arg| {
-            arg.strip_prefix("-Cincremental=")
-                .or_else(|| arg.strip_prefix("--codegen=incremental="))
-        })
-        .expect("adaptive compilation did not receive an incremental directory");
-    assert!(
-        std::path::Path::new(rustc_incremental)
-            .join("state.bin")
-            .is_file(),
-        "successful adaptive compilation discarded reusable rustc state"
-    );
-
-    assert!(
-        !argv
-            .lines()
-            .any(|arg| arg.starts_with("--remap-path-prefix")),
-        "an immediate passthrough unexpectedly injected remap arguments: {argv:?}"
-    );
-}
-
-/// The lease sees how rustc really ended on both execute paths: a compile
-/// error keeps the private state, and anything abnormal resets it.
-#[cfg(unix)]
-#[test]
-fn adaptive_compile_resets_rustc_state_only_after_an_abnormal_exit() {
-    use std::os::unix::fs::PermissionsExt;
-    const TYPE_ERROR: &str = r"printf 'error[E0308]: mismatched types\n' >&2; exit 1";
-
-    let dir = tempfile::tempdir().unwrap();
-    let profile = dir.path().join("target/debug");
-    let deps = profile.join("deps");
-    let incremental = profile.join("incremental");
-    std::fs::create_dir_all(&deps).unwrap();
-    std::fs::create_dir(&incremental).unwrap();
-    let source = dir.path().join("lib.rs");
-    let rustc = dir.path().join("rustc");
-    let ending = dir.path().join("rustc.ending");
-    std::fs::write(&source, "pub fn answer() -> u8 { 42 }\n").unwrap();
-    // The unit key includes the compiler's size and mtime, so the script stays
-    // fixed: it writes into its private directory, then runs a case's ending.
-    kache_fs::testutil::write_executable(
-        &rustc,
-        r#"#!/bin/sh
-for arg in "$@"; do
-    case "$arg" in
-        -Cincremental=*) incremental=${arg#-Cincremental=} ;;
-    esac
-done
-printf 'state' > "$incremental/state.bin"
-. "$0.ending"
-"#,
-    );
-    let mut args = RustcArgs::parse(&[
-        rustc.display().to_string(),
-        "--crate-name".to_string(),
-        "adaptive_fixture".to_string(),
-        "--crate-type".to_string(),
-        "lib".to_string(),
-        source.display().to_string(),
-        "--out-dir".to_string(),
-        deps.display().to_string(),
-        "--emit=metadata".to_string(),
-        "-Cextra-filename=-1234abcd".to_string(),
-        format!("-Cincremental={}", incremental.display()),
-    ])
-    .unwrap();
-    args.is_primary = true;
-    let config = test_config(dir.path().join("cache"));
-    let unit = AdaptiveUnit::eligible(&args, &adaptive_policy_guard(&config)).unwrap();
-    let root = dir.path().display().to_string();
-
-    let end_with = |script: &str| std::fs::write(&ending, script).unwrap();
-    let compile = |lease: Lease| {
-        adaptive_incremental_with_event(
-            &config,
-            &args,
-            "adaptive_fixture",
-            &root,
-            std::time::Instant::now(),
-            lease,
-            "adaptive passthrough",
-            None,
-            KeyEventRecord::default(),
-        )
-    };
-    let last_exit_code = || {
-        crate::events::read_events(&config.event_log_path())
-            .unwrap()
-            .last()
-            .and_then(|event| event.exit_code)
-    };
-    // A reset removes rustc/ and state.json but leaves the unit directory.
-    let state_kept = || {
-        let units = profile.join("incremental.kache-auto/v2");
-        let unit_dir = std::fs::read_dir(units).unwrap().next().unwrap().unwrap();
-        unit_dir.path().join("rustc/state.bin").is_file()
-    };
-
-    for (script, exit, kept) in [
-        ("exit 0", 0, true),
-        (TYPE_ERROR, 1, true),
-        (
-            r"printf 'warning: hard linking files in the incremental compilation cache failed\n' >&2; printf 'error[E0308]: mismatched types\n' >&2; exit 1",
-            1,
-            true,
-        ),
-        ("exit 101", 101, false),
-        // Cargo still sees 1 for a signal.
-        ("kill -KILL $$", 1, false),
-        (
-            r"printf 'error: incremental compilation: could not create session directory lock file\n' >&2; exit 1",
-            1,
-            false,
-        ),
-    ] {
-        end_with(script);
-        assert_eq!(
-            compile(unit.try_immediate().unwrap()).unwrap(),
-            exit,
-            "{script}"
-        );
-        assert_eq!(last_exit_code(), Some(exit), "{script}");
-        assert_eq!(state_kept(), kept, "{script}");
-    }
-
-    end_with("exit 0");
-    assert_eq!(compile(unit.try_immediate().unwrap()).unwrap(), 0);
-    assert!(state_kept());
-    // A mode change leaves the size and mtime, and so the unit, alone.
-    std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o644)).unwrap();
-    assert!(
-        compile(unit.try_immediate().unwrap()).is_err(),
-        "the passthrough retry cannot spawn the compiler either"
-    );
-    assert!(!state_kept(), "a spawn failure must reset the unit");
-    std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    // The seed and active lanes run rustc through the other execute path.
-    let key = |label: &str| blake3::hash(label.as_bytes()).to_hex().to_string();
-    let fields = |sources: &str| {
-        std::collections::BTreeMap::from(
-            [
-                ("args", "stable"),
-                ("compiler", "compiler"),
-                ("externs", "extern-a"),
-                ("sources", sources),
-            ]
-            .map(|(name, value)| (name.to_string(), value.to_string())),
-        )
-    };
-    assert!(unit.observe_build(&key("first"), &fields("source-a")));
-    end_with("exit 0");
-    let seed = unit.try_seed(&key("second"), &fields("source-b")).unwrap();
-    assert_eq!(compile(seed).unwrap(), 0);
-    end_with(TYPE_ERROR);
-    assert_eq!(compile(unit.try_active().unwrap()).unwrap(), 1);
-    assert!(state_kept());
-    end_with("kill -KILL $$");
-    let active = unit
-        .try_active()
-        .expect("a compile error keeps the unit active");
-    assert_eq!(compile(active).unwrap(), 1);
-    assert!(!state_kept());
-    assert!(unit.try_active().is_none());
-}
-
-/// A seed runs after both lookups missed, so it takes a scheduler slot and
-/// records the crate's weight like any miss. The immediate and active lanes
-/// run before any key work and take no slot.
-#[cfg(unix)]
-#[test]
-fn only_an_adaptive_seed_takes_a_scheduler_slot() {
-    use crate::incremental_policy::LeaseKind;
-    assert!(adaptive_lane_takes_permit(LeaseKind::Seed));
-    assert!(!adaptive_lane_takes_permit(LeaseKind::Active));
-    assert!(!adaptive_lane_takes_permit(LeaseKind::Immediate));
-
-    let dir = tempfile::tempdir().unwrap();
-    let deps = dir.path().join("target/debug/deps");
-    let incremental = dir.path().join("target/debug/incremental");
-    std::fs::create_dir_all(&deps).unwrap();
-    std::fs::create_dir(&incremental).unwrap();
-    let source = dir.path().join("lib.rs");
-    let rustc = dir.path().join("rustc");
-    std::fs::write(&source, "pub fn answer() -> u8 { 42 }\n").unwrap();
-    kache_fs::testutil::write_executable(
-        &rustc,
-        r#"#!/bin/sh
-for arg in "$@"; do
-    case "$arg" in
-        -Cincremental=*) printf 'state' > "${arg#-Cincremental=}/state.bin" ;;
-    esac
-done
-"#,
-    );
-    let mut args = RustcArgs::parse(&[
-        rustc.display().to_string(),
-        "--crate-name".to_string(),
-        "adaptive_fixture".to_string(),
-        "--crate-type".to_string(),
-        "lib".to_string(),
-        source.display().to_string(),
-        "--out-dir".to_string(),
-        deps.display().to_string(),
-        "--emit=metadata".to_string(),
-        "-Cextra-filename=-1234abcd".to_string(),
-        format!("-Cincremental={}", incremental.display()),
-    ])
-    .unwrap();
-    args.is_primary = true;
-    let config = test_config(dir.path().join("cache"));
-    assert!(config.scheduler);
-    let unit = AdaptiveUnit::eligible(&args, &adaptive_policy_guard(&config)).unwrap();
-    let root = dir.path().display().to_string();
-    let compile = |lease: Lease| {
-        adaptive_incremental_with_event(
-            &config,
-            &args,
-            "adaptive_fixture",
-            &root,
-            std::time::Instant::now(),
-            lease,
-            "adaptive",
-            None,
-            KeyEventRecord::default(),
-        )
-        .unwrap()
-    };
-    let weights = crate::scheduler::scheduler_root(&config.cache_dir).join("weights");
-    let recorded_weights = || {
-        std::fs::read_dir(&weights)
-            .map(|entries| entries.count())
-            .unwrap_or(0)
-    };
-    let key = |label: &str| blake3::hash(label.as_bytes()).to_hex().to_string();
-    let fields = |sources: &str| {
-        std::collections::BTreeMap::from(
-            [
-                ("args", "stable"),
-                ("compiler", "compiler"),
-                ("externs", "extern-a"),
-                ("sources", sources),
-            ]
-            .map(|(name, value)| (name.to_string(), value.to_string())),
-        )
-    };
-
-    assert_eq!(compile(unit.try_immediate().unwrap()), 0);
-    assert_eq!(recorded_weights(), 0, "the immediate lane took a slot");
-
-    assert!(unit.observe_build(&key("first"), &fields("source-a")));
-    let seed = unit.try_seed(&key("second"), &fields("source-b")).unwrap();
-    assert_eq!(compile(seed), 0);
-    assert_eq!(recorded_weights(), 1, "the seed took no slot");
-
-    std::fs::remove_dir_all(&weights).unwrap();
-    assert_eq!(compile(unit.try_active().unwrap()), 0);
-    assert_eq!(recorded_weights(), 0, "the active lane took a slot");
-}
 
 #[test]
 fn clean_path_collapses_dot_and_dotdot() {
@@ -8928,29 +8137,6 @@ fn mint_session_id_is_opaque_and_distinct() {
 }
 
 
-/// Incremental cleanup only removes a real directory when the config flag
-/// is enabled; absent paths and disabled cleanup are silent no-ops.
-#[test]
-fn clean_incremental_dir_respects_config_and_existing_directory() {
-    let dir = tempfile::tempdir().unwrap();
-    let incremental = dir.path().join("incremental");
-    std::fs::create_dir_all(&incremental).unwrap();
-    std::fs::write(incremental.join("state.bin"), b"state").unwrap();
-    let mut config = test_config(dir.path().join("cache"));
-    let mut args = rustc_args(&["rustc", "src/lib.rs", "--crate-name", "foo"]);
-    args.incremental = Some(incremental.clone());
-
-    config.clean_incremental = false;
-    clean_incremental_dir(&config, &args);
-    assert!(incremental.exists());
-
-    config.clean_incremental = true;
-    clean_incremental_dir(&config, &args);
-    assert!(!incremental.exists());
-
-    clean_incremental_dir(&config, &args);
-}
-
 #[test]
 fn event_root_string_none_is_empty() {
     assert_eq!(event_root_string(None), "");
@@ -9751,49 +8937,6 @@ fn declared_inputs_that_moved_during_the_compile_are_caught() {
         .set_len(64 << 20)
         .unwrap();
     assert!(moved(&snapshot), "the record can no longer be read");
-}
-
-/// A hit restores a unit without its incremental state, so it counts as the
-/// unit's first build: the next edit seeds at once instead of only teaching
-/// the policy.
-#[test]
-fn a_hit_counts_as_the_build_an_edit_seeds_from() {
-    let dir = tempfile::tempdir().unwrap();
-    let deps = dir.path().join("target/debug/deps");
-    let incremental = dir.path().join("target/debug/incremental");
-    std::fs::create_dir_all(&deps).unwrap();
-    std::fs::create_dir_all(&incremental).unwrap();
-    let args = RustcArgs::parse(&[
-        "/toolchain/bin/rustc".to_string(),
-        "--crate-name".to_string(),
-        "sample".to_string(),
-        "src/lib.rs".to_string(),
-        "--out-dir".to_string(),
-        deps.display().to_string(),
-        format!("-Cincremental={}", incremental.display()),
-        "-Cextra-filename=-1234abcd".to_string(),
-    ])
-    .unwrap();
-    let unit = AdaptiveUnit::eligible(&args, b"").unwrap();
-    let fields = |sources: &str| {
-        std::collections::BTreeMap::from(
-            [
-                ("args", "stable"),
-                ("compiler", "compiler"),
-                ("externs", "extern-a"),
-                ("sources", sources),
-            ]
-            .map(|(name, value)| (name.to_string(), value.to_string())),
-        )
-    };
-    let key = |label: &str| blake3::hash(label.as_bytes()).to_hex().to_string();
-
-    observe_adaptive_hit(Some(&unit), Some(&fields("source-a")), &key("hit"));
-
-    let lease = unit
-        .try_seed(&key("edit"), &fields("source-b"))
-        .expect("the first edit after a hit seeds");
-    assert_eq!(lease.kind(), crate::incremental_policy::LeaseKind::Seed);
 }
 
 #[test]
@@ -10904,12 +10047,12 @@ fn concurrent_passthroughs_and_fallbacks_use_each_clients_environment_and_direct
                     std::fs::read_to_string(root.join("output.o")).unwrap(),
                     format!("{client}:1")
                 );
-                let rust_result = passthrough(&rustc, config.fallback.as_deref(), false).unwrap();
+                let rust_result = passthrough(&rustc, config.fallback.as_deref()).unwrap();
                 assert_eq!(rust_result.exit_code, 0);
                 assert_eq!(rust_result.fallback, fail_fallback == "0");
                 assert_eq!(
                     std::fs::read_to_string(root.join("output.rlib")).unwrap(),
-                    format!("{client}:0")
+                    format!("{client}:1")
                 );
                 assert_eq!(
                     std::fs::read_to_string(root.join("fallback-seen")).unwrap(),

@@ -91,10 +91,6 @@ The check has costs:
   once on the next build that would otherwise restore it, such as a build
   after `cargo clean`, in a new target directory, or on CI with a restored
   cache.
-- With adaptive incremental mode, the build that starts incremental
-  compilation of a crate you are editing, and the first edit after a hit,
-  run dependency discovery before compiling. On a large crate that takes
-  roughly half as long as an incremental check.
 - A record written while files in the workspace change does not carry the
   check, so its crate runs dependency discovery again on the next build,
   even if the files end up unchanged.
@@ -161,13 +157,7 @@ on Linux, 1 ms on macOS and Windows, 20 ms on other systems, and 2 seconds on fi
 that keep whole seconds, such as HFS+ and FAT. Peers of the same unit in other
 target directories wait for this compile as they would for a pre-pass.
 Crates with extra inputs keep the pre-pass, and so does every Rust unit when
-the scheduler is off (`KACHE_SCHEDULER=0`). A unit with
-[adaptive incremental](/docs/getting-started/quick-start#executables-and-incremental-builds)
-state keeps it too, because its key decides whether a miss compiles
-incrementally, and so does a crate listed in `KACHE_INCREMENTAL_CRATES`. When
-such a unit misses and no incremental lane takes the compile, Kache compiles
-before keying again from the closure the compile emits, so a source written
-during the compile leaves the result unstored. For a unit that links, a
+the scheduler is off (`KACHE_SCHEDULER=0`). For a unit that links, a
 predicted key is first re-derived with the pre-pass, because that compile
 cannot be stopped on a hit.
 `[cache] deferred_discovery = false` or `KACHE_DEFERRED_DISCOVERY=0` restores

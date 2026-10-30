@@ -734,14 +734,6 @@ impl RustcArgs {
         Ok(parsed)
     }
 
-    /// Borrow the parsed invocation without presentation options. Record the
-    /// parser's positions so a same-spelled operand of another flag is kept.
-    pub(crate) fn args_without_diagnostic_presentation(&self) -> impl Iterator<Item = &String> {
-        self.all_args.iter().enumerate().filter_map(|(index, arg)| {
-            (!self.diagnostic_arg_indices.contains(&index)).then_some(arg)
-        })
-    }
-
     /// Exclude one valid terminal width when lint warnings are silenced.
     /// Preserve malformed and repeated options so a
     /// cached success cannot hide rustc's argument errors.

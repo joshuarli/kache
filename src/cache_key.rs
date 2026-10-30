@@ -480,23 +480,6 @@ pub(crate) fn apply_key_env_vars_in(
     keyed
 }
 
-/// Digest the configured `key_env_vars` patterns and their current raw values
-/// for an adaptive-incremental unit identity. A changed value must select a new
-/// rustc state directory before the full artifact key is computed.
-pub(crate) fn key_env_guard(patterns: &[String]) -> Option<String> {
-    key_env_guard_in(patterns, &crate::invocation::InvocationEnv::capture())
-}
-
-pub(crate) fn key_env_guard_in(
-    patterns: &[String],
-    env: &crate::invocation::InvocationEnv,
-) -> Option<String> {
-    (!patterns.is_empty()).then(|| {
-        let (matched, _) = matching_key_env_vars(patterns, env.vars_os());
-        key_env_digest(patterns, matched)
-    })
-}
-
 type RawEnvPair = (Vec<u8>, Vec<u8>);
 
 fn matching_key_env_vars(
@@ -6330,13 +6313,6 @@ pub struct DepInfo {
     pub env_deps: Vec<(String, Option<String>)>,
 }
 
-/// Version of the prediction record's own logic and encoding.
-///
-/// Folded into the identity AND stored in the row, so changing how a closure
-/// is recorded or validated orphans the old rows without touching
-/// [`CACHE_KEY_VERSION`] and therefore without invalidating a single cache
-/// entry. Precedent: `STATE_SCHEMA` / `POLICY_VERSION` in
-/// `incremental_policy.rs`.
 pub(crate) const PREDICTION_SCHEMA: u32 = 2;
 
 /// The input closure a previous build of one unit discovered, remembered so a
@@ -9440,132 +9416,6 @@ mod invocation_core_tests {
         assert_ne!(first.2, second.2);
         assert_ne!(first.3, second.3);
     }
-}
-
-/// Get rustc version string, cached to a file keyed by binary mtime.
-///
-/// Every wrapper invocation needs this, but the output only changes when rustc
-/// itself is updated.  A file cache avoids spawning `rustc --version --verbose`
-/// 300+ times per parallel build — the first invocation writes the file and the
-/// rest read it back in <1 ms.
-/// `rustc -vV` of `rustc`, as the cache key reads it (cached per binary), or
-/// `None` when it cannot be run.
-#[cfg(all(test, unix))]
-pub(crate) fn rustc_version_text(rustc: &Path) -> Option<String> {
-    get_rustc_version(rustc).ok()
-}
-
-pub(crate) fn rustc_version_text_for(rustc: &Path, env: &InvocationEnv) -> Option<String> {
-    get_rustc_version_for(rustc, env).ok()
-}
-
-/// Whether this compiler accepts cwd remapping for this crate and bootstrap
-/// environment. No source is compiled. Transient faults are not memoized.
-#[cfg(all(test, unix))]
-pub(crate) fn rustc_accepts_cwd_remap(
-    rustc: &Path,
-    crate_name: &str,
-    prefix: &str,
-    bootstrap: Option<&OsStr>,
-    restrict_features: bool,
-) -> Option<bool> {
-    rustc_accepts_cwd_remap_for(
-        rustc,
-        crate_name,
-        prefix,
-        bootstrap,
-        restrict_features,
-        &InvocationEnv::capture(),
-    )
-}
-
-pub(crate) fn rustc_accepts_cwd_remap_for(
-    rustc: &Path,
-    crate_name: &str,
-    prefix: &str,
-    bootstrap: Option<&OsStr>,
-    restrict_features: bool,
-    env: &InvocationEnv,
-) -> Option<bool> {
-    use std::process::Stdio;
-    use std::time::{Duration, Instant};
-    let mut material = crate::probe_memo::Material::new("rustc-cwd-remap-v1");
-    if let Some(path) = env.resolve_program(rustc)
-        && let Ok(meta) = std::fs::metadata(path)
-    {
-        material.push(&meta.len().to_le_bytes());
-        if let Ok(time) = meta.modified()
-            && let Ok(time) = time.duration_since(std::time::UNIX_EPOCH)
-        {
-            material.push(&time.as_nanos().to_le_bytes());
-        }
-    }
-    material.push(crate_name.as_bytes()).push(prefix.as_bytes());
-    material.push(if restrict_features {
-        b"restrict"
-    } else {
-        b"unchanged"
-    });
-    match bootstrap {
-        Some(value) => {
-            material.push(b"set").push(value.as_encoded_bytes());
-        }
-        None => {
-            material.push(b"unset");
-        }
-    }
-    let memo = format!("rustc-cwd-{}", material.digest());
-    match read_tool_version_cache_for(rustc, &memo, env).as_deref() {
-        Some("yes") => return Some(true),
-        Some("no") => return Some(false),
-        _ => {}
-    }
-    let mut command = env.command(rustc).ok()?;
-    crate::toolchain_dylib::apply_for(&mut command, rustc, env);
-    command
-        .args(["--crate-name", crate_name, "--print", "cfg"])
-        .arg(format!("-Zremap-cwd-prefix={prefix}"))
-        .env_remove("RUSTC_BOOTSTRAP")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if let Some(value) = bootstrap {
-        command.env("RUSTC_BOOTSTRAP", value);
-    }
-    if restrict_features {
-        command.arg("-Zallow-features=");
-    }
-    let mut child = command
-        .invocation_spawn_in_group_with_io(kache_protocol::execution::process::Stdio::QUIET)
-        .ok()?;
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                status.code()?;
-                let accepted = status.success();
-                write_tool_version_cache_for(
-                    rustc,
-                    &memo,
-                    if accepted { "yes" } else { "no" },
-                    env,
-                );
-                return Some(accepted);
-            }
-            Ok(None) if cwd_remap_probe_within_deadline(start.elapsed()) => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    }
-}
-
-fn cwd_remap_probe_within_deadline(elapsed: std::time::Duration) -> bool {
-    elapsed < std::time::Duration::from_secs(2)
 }
 
 #[cfg(test)]

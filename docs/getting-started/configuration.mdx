@@ -57,29 +57,6 @@ cache_executables = true
 local_max_size = "50GiB"
 ```
 
-### Unstable mode
-
-Enable all Kache experiments with one setting:
-
-```toml
-[cache]
-unstable = true
-```
-
-Or set `KACHE_UNSTABLE=1` for a build. The default is `false`.
-The mode includes new experiments when you upgrade Kache; there are no feature
-names to maintain. Once an experiment becomes a default, it also applies with
-unstable mode off.
-
-Worktree incremental seeding is enabled independently through
-`cache.seed_incremental`; it does not require unstable mode on supported
-compilers. See [incremental seeds between worktrees](/docs/getting-started/mutation-testing#incremental-seeds-between-worktrees)
-for compiler behavior and donor settings.
-
-Unstable mode does not enable every optional configuration setting. Those
-settings also cover project-specific policies such as disk
-cleanup. Experiments still check compiler support and input compatibility.
-
 ### Host config
 
 A machine owner can set keys for every build on the machine in `/etc/kache/config.toml`. Kache merges it with the chosen file key by key: a key the chosen file sets wins, and a key it leaves unset comes from the host file. Environment variables still win over both.
@@ -291,13 +268,6 @@ Set `cache.auto_recover_min_free_bytes` to the minimum free space on the store's
 | `KACHE_CACHE_EXECUTABLES` | `cache.cache_executables` | Linux/macOS: `true`; Windows: `false` | Cache eligible Rust bins and test executables |
 | `KACHE_CACHE_CC_LINKS` | `cache.cache_cc_links` | `false` | Opt into caching eligible C/C++ links with explicit file inputs and their sidecars. Links using named libraries (`-l`, `--library`) or response files pass through. |
 | `KACHE_TRUST_CODEGEN_BACKENDS` | `cache.trust_codegen_backends` | `false` | Cache rustc compiles that load a codegen backend dylib (`-Zcodegen-backend=<path>`), keyed by the dylib's contents. The backend must be passed as a path, and libraries it loads at run time are not part of the key. Off because a backend can write files rustc does not report, and a cache hit would not restore them. |
-| `KACHE_CLEAN_INCREMENTAL` | `cache.clean_incremental` | `true` | Remove tracked incremental directories during cleanup |
-| `KACHE_ADAPTIVE_INCREMENTAL` | `cache.adaptive_incremental` | `true` | Give isolated incremental state to a workspace member or path dependency whose sources or dependencies changed since its last build in the same target, whether or not the command selects it. A pull or a branch switch counts. Kache skips the cache for up to eight builds of such a unit, each within 15 minutes of the last, and neither stores nor uploads them. A compile error keeps the state. See [Executables and incremental builds](/docs/getting-started/quick-start#executables-and-incremental-builds). |
-| `KACHE_SEED_INCREMENTAL` | `cache.seed_incremental` | `true` | Import compatible local incremental state between worktrees on rustc 1.98 or later. Private compilations use an unstable cwd-remapping flag; stable and beta children receive restricted bootstrap permission. Set `0` or `false` to opt out. See [incremental seeds between worktrees](/docs/getting-started/mutation-testing#incremental-seeds-between-worktrees). |
-| `KACHE_PRESERVE_INCREMENTAL` | `cache.preserve_incremental` | `false` | Force eligible Cargo units onto isolated incremental state |
-| `KACHE_INCREMENTAL_CRATES` | `cache.incremental_crates` | `[]` | Force listed rustc crate names onto that incremental path, whether or not the command selects them |
-| `KACHE_UNSTABLE` | `cache.unstable` | `false` | Enable all current and future Kache experiments before they become defaults. Use `1` or `true` in the environment, or a TOML boolean. See [Unstable mode](#unstable-mode). |
-| `KACHE_INCREMENTAL_SEED_FROM` | `cache.incremental_seed_from` | none | Optional canonical donor Cargo profile for incremental seeds, such as `/work/previous/target/debug`. Overrides automatic donor selection when seeding is enabled. |
 | `KACHE_MODIFIED_INPUT_GUARD` | `cache.modified_input_guard` | `false` | Do not store a Rust result when a keyed input changed at or after build start, or just before it by the margin file times can trail the clock. A compile that ran before its key, as in [misses without a record](/docs/how-it-works/cache-key#misses-without-a-record), is not stored when a source it read changed then; this option extends the check to the other inputs a key hashes and to keys taken before the compile. A keyed input whose size, write time or inode differs after the compile from what the key read also leaves the result unstored, which catches a save between the key and the compiler's read. A rewrite that keeps all three is missed: a second save within one tick of a coarse file clock. C/C++ compiles always apply this check to the files their key hashes. When the key comes before such a compile, a timestamp that is in the future when Kache reads the file counts as clock skew, not a change. |
 | `KACHE_INPUT_PREDICTIONS` | `cache.input_predictions` | `true` | Remember each crate's source closure and derive the next key from it, skipping the dep-info pre-pass when every recorded input still checks out |
 | `KACHE_VERIFY_INPUT_PREDICTIONS` | none | off | `sampled` or `always`: also run the dep-info pre-pass for a validated prediction and count disagreements in the report. The pre-pass result is the one used |
@@ -401,8 +371,7 @@ own `OUT_DIR`. A macro that writes debug output into the shared directory fails
 with a hint: run `cargo clean -p <crate>` and rebuild with
 `KACHE_OUT_DIR_ALIAS=0`. The hint comes from rustc's error output, so a compile
 that Kache passes straight to rustc fails with rustc's error alone. That covers
-a `bypass_*` or `exclude` match and a compile on the `preserve_incremental`
-lane.
+a `bypass_*` or `exclude` match and an incremental compile.
 
 `key_env_vars` accepts exact names and trailing-star prefix patterns:
 

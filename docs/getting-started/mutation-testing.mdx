@@ -19,7 +19,7 @@ Cargo's `-C metadata` and `-C extra-filename` hashes enter the key verbatim. For
 ## What hits
 
 - registry crates
-- workspace crates no mutant touched, and their proc-macros
+- non-incremental workspace crates no mutant touched, and their proc-macros
 - test binaries and build-script binaries of those crates (Kache caches executables by default on Linux and macOS; see [Configuration](/docs/getting-started/configuration))
 
 These hit in every build directory, including all of them under `--jobs N`, and again on later runs. When several build directories miss the same key at the same time, one compiles it and the others wait for its entry and restore it.
@@ -28,92 +28,7 @@ These hit in every build directory, including all of them under `--jobs N`, and 
 
 The mutated crate rebuilds, together with every crate downstream of it and their test binaries. A dependent's key includes the content hash of each `--extern` artifact, so a changed rlib changes every key above it.
 
-For the unit that misses on every mutant, Kache keeps rustc's incremental compilation instead of caching. Adaptive incremental mode notices a Cargo unit that is built and then misses in the same target with only its sources or dependencies changed, and gives it a private incremental directory while you keep building it. That covers workspace crates and path dependencies whether or not the command selects them, including the local crates downstream of the mutated one. Kache skips the cache for up to eight builds of such a unit. After the eighth, or after 15 minutes without a build of it, Kache checks the cache first, and a miss still compiles incrementally.
-
-To skip the learning step for every crate Cargo builds incrementally, normally your workspace crates, set `KACHE_PRESERVE_INCREMENTAL=1` or `[cache] preserve_incremental = true`. Those units then bypass the artifact cache and keep their own incremental directory, while dependencies still restore from Kache. Unchanged workspace crates compile once in every new build directory instead of restoring, so compare both modes on your project. `KACHE_INCREMENTAL_CRATES` limits the same treatment to the crates you list:
-
-```bash
-KACHE_INCREMENTAL_CRATES=my_crate cargo mutants
-```
-
-A mutant that fails to compile keeps the crate's incremental state, so the next mutant still compiles incrementally.
-
-<a id="experimental-incremental-seeds-between-worktrees" />
-
-## Incremental seeds between worktrees
-
-With rustc 1.98 or later, Kache can start an edited crate from another checkout's
-finished incremental state. This is enabled by default for managed incremental
-builds. An unchanged checkout still uses the artifact cache. Registry
-dependencies and build scripts keep their existing compilation paths.
-
-Kache looks for compatible donors among eight recently built target directories
-in the local cache index. Each receiver keeps its own compiler state and lock.
-The import clones files with copy-on-write where the filesystem supports it
-and uses independent copies otherwise. No imported file shares an inode with
-the donor, including ThinLTO bitcode that rustc can rewrite in place.
-A busy donor, incompatible flags, unsupported arguments or unfinished
-state leaves the receiver compiling without an imported seed. Each candidate
-import is limited to 1 GiB, 65,536 entries and 256 donor units.
-
-For recognized rustc layouts, the import keeps the newest finalized session
-per crate, using the timestamp in its name. Tied timestamps and unfamiliar
-layouts retain their existing copying behavior.
-
-The first managed incremental compile after upgrading starts fresh in each
-checkout. Kache uses a new state version so it cannot reuse or import older
-state whose files may already be shared or modified. The old state remains
-eligible for the usual unused-unit cleanup. Finish builds using the older
-Kache before upgrading; those versions can still share files with each other.
-
-To disable automatic seeding for one build:
-
-```bash
-KACHE_SEED_INCREMENTAL=0 cargo build
-```
-
-Or set it in the config file:
-
-```toml
-[cache]
-seed_incremental = false
-```
-
-This keeps target-local adaptive incremental compilation enabled. To choose a
-donor explicitly, set `KACHE_INCREMENTAL_SEED_FROM` or
-`[cache] incremental_seed_from` to its absolute, canonical Cargo profile path,
-such as `/work/previous/target/debug`.
-
-### Compiler behavior
-
-Portable private compilations use `-Zremap-cwd-prefix=/src`. Debug information
-records that virtual working directory; a debugger started elsewhere may need a
-source mapping. Relative source operands keep relative `file!()` values.
-Absolute source operands retain native path behavior and do not import a seed.
-
-Kache probes compiler support before using the flag. On stable and beta it sets
-`RUSTC_BOOTSTRAP=1` only in the selected rustc child and adds
-`-Zallow-features=` so source feature attributes remain forbidden. Cargo and
-build scripts keep the caller's environment. Existing `RUSTC_BOOTSTRAP`
-settings, including an empty value and `-1`, take precedence. Other unstable
-compiler flags can prevent Kache from adding bootstrap.
-
-If rustc reports that source read `RUSTC_BOOTSTRAP`, Kache discards that attempt's
-outputs and diagnostics, retries with the caller's environment, and remembers
-not to inject bootstrap for that unit. Genuine compile errors remain errors.
-A proc macro using untracked environment reads can still observe the child
-override; disable seeding if that distinction matters to your macro.
-
-An edit to the primary source can select a compatible private graph before
-cache-key discovery. A previously cached variant may compile during that
-private run. The existing limit of eight builds or 15 minutes of inactivity
-still returns the unit to a cache check. These private outputs are never stored
-or uploaded as ordinary artifact-cache entries.
-
-Use the same relative package layout in both checkouts. Target paths outside
-the compiler's working directory can prevent compatibility. Older compilers
-retain target-local incremental behavior. `KACHE_UNSTABLE=1` still enables
-experimental compiler probing independently of the automatic-seeding setting.
+Cargo passes incremental units straight to rustc with their existing incremental state. Kache caches eligible units that Cargo compiles without incremental state. Set `CARGO_INCREMENTAL=0` before starting cargo-mutants to let eligible workspace units use the artifact cache, or keep Cargo's default to reuse incremental state within each build directory.
 
 ## What to expect
 

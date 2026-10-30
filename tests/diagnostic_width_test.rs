@@ -268,7 +268,6 @@ fn cargo_dependency_hits_between_terminal_widths_and_pipes() {
             .env("CARGO_TARGET_DIR", &target)
             .env("CARGO_INCREMENTAL", "0")
             .env("CARGO_TERM_PROGRESS_WHEN", "never")
-            .env("KACHE_ADAPTIVE_INCREMENTAL", "0")
             .env("KACHE_LOG", "off")
             .env_remove("RUSTFLAGS")
             .env_remove("CARGO_ENCODED_RUSTFLAGS")

@@ -27,6 +27,7 @@ path = "source"
 
 [env]
 RUSTC_WRAPPER = "$KACHE"
+CARGO_INCREMENTAL = "0"
 # Opt the `--test` binary into the cache; without this it is passthrough
 # and the restore path under test never runs.
 KACHE_CACHE_EXECUTABLES = "1"

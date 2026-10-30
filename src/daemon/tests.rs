@@ -722,7 +722,6 @@ pub(super) fn test_config(dir: &Path) -> Config {
         scheduler: true,
         test_lease: None,
         path_only_env_vars: Vec::new(),
-        incremental_crates: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
         cache_dir: dir.to_path_buf(),
@@ -733,13 +732,6 @@ pub(super) fn test_config(dir: &Path) -> Config {
         cache_executables: false,
         cache_cc_links: false,
         trust_codegen_backends: false,
-
-        clean_incremental: false,
-        preserve_incremental: false,
-        adaptive_incremental: true,
-        seed_incremental: true,
-        incremental_seed_from: None,
-        unstable: Default::default(),
         event_log_max_size: 10 * 1024 * 1024,
         event_log_keep_lines: 1000,
         compression_level: 3,
@@ -2707,17 +2699,19 @@ fn gc_pinned_lower_bound_is_policy_aware() {
 }
 
 #[test]
-fn test_run_gc_cleans_registered_incremental_dirs_once() {
+fn gc_preserves_cargo_incremental_directories() {
     let dir = tempfile::tempdir().unwrap();
-    let mut config = test_config(dir.path());
-    config.clean_incremental = true;
+    let config = test_config(dir.path());
     let incremental_dir = dir.path().join("workspace/target/debug/incremental");
     std::fs::create_dir_all(&incremental_dir).unwrap();
     std::fs::write(incremental_dir.join("junk"), b"tmp").unwrap();
 
     let store = Store::open(&config).unwrap();
-    store.remember_incremental_dir(&incremental_dir).unwrap();
     drop(store);
+    let db = rusqlite::Connection::open(config.cache_dir.join("index.db")).unwrap();
+    db.execute_batch("CREATE TABLE IF NOT EXISTS incremental_dirs (path TEXT PRIMARY KEY, last_seen TEXT)").unwrap();
+    db.execute("INSERT INTO incremental_dirs (path) VALUES (?1)", [incremental_dir.to_str().unwrap()]).unwrap();
+    drop(db);
 
     let daemon = Daemon::new(config.clone());
     let stats = daemon
@@ -2729,7 +2723,7 @@ fn test_run_gc_cleans_registered_incremental_dirs_once() {
         )
         .unwrap();
     assert_eq!(stats.total.entries_evicted, 0);
-    assert!(!incremental_dir.exists());
+    assert!(incremental_dir.exists());
 
     std::fs::create_dir_all(&incremental_dir).unwrap();
     std::fs::write(incremental_dir.join("junk"), b"tmp2").unwrap();

@@ -27,6 +27,7 @@ path = "source"
 
 [env]
 RUSTC_WRAPPER = "$KACHE"
+CARGO_INCREMENTAL = "0"
 # `--test` units are bin-shaped, so the `is_user_facing_executable` gate
 # would make them passthrough on hosts where executable caching is off
 # (macOS default). Opt in so the zero-byte `.rmeta` units actually reach

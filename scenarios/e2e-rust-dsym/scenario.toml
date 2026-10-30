@@ -33,6 +33,7 @@ path = "source"
 
 [env]
 RUSTC_WRAPPER = "$KACHE"
+CARGO_INCREMENTAL = "0"
 # Executable caching defaults on for macOS since #319 shipped, but the
 # fixture pins it explicitly so a future default change can't silently
 # turn this into a passthrough test that never exercises the bundle.

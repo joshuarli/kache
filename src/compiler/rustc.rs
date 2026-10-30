@@ -64,7 +64,6 @@ pub fn crate_type_produces_metadata(crate_type: &str) -> bool {
 
 pub struct RustcCompiler {
     base_dirs: Vec<String>,
-    incremental_bootstrap: bool,
     invocation_env: crate::invocation::InvocationEnv,
 }
 
@@ -82,18 +81,12 @@ impl RustcCompiler {
     pub(crate) fn new_for(env: &crate::invocation::InvocationEnv) -> Self {
         Self {
             base_dirs: Vec::new(),
-            incremental_bootstrap: false,
             invocation_env: env.clone(),
         }
     }
 
     pub fn with_base_dirs(mut self, base_dirs: Vec<String>) -> Self {
         self.base_dirs = base_dirs;
-        self
-    }
-
-    pub(crate) fn with_incremental_bootstrap(mut self, enabled: bool) -> Self {
-        self.incremental_bootstrap = enabled;
         self
     }
 
@@ -161,9 +154,7 @@ impl RustcCompiler {
         self.execute_with_args(
             parsed,
             &parsed.all_args,
-            compile::IncrementalMode::Strip,
             None,
-            LinkLane::Cache,
             metadata_sink,
             None,
         )
@@ -181,91 +172,9 @@ impl RustcCompiler {
         self.execute_with_args(
             parsed,
             &parsed.all_args,
-            compile::IncrementalMode::Strip,
             None,
-            LinkLane::Cache,
             Some(&mut crate::invocation::io::stderr()),
             Some(on_dep_info),
-        )
-    }
-
-    /// Execute rustc with Kache-owned isolated incremental state while keeping
-    /// every other normal compile behavior (path remapping, opcounts,
-    /// heartbeat monitoring, diagnostics, and output discovery).
-    /// The output is never stored, so a test or binary links as [`LinkLane::Adaptive`] describes.
-    pub(crate) fn execute_preserving_incremental(
-        &self,
-        parsed: &RustcArgs,
-        isolated_args: &[String],
-    ) -> Result<CompileResult> {
-        self.execute_with_args(
-            parsed,
-            isolated_args,
-            compile::IncrementalMode::PreserveIsolated {
-                bootstrap: self.incremental_bootstrap,
-            },
-            None,
-            LinkLane::Adaptive,
-            Some(&mut crate::invocation::io::stderr()),
-            None,
-        )
-    }
-
-    /// Start a cold private incremental compile and pause after dep-info so
-    /// the caller can check for a stored artifact before rustc reaches Cargo.
-    pub(crate) fn execute_preserving_incremental_until_dep_info(
-        &self,
-        parsed: &RustcArgs,
-        isolated_args: &[String],
-        on_dep_info: &mut dyn FnMut() -> bool,
-    ) -> Result<CompileResult> {
-        self.execute_with_args(
-            parsed,
-            isolated_args,
-            compile::IncrementalMode::PreserveIsolated {
-                bootstrap: self.incremental_bootstrap,
-            },
-            None,
-            LinkLane::Adaptive,
-            Some(&mut crate::invocation::io::stderr()),
-            Some(on_dep_info),
-        )
-    }
-
-    /// Preserve ordinary passthrough path semantics for an executable Kache
-    /// had already excluded from artifact caching, while retaining compiler
-    /// accounting and heartbeat monitoring.
-    pub(crate) fn execute_passthrough_preserving_incremental(
-        &self,
-        parsed: &RustcArgs,
-        isolated_args: &[String],
-    ) -> Result<CompileResult> {
-        self.execute_portable_incremental(parsed, isolated_args, None)
-    }
-
-    pub(crate) fn execute_portable_incremental(
-        &self,
-        parsed: &RustcArgs,
-        isolated_args: &[String],
-        on_dep_info: Option<&mut dyn FnMut() -> bool>,
-    ) -> Result<CompileResult> {
-        let mut stderr = crate::invocation::io::stderr();
-        self.execute_with_args(
-            parsed,
-            isolated_args,
-            compile::IncrementalMode::PreserveIsolated {
-                bootstrap: self.incremental_bootstrap,
-            },
-            Some(true),
-            LinkLane::Passthrough,
-            // An injected bootstrap attempt may be retried with the caller's
-            // environment. Do not expose diagnostics from a discarded attempt.
-            if self.incremental_bootstrap {
-                None
-            } else {
-                Some(&mut stderr)
-            },
-            on_dep_info,
         )
     }
 
@@ -274,9 +183,7 @@ impl RustcCompiler {
         &self,
         parsed: &RustcArgs,
         all_args: &[String],
-        incremental_mode: compile::IncrementalMode,
         skip_remap_override: Option<bool>,
-        lane: LinkLane,
         metadata_sink: Option<&mut dyn std::io::Write>,
         on_dep_info: Option<&mut dyn FnMut() -> bool>,
     ) -> Result<CompileResult> {
@@ -295,8 +202,8 @@ impl RustcCompiler {
         );
         let skip_remap = skip_remap_override.unwrap_or_else(|| parsed.skip_path_remap());
         let injected: Vec<String> = [
-            macos_oso_prefix_flag(parsed, all_args, lane),
-            macos_install_name_flag(parsed, all_args, lane),
+            macos_oso_prefix_flag(parsed, all_args),
+            macos_install_name_flag(parsed, all_args),
         ]
         .into_iter()
         .flatten()
@@ -320,7 +227,6 @@ impl RustcCompiler {
             parsed.is_user_facing_executable() && parsed.emits_link(),
             skip_remap,
             &path_normalizer,
-            incremental_mode,
             metadata_sink,
             on_dep_info,
         )
@@ -519,21 +425,6 @@ fn wasm_link_refusal(parsed: &RustcArgs) -> Option<&'static str> {
     None
 }
 
-/// What Kache does with a compile's output, which decides the macOS link flags it adds.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum LinkLane {
-    /// A passthrough links exactly as an unwrapped rustc would.
-    Passthrough,
-    /// An output Kache may store gets the checkout-independent `-oso_prefix` and proc-macro install name.
-    Cache,
-    /// An adaptive incremental output is never stored, so no store-time `.dSYM` stands in for its objects.
-    /// A test or binary therefore keeps the absolute `N_OSO` paths an unwrapped rustc writes,
-    /// which debuggers and backtraces resolve from any working directory.
-    /// Every other output keeps the cache lane's flags.
-    /// For a proc macro or dylib that matters, because each dependent's key hashes its bytes.
-    Adaptive,
-}
-
 /// ld64 `-install_name` for a cached macOS proc-macro link.
 ///
 /// rustc gives a dylib's `LC_ID_DYLIB` its absolute output path, so the same
@@ -547,16 +438,14 @@ enum LinkLane {
 fn macos_install_name_flag(
     parsed: &RustcArgs,
     all_args: &[String],
-    lane: LinkLane,
 ) -> Option<String> {
-    macos_install_name_flag_inner(parsed, all_args, lane)
+    macos_install_name_flag_inner(parsed, all_args)
 }
 
 #[cfg(not(target_os = "macos"))]
 fn macos_install_name_flag(
     _parsed: &RustcArgs,
     _all_args: &[String],
-    _lane: LinkLane,
 ) -> Option<String> {
     None
 }
@@ -565,9 +454,8 @@ fn macos_install_name_flag(
 fn macos_install_name_flag_inner(
     parsed: &RustcArgs,
     all_args: &[String],
-    lane: LinkLane,
 ) -> Option<String> {
-    if lane == LinkLane::Passthrough || !parsed.emits_link() {
+    if !parsed.emits_link() {
         return None;
     }
     if !parsed.crate_types.iter().any(|kind| kind == "proc-macro") {
@@ -594,23 +482,19 @@ fn macos_install_name_flag_inner(
 /// A `-g` Mach-O records absolute object paths in `N_OSO`. Prefixing the
 /// output directory makes those paths relative to `--out-dir`, so a restored
 /// binary is not checkout-local. An invocation that already carries the flag
-/// keeps the caller's spelling. Passthrough compiles skip injection so the
-/// binary matches an unwrapped rustc.
-/// So does an adaptive test or binary, as [`LinkLane::Adaptive`] explains.
+/// keeps the caller's spelling.
 #[cfg(target_os = "macos")]
 fn macos_oso_prefix_flag(
     parsed: &RustcArgs,
     all_args: &[String],
-    lane: LinkLane,
 ) -> Option<String> {
-    macos_oso_prefix_flag_inner(parsed, all_args, lane)
+    macos_oso_prefix_flag_inner(parsed, all_args)
 }
 
 #[cfg(not(target_os = "macos"))]
 fn macos_oso_prefix_flag(
     _parsed: &RustcArgs,
     _all_args: &[String],
-    _lane: LinkLane,
 ) -> Option<String> {
     None
 }
@@ -619,14 +503,7 @@ fn macos_oso_prefix_flag(
 fn macos_oso_prefix_flag_inner(
     parsed: &RustcArgs,
     all_args: &[String],
-    lane: LinkLane,
 ) -> Option<String> {
-    if lane == LinkLane::Passthrough {
-        return None;
-    }
-    if lane == LinkLane::Adaptive && parsed.is_user_facing_executable() {
-        return None;
-    }
     // Not gated on Rust debuginfo: native objects bundled into an rlib (C or
     // assembly built with `-g`) put `N_OSO` entries in the link either way,
     // and a link with none is unchanged by the flag (kunobi-ninja/kache#1026).
@@ -692,7 +569,7 @@ pub(crate) fn oso_prefix_root_for_key(_parsed: &RustcArgs) -> Option<PathBuf> {
 
 #[cfg(any(test, target_os = "macos"))]
 fn oso_prefix_root_for_key_inner(parsed: &RustcArgs) -> Option<PathBuf> {
-    macos_oso_prefix_flag_inner(parsed, &parsed.all_args, LinkLane::Cache)?;
+    macos_oso_prefix_flag_inner(parsed, &parsed.all_args)?;
     macos_oso_prefix_root(parsed)
 }
 
@@ -796,41 +673,31 @@ fi
     fn a_cached_proc_macro_gets_a_checkout_independent_install_name() {
         let parsed = proc_macro_args(&[]);
         assert_eq!(
-            macos_install_name_flag_inner(&parsed, &parsed.all_args, LinkLane::Cache).as_deref(),
+            macos_install_name_flag_inner(&parsed, &parsed.all_args).as_deref(),
             Some("-Clink-arg=-Wl,-install_name,@rpath/libpm.dylib")
         );
         let darwin = proc_macro_args(&["--target", "aarch64-apple-darwin"]);
         assert!(
-            macos_install_name_flag_inner(&darwin, &darwin.all_args, LinkLane::Cache).is_some()
+            macos_install_name_flag_inner(&darwin, &darwin.all_args).is_some()
         );
     }
 
     #[test]
     fn only_a_cached_proc_macro_link_of_ours_is_renamed() {
-        let passthrough = proc_macro_args(&[]);
-        assert_eq!(
-            macos_install_name_flag_inner(
-                &passthrough,
-                &passthrough.all_args,
-                LinkLane::Passthrough
-            ),
-            None,
-            "a passthrough matches an unwrapped rustc"
-        );
         let named = proc_macro_args(&["-C", "link-arg=-Wl,-install_name,@rpath/mine.dylib"]);
         assert_eq!(
-            macos_install_name_flag_inner(&named, &named.all_args, LinkLane::Cache),
+            macos_install_name_flag_inner(&named, &named.all_args),
             None,
             "the caller's own install name stays"
         );
         let linux = proc_macro_args(&["--target", "x86_64-unknown-linux-gnu"]);
         assert_eq!(
-            macos_install_name_flag_inner(&linux, &linux.all_args, LinkLane::Cache),
+            macos_install_name_flag_inner(&linux, &linux.all_args),
             None
         );
         let metadata = proc_macro_args(&["--emit", "metadata"]);
         assert_eq!(
-            macos_install_name_flag_inner(&metadata, &metadata.all_args, LinkLane::Cache),
+            macos_install_name_flag_inner(&metadata, &metadata.all_args),
             None,
             "nothing is linked"
         );
@@ -848,7 +715,7 @@ fi
                 ]))
                 .unwrap();
             assert_eq!(
-                macos_install_name_flag_inner(&parsed, &parsed.all_args, LinkLane::Cache),
+                macos_install_name_flag_inner(&parsed, &parsed.all_args),
                 None,
                 "{kind} keeps the name its consumers may record"
             );
@@ -1571,7 +1438,7 @@ fi
             );
 
             let (parsed, argv) = debug_bin_args(&out_dir, &[]);
-            let flag = macos_oso_prefix_flag_inner(&parsed, &argv, LinkLane::Cache).unwrap();
+            let flag = macos_oso_prefix_flag_inner(&parsed, &argv).unwrap();
             let link_arg = flag.strip_prefix("-Clink-arg=").unwrap();
             let binary = out_dir.join("foo");
             cc(&[
@@ -1618,7 +1485,7 @@ fi
 
         let expected = |root: &Path| format!("-Clink-arg=-Wl,-oso_prefix,{}/", root.display());
         let (parsed, argv) = debug_bin_args(&out_dir, &[]);
-        let flag = macos_oso_prefix_flag_inner(&parsed, &argv, LinkLane::Cache).unwrap();
+        let flag = macos_oso_prefix_flag_inner(&parsed, &argv).unwrap();
         assert_eq!(flag, expected(&profile));
 
         // An example links `<profile>/examples/demo` against rlibs in
@@ -1628,7 +1495,7 @@ fi
         std::fs::create_dir_all(&examples).unwrap();
         let (parsed, argv) = debug_bin_args(&examples, &[]);
         assert_eq!(
-            macos_oso_prefix_flag_inner(&parsed, &argv, LinkLane::Cache).unwrap(),
+            macos_oso_prefix_flag_inner(&parsed, &argv).unwrap(),
             expected(&profile),
             "an example strips the same root as a binary"
         );
@@ -1639,7 +1506,7 @@ fi
         std::fs::create_dir_all(&cross_out).unwrap();
         let (parsed, argv) = debug_bin_args(&cross_out, &["--target", "aarch64-apple-darwin"]);
         assert_eq!(
-            macos_oso_prefix_flag_inner(&parsed, &argv, LinkLane::Cache).unwrap(),
+            macos_oso_prefix_flag_inner(&parsed, &argv).unwrap(),
             expected(&cross_profile)
         );
 
@@ -1648,7 +1515,7 @@ fi
         std::fs::create_dir_all(&build_out).unwrap();
         let (parsed, argv) = debug_bin_args(&build_out, &[]);
         assert_eq!(
-            macos_oso_prefix_flag_inner(&parsed, &argv, LinkLane::Cache).unwrap(),
+            macos_oso_prefix_flag_inner(&parsed, &argv).unwrap(),
             expected(&profile)
         );
 
@@ -1656,7 +1523,7 @@ fi
         // root, and widening further would reach outside the build.
         let (parsed, argv) = debug_bin_args(&profile, &[]);
         assert_eq!(
-            macos_oso_prefix_flag_inner(&parsed, &argv, LinkLane::Cache).unwrap(),
+            macos_oso_prefix_flag_inner(&parsed, &argv).unwrap(),
             expected(&profile)
         );
         assert_eq!(cargo_profile_dir(&profile), None);
@@ -1676,15 +1543,15 @@ fi
         );
         let (parsed, argv) = debug_bin_args(Path::new("relative/deps"), &[]);
         assert!(
-            macos_oso_prefix_flag_inner(&parsed, &argv, LinkLane::Cache).is_none(),
+            macos_oso_prefix_flag_inner(&parsed, &argv).is_none(),
             "a relative output directory cannot anchor a prefix"
         );
 
         let already = debug_bin_args(&out_dir, &["-Clink-arg=-Wl,-oso_prefix,/elsewhere/"]);
-        assert!(macos_oso_prefix_flag_inner(&already.0, &already.1, LinkLane::Cache).is_none());
+        assert!(macos_oso_prefix_flag_inner(&already.0, &already.1).is_none());
 
         let wasm = debug_bin_args(&out_dir, &["--target", "wasm32-unknown-unknown"]);
-        assert!(macos_oso_prefix_flag_inner(&wasm.0, &wasm.1, LinkLane::Cache).is_none());
+        assert!(macos_oso_prefix_flag_inner(&wasm.0, &wasm.1).is_none());
 
         let release = RustcCompiler::new()
             .parse(&s(&[
@@ -1699,7 +1566,7 @@ fi
             ]))
             .unwrap();
         assert_eq!(
-            macos_oso_prefix_flag_inner(&release, &release.all_args, LinkLane::Cache),
+            macos_oso_prefix_flag_inner(&release, &release.all_args),
             Some(expected(&profile)),
             "a link without Rust debuginfo can still carry native DWARF from rlibs"
         );
@@ -1723,7 +1590,7 @@ fi
             ]))
             .unwrap();
         assert!(
-            macos_oso_prefix_flag_inner(&library, &library.all_args, LinkLane::Cache).is_none(),
+            macos_oso_prefix_flag_inner(&library, &library.all_args).is_none(),
             "non-executable outputs must not receive oso_prefix"
         );
 
@@ -1743,66 +1610,15 @@ fi
             ]))
             .unwrap();
         assert!(
-            macos_oso_prefix_flag_inner(&metadata_only, &metadata_only.all_args, LinkLane::Cache)
+            macos_oso_prefix_flag_inner(&metadata_only, &metadata_only.all_args)
                 .is_none(),
             "non-link outputs must not receive oso_prefix"
         );
 
         let relative = debug_bin_args(Path::new("target/debug/deps"), &[]);
-        assert!(macos_oso_prefix_flag_inner(&relative.0, &relative.1, LinkLane::Cache).is_none());
+        assert!(macos_oso_prefix_flag_inner(&relative.0, &relative.1).is_none());
 
-        let (parsed, argv) = debug_bin_args(&out_dir, &[]);
-        assert!(
-            macos_oso_prefix_flag_inner(&parsed, &argv, LinkLane::Passthrough).is_none(),
-            "passthrough must not rewrite the link"
-        );
-    }
 
-    /// An adaptive output is never stored, so a test or binary keeps the absolute `N_OSO` paths
-    /// that a backtrace resolves from the package directory.
-    /// Every other executable output keeps the prefix on that lane; a proc macro's or dylib's dependents hash its bytes.
-    #[test]
-    fn only_an_adaptive_test_or_binary_links_without_the_oso_prefix() {
-        let dir = tempfile::tempdir().unwrap();
-        let profile = dir.path().join("target/debug");
-        let out_dir = profile.join("deps");
-        std::fs::create_dir_all(&out_dir).unwrap();
-        let prefixed = Some(format!("-Clink-arg=-Wl,-oso_prefix,{}/", profile.display()));
-        let link = |kind: &[&str]| {
-            let mut argv = vec!["rustc", "--crate-name", "foo"];
-            argv.extend_from_slice(kind);
-            argv.extend_from_slice(&["-g", "--out-dir", out_dir.to_str().unwrap(), "src/lib.rs"]);
-            RustcCompiler::new().parse(&s(&argv)).unwrap()
-        };
-
-        // The last field says whether the adaptive lane keeps the prefix.
-        let outputs: [(&str, &[&str], bool); 5] = [
-            ("bin", &["--crate-type", "bin"], false),
-            ("test harness", &["--test"], false),
-            ("proc-macro", &["--crate-type", "proc-macro"], true),
-            ("dylib", &["--crate-type", "dylib"], true),
-            ("cdylib", &["--crate-type", "cdylib"], true),
-        ];
-        for (name, kind, adaptive_keeps_prefix) in outputs {
-            let parsed = link(kind);
-            let flag = |lane| macos_oso_prefix_flag_inner(&parsed, &parsed.all_args, lane);
-            assert_eq!(flag(LinkLane::Cache), prefixed, "a cached {name}");
-            let adaptive = if adaptive_keeps_prefix {
-                prefixed.clone()
-            } else {
-                None
-            };
-            assert_eq!(flag(LinkLane::Adaptive), adaptive, "an adaptive {name}");
-            assert_eq!(flag(LinkLane::Passthrough), None, "a passthrough {name}");
-        }
-
-        let proc_macro = link(&["--crate-type", "proc-macro"]);
-        assert_eq!(
-            macos_install_name_flag_inner(&proc_macro, &proc_macro.all_args, LinkLane::Adaptive)
-                .as_deref(),
-            Some("-Clink-arg=-Wl,-install_name,@rpath/libfoo.dylib"),
-            "an adaptive proc macro keeps its checkout-independent install name"
-        );
     }
 
     /// The key reads the root only where kache injects the prefix: a debug

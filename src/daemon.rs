@@ -1157,7 +1157,7 @@ impl Daemon {
                 }
             },
         };
-        let (dedup_stats, evict_stats, age_evict_stats, incremental_cleaned, orphan_stats) =
+        let (dedup_stats, evict_stats, age_evict_stats, orphan_stats) =
             (|| -> Result<_> {
                 let store = &gc_store;
                 // Backfill content_hash for legacy entries
@@ -1271,11 +1271,6 @@ impl Daemon {
                     );
                 }
 
-                let incremental_cleaned = if self.config.clean_incremental {
-                    store.clean_registered_incremental_dirs().unwrap_or(0)
-                } else {
-                    0
-                };
                 crate::build_script::sweep_hermetic_out_dirs_for_gc(&self.config.cache_dir);
 
                 // Reclaim orphaned blob files (crash mid-put, or a meta-less
@@ -1321,7 +1316,6 @@ impl Daemon {
                     dedup_stats,
                     evict_stats,
                     age_evict_stats,
-                    incremental_cleaned,
                     orphan_stats,
                 ))
             })()?;
@@ -1342,10 +1336,6 @@ impl Daemon {
             housekeeping.predictions_pruned,
             housekeeping.file_hashes_pruned
         );
-
-        if incremental_cleaned > 0 {
-            log::info!("cleaned {incremental_cleaned} registered incremental dirs");
-        }
 
         // Aggregate stats
         let stats = crate::store::GcStats {

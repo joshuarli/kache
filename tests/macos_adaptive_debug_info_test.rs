@@ -1,5 +1,3 @@
-//! A test binary that Kache relinks on its adaptive incremental lanes keeps a debug map that backtraces can read.
-
 #![cfg(target_os = "macos")]
 
 use filetime::FileTime;
@@ -91,8 +89,6 @@ impl Fixture {
             ),
         )
         .unwrap();
-        // The first build keeps the real mtime. A unit without policy state compiles before its key,
-        // and a source stamped after the build started would keep it from being stored and from learning.
         if salt > 1 {
             filetime::set_file_mtime(
                 &source,
@@ -110,12 +106,9 @@ impl Fixture {
             .env("RUSTC_WRAPPER", &self.kache)
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO_INCREMENTAL", "1")
-            .env("KACHE_ADAPTIVE_INCREMENTAL", "1")
             .env("KACHE_LOG", "kache=debug")
             .env_remove("RUSTC_WORKSPACE_WRAPPER")
-            .env_remove("KACHE_CLEAN_INCREMENTAL")
             .env_remove("KACHE_DISABLED")
-            .env_remove("KACHE_PRESERVE_INCREMENTAL")
             .env_remove("KACHE_FALLBACK")
             .env_remove("KACHE_CACHE_EXECUTABLES")
             .env_remove("RUSTFLAGS")
@@ -154,20 +147,6 @@ impl Fixture {
     /// Kache's events for `it`, the integration test's crate.
     fn events(&self) -> Vec<Value> {
         self.crate_events("it")
-    }
-
-    /// Kache's events for the library's rlib, which `it` links. The library's unit-test harness has the same crate name.
-    fn library_events(&self) -> Vec<Value> {
-        self.crate_events("adaptive_debug_fixture")
-            .into_iter()
-            .filter(|event| {
-                event["rebuilt_paths"].as_seq().is_some_and(|paths| {
-                    paths
-                        .iter()
-                        .any(|path| path.as_str().is_some_and(|path| path.ends_with(".rlib")))
-                })
-            })
-            .collect()
     }
 
     fn crate_events(&self, crate_name: &str) -> Vec<Value> {
@@ -234,49 +213,13 @@ fn assert_passthrough(event: &Value, reason: &str) {
     );
 }
 
-/// The crate's own frames keep their file and line when the adaptive seed and active lanes relink the test binary.
-/// A relative `OSO` record resolves against the reader's working directory,
-/// and the test binary runs from its package directory, not from the profile directory the records would be relative to.
-/// Those lanes store no `.dSYM` to fall back on, so a relative record leaves the frames without a location.
 #[test]
-fn adaptive_test_binaries_keep_a_readable_debug_map() {
+fn incremental_test_binaries_keep_a_readable_debug_map() {
     let fixture = Fixture::new();
-
-    let first = fixture.build(1);
-    assert_eq!(first.event["result"], "miss", "event: {:#?}", first.event);
-
-    // Each build replaces the previous test binary, so run it before the next build.
-    let seed = fixture.build(2);
-    assert_passthrough(&seed.event, "adaptive seed");
-    let library = fixture.library_events();
-    assert!(
-        library
-            .last()
-            .is_some_and(|event| event["passthrough_reason"] == "adaptive seed"),
-        "the library must seed too, or its frames never come from an adaptive lane: {library:#?}",
-    );
-    let seed_backtrace = fixture.backtrace(&seed);
-
-    let active = fixture.build(3);
-    assert_passthrough(&active.event, "adaptive active");
-    let active_backtrace = fixture.backtrace(&active);
-
-    let unlocated: Vec<String> = [
-        ("adaptive seed", &seed_backtrace),
-        ("adaptive active", &active_backtrace),
-    ]
-    .into_iter()
-    .filter(|(_, backtrace)| !(backtrace.library && backtrace.test))
-    .map(|(lane, backtrace)| {
-        format!(
-            "{lane}: library frame located {}, test frame located {}\n{}",
-            backtrace.library, backtrace.test, backtrace.output
-        )
-    })
-    .collect();
-    assert!(
-        unlocated.is_empty(),
-        "the crate's frames lost their source locations:\n{}",
-        unlocated.join("\n")
-    );
+    for variant in 1..=3 {
+        let build = fixture.build(variant);
+        assert_passthrough(&build.event, "incremental compilation");
+        let backtrace = fixture.backtrace(&build);
+        assert!(backtrace.library && backtrace.test, "{}", backtrace.output);
+    }
 }

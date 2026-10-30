@@ -108,23 +108,6 @@ pub struct Config {
     /// file only, not libraries it loads at run time.
     /// `KACHE_TRUST_CODEGEN_BACKENDS` or `[cache] trust_codegen_backends`.
     pub trust_codegen_backends: bool,
-    pub clean_incremental: bool,
-    /// Keep rustc incremental compilation for Cargo mutation workloads by
-    /// bypassing artifact caching and isolating their incremental state.
-    pub preserve_incremental: bool,
-    /// Automatically preserve rustc incremental compilation when kache detects
-    /// that repeated source variants benefit more from incremental reuse than
-    /// artifact caching. Enabled by default; `preserve_incremental` remains the
-    /// explicit force mode.
-    pub adaptive_incremental: bool,
-    /// Seed private incremental state from compatible local Cargo targets.
-    /// Enabled by default; `KACHE_SEED_INCREMENTAL=0` opts out.
-    pub seed_incremental: bool,
-    /// Optional explicit donor profile for worktree incremental seeds.
-    pub incremental_seed_from: Option<PathBuf>,
-    /// Enable all current and future experiments before they become defaults.
-    /// `KACHE_UNSTABLE=1` / `[cache] unstable = true`. Off by default.
-    pub unstable: bool,
     pub event_log_max_size: u64,
     pub event_log_keep_lines: usize,
     /// Zstd compression level (1-19, default 3). Lower = faster, higher = smaller.
@@ -146,14 +129,8 @@ pub struct Config {
     pub gc_evict_shared: bool,
     /// Daemon idle timeout in seconds (default 0 = no timeout).
     pub daemon_idle_timeout_secs: u64,
-    /// A secondary compiler-wrapper to hand ordinary passed-through compiles
-    /// to. When kache declines to cache a compile outside its adaptive lane, it
-    /// runs `<fallback> <compiler> <args>` instead of the bare
-    /// compiler — so the fallback gets a chance to cache what kache
-    /// doesn't. Kache runs its own isolated adaptive compiles directly so one
-    /// implementation owns the incremental state and lock. `None` = plain
-    /// passthrough. Set via `KACHE_FALLBACK` or `[cache] fallback` in the config
-    /// file.
+    /// Secondary wrapper for ordinary uncached compiles. Incremental compiles
+    /// go directly to the compiler. Set with `KACHE_FALLBACK` or `[cache] fallback`.
     pub fallback: Option<String>,
     /// An opaque string folded into every cache key. Lets a project
     /// force a cold cache on a change kache cannot otherwise observe —
@@ -178,27 +155,6 @@ pub struct Config {
     /// For build-script runs, plain RUSTC_LINKER/RUSTC/RUSTDOC entries also
     /// normalize tool paths under KACHE_BASE_DIR and key their file contents.
     pub path_only_env_vars: Vec<String>,
-    /// Crate names whose eligible compiles bypass the artifact cache with
-    /// policy-owned rustc incremental state, regardless of the adaptive
-    /// heuristic's state and of whether the Cargo command selects the package.
-    ///
-    /// Eligible listed crates use the adaptive policy's narrow Cargo layout,
-    /// isolated directory, exclusive lease, hidden-input checks, and cache
-    /// eligibility gates. Unsafe layouts, hidden inputs, exclusions, and
-    /// lease contention keep the normal cache/passthrough path and strip
-    /// Cargo's original incremental argument. User-facing executables first
-    /// follow `cache_executables`; the existing intentional managed
-    /// passthrough is available only when no fallback owns the compile. This
-    /// is intended for edit-loop-hot leaf crates that should skip the
-    /// adaptive policy's learning step (its first miss).
-    ///
-    /// Entries match the exact rustc `--crate-name`; `-` is normalized to `_`
-    /// on both sides. A Cargo package name is not authoritative because one
-    /// package may define differently named library, binary, and test targets.
-    /// Set via
-    /// `KACHE_INCREMENTAL_CRATES` (comma/whitespace-separated) or
-    /// `[cache] incremental_crates`. Empty (the default) = feature off.
-    pub incremental_crates: Vec<String>,
     /// Environment variables to fold into every cache key (kunobi-ninja/kache#635).
     ///
     /// rustc reports an env var as a dep-info `# env-dep:` line only when a
@@ -419,15 +375,6 @@ pub struct Config {
     pub test_lease: Option<PathBuf>,
 }
 
-impl Config {
-    /// Whether `crate_name` is on the incremental force-list.
-    /// See [`Config::incremental_crates`].
-    pub fn incremental_crate_forced(&self, crate_name: &str) -> bool {
-        incremental_crate_forced_in(&self.incremental_crates, crate_name)
-    }
-}
-
-
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct FileConfig {
     pub cache: Option<CacheFileConfig>,
@@ -509,12 +456,6 @@ pub struct CacheFileConfig {
     pub cache_executables: Option<bool>,
     pub cache_cc_links: Option<bool>,
     pub trust_codegen_backends: Option<bool>,
-    pub clean_incremental: Option<bool>,
-    pub preserve_incremental: Option<bool>,
-    pub adaptive_incremental: Option<bool>,
-    pub seed_incremental: Option<bool>,
-    pub incremental_seed_from: Option<String>,
-    pub unstable: Option<bool>,
     pub exclude: Option<Vec<String>>,
     /// Declarative bypass rules (kunobi-ninja/kache#222). Siblings of
     /// `exclude`, which already covers the source-path case; each entry means
@@ -538,8 +479,6 @@ pub struct CacheFileConfig {
     pub key_salt: Option<String>,
     /// Path-only env-var allowlist. See [`Config::path_only_env_vars`].
     pub path_only_env_vars: Option<Vec<String>>,
-    /// Incremental force-list. See [`Config::incremental_crates`].
-    pub incremental_crates: Option<Vec<String>>,
     /// Env vars folded into every cache key. See [`Config::key_env_vars`].
     pub key_env_vars: Option<Vec<String>>,
     /// Machine-wide miss-path scheduler. See [`Config::scheduler`].
@@ -551,9 +490,6 @@ pub struct EnvOverrides {
     pub cache_dir: bool,
     pub max_size: bool,
     pub cache_executables: bool,
-    pub clean_incremental: bool,
-    pub preserve_incremental: bool,
-    pub adaptive_incremental: bool,
     pub fallback: bool,
     pub key_salt: bool,
 }
@@ -567,10 +503,7 @@ impl EnvOverrides {
             cache_dir: env_or_ignored("KACHE_CACHE_DIR", ignore_env).is_ok(),
             max_size: env_or_ignored("KACHE_MAX_SIZE", ignore_env).is_ok(),
             cache_executables: env_or_ignored("KACHE_CACHE_EXECUTABLES", ignore_env).is_ok(),
-            clean_incremental: env_or_ignored("KACHE_CLEAN_INCREMENTAL", ignore_env).is_ok(),
-            preserve_incremental: env_or_ignored("KACHE_PRESERVE_INCREMENTAL", ignore_env).is_ok(),
-            adaptive_incremental: env_or_ignored("KACHE_ADAPTIVE_INCREMENTAL", ignore_env).is_ok(),
-                                    fallback: env_or_ignored("KACHE_FALLBACK", ignore_env).is_ok(),
+            fallback: env_or_ignored("KACHE_FALLBACK", ignore_env).is_ok(),
             key_salt: env_or_ignored("KACHE_KEY_SALT", ignore_env).is_ok(),
         }
     }
@@ -589,36 +522,6 @@ fn normalize_cc_flags(raw: impl IntoIterator<Item = String>) -> Vec<String> {
         out.push(trimmed.to_string());
     }
     out
-}
-
-/// Normalize the `incremental_crates` force-list: trim, drop empties, map `-`
-/// to `_`, dedupe, and sort.
-///
-/// rustc crate names commonly use `_` where target names use `-`; accepting
-/// either spelling is useful without treating a Cargo package name as the
-/// source of truth. The list is control flow only (it is never folded into a
-/// cache key), so normalization exists for predictable matching, not key
-/// stability.
-pub fn normalize_incremental_crates(raw: impl IntoIterator<Item = String>) -> Vec<String> {
-    let mut out: Vec<String> = raw
-        .into_iter()
-        .map(|entry| entry.trim().replace('-', "_"))
-        .filter(|entry| !entry.is_empty())
-        .collect();
-    out.sort();
-    out.dedup();
-    out
-}
-
-/// Whether `crate_name` is on the incremental force-list `list`.
-///
-/// `crate_name` gets the same `-`→`_` normalization as the stored entries.
-pub fn incremental_crate_forced_in(list: &[String], crate_name: &str) -> bool {
-    !list.is_empty()
-        && (list.iter().any(|entry| entry == crate_name)
-            || list
-                .iter()
-                .any(|entry| *entry == crate_name.replace('-', "_")))
 }
 
 /// Normalize the `key_env_vars` patterns: trim, drop empties, upper-case,
@@ -753,12 +656,7 @@ const IGNORE_ENV_GATED_VARS: &[&str] = &[
     "KACHE_CACHE_EXECUTABLES",
     "KACHE_CACHE_CC_LINKS",
     "KACHE_TRUST_CODEGEN_BACKENDS",
-    "KACHE_CLEAN_INCREMENTAL",
-    "KACHE_PRESERVE_INCREMENTAL",
-    "KACHE_ADAPTIVE_INCREMENTAL",
-    "KACHE_SEED_INCREMENTAL",
-    "KACHE_INCREMENTAL_SEED_FROM",
-    "KACHE_UNSTABLE",
+
     "KACHE_COMPRESSION_LEVEL",
     "KACHE_MIN_STORE_COMPILE_MS",
     "KACHE_GC_MAX_AGE_HOURS",
@@ -767,7 +665,7 @@ const IGNORE_ENV_GATED_VARS: &[&str] = &[
     "KACHE_KEY_SALT",
     "KACHE_CC_EXTRA_ALLOWLIST_FLAGS",
     "KACHE_PATH_ONLY_ENV_VARS",
-    "KACHE_INCREMENTAL_CRATES",
+
     "KACHE_KEY_ENV_VARS",
     "KACHE_MODIFIED_INPUT_GUARD",
     "KACHE_INPUT_PREDICTIONS",
@@ -807,12 +705,7 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
         "KACHE_TRUST_CODEGEN_BACKENDS",
         "cache.trust_codegen_backends",
     ),
-    ("KACHE_CLEAN_INCREMENTAL", "cache.clean_incremental"),
-    ("KACHE_PRESERVE_INCREMENTAL", "cache.preserve_incremental"),
-    ("KACHE_ADAPTIVE_INCREMENTAL", "cache.adaptive_incremental"),
-    ("KACHE_SEED_INCREMENTAL", "cache.seed_incremental"),
-    ("KACHE_INCREMENTAL_SEED_FROM", "cache.incremental_seed_from"),
-    ("KACHE_UNSTABLE", "cache.unstable"),
+
     ("KACHE_COMPRESSION_LEVEL", "cache.compression_level"),
     ("KACHE_MIN_STORE_COMPILE_MS", "cache.min_store_compile_ms"),
     ("KACHE_GC_MAX_AGE_HOURS", "cache.gc_max_age_hours"),
@@ -825,7 +718,7 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
     ("KACHE_KEY_SALT", "cache.key_salt"),
     ("KACHE_CC_EXTRA_ALLOWLIST_FLAGS", "cc.extra_allowlist_flags"),
     ("KACHE_PATH_ONLY_ENV_VARS", "cache.path_only_env_vars"),
-    ("KACHE_INCREMENTAL_CRATES", "cache.incremental_crates"),
+
     ("KACHE_KEY_ENV_VARS", "cache.key_env_vars"),
     ("KACHE_MODIFIED_INPUT_GUARD", "cache.modified_input_guard"),
     ("KACHE_INPUT_PREDICTIONS", "cache.input_predictions"),
@@ -1073,53 +966,6 @@ impl Config {
                         .unwrap_or(false)
                 });
 
-        let clean_incremental =
-            env_or_ignored_for(invocation, "KACHE_CLEAN_INCREMENTAL", ignore_env)
-                .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-                .unwrap_or_else(|_| {
-                    file_config
-                        .as_ref()
-                        .ok()
-                        .and_then(|c| c.cache.as_ref())
-                        .and_then(|c| c.clean_incremental)
-                        .unwrap_or(true)
-                });
-
-        let preserve_incremental =
-            env_or_ignored_for(invocation, "KACHE_PRESERVE_INCREMENTAL", ignore_env)
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or_else(|_| {
-                    file_config
-                        .as_ref()
-                        .ok()
-                        .and_then(|c| c.cache.as_ref())
-                        .and_then(|c| c.preserve_incremental)
-                        .unwrap_or(false)
-                });
-
-        let adaptive_incremental =
-            env_or_ignored_for(invocation, "KACHE_ADAPTIVE_INCREMENTAL", ignore_env)
-                .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-                .unwrap_or_else(|_| {
-                    file_config
-                        .as_ref()
-                        .ok()
-                        .and_then(|c| c.cache.as_ref())
-                        .and_then(|c| c.adaptive_incremental)
-                        .unwrap_or(true)
-                });
-
-        let seed_incremental = env_or_ignored_for(invocation, "KACHE_SEED_INCREMENTAL", ignore_env)
-            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-            .unwrap_or_else(|_| {
-                file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|c| c.cache.as_ref())
-                    .and_then(|c| c.seed_incremental)
-                    .unwrap_or(true)
-            });
-
         let event_log_max_size = file_config
             .as_ref()
             .ok()
@@ -1257,25 +1103,6 @@ impl Config {
             };
         let _inert = warn_inert_path_only_env_vars(&path_only_env_vars, path_only_source);
 
-        // Incremental force-list for the managed per-crate policy.
-        // Env wins over the file: a set `KACHE_INCREMENTAL_CRATES`
-        // (comma/whitespace-separated) replaces the file list entirely,
-        // matching `path_only_env_vars` above.
-        let incremental_crates =
-            match env_or_ignored_for(invocation, "KACHE_INCREMENTAL_CRATES", ignore_env) {
-                Ok(val) => normalize_incremental_crates(
-                    val.split([',', ' ', '\t', '\n']).map(str::to_string),
-                ),
-                Err(_) => normalize_incremental_crates(
-                    file_config
-                        .as_ref()
-                        .ok()
-                        .and_then(|c| c.cache.as_ref())
-                        .and_then(|c| c.incremental_crates.clone())
-                        .unwrap_or_default(),
-                ),
-            };
-
         // Env vars folded into the cache key (#635). Env wins over the file:
         // a set `KACHE_KEY_ENV_VARS` (comma/whitespace-separated) replaces the
         // file list entirely, matching `path_only_env_vars` above.
@@ -1376,17 +1203,6 @@ impl Config {
             .map(PathBuf::from)
             .map(|path| resolve_invocation_path(invocation, &path))
             .transpose()?;
-        let unstable = env_or_ignored_for(invocation, "KACHE_UNSTABLE", ignore_env)
-            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-            .unwrap_or_else(|_| {
-                file_config
-                    .as_ref()
-                    .ok()
-                    .and_then(|config| config.cache.as_ref())
-                    .and_then(|cache| cache.unstable)
-                    .unwrap_or(false)
-            });
-
         Ok(Config {
             cache_dir,
             runtime_dir,
@@ -1421,29 +1237,6 @@ impl Config {
             cache_executables,
             cache_cc_links,
             trust_codegen_backends,
-            clean_incremental,
-            preserve_incremental,
-            adaptive_incremental,
-            seed_incremental,
-            unstable,
-            incremental_seed_from: env_or_ignored_for(
-                invocation,
-                "KACHE_INCREMENTAL_SEED_FROM",
-                ignore_env,
-            )
-            .ok()
-            .or_else(|| {
-                file_config
-                    .as_ref()
-                    .ok()?
-                    .cache
-                    .as_ref()?
-                    .incremental_seed_from
-                    .clone()
-            })
-            .filter(|value| !value.is_empty())
-            .map(|path| resolve_invocation_path(invocation, Path::new(&path)))
-            .transpose()?,
             event_log_max_size,
             event_log_keep_lines,
             compression_level,
@@ -1453,7 +1246,6 @@ impl Config {
             fallback,
             key_salt,
             path_only_env_vars,
-            incremental_crates,
             key_env_vars,
             base_dirs,
             cc_extra_allowlist_flags,
@@ -3435,7 +3227,6 @@ mod invocation_tests {
 local_store = "~/store"
 runtime_dir = "run"
 readonly_store = "~/read"
-incremental_seed_from = "seed"
 local_max_size = "1GiB"
 exclude = ["$CARGO_HOME/**", "$CUSTOM/**"]
 bypass_env = ["SKIP=1"]
@@ -3448,7 +3239,6 @@ bypass_env = ["SKIP=1"]
             &[
                 ("KACHE_HOST_CONFIG", ""),
                 ("KACHE_KEY_SALT", "first"),
-                ("KACHE_SEED_INCREMENTAL", "false"),
                 ("KACHE_TRUST_DOMAIN", "one"),
                 ("SKIP", "1"),
                 ("GITHUB_ACTIONS", "true"),
@@ -3469,10 +3259,7 @@ bypass_env = ["SKIP=1"]
         assert_eq!(b.cache_dir, second.path().join("home/store/two"));
         assert_eq!(a.runtime_dir, first.path().join("run"));
         assert_eq!(b.readonly_store, Some(second.path().join("home/read")));
-        assert_eq!(a.incremental_seed_from, Some(first.path().join("seed")));
         assert_eq!(a.key_salt.as_deref(), Some("first"));
-        assert!(!a.seed_incremental);
-        assert!(b.seed_incremental);
         assert_eq!(b.key_salt.as_deref(), Some("second"));
         assert_eq!(a.max_size, 1 << 30);
         assert_eq!(a.auto_recover_min_free_bytes, 0);

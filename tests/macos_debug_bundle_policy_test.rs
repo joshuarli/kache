@@ -31,7 +31,7 @@ fn check_debug_bundle_policy(split: &str, expected_bundle: bool) {
     fs::write(
         &config,
         format!(
-            "[cache]\nlocal_only = true\ncache_executables = true\nadaptive_incremental = false\nlocal_store = {cache_path}\nruntime_dir = {cache_path}\n"
+            "[cache]\nlocal_only = true\ncache_executables = true\nlocal_store = {cache_path}\nruntime_dir = {cache_path}\n"
         ),
     )
     .unwrap();

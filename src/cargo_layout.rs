@@ -148,16 +148,6 @@ pub(crate) fn profile_dir(out_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// The profile directory of a library, binary or test compile: legacy
-/// `<profile>/deps` or a per-unit `out`. Examples and build scripts, which
-/// the legacy layout keeps elsewhere, are the caller's to exclude.
-pub(crate) fn deps_profile(out_dir: &Path) -> Option<&Path> {
-    if let Some(unit) = per_unit_out_dir(out_dir) {
-        return Some(unit.profile);
-    }
-    (out_dir.file_name()? == "deps").then(|| out_dir.parent())?
-}
-
 /// The unit `out` directory `dir` sits in under `target`, with the unit's
 /// package, when it has one of the shapes
 /// `[<triple>/]<profile>/build/<pkg>-<hash>/out` or
@@ -365,20 +355,6 @@ mod tests {
         assert_eq!(profile_dir(Path::new("/t/debug")), None);
         assert_eq!(profile_dir(Path::new("/deps/proj/target/debug")), None);
         assert_eq!(profile_dir(Path::new("/deps")), Some(PathBuf::from("/")));
-    }
-
-    #[test]
-    fn deps_profile_is_legacy_deps_or_a_per_unit_out() {
-        assert_eq!(
-            deps_profile(Path::new("/t/debug/deps")),
-            Some(Path::new("/t/debug"))
-        );
-        assert_eq!(
-            deps_profile(&per_unit(&format!("pkg/{HASH}/out"))),
-            Some(Path::new("/t/debug"))
-        );
-        assert_eq!(deps_profile(Path::new("/t/debug/examples")), None);
-        assert_eq!(deps_profile(Path::new("/t/debug/build/pkg-1")), None);
     }
 
     #[test]

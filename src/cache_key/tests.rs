@@ -1231,22 +1231,6 @@ fn apply_key_env_vars_no_patterns_is_identity() {
     // Feature off must leave the key byte-for-byte unchanged — that is what
     // lets this ship without a CACHE_KEY_VERSION bump.
     assert_eq!(apply_key_env_vars(base.clone(), &[], "crate"), base);
-    assert_eq!(key_env_guard(&[]), None);
-}
-
-#[test]
-fn adaptive_key_env_guard_changes_with_the_selected_value() {
-    let _lock = key_test_lock();
-    let patterns = vec!["KACHE_TEST_ADAPTIVE_ENV".to_string()];
-    let first = {
-        let _guard = ScopedEnv::set("KACHE_TEST_ADAPTIVE_ENV", "one");
-        key_env_guard(&patterns).unwrap()
-    };
-    let second = {
-        let _guard = ScopedEnv::set("KACHE_TEST_ADAPTIVE_ENV", "two");
-        key_env_guard(&patterns).unwrap()
-    };
-    assert_ne!(first, second);
 }
 
 #[test]
@@ -5914,103 +5898,6 @@ fn tool_version_cache_write_is_read_back() {
         "the file is exactly the version string, as before"
     );
     let _ = std::fs::remove_file(&cache_file);
-}
-
-#[cfg(unix)]
-#[test]
-fn cwd_remap_probe_kills_timeouts_and_retries_without_a_cached_rejection() {
-    let dir = tempfile::tempdir().unwrap();
-    // Tool-version memos use the platform cache directory. Isolate it in a
-    // child so Nix's unwritable home and other tests cannot affect the memo.
-    let output = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--ignored",
-            "--exact",
-            "cache_key::tests::cwd_remap_probe_timeout_fixture",
-            "--nocapture",
-        ])
-        .env("HOME", dir.path())
-        .env("XDG_CACHE_HOME", dir.path())
-        .env("KACHE_TEST_CWD_REMAP_ROOT", dir.path())
-        .output()
-        .expect("spawn isolated cwd-remap probe fixture");
-    assert!(
-        output.status.success(),
-        "isolated cwd-remap probe failed:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[cfg(unix)]
-#[test]
-#[ignore = "spawned by the cwd-remap probe timeout regression"]
-fn cwd_remap_probe_timeout_fixture() {
-    let root = std::env::var_os("KACHE_TEST_CWD_REMAP_ROOT")
-        .map(PathBuf::from)
-        .expect("fixture requires its isolated cache root");
-    assert!(crate::config::default_cache_dir().starts_with(&root));
-    let rustc = root.join("rustc-probe");
-    kache_fs::testutil::write_executable(
-        &rustc,
-        "#!/bin/sh\nif [ -f \"$0.ready\" ]; then printf x >> \"$0.calls\"; exit 0; fi\nprintf '%s\\n' \"$$\" > \"$0.pid\"\nexec sleep 8\n",
-    );
-    assert_eq!(
-        rustc_accepts_cwd_remap(&rustc, "fixture", "/src", None, false),
-        None
-    );
-    let pid: u32 = std::fs::read_to_string(rustc.with_extension("pid"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    assert!(
-        !crate::daemon::process_is_alive(pid),
-        "timed-out probe survived"
-    );
-    std::fs::write(rustc.with_extension("ready"), b"ready").unwrap();
-    assert_eq!(
-        rustc_accepts_cwd_remap(&rustc, "fixture", "/src", None, false),
-        Some(true)
-    );
-    assert_eq!(
-        rustc_accepts_cwd_remap(&rustc, "fixture", "/src", None, false),
-        Some(true)
-    );
-    assert_eq!(std::fs::read(rustc.with_extension("calls")).unwrap(), b"x");
-}
-
-#[test]
-fn cwd_remap_probe_stops_at_the_deadline() {
-    use std::time::Duration;
-    assert!(cwd_remap_probe_within_deadline(Duration::ZERO));
-    assert!(cwd_remap_probe_within_deadline(Duration::from_nanos(
-        1_999_999_999
-    )));
-    assert!(!cwd_remap_probe_within_deadline(Duration::from_nanos(
-        2_000_000_000
-    )));
-    assert!(!cwd_remap_probe_within_deadline(Duration::from_nanos(
-        2_000_000_001
-    )));
-}
-
-/// The compiler a target is recorded as built by is what `rustc -vV` says,
-/// and nothing when the compiler cannot be run.
-#[cfg(unix)]
-#[test]
-fn rustc_version_text_is_the_compilers_own_description() {
-    let _lock = key_test_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let rustc = dir.path().join("rustc");
-    kache_fs::testutil::write_executable(
-        &rustc,
-        "#!/bin/sh\nprintf 'rustc 1.98.0 (fake 2026-09-01)\\nhost: test\\n'\n",
-    );
-    let text = rustc_version_text(&rustc).expect("a runnable compiler");
-    assert!(text.starts_with("rustc 1.98.0 (fake 2026-09-01)"), "{text}");
-    assert!(text.contains("host: test"), "{text}");
-    assert_eq!(rustc_version_text(&dir.path().join("missing")), None);
 }
 
 #[cfg(unix)]
@@ -17500,7 +17387,6 @@ fn concurrent_key_env_snapshots_do_not_use_the_servers_values() {
             apply_key_env_vars_in("base".to_string(), &patterns, "snapshot", env),
             expected
         );
-        assert!(key_env_guard_in(&patterns, env).is_some());
     }
 }
 

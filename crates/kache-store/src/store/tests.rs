@@ -94,7 +94,7 @@ fn index_ddl_runs_once_per_schema_generation() {
     assert_eq!(generation, INDEX_SCHEMA_GENERATION);
     // A pre-stamp index (generation 0) migrates and gets stamped.
     db.pragma_update(None, "user_version", 0_i64).unwrap();
-    db.execute_batch("DROP TABLE target_roots").unwrap();
+    db.execute_batch("DROP TABLE cc_header_scans").unwrap();
     drop(db);
     let db = open_index_db(&path).unwrap();
     let generation: i64 = db
@@ -103,7 +103,7 @@ fn index_ddl_runs_once_per_schema_generation() {
     assert_eq!(generation, INDEX_SCHEMA_GENERATION);
     let tables: i64 = db
         .query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'target_roots'",
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'cc_header_scans'",
             [],
             |row| row.get(0),
         )
@@ -139,6 +139,25 @@ fn index_ddl_runs_once_per_schema_generation() {
         tables, 1,
         "the dropped table was recreated by the migration"
     );
+}
+
+#[test]
+fn retired_directory_registries_are_not_created_or_modified() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.db");
+    let db = open_index_db(&path).unwrap();
+    let count: i64 = db.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('target_roots', 'incremental_dirs')",
+        [], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(count, 0);
+    db.execute_batch("CREATE TABLE target_roots (path TEXT PRIMARY KEY); INSERT INTO target_roots VALUES ('target'); CREATE TABLE incremental_dirs (path TEXT PRIMARY KEY); INSERT INTO incremental_dirs VALUES ('incremental'); PRAGMA user_version = 12;").unwrap();
+    drop(db);
+    let db = open_index_db(&path).unwrap();
+    for table in ["target_roots", "incremental_dirs"] {
+        let count: i64 = db.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 1);
+    }
 }
 
 /// An index from before the C/C++ memo's rule columns holds memos an older
@@ -5665,452 +5684,6 @@ fn remove_entry_ignores_recency_guard() {
 }
 
 #[test]
-fn test_incremental_dir_registry_deduplicates_and_cleans() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-
-    let incremental_dir = dir.path().join("target/debug/incremental");
-    std::fs::create_dir_all(&incremental_dir).unwrap();
-    std::fs::write(incremental_dir.join("junk"), b"tmp").unwrap();
-
-    store.remember_incremental_dir(&incremental_dir).unwrap();
-    store.remember_incremental_dir(&incremental_dir).unwrap();
-    store
-        .remember_incremental_dir(&dir.path().join("missing/incremental"))
-        .unwrap();
-
-    let count_before: i64 = store
-        .db
-        .query_row("SELECT COUNT(*) FROM incremental_dirs", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(count_before, 2);
-
-    let cleaned = store.clean_registered_incremental_dirs().unwrap();
-    assert_eq!(cleaned, 1);
-    assert!(!incremental_dir.exists());
-
-    let count_after: i64 = store
-        .db
-        .query_row("SELECT COUNT(*) FROM incremental_dirs", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(count_after, 0);
-}
-
-#[test]
-fn target_root_registry_is_local_bounded_provenance_with_identity() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-    let workspace = dir.path().join("workspace");
-    let target = workspace.join("target");
-    std::fs::create_dir_all(&target).unwrap();
-    std::fs::write(
-        target.join("CACHEDIR.TAG"),
-        "Signature: 8a477f597d28d172789f06886806bc55",
-    )
-    .unwrap();
-    std::fs::write(target.join(".rustc_info.json"), "{}").unwrap();
-
-    store.remember_target_root(&target, &workspace).unwrap();
-    store.remember_target_root(&target, &workspace).unwrap();
-    let roots = store.tracked_target_roots(0).unwrap();
-    assert_eq!(roots.len(), 1, "same target is upserted, not duplicated");
-    assert_eq!(roots[0].path, std::path::absolute(&target).unwrap());
-    assert_eq!(
-        roots[0].workspace_root,
-        std::path::absolute(&workspace).unwrap()
-    );
-    assert_eq!(
-        crate::filesystem::directory_identity(&target),
-        Some(roots[0].identity)
-    );
-
-    store.remember_target_root(&workspace, &workspace).unwrap();
-    assert_eq!(
-        store.tracked_target_roots(0).unwrap().len(),
-        1,
-        "a source root must never be registered as a cleanup target"
-    );
-
-    store.forget_target_root(&target).unwrap();
-    assert!(store.tracked_target_roots(0).unwrap().is_empty());
-}
-
-#[test]
-fn forgetting_by_identity_keeps_a_row_recorded_for_a_new_directory() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-    let workspace = dir.path().join("workspace");
-    let target = workspace.join("target");
-    let tagged = |target: &Path| {
-        std::fs::create_dir_all(target.join("debug")).unwrap();
-        std::fs::write(
-            target.join("CACHEDIR.TAG"),
-            "Signature: 8a477f597d28d172789f06886806bc55",
-        )
-        .unwrap();
-    };
-    tagged(&target);
-    store.remember_target_root(&target, &workspace).unwrap();
-    let removed = store.tracked_target_roots(0).unwrap().remove(0).identity;
-    // Moved aside, the old directory keeps its inode while a build records
-    // a new one at the same path.
-    std::fs::rename(&target, workspace.join("aside")).unwrap();
-    tagged(&target);
-    store.remember_target_root(&target, &workspace).unwrap();
-    let current = store.tracked_target_roots(0).unwrap().remove(0).identity;
-    assert_ne!(current, removed);
-    let elsewhere = crate::filesystem::PathIdentity {
-        device: current.device.wrapping_add(1),
-        inode: current.inode,
-    };
-    for stale in [removed, elsewhere] {
-        store
-            .forget_target_root_with_identity(&target, stale)
-            .unwrap();
-        assert_eq!(
-            store.tracked_target_roots(0).unwrap().len(),
-            1,
-            "{stale:?} forgot the row for {current:?}"
-        );
-    }
-    store
-        .forget_target_root_with_identity(&target, current)
-        .unwrap();
-    assert!(store.tracked_target_roots(0).unwrap().is_empty());
-}
-
-#[test]
-fn discovered_target_remains_unbuilt_until_a_real_build_uses_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-    let workspace = dir.path().join("workspace");
-    let target = workspace.join("target");
-    std::fs::create_dir_all(target.join("debug")).unwrap();
-    std::fs::write(
-        target.join("CACHEDIR.TAG"),
-        "Signature: 8a477f597d28d172789f06886806bc55",
-    )
-    .unwrap();
-
-    assert!(
-        store
-            .remember_discovered_target_root(&target, &workspace)
-            .unwrap()
-    );
-    assert!(
-        !store
-            .remember_discovered_target_root(&target, &workspace)
-            .unwrap()
-    );
-    let before = store.tracked_target_roots(0).unwrap().remove(0);
-    assert!(before.discovered);
-    assert_eq!(before.rustc, None);
-    store
-        .remember_target_root_built_by(&target, &workspace, Some("rustc 1"))
-        .unwrap();
-    let after = store.tracked_target_roots(0).unwrap().remove(0);
-    assert!(!after.discovered);
-    assert_eq!(after.rustc.as_deref(), Some("rustc 1"));
-    assert!(
-        !store
-            .remember_discovered_target_root(&target, &workspace)
-            .unwrap()
-    );
-    assert!(!store.tracked_target_roots(0).unwrap()[0].discovered);
-    assert!(
-        !store
-            .remember_discovered_target_root(&workspace, &workspace)
-            .unwrap()
-    );
-}
-
-#[test]
-fn a_target_root_keeps_its_row_when_its_volume_is_renumbered() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-    let workspace = dir.path().join("workspace");
-    let target = workspace.join("target");
-    std::fs::create_dir_all(target.join("debug")).unwrap();
-    std::fs::write(
-        target.join("CACHEDIR.TAG"),
-        "Signature: 8a477f597d28d172789f06886806bc55",
-    )
-    .unwrap();
-    store.remember_target_root(&target, &workspace).unwrap();
-    let now = crate::filesystem::directory_identity(&target).unwrap();
-    let path = std::path::absolute(&target).unwrap();
-    let set_device = |device: u64| {
-        store
-            .db
-            .execute(
-                "UPDATE target_roots SET device = ?1 WHERE path = ?2",
-                rusqlite::params![device.to_string(), path.to_string_lossy()],
-            )
-            .unwrap();
-    };
-    let stored_device = || -> String {
-        store
-            .db
-            .query_row(
-                "SELECT device FROM target_roots WHERE path = ?1",
-                rusqlite::params![path.to_string_lossy()],
-                |row| row.get(0),
-            )
-            .unwrap()
-    };
-
-    // After a restart the volume has another device number; the inode is the
-    // directory's own and stays.
-    set_device(now.device + 3);
-    assert_eq!(store.tracked_target_roots(0).unwrap()[0].identity, now);
-    assert_eq!(stored_device(), now.device.to_string(), "the row is healed");
-
-    // A replaced directory has a new inode and still reads as replaced.
-    store
-        .db
-        .execute(
-            "UPDATE target_roots SET device = ?1, inode = ?2 WHERE path = ?3",
-            rusqlite::params![
-                (now.device + 3).to_string(),
-                (now.inode + 1).to_string(),
-                path.to_string_lossy()
-            ],
-        )
-        .unwrap();
-    let read = store.tracked_target_roots(0).unwrap()[0].identity;
-    assert_ne!(read, now);
-    assert_eq!(read.inode, now.inode + 1);
-}
-
-#[test]
-fn a_target_root_records_the_compiler_that_built_into_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-    let workspace = dir.path().join("workspace");
-    let target = workspace.join("target");
-    std::fs::create_dir_all(&target).unwrap();
-    std::fs::write(
-        target.join("CACHEDIR.TAG"),
-        "Signature: 8a477f597d28d172789f06886806bc55",
-    )
-    .unwrap();
-    // A Cargo profile directory, as a target without a rustc info cache has.
-    std::fs::create_dir_all(target.join("debug")).unwrap();
-    let rustc = |store: &Store| store.tracked_target_roots(0).unwrap()[0].rustc.clone();
-
-    store
-        .remember_target_root_built_by(&target, &workspace, Some("rustc 1"))
-        .unwrap();
-    assert_eq!(rustc(&store).as_deref(), Some("rustc 1"));
-    store
-        .remember_target_root_built_by(&target, &workspace, Some("rustc 2"))
-        .unwrap();
-    assert_eq!(
-        rustc(&store).as_deref(),
-        Some("rustc 2"),
-        "another compiler updates a row that is still fresh"
-    );
-    store.remember_target_root(&target, &workspace).unwrap();
-    assert_eq!(
-        rustc(&store).as_deref(),
-        Some("rustc 2"),
-        "registering without a compiler keeps the recorded one"
-    );
-    drop(store);
-
-    // An index from before the column gains it when opened.
-    let db = rusqlite::Connection::open(config.index_db_path()).unwrap();
-    db.execute_batch(
-        "DROP TABLE target_roots;
-         CREATE TABLE target_roots (
-            path TEXT PRIMARY KEY, workspace_root TEXT NOT NULL,
-            first_seen INTEGER NOT NULL DEFAULT (unixepoch()),
-            last_seen INTEGER NOT NULL DEFAULT (unixepoch()),
-            device TEXT NOT NULL, inode TEXT NOT NULL);
-         PRAGMA user_version = 6;",
-    )
-    .unwrap();
-    drop(db);
-    let store = Store::open(&config).unwrap();
-    store
-        .remember_target_root_built_by(&target, &workspace, Some("rustc 3"))
-        .unwrap();
-    assert_eq!(rustc(&store).as_deref(), Some("rustc 3"));
-}
-
-#[test]
-fn target_root_registry_filters_by_last_seen() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-    let workspace = dir.path().join("workspace");
-    let target = workspace.join("target");
-    std::fs::create_dir_all(&target).unwrap();
-    std::fs::write(
-        target.join("CACHEDIR.TAG"),
-        "Signature: 8a477f597d28d172789f06886806bc55",
-    )
-    .unwrap();
-    std::fs::write(target.join(".rustc_info.json"), "{}").unwrap();
-    store.remember_target_root(&target, &workspace).unwrap();
-
-    assert!(store.tracked_target_roots(24).unwrap().is_empty());
-    store
-        .db
-        .execute(
-            "UPDATE target_roots SET last_seen = unixepoch() - 90000",
-            [],
-        )
-        .unwrap();
-    assert_eq!(store.tracked_target_roots(24).unwrap().len(), 1);
-}
-
-/// The cleanup sweep re-reads one row's `last_seen` before it deletes.
-#[test]
-fn target_root_last_seen_reads_one_row() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-    let workspace = dir.path().join("workspace");
-    let target = workspace.join("target");
-    std::fs::create_dir_all(&target).unwrap();
-    std::fs::write(
-        target.join("CACHEDIR.TAG"),
-        "Signature: 8a477f597d28d172789f06886806bc55",
-    )
-    .unwrap();
-    std::fs::write(target.join(".rustc_info.json"), "{}").unwrap();
-    assert_eq!(store.target_root_last_seen(&target).unwrap(), None);
-
-    store.remember_target_root(&target, &workspace).unwrap();
-    store
-        .db
-        .execute("UPDATE target_roots SET last_seen = 1234", [])
-        .unwrap();
-    assert_eq!(store.target_root_last_seen(&target).unwrap(), Some(1234));
-    assert_eq!(
-        store
-            .target_root_last_seen(&workspace.join("other"))
-            .unwrap(),
-        None
-    );
-}
-
-#[test]
-fn target_registry_prunes_only_after_a_real_upsert() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-    let workspace = dir.path().join("workspace");
-    let target = workspace.join("target");
-    std::fs::create_dir_all(&target).unwrap();
-    std::fs::write(
-        target.join("CACHEDIR.TAG"),
-        "Signature: 8a477f597d28d172789f06886806bc55",
-    )
-    .unwrap();
-    std::fs::write(target.join(".rustc_info.json"), "{}").unwrap();
-
-    let insert_stale = |path: &str| {
-        store
-            .db
-            .execute(
-                "INSERT INTO target_roots
-                     (path, workspace_root, first_seen, last_seen, device, inode)
-                     VALUES (?1, '/workspace', 0, unixepoch() - 15552001, '1', '1')",
-                params![path],
-            )
-            .unwrap();
-    };
-    let contains = |path: &str| -> bool {
-        store
-            .db
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM target_roots WHERE path = ?1)",
-                params![path],
-                |row| row.get::<_, i64>(0),
-            )
-            .unwrap()
-            != 0
-    };
-
-    insert_stale("/stale-before-write");
-    store.remember_target_root(&target, &workspace).unwrap();
-    assert!(!contains("/stale-before-write"));
-
-    insert_stale("/stale-before-debounced-noop");
-    store.remember_target_root(&target, &workspace).unwrap();
-    assert!(contains("/stale-before-debounced-noop"));
-}
-
-#[test]
-fn clean_registered_incremental_dirs_prunes_a_non_directory_path() {
-    // A registered incremental path that now points at a *file* (not a dir)
-    // is pruned without being counted as cleaned. Covers the
-    // `!path.is_dir()` branch of clean_registered_incremental_dirs.
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-
-    let bogus = dir.path().join("not-a-dir");
-    std::fs::write(&bogus, b"i am a file").unwrap();
-    store.remember_incremental_dir(&bogus).unwrap();
-
-    let cleaned = store.clean_registered_incremental_dirs().unwrap();
-    assert_eq!(cleaned, 0, "a non-directory is pruned, not cleaned");
-    // The file is left in place (we only remove directories), but its row is gone.
-    assert!(bogus.exists(), "the non-directory file is not deleted");
-    let remaining: i64 = store
-        .db
-        .query_row("SELECT COUNT(*) FROM incremental_dirs", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(remaining, 0, "the bogus registration was pruned");
-}
-
-#[cfg(unix)]
-#[test]
-fn clean_registered_incremental_dirs_keeps_row_when_remove_fails() {
-    // Covers clean_registered_incremental_dirs remove_dir_all error branch.
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-
-    let parent = dir.path().join("readonly-parent");
-    let incremental_dir = parent.join("incremental");
-    std::fs::create_dir_all(&incremental_dir).unwrap();
-    std::fs::write(incremental_dir.join("junk"), b"tmp").unwrap();
-    store.remember_incremental_dir(&incremental_dir).unwrap();
-
-    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500)).unwrap();
-    let cleaned = store.clean_registered_incremental_dirs().unwrap();
-    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
-
-    assert_eq!(cleaned, 0, "failed removals are not counted as cleaned");
-    assert!(incremental_dir.exists(), "failed removal leaves the dir");
-    let remaining: i64 = store
-        .db
-        .query_row("SELECT COUNT(*) FROM incremental_dirs", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(remaining, 1, "failed removal keeps the registry row");
-}
-
-#[test]
 fn test_store_locking() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
@@ -6460,185 +6033,15 @@ fn test_store_clear() {
     assert!(!store.contains("k1"));
 }
 
-/// A tagged Cargo target directory at `target`.
-fn tagged_target(target: &Path) {
-    std::fs::create_dir_all(target.join("debug")).unwrap();
-    std::fs::write(
-        target.join("CACHEDIR.TAG"),
-        "Signature: 8a477f597d28d172789f06886806bc55",
-    )
-    .unwrap();
-}
-
 #[test]
-fn clearing_the_store_keeps_tracked_target_directories() {
+fn clearing_the_store_keeps_cargo_target_directories() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(test_config(dir.path())).unwrap();
-    let workspace = dir.path().join("workspace");
-    tagged_target(&workspace.join("target"));
-    store
-        .remember_target_root(&workspace.join("target"), &workspace)
-        .unwrap();
+    let target = dir.path().join("workspace/target");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("artifact"), b"cargo output").unwrap();
     store.clear().unwrap();
-    assert_eq!(store.tracked_target_roots(0).unwrap().len(), 1);
-}
-
-#[test]
-fn a_target_named_through_a_deleted_worktree_stays_tracked() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(test_config(dir.path())).unwrap();
-    let root = std::path::absolute(dir.path()).unwrap();
-    let worktree = root.join("worktree");
-    let shared = root.join("shared");
-    std::fs::create_dir_all(&worktree).unwrap();
-    tagged_target(&shared);
-    store
-        .remember_target_root(&worktree.join("../shared"), &worktree)
-        .unwrap();
-    std::fs::remove_dir_all(&worktree).unwrap();
-    let rows = store.tracked_target_roots(0).unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].path, shared);
-}
-
-/// A row recorded before paths were normalized names the same directory
-/// through `..`; the next build's row replaces it, so cleanup never judges the
-/// directory by the stale one.
-#[test]
-fn a_build_replaces_an_older_spelling_of_the_same_target() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(test_config(dir.path())).unwrap();
-    let root = std::path::absolute(dir.path()).unwrap();
-    let shared = root.join("shared");
-    let worktree = root.join("wt");
-    tagged_target(&shared);
-    std::fs::create_dir_all(&worktree).unwrap();
-    store.remember_target_root(&shared, &worktree).unwrap();
-    let old = worktree.join("../shared");
-    store
-        .db
-        .execute(
-            "UPDATE target_roots SET path = ?1, last_seen = last_seen - 86400",
-            [old.to_string_lossy()],
-        )
-        .unwrap();
-
-    store.remember_target_root(&shared, &worktree).unwrap();
-    let rows = store.tracked_target_roots(0).unwrap();
-    assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0].path, shared);
-}
-
-/// A registration inside a caller's transaction joins it rather than
-/// starting its own, so the caller's rollback undoes it.
-#[test]
-fn a_registration_joins_the_callers_transaction() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(test_config(dir.path())).unwrap();
-    let workspace = dir.path().join("workspace");
-    let target = workspace.join("target");
-    tagged_target(&target);
-    store.db.execute_batch("BEGIN IMMEDIATE").unwrap();
-    store.remember_target_root(&target, &workspace).unwrap();
-    store.db.execute_batch("ROLLBACK").unwrap();
-    assert!(store.tracked_target_roots(0).unwrap().is_empty());
-    store.remember_target_root(&target, &workspace).unwrap();
-    assert!(store.db.is_autocommit(), "no transaction left open");
-    assert_eq!(store.tracked_target_roots(0).unwrap().len(), 1);
-
-    // Forgetting a removed directory joins a caller's transaction the same way.
-    let identity = crate::filesystem::directory_identity(&target).unwrap();
-    std::fs::remove_dir_all(&target).unwrap();
-    store.db.execute_batch("BEGIN IMMEDIATE").unwrap();
-    store.forget_target_roots_with_identity(identity).unwrap();
-    store.db.execute_batch("ROLLBACK").unwrap();
-    assert_eq!(store.tracked_target_roots(0).unwrap().len(), 1);
-    store.forget_target_roots_with_identity(identity).unwrap();
-    assert!(store.db.is_autocommit(), "no transaction left open");
-    assert!(store.tracked_target_roots(0).unwrap().is_empty());
-}
-
-/// A registration whose directory moved after its identity was read leaves
-/// other rows alone: that identity may belong to the directory's new path.
-#[test]
-fn a_moved_directory_does_not_drop_the_rows_of_its_new_path() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(test_config(dir.path())).unwrap();
-    let root = std::path::absolute(dir.path()).unwrap();
-    let workspace = root.join("ws");
-    let old = workspace.join("target");
-    let new = root.join("moved/target");
-    tagged_target(&old);
-    let identity = crate::filesystem::directory_identity(&old).unwrap();
-    std::fs::create_dir_all(new.parent().unwrap()).unwrap();
-    std::fs::rename(&old, &new).unwrap();
-    store.remember_target_root(&new, &workspace).unwrap();
-
-    store
-        .record_target_root(&old, &workspace, identity, None)
-        .unwrap();
-    let paths: Vec<_> = store
-        .tracked_target_roots(0)
-        .unwrap()
-        .into_iter()
-        .map(|row| row.path)
-        .collect();
-    assert!(paths.contains(&new), "{paths:?}");
-}
-
-/// Forgetting a removed directory keeps a row whose path still exists: the
-/// filesystem may give a new directory the old inode.
-#[test]
-fn forgetting_by_identity_keeps_rows_whose_path_still_exists() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(test_config(dir.path())).unwrap();
-    let workspace = dir.path().join("workspace");
-    let target = workspace.join("target");
-    tagged_target(&target);
-    store.remember_target_root(&target, &workspace).unwrap();
-    let identity = crate::filesystem::directory_identity(&target).unwrap();
-    let gone = std::path::absolute(dir.path()).unwrap().join("gone/target");
-    store
-        .db
-        .execute(
-            "INSERT INTO target_roots
-                (path, workspace_root, first_seen, last_seen, device, inode, rustc, discovered)
-             SELECT ?1, workspace_root, first_seen, last_seen, device, inode, rustc, discovered
-             FROM target_roots",
-            [gone.to_string_lossy()],
-        )
-        .unwrap();
-
-    store.forget_target_roots_with_identity(identity).unwrap();
-    let rows = store.tracked_target_roots(0).unwrap();
-    assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0].path, std::path::absolute(&target).unwrap());
-}
-
-#[test]
-fn forgetting_a_removed_target_matches_its_identity_not_its_path() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(test_config(dir.path())).unwrap();
-    let workspace = dir.path().join("workspace");
-    let target = workspace.join("target");
-    tagged_target(&target);
-    store.remember_target_root(&target, &workspace).unwrap();
-    let removed = crate::filesystem::directory_identity(&target).unwrap();
-    store
-        .db
-        .execute("UPDATE target_roots SET path = 'another spelling'", [])
-        .unwrap();
-    // A build recorded a new directory at the removed path since.
-    let rebuilt = workspace.join("rebuilt");
-    tagged_target(&rebuilt);
-    std::fs::remove_dir_all(&target).unwrap();
-    std::fs::rename(&rebuilt, &target).unwrap();
-    store.remember_target_root(&target, &workspace).unwrap();
-
-    store.forget_target_roots_with_identity(removed).unwrap();
-    let rows = store.tracked_target_roots(0).unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].path, std::path::absolute(&target).unwrap());
+    assert_eq!(fs::read(target.join("artifact")).unwrap(), b"cargo output");
 }
 
 #[test]
@@ -14220,41 +13623,6 @@ fn read_only_store_serves_hits_and_writes_nothing() {
         ro.prune_tombstones(0).is_err(),
         "prune_tombstones must be refused on a read-only store"
     );
-    assert!(
-        ro.remember_incremental_dir(src.path()).is_err(),
-        "remember_incremental_dir must be refused on a read-only store"
-    );
-    assert!(
-        ro.remember_target_root(src.path(), src.path()).is_err(),
-        "remember_target_root must be refused on a read-only store"
-    );
-    assert!(
-        ro.remember_discovered_target_root(src.path(), src.path())
-            .is_err(),
-        "remember_discovered_target_root must be refused on a read-only store"
-    );
-    assert!(
-        ro.forget_target_root(src.path()).is_err(),
-        "forget_target_root must be refused on a read-only store"
-    );
-    let identity = crate::filesystem::PathIdentity {
-        device: 1,
-        inode: 2,
-    };
-    // SQLite refuses the write too; the store must refuse it first.
-    let refused = ro
-        .forget_target_root_with_identity(src.path(), identity)
-        .unwrap_err();
-    assert!(
-        refused
-            .to_string()
-            .contains("refusing to forget a target root"),
-        "forget_target_root_with_identity must be refused on a read-only store: {refused:#}"
-    );
-    assert!(
-        ro.clean_registered_incremental_dirs().is_err(),
-        "clean_registered_incremental_dirs must be refused on a read-only store"
-    );
     // The file-hash memo writers are best-effort; on a read-only connection
     // they write nothing.
     ro.record_known_file_hash(&other, "00");
@@ -14392,14 +13760,13 @@ fn read_only_store_treats_a_legacy_entry_as_a_miss() {
 }
 
 #[test]
-fn read_only_maintenance_preserves_files_and_registered_incremental_directories() {
+fn read_only_maintenance_preserves_files() {
     let dir = tempfile::tempdir().unwrap();
     let incremental = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
     let owner = Store::open(&config).unwrap();
     let state = incremental.path().join("state");
     fs::write(&state, b"incremental state").unwrap();
-    owner.remember_incremental_dir(incremental.path()).unwrap();
     fs::create_dir_all(owner.staging_dir()).unwrap();
     let staging = owner.staging_dir().join("abandoned.tmp");
     fs::write(&staging, b"staged bytes").unwrap();
@@ -14415,15 +13782,7 @@ fn read_only_maintenance_preserves_files_and_registered_incremental_directories(
     let before = ro_tree_snapshot(dir.path());
     let ro = Store::open_read_only(&config).unwrap();
 
-    assert!(ro.clean_registered_incremental_dirs().is_err());
     assert_eq!(fs::read(&state).unwrap(), b"incremental state");
-    let registry_count: i64 = owner
-        .db
-        .query_row("SELECT COUNT(*) FROM incremental_dirs", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(registry_count, 1);
     let sweep = ro.sweep_stale_staging(Duration::ZERO);
     assert_eq!(
         (sweep.scanned, sweep.removed, sweep.bytes_reclaimed),

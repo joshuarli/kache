@@ -1450,11 +1450,6 @@ fn build(
         // Profile env first so the benchmark baseline below always wins.
         .envs(profile.build_env(kache))
         .env("RUSTC_WRAPPER", kache)
-        // Every phase builds from scratch, so incremental state would only
-        // add disk writes and measurement noise. With it off, Cargo passes
-        // no -C incremental and no unit takes Kache's adaptive incremental
-        // lanes. Injected for every scenario (Firefox also sets it via
-        // mozconfig).
         .env("CARGO_INCREMENTAL", "0");
     match cache_backend {
         CacheBackend::Kache => {

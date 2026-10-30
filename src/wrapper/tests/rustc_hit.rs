@@ -167,7 +167,7 @@ fn completion_child() {
         std::fs::read(fixture.args.out_dir.as_ref().unwrap().join("second.rmeta")).unwrap(),
         b"second"
     );
-    assert!(!fixture.args.incremental.as_ref().unwrap().exists());
+    assert!(fixture.args.incremental.as_ref().unwrap().is_dir());
     assert!(prediction.is_some());
     let events = events::read_events(&fixture.config.event_log_path()).unwrap();
     assert_eq!(events.len(), 1);

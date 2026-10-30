@@ -9,11 +9,13 @@ copy-on-write restores, e2e) stay strict throughout.
 ## Status
 
 - Goal: land deletion slices S1–S9 on `main`, each with narrow acceptance green.
-- Accepted: S1 (rustdoc deletion), S2 (remote/prefetch accounting deletion; report schema 1→2), S3 (no changes), S4 (target management deletion; see below).
+- Accepted: S1 (rustdoc deletion), S2 (remote/prefetch accounting deletion; report schema 1→2), S3 (no changes), S4 (target management deletion), S5 (incremental passthrough).
 - S4 contract: remove `kache targets`, target-directory `clean` modes and options, target seeding/tracking from `kache cargo`, and the seven `[cache]` settings `target_liveness`, `auto_clean_orphaned_targets`, `auto_share_target_files`, `auto_clean_idle_targets_days`, `auto_clean_unused_units_days`, `seed_new_targets`, and `auto_recover_targets` and their corresponding `KACHE_` environment variables. `kache cargo` passes Cargo arguments through and sets `RUSTC_WRAPPER`; cache cleaning remains.
 - S4 evidence: affected tests and docs check pass; macOS e2e passes all executed fixtures including cross-tree (six skipped: Linux-only cases and missing CMake/Ninja/sccache). Linux clippy, client checks, resource guard and workspace tests ran; two engine tests and eight C/C++ integration tests fail identically on untouched `d02affd` in the container. All other test targets pass. The earlier sandbox-preflight baseline failure remains environment-dependent.
 - Loop timings: incremental build 10.6s; lib suite ~36s; clippy ~17s; `make check` ~5–8min; `make e2e` ~6min.
-- Next: S5. The adaptive machinery still owns incremental state and its target registry until that slice removes them.
+- S5 contract: incremental rustc invocations bypass the artifact cache and fallback wrapper with Cargo's arguments and environment unchanged; Kache never cleans their directories. Remove `cache.clean_incremental`, `cache.preserve_incremental`, `cache.adaptive_incremental`, `cache.seed_incremental`, `cache.incremental_seed_from`, `cache.incremental_crates`, `cache.unstable`, their `KACHE_` overrides, and the target/incremental registry APIs. New indexes omit the two retired tables; existing rows remain untouched. Index generation 12→13 retains cached entries.
+- S5 evidence: config and store suites, Linux clippy/client/resource checks, focused wrapper, cache, incremental, extra-input and macOS debug tests pass. Linux workspace tests pass apart from two pre-existing engine failures in the container; the three changed-contract assertions and 43 C/C++ integration tests passed on rerun. The macOS scenario corpus passes all executed fixtures including cross-tree (six skipped for platform or missing tools); seven cache-specific debug fixtures explicitly disable Cargo incremental compilation without weakening their assertions.
+- Next: S6.
 
 ## Charter
 

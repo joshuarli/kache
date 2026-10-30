@@ -2058,7 +2058,6 @@ fn test_file_config_roundtrip() {
             fallback: None,
             key_salt: None,
             path_only_env_vars: None,
-            incremental_crates: None,
             key_env_vars: Some(vec!["BOLTFFI_*".to_string()]),
             local_store: Some("~/my/cache".to_string()),
             runtime_dir: Some("~/my/runtime".to_string()),
@@ -2066,13 +2065,6 @@ fn test_file_config_roundtrip() {
             cache_executables: Some(true),
             cache_cc_links: None,
             trust_codegen_backends: None,
-
-            clean_incremental: Some(false),
-            preserve_incremental: Some(true),
-            adaptive_incremental: Some(false),
-            seed_incremental: None,
-            incremental_seed_from: None,
-            unstable: Default::default(),
             exclude: Some(vec!["vendor/problem/**".to_string()]),
             event_log_max_size: Some("10MiB".to_string()),
             event_log_keep_lines: Some(500),
@@ -2100,14 +2092,6 @@ fn test_file_config_roundtrip() {
     assert_eq!(
         deserialized.cache.as_ref().unwrap().key_env_vars.as_deref(),
         Some(&["BOLTFFI_*".to_string()][..])
-    );
-    assert_eq!(
-        deserialized.cache.as_ref().unwrap().preserve_incremental,
-        Some(true)
-    );
-    assert_eq!(
-        deserialized.cache.as_ref().unwrap().adaptive_incremental,
-        Some(false)
     );
 }
 
@@ -2153,246 +2137,6 @@ fn test_key_salt_file_env_precedence() {
 }
 
 #[test]
-fn test_preserve_incremental_file_env_precedence() {
-    let _guard = config_path_lock();
-
-    let previous = std::env::var_os("KACHE_PRESERVE_INCREMENTAL");
-    let restore = |value: &Option<OsString>| unsafe {
-        match value {
-            Some(value) => std::env::set_var("KACHE_PRESERVE_INCREMENTAL", value),
-            None => std::env::remove_var("KACHE_PRESERVE_INCREMENTAL"),
-        }
-    };
-    restore(&None);
-
-    let dir = tempfile::tempdir().unwrap();
-    let cfg_path = dir.path().join("config.toml");
-    std::fs::write(&cfg_path, "[cache]\n").unwrap();
-    let _cfg_guard = set_kache_config_for_test(&cfg_path);
-    assert!(!Config::load().unwrap().preserve_incremental);
-
-    std::fs::write(&cfg_path, "[cache]\npreserve_incremental = true\n").unwrap();
-    assert!(Config::load().unwrap().preserve_incremental);
-
-    unsafe { std::env::set_var("KACHE_PRESERVE_INCREMENTAL", "TRUE") };
-    assert!(Config::load().unwrap().preserve_incremental);
-
-    unsafe { std::env::set_var("KACHE_PRESERVE_INCREMENTAL", "false") };
-    assert!(!Config::load().unwrap().preserve_incremental);
-
-    std::fs::write(
-        &cfg_path,
-        "[cache]\nignore_env = true\npreserve_incremental = true\n",
-    )
-    .unwrap();
-    assert!(Config::load().unwrap().preserve_incremental);
-    assert!(IGNORE_ENV_GATED_VARS.contains(&"KACHE_PRESERVE_INCREMENTAL"));
-
-    restore(&previous);
-}
-
-#[test]
-fn test_adaptive_incremental_default_file_env_precedence() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let cfg_path = dir.path().join("config.toml");
-    let _cfg_guard = set_kache_config_for_test(&cfg_path);
-
-    std::fs::write(&cfg_path, "[cache]\n").unwrap();
-    {
-        let _adaptive = NamedEnvGuard::remove("KACHE_ADAPTIVE_INCREMENTAL");
-        assert!(Config::load().unwrap().adaptive_incremental);
-    }
-
-    std::fs::write(&cfg_path, "[cache]\nadaptive_incremental = false\n").unwrap();
-    {
-        let _adaptive = NamedEnvGuard::remove("KACHE_ADAPTIVE_INCREMENTAL");
-        assert!(!Config::load().unwrap().adaptive_incremental);
-    }
-
-    {
-        let _adaptive = NamedEnvGuard::set("KACHE_ADAPTIVE_INCREMENTAL", "true");
-        assert!(Config::load().unwrap().adaptive_incremental);
-    }
-
-    std::fs::write(&cfg_path, "[cache]\nadaptive_incremental = true\n").unwrap();
-    {
-        let _adaptive = NamedEnvGuard::set("KACHE_ADAPTIVE_INCREMENTAL", "false");
-        assert!(!Config::load().unwrap().adaptive_incremental);
-    }
-
-    std::fs::write(
-        &cfg_path,
-        "[cache]\nignore_env = true\nadaptive_incremental = false\n",
-    )
-    .unwrap();
-    {
-        let _adaptive = NamedEnvGuard::set("KACHE_ADAPTIVE_INCREMENTAL", "true");
-        assert!(!Config::load().unwrap().adaptive_incremental);
-        assert!(!EnvOverrides::detect().adaptive_incremental);
-    }
-    assert!(IGNORE_ENV_GATED_VARS.contains(&"KACHE_ADAPTIVE_INCREMENTAL"));
-}
-
-#[test]
-fn test_incremental_seed_from_is_explicit_and_respects_ignore_env() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let cfg_path = dir.path().join("config.toml");
-    let _cfg_guard = set_kache_config_for_test(&cfg_path);
-    std::fs::write(&cfg_path, "[cache]\n").unwrap();
-    {
-        let _seed = NamedEnvGuard::remove("KACHE_INCREMENTAL_SEED_FROM");
-        assert!(Config::load().unwrap().incremental_seed_from.is_none());
-    }
-    let seed = dir.path().join("previous/target/debug");
-    let _seed = NamedEnvGuard::set("KACHE_INCREMENTAL_SEED_FROM", seed.to_str().unwrap());
-    assert_eq!(Config::load().unwrap().incremental_seed_from, Some(seed));
-    std::fs::write(&cfg_path, "[cache]\nignore_env = true\n").unwrap();
-    assert!(Config::load().unwrap().incremental_seed_from.is_none());
-    std::fs::write(
-        &cfg_path,
-        format!(
-            "[cache]\nignore_env = true\nincremental_seed_from = '{}'\n",
-            dir.path().join("file/target/debug").display()
-        ),
-    )
-    .unwrap();
-    assert_eq!(
-        Config::load().unwrap().incremental_seed_from,
-        Some(dir.path().join("file/target/debug"))
-    );
-}
-
-#[test]
-fn worktree_seeding_defaults_on_and_respects_file_env_and_ignore_env() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&path);
-    let _env = NamedEnvGuard::remove("KACHE_SEED_INCREMENTAL");
-    std::fs::write(&path, "[cache]\n").unwrap();
-    assert!(Config::load().unwrap().seed_incremental);
-    std::fs::write(&path, "[cache]\nseed_incremental = false\n").unwrap();
-    assert!(!Config::load().unwrap().seed_incremental);
-    for value in ["1", "true", "TRUE"] {
-        let _env = NamedEnvGuard::set("KACHE_SEED_INCREMENTAL", value);
-        assert!(Config::load().unwrap().seed_incremental, "{value}");
-    }
-    std::fs::write(&path, "[cache]\nseed_incremental = true\n").unwrap();
-    for value in ["0", "false", "FALSE"] {
-        let _env = NamedEnvGuard::set("KACHE_SEED_INCREMENTAL", value);
-        assert!(!Config::load().unwrap().seed_incremental, "{value}");
-        assert_eq!(
-            env_override_for(&["cache".into(), "seed_incremental".into()], false),
-            Some("KACHE_SEED_INCREMENTAL")
-        );
-    }
-    std::fs::write(
-        &path,
-        "[cache]\nignore_env = true\nseed_incremental = false\n",
-    )
-    .unwrap();
-    let _env = NamedEnvGuard::set("KACHE_SEED_INCREMENTAL", "true");
-    assert!(!Config::load().unwrap().seed_incremental);
-    assert_eq!(
-        env_override_for(&["cache".into(), "seed_incremental".into()], true),
-        None
-    );
-    assert!(IGNORE_ENV_GATED_VARS.contains(&"KACHE_SEED_INCREMENTAL"));
-}
-
-#[test]
-fn unstable_mode_defaults_off_and_respects_file_env_and_ignore_env() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&path);
-    let _env = NamedEnvGuard::remove("KACHE_UNSTABLE");
-    std::fs::write(&path, "[cache]\n").unwrap();
-    assert!(!Config::load().unwrap().unstable);
-    std::fs::write(&path, "[cache]\nunstable = true\n").unwrap();
-    assert!(Config::load().unwrap().unstable);
-    for value in ["0", "false", "FALSE", "", "incremental-worktrees"] {
-        let _env = NamedEnvGuard::set("KACHE_UNSTABLE", value);
-        assert!(!Config::load().unwrap().unstable, "{value}");
-        assert_eq!(
-            env_override_for(&["cache".into(), "unstable".into()], false),
-            Some("KACHE_UNSTABLE")
-        );
-    }
-    std::fs::write(&path, "[cache]\nunstable = false\n").unwrap();
-    assert!(!Config::load().unwrap().unstable);
-    for value in ["1", "true", "TRUE"] {
-        let _env = NamedEnvGuard::set("KACHE_UNSTABLE", value);
-        assert!(Config::load().unwrap().unstable, "{value}");
-    }
-    std::fs::write(&path, "[cache]\nignore_env = true\nunstable = true\n").unwrap();
-    let _env = NamedEnvGuard::set("KACHE_UNSTABLE", "false");
-    assert!(Config::load().unwrap().unstable);
-    assert_eq!(
-        env_override_for(&["cache".into(), "unstable".into()], true),
-        None
-    );
-    std::fs::write(&path, "[cache]\nignore_env = true\n").unwrap();
-    let _env = NamedEnvGuard::set("KACHE_UNSTABLE", "true");
-    assert!(!Config::load().unwrap().unstable);
-    assert!(IGNORE_ENV_GATED_VARS.contains(&"KACHE_UNSTABLE"));
-}
-
-#[test]
-fn test_incremental_crates_default_file_env_precedence() {
-    let _guard = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let cfg_path = dir.path().join("config.toml");
-    let _cfg_guard = set_kache_config_for_test(&cfg_path);
-
-    std::fs::write(&cfg_path, "[cache]\n").unwrap();
-    {
-        let _crates = NamedEnvGuard::remove("KACHE_INCREMENTAL_CRATES");
-        assert!(Config::load().unwrap().incremental_crates.is_empty());
-    }
-
-    std::fs::write(
-        &cfg_path,
-        "[cache]\nincremental_crates = [\"tap-lib\", \"other\"]\n",
-    )
-    .unwrap();
-    {
-        let _crates = NamedEnvGuard::remove("KACHE_INCREMENTAL_CRATES");
-        // File entries get the same `-`→`_` normalization as env entries.
-        assert_eq!(
-            Config::load().unwrap().incremental_crates,
-            vec!["other".to_string(), "tap_lib".to_string()]
-        );
-    }
-
-    {
-        // Env wins and REPLACES the file list entirely; comma and
-        // whitespace both separate; duplicates and empties collapse.
-        let _crates = NamedEnvGuard::set("KACHE_INCREMENTAL_CRATES", "tap_lib, tap-lib\tzeta  ,");
-        assert_eq!(
-            Config::load().unwrap().incremental_crates,
-            vec!["tap_lib".to_string(), "zeta".to_string()]
-        );
-    }
-
-    std::fs::write(
-        &cfg_path,
-        "[cache]\nignore_env = true\nincremental_crates = [\"from_file\"]\n",
-    )
-    .unwrap();
-    {
-        let _crates = NamedEnvGuard::set("KACHE_INCREMENTAL_CRATES", "from_env");
-        assert_eq!(
-            Config::load().unwrap().incremental_crates,
-            vec!["from_file".to_string()]
-        );
-    }
-    assert!(IGNORE_ENV_GATED_VARS.contains(&"KACHE_INCREMENTAL_CRATES"));
-}
-
-#[test]
 fn path_only_env_vars_take_the_env_list_verbatim_without_empties() {
     let _guard = config_path_lock();
     let dir = tempfile::tempdir().unwrap();
@@ -2422,30 +2166,6 @@ fn path_only_env_vars_take_the_env_list_verbatim_without_empties() {
         );
     }
     assert!(IGNORE_ENV_GATED_VARS.contains(&"KACHE_PATH_ONLY_ENV_VARS"));
-}
-
-#[test]
-fn test_incremental_crate_forced_matches_normalized_names_only() {
-    let list = normalize_incremental_crates(["tap-lib".to_string()]);
-    // Both spellings of the listed crate select it; other crates,
-    // prefixes, and supersets do not.
-    assert!(incremental_crate_forced_in(&list, "tap_lib"));
-    assert!(incremental_crate_forced_in(&list, "tap-lib"));
-    assert!(!incremental_crate_forced_in(&list, "tap_lib_extra"));
-    assert!(!incremental_crate_forced_in(&list, "tap"));
-    assert!(!incremental_crate_forced_in(&list, "other"));
-    // Empty list: nothing is forced, not even the empty name.
-    assert!(!incremental_crate_forced_in(&[], "tap_lib"));
-    assert!(!incremental_crate_forced_in(&[], ""));
-    // Normalization: trim, drop empties, `-`→`_`, sort, dedupe.
-    assert_eq!(
-        normalize_incremental_crates(
-            [" b-crate ", "", "a_crate", "b_crate"]
-                .into_iter()
-                .map(str::to_string)
-        ),
-        vec!["a_crate".to_string(), "b_crate".to_string()]
-    );
 }
 
 #[test]
@@ -2652,7 +2372,6 @@ fn test_config_store_dir() {
         scheduler: true,
         test_lease: None,
         path_only_env_vars: Vec::new(),
-        incremental_crates: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
         cache_dir: PathBuf::from("/tmp/kache"),
@@ -2663,13 +2382,6 @@ fn test_config_store_dir() {
         cache_executables: false,
         cache_cc_links: false,
         trust_codegen_backends: false,
-
-        clean_incremental: true,
-        preserve_incremental: false,
-        adaptive_incremental: true,
-        seed_incremental: true,
-        incremental_seed_from: None,
-        unstable: Default::default(),
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
@@ -2719,7 +2431,6 @@ fn test_config_index_db_path() {
         scheduler: true,
         test_lease: None,
         path_only_env_vars: Vec::new(),
-        incremental_crates: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
         cache_dir: PathBuf::from("/tmp/kache"),
@@ -2730,13 +2441,6 @@ fn test_config_index_db_path() {
         cache_executables: false,
         cache_cc_links: false,
         trust_codegen_backends: false,
-
-        clean_incremental: true,
-        preserve_incremental: false,
-        adaptive_incremental: true,
-        seed_incremental: true,
-        incremental_seed_from: None,
-        unstable: Default::default(),
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
@@ -2782,7 +2486,6 @@ fn test_config_event_log_path() {
         scheduler: true,
         test_lease: None,
         path_only_env_vars: Vec::new(),
-        incremental_crates: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
         cache_dir: PathBuf::from("/tmp/kache"),
@@ -2793,13 +2496,6 @@ fn test_config_event_log_path() {
         cache_executables: false,
         cache_cc_links: false,
         trust_codegen_backends: false,
-
-        clean_incremental: true,
-        preserve_incremental: false,
-        adaptive_incremental: true,
-        seed_incremental: true,
-        incremental_seed_from: None,
-        unstable: Default::default(),
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
@@ -2860,7 +2556,6 @@ fn test_config_socket_path() {
         scheduler: true,
         test_lease: None,
         path_only_env_vars: Vec::new(),
-        incremental_crates: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
         cache_dir: PathBuf::from("/tmp/kache"),
@@ -2871,13 +2566,6 @@ fn test_config_socket_path() {
         cache_executables: false,
         cache_cc_links: false,
         trust_codegen_backends: false,
-
-        clean_incremental: true,
-        preserve_incremental: false,
-        adaptive_incremental: true,
-        seed_incremental: true,
-        incremental_seed_from: None,
-        unstable: Default::default(),
         event_log_max_size: 1024,
         event_log_keep_lines: 100,
         compression_level: 3,
@@ -3546,7 +3234,6 @@ fn test_save_and_load_file_config() {
             fallback: None,
             key_salt: None,
             path_only_env_vars: None,
-            incremental_crates: None,
             key_env_vars: None,
             local_store: Some("/tmp/my-cache".to_string()),
             runtime_dir: Some("/tmp/my-runtime".to_string()),
@@ -3554,13 +3241,6 @@ fn test_save_and_load_file_config() {
             cache_executables: Some(true),
             cache_cc_links: None,
             trust_codegen_backends: None,
-
-            clean_incremental: None,
-            preserve_incremental: None,
-            adaptive_incremental: None,
-            seed_incremental: None,
-            incremental_seed_from: None,
-            unstable: Default::default(),
             exclude: None,
             event_log_max_size: None,
             event_log_keep_lines: None,

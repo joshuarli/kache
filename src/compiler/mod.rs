@@ -914,7 +914,7 @@ fn is_workspace_wrapper_chain_with(
     workspace_wrapper: Option<&std::ffi::OsStr>,
     program_on_path: impl FnOnce(&str) -> bool,
 ) -> bool {
-    if args.len() < 2 || !rustc::RustcCompiler::recognizes(&args[1..]) {
+    if args.len() < 2 || args[1].starts_with('@') || !rustc::RustcCompiler::recognizes(&args[1..]) {
         return false;
     }
     if args[0].contains('/') || args[0].contains('\\') {
