@@ -634,14 +634,17 @@ mod tests {
     fn jobserver_mapping_keeps_endpoint_order_when_daemon_fd_numbers_are_reversed() {
         let root = tempfile::tempdir().unwrap();
         let mut client = fixture(root.path());
-        let mut first = tempfile::tempfile().unwrap();
-        let mut second = tempfile::tempfile().unwrap();
+        let mut first = tempfile::NamedTempFile::new().unwrap();
+        let mut second = tempfile::NamedTempFile::new().unwrap();
         first.write_all(b"read-end").unwrap();
         first.rewind().unwrap();
         second.write_all(b"write-end").unwrap();
         second.rewind().unwrap();
-        client.jobserver =
-            crate::jobserver::Descriptors::new(vec![first.into(), second.into()]).unwrap();
+        client.jobserver = crate::jobserver::Descriptors::new(vec![
+            first.as_file().try_clone().unwrap().into(),
+            second.as_file().try_clone().unwrap().into(),
+        ])
+        .unwrap();
         let Command::Spawn { mut command, .. } = spawn(
             root.path(),
             "pair=${CARGO_MAKEFLAGS#*=}; r=${pair%,*}; w=${pair#*,}; /bin/cat /dev/fd/$r; /bin/cat /dev/fd/$w",
