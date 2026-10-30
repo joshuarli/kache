@@ -85,7 +85,7 @@ Failing item: 3 attempts max (root-cause: repro first, one hypothesis at a time)
 
 ## Needs environment
 
-- `make bench-contention` (six overlapping Cargo jobs) is Linux-only; macOS numbers do not substitute. Owner command on Linux: `make bench-contention ARGS="--output tmp/bench/contention-<date>"`. Attempted 2026-10-30 on the musl host and parked: the `test`/`test-all` jobs (`cargo test --no-run`) link `-static-pie` and hk/eza need a static libz via non-vendored libgit2-sys, but the host ships only shared `libz.so` (same failure with `LIBRARY_PATH=/usr/lib`; eza fails identically). Retry on a glibc host, or after `apk add zlib-static` here.
+- `make bench-contention` (six overlapping Cargo jobs) is Linux-only; macOS numbers do not substitute. Owner command on Linux: `make bench-contention ARGS="--output tmp/bench/contention-<date>"`. Attempted 2026-10-30 on the musl host and parked: the `test`/`test-all` jobs (`cargo test --no-run`) link `-static-pie` and hk/eza need a static libz via non-vendored libgit2-sys, but the host ships only shared `libz.so` (same failure with `LIBRARY_PATH=/usr/lib`; eza fails identically). glibc is out of scope (static musl binaries only); retry after `apk add zlib-static` here.
 - Bench subjects requiring fresh clones need network (`make bench PROFILE=<p>` without `--skip-clone`). Offline slices use cached subjects only.
 - CI mutation shards (`Mutation testing (diff k/n)`) run on Linux runners after the parent opens the draft PR; a laptop run at 1–3 jobs takes hours and flakes fixture tests.
 
