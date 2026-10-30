@@ -158,9 +158,9 @@ pub fn current_for(env: &InvocationEnv) -> Box<dyn Platform> {
     {
         Box::new(LinuxPlatform)
     }
-    #[cfg(target_os = "windows")]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        Box::new(WindowsPlatform)
+        panic!("unsupported host OS: Kache supports Linux and macOS only")
     }
 }
 
@@ -586,38 +586,6 @@ impl Platform for LinuxPlatform {
     }
 }
 
-/// Windows implementation. Authenticode signing is not enforced for
-/// load-time loading of unsigned PE binaries (only for kernel-mode
-/// drivers and SmartScreen), so [`Platform::ensure_binary_loadable`]
-/// is a no-op. PE/PDB pairing is checked before storage and before restoring
-/// any cached output (`pe_pdb`), including explicitly named executables.
-///
-/// Constructed off Windows only by tests; see [`LinuxPlatform`].
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-pub struct WindowsPlatform;
-
-impl Platform for WindowsPlatform {
-    fn name(&self) -> &'static str {
-        "windows"
-    }
-
-    fn ensure_binary_loadable(&self, _path: &Path) -> Result<Loadability> {
-        Ok(Loadability::Unverified)
-    }
-
-    fn package_debug_bundle(
-        &self,
-        _binary: &Path,
-        _staging_dir: &Path,
-        _split_debuginfo: Option<&str>,
-    ) -> Result<Option<PathBuf>> {
-        // Nothing to package: rustc names the `.pdb` by file name
-        // (`/PDBALTPATH:%_PDB%`) and it is stored with the `.exe` as an
-        // output of its own; the store checks the pair (`pe_pdb`).
-        Ok(None)
-    }
-}
-
 /// Whether the loader requires a valid signature, so that
 /// [`MacOsPlatform::ensure_binary_loadable`] has something to check: arm64
 /// macOS only.
@@ -806,10 +774,8 @@ pub(crate) mod tests {
             "macos"
         } else if cfg!(target_os = "linux") {
             "linux"
-        } else if cfg!(target_os = "windows") {
-            "windows"
         } else {
-            // The cfg cascade in `current` covers exactly these three.
+            // The cfg cascade in `current` covers Linux and macOS only.
             // If this branch fires, `current` needs a new arm.
             panic!("unsupported host OS in test")
         };
@@ -819,7 +785,6 @@ pub(crate) mod tests {
     #[test]
     fn only_macos_on_arm64_keeps_a_verified_loadable_memo() {
         assert_eq!(LinuxPlatform.verified_loadable_dir(), None);
-        assert_eq!(WindowsPlatform.verified_loadable_dir(), None);
         let dir = MacOsPlatform::default().verified_loadable_dir();
         if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             let dir = dir.expect("arm64 macOS checks signatures, so it keeps the memo");
@@ -882,14 +847,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn windows_ensure_binary_loadable_is_noop_for_any_path() {
-        let platform = WindowsPlatform;
-        platform
-            .ensure_binary_loadable(Path::new("/no/such/file"))
-            .unwrap();
-    }
-
-    #[test]
     fn macos_ensure_binary_loadable_does_not_propagate_errors() {
         // Two paths exercised by this single test depending on host:
         //
@@ -922,8 +879,6 @@ pub(crate) mod tests {
         assert!(LinuxPlatform.may_share_restored_loadables());
         // codesign may rewrite a restored file in place.
         assert!(!MacOsPlatform::default().may_share_restored_loadables());
-        // An NTFS link shares the blob's read-only attribute (#429).
-        assert!(!WindowsPlatform.may_share_restored_loadables());
     }
 
     // ── package_debug_bundle (kunobi-ninja/kache#319) ────────────────
@@ -932,18 +887,6 @@ pub(crate) mod tests {
     fn linux_package_debug_bundle_is_none_for_any_path() {
         // Linux DWARF is embedded — no companion to produce, ever.
         let platform = LinuxPlatform;
-        let dir = tempfile::tempdir().unwrap();
-        assert!(
-            platform
-                .package_debug_bundle(Path::new("/no/such/binary"), dir.path(), None)
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn windows_package_debug_bundle_is_none_for_any_path() {
-        let platform = WindowsPlatform;
         let dir = tempfile::tempdir().unwrap();
         assert!(
             platform
