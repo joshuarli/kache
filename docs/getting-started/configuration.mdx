@@ -210,7 +210,7 @@ Set `cache.auto_recover_min_free_bytes` to the minimum free space on the store's
 
 | Environment | TOML key | Default | Purpose |
 | --- | --- | --- | --- |
-| `KACHE_CACHE_EXECUTABLES` | `cache.cache_executables` | Linux/macOS: `true`; Windows: `false` | Cache eligible Rust bins and test executables |
+| `KACHE_CACHE_EXECUTABLES` | `cache.cache_executables` | `true` | Cache eligible Rust bins and test executables |
 | `KACHE_TRUST_CODEGEN_BACKENDS` | `cache.trust_codegen_backends` | `false` | Cache rustc compiles that load a codegen backend dylib (`-Zcodegen-backend=<path>`), keyed by the dylib's contents. The backend must be passed as a path, and libraries it loads at run time are not part of the key. Off because a backend can write files rustc does not report, and a cache hit would not restore them. |
 | `KACHE_INPUT_PREDICTIONS` | `cache.input_predictions` | `true` | Remember each crate's source closure and derive the next key from it, skipping the dep-info pre-pass when every recorded input still checks out |
 | `KACHE_VERIFY_INPUT_PREDICTIONS` | none | off | `sampled` or `always`: also run the dep-info pre-pass for a validated prediction and count disagreements in the report. The pre-pass result is the one used |

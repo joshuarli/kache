@@ -85,11 +85,11 @@ for key in ["cc.extra_allowlist_flags", "paths.base_dirs", "workspace.extra_inpu
     if key not in config_doc:
         errors.append(f"configuration guide is missing source field: {key}")
 
-expected_default = 'cfg!(target_os = "linux") || cfg!(target_os = "macos")'
+expected_default = 'pub fn default_cache_executables() -> bool {\n    true\n}'
 if expected_default not in config:
-    errors.append("cache_executables platform default changed; update the docs and this check")
-if "Linux/macOS: `true`; Windows: `false`" not in config_doc:
-    errors.append("configuration guide does not state the executable-cache platform default")
+    errors.append("cache_executables default changed; update the docs and this check")
+if "| `KACHE_CACHE_EXECUTABLES` | `cache.cache_executables` | `true` |" not in config_doc:
+    errors.append("configuration guide does not state the executable-cache default")
 
 if errors:
     print("Documentation checks failed:", file=sys.stderr)

@@ -1811,7 +1811,7 @@ fn source_excluded_by_patterns(patterns: &[String], source_path: &Path, roots: &
 /// Override either way with `KACHE_CACHE_EXECUTABLES` or
 /// `[cache] cache_executables`.
 pub fn default_cache_executables() -> bool {
-    cfg!(target_os = "linux") || cfg!(target_os = "macos")
+    true
 }
 
 /// Where probe memos (CRT placements, build-script tree digests) live: under
