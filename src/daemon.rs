@@ -1271,8 +1271,6 @@ impl Daemon {
                     );
                 }
 
-                crate::build_script::sweep_hermetic_out_dirs_for_gc(&self.config.cache_dir);
-
                 // Reclaim orphaned blob files (crash mid-put, or a meta-less
                 // remove_entry that couldn't decrement refcounts). The grace
                 // leaves blobs a concurrent build is materializing untouched; they

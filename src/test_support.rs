@@ -36,7 +36,6 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),

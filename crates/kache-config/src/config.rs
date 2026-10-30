@@ -190,11 +190,6 @@ pub struct Config {
     /// `KACHE_SCHEDULER_MEMORY_PRESSURE=0`/`=false` or `[cache]
     /// scheduler_memory_pressure = false` to disable.
     pub scheduler_memory_pressure: bool,
-    /// Run cached build scripts with `OUT_DIR` in a shared directory named by
-    /// their inputs, so a run is shared across target directories (Unix).
-    /// Off by default. Set via `KACHE_BUILD_SCRIPT_HERMETIC=1`/`=true` or
-    /// `[cache] build_script_hermetic = true`.
-    pub build_script_hermetic: bool,
     // Storage-layout advisories (kunobi-ninja/kache#551) are always on: a
     // cache hit restored by COPY because the storage *layout* prevents
     // zero-copy dedup is surfaced as a deduplicated advisory with fix
@@ -246,8 +241,6 @@ pub struct CacheFileConfig {
     pub auto_recover_min_free_bytes: Option<u64>,
     /// See [`Config::scheduler_memory_pressure`].
     pub scheduler_memory_pressure: Option<bool>,
-    /// See [`Config::build_script_hermetic`].
-    pub build_script_hermetic: Option<bool>,
     /// Ignore `KACHE_*` env overrides for file-backed settings. File-only by
     /// design (env must not re-enable env). See [`Config::ignore_env_enabled`].
     pub ignore_env: Option<bool>,
@@ -448,7 +441,6 @@ const IGNORE_ENV_GATED_VARS: &[&str] = &[
     "KACHE_DAEMON_EXECUTION_CONCURRENCY",
     "KACHE_AUTO_RECOVER_MIN_FREE_BYTES",
     "KACHE_SCHEDULER_MEMORY_PRESSURE",
-    "KACHE_BUILD_SCRIPT_HERMETIC",
     "KACHE_HEARTBEAT_SECS",
 ];
 
@@ -484,7 +476,6 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
         "KACHE_SCHEDULER_MEMORY_PRESSURE",
         "cache.scheduler_memory_pressure",
     ),
-    ("KACHE_BUILD_SCRIPT_HERMETIC", "cache.build_script_hermetic"),
 ];
 
 /// Read a `KACHE_*` env var, unless the pinned config asked to ignore env
@@ -774,8 +765,6 @@ impl Config {
             Self::auto_recover_min_free_bytes_for(invocation, &file_config);
         let scheduler_memory_pressure =
             Self::scheduler_memory_pressure_enabled_for(invocation, &file_config);
-        let build_script_hermetic =
-            Self::build_script_hermetic_enabled_for(invocation, &file_config);
         let mut volume_stores = Self::load_volume_stores(&file_config, explicit_max_size);
         for shard in &mut volume_stores {
             shard.store = resolve_invocation_path(invocation, &shard.store)?;
@@ -791,7 +780,6 @@ impl Config {
             project_rules,
             auto_recover_min_free_bytes,
             scheduler_memory_pressure,
-            build_script_hermetic,
             volume_stores,
             cache_executables,
             event_log_max_size,
@@ -997,25 +985,6 @@ impl Config {
             .ok()
             .and_then(|config| config.cache.as_ref())
             .and_then(|cache| cache.trust_daemon_execution)
-            .unwrap_or(false)
-    }
-
-    /// Hermetic build-script runs, off by default.
-    /// `KACHE_BUILD_SCRIPT_HERMETIC=1`/`=true` turns them on and any other
-    /// value off (env wins), else `[cache] build_script_hermetic`, else off.
-    fn build_script_hermetic_enabled_for(
-        invocation: &InvocationEnv,
-        file_config: &Result<FileConfig>,
-    ) -> bool {
-        let ignore_env = Self::ignore_env_enabled(file_config);
-        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_BUILD_SCRIPT_HERMETIC", ignore_env) {
-            return v == "1" || v == "true";
-        }
-        file_config
-            .as_ref()
-            .ok()
-            .and_then(|c| c.cache.as_ref())
-            .and_then(|c| c.build_script_hermetic)
             .unwrap_or(false)
     }
 

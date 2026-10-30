@@ -240,33 +240,6 @@ fn recovery_floor_obeys_file_environment_and_ci_defaults() {
 }
 
 #[test]
-fn hermetic_build_scripts_are_off_by_default_and_obey_env_precedence() {
-    let _lock = config_path_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let _config = set_kache_config_for_test(&config_path);
-    let _missing = NamedEnvGuard::remove("KACHE_BUILD_SCRIPT_HERMETIC");
-    assert!(!Config::load().unwrap().build_script_hermetic);
-    std::fs::write(&config_path, "[cache]\nbuild_script_hermetic = true\n").unwrap();
-    assert!(Config::load().unwrap().build_script_hermetic);
-    for (value, on) in [("0", false), ("yes", false), ("1", true), ("true", true)] {
-        let _env = NamedEnvGuard::set("KACHE_BUILD_SCRIPT_HERMETIC", value);
-        assert_eq!(Config::load().unwrap().build_script_hermetic, on, "{value}");
-    }
-    std::fs::write(&config_path, "[cache]\nbuild_script_hermetic = false\n").unwrap();
-    let _on = NamedEnvGuard::set("KACHE_BUILD_SCRIPT_HERMETIC", "1");
-    assert!(Config::load().unwrap().build_script_hermetic);
-    drop(_on);
-    std::fs::write(
-        &config_path,
-        "[cache]\nignore_env = true\nbuild_script_hermetic = true\n",
-    )
-    .unwrap();
-    let _ignored = NamedEnvGuard::set("KACHE_BUILD_SCRIPT_HERMETIC", "0");
-    assert!(Config::load().unwrap().build_script_hermetic);
-}
-
-#[test]
 fn memory_pressure_admission_is_on_by_default_and_obeys_env_precedence() {
     let _lock = config_path_lock();
     let dir = tempfile::tempdir().unwrap();
@@ -1562,7 +1535,6 @@ fn test_file_config_roundtrip() {
 
             scheduler_memory_pressure: None,
 
-            build_script_hermetic: None,
             ignore_env: None,
             key_salt: None,
             path_only_env_vars: None,
@@ -1853,7 +1825,6 @@ fn test_config_store_dir() {
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -1888,7 +1859,6 @@ fn test_config_index_db_path() {
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -1919,7 +1889,6 @@ fn test_config_event_log_path() {
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -1965,7 +1934,6 @@ fn test_config_socket_path() {
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -2560,7 +2528,6 @@ fn test_save_and_load_file_config() {
 
             scheduler_memory_pressure: None,
 
-            build_script_hermetic: None,
             ignore_env: None,
             key_salt: None,
             path_only_env_vars: None,

@@ -68,7 +68,7 @@ kache clean --cache --dry-run
 kache clean --cache
 ```
 
-`kache clean` empties the main store; volume shards keep their entries. It asks first, and without a terminal it removes nothing unless `--yes` is set. It also deletes the index files kept after index corruption, and says how many before it asks. It removes hermetic build-script runs that no target directory links to.
+`kache clean` empties the main store; volume shards keep their entries. It asks first, and without a terminal it removes nothing unless `--yes` is set. It also deletes the index files kept after index corruption, and says how many before it asks.
 
 You rarely need `--cache`: the daemon evicts entries on its own to keep the cache under `cache.local_max_size`, starting with stale, rarely hit entries that free the most space. For scripts, `--cache --stale 30d` evicts older entries and `--cache --stale-schema` removes entries created with old or unrecorded key schemas without asking. `--crate serde` removes one crate's entries after asking.
 

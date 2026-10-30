@@ -650,44 +650,6 @@ fn local_gc_records_its_run_with_the_driver_that_ran_it() {
     assert_eq!(stats.source, "manual");
 }
 
-/// A sandbox a crashed hermetic attempt left is gone after any GC run.
-#[test]
-fn local_gc_sweeps_hermetic_build_script_runs() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().to_path_buf());
-    let leftover = config.cache_dir.join("out-dirs/v2").join("ab".repeat(16));
-    std::fs::create_dir_all(leftover.join("debug/build/z-1/out")).unwrap();
-    run_gc_local(&config, GcMode::Background).unwrap();
-    assert!(!leftover.exists());
-}
-
-/// `kache purge` removes every shared build-script run but the ones a
-/// target directory still links to.
-#[cfg(unix)]
-#[test]
-fn purge_keeps_only_linked_build_script_runs() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = save_manifest_config(dir.path().join("cache"));
-    let v2 = config.cache_dir.join("out-dirs/v2");
-    let run = |key: &str| {
-        let root = v2.join(key.repeat(16));
-        std::fs::create_dir_all(root.join("out")).unwrap();
-        std::fs::write(root.join(".kache-sealed"), b"{}").unwrap();
-        root
-    };
-    let (linked, unlinked) = (run("ab"), run("cd"));
-    let link = dir.path().join("target-out");
-    std::os::unix::fs::symlink(linked.join("out"), &link).unwrap();
-    let mut line = link.as_os_str().as_encoded_bytes().to_vec();
-    line.push(b'\n');
-    std::fs::write(linked.with_extension("refs"), line).unwrap();
-
-    purge(&config, None).unwrap();
-    assert!(linked.exists(), "a target directory links to it");
-    assert!(!unlinked.exists());
-}
-/// kunobi-ninja/kache#1126: the local sweep removes stale key locks and
-/// records the housekeeping counts.
 #[test]
 fn local_gc_runs_store_housekeeping_and_records_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -2155,7 +2117,6 @@ fn save_manifest_config(
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),

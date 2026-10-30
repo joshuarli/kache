@@ -701,7 +701,6 @@ pub(super) fn test_config(dir: &Path) -> Config {
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -1477,30 +1476,6 @@ fn gc_does_not_hold_the_daemon_store_mutex() {
     );
 }
 
-/// The daemon's GC sweeps shared build-script runs too: a sandbox a
-/// crashed hermetic attempt left is gone after a run.
-#[test]
-fn daemon_gc_sweeps_hermetic_build_script_runs() {
-    let dir = tempfile::tempdir().unwrap();
-    let daemon = Daemon::new(test_config(dir.path()));
-    let leftover = daemon
-        .config
-        .cache_dir
-        .join("out-dirs/v2")
-        .join("ab".repeat(16));
-    std::fs::create_dir_all(leftover.join("out")).unwrap();
-    daemon
-        .run_gc(
-            GcPolicy::Automatic { max_age_hours: 0 },
-            GcDriver::Requested,
-        )
-        .unwrap();
-    assert!(!leftover.exists());
-}
-
-/// The daemon's sweep is what flushes entries a miss stored without an
-/// fsync: it marks them durable, does nothing once the queue is empty,
-/// and stands aside while another flusher holds the lock.
 #[test]
 fn the_daemon_sweep_flushes_entries_pending_durability() {
     let dir = tempfile::tempdir().unwrap();

@@ -418,7 +418,6 @@ fn write_test_events(dir: &std::path::Path) -> Config {
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -1596,7 +1595,6 @@ fn test_missing_transfer_data() {
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -1641,7 +1639,6 @@ fn test_suggestion_high_miss_share() {
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -1695,7 +1692,6 @@ fn test_suggestion_high_hit_overhead() {
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -1750,7 +1746,6 @@ fn test_suggestion_network_download_failures_and_fanout() {
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -1810,7 +1805,6 @@ fn test_suggestion_network_latency_thresholds() {
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -2271,7 +2265,6 @@ fn test_empty_report() {
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),
@@ -2693,7 +2686,6 @@ fn report_counts_each_download_transfer_format() {
 
         scheduler_memory_pressure: true,
 
-        build_script_hermetic: false,
         path_only_env_vars: Vec::new(),
         key_env_vars: Vec::new(),
         base_dirs: Vec::new(),

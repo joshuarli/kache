@@ -49,7 +49,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(crate) mod declarations;
-mod hermetic;
 pub(crate) mod inputs;
 mod outside;
 mod restore;
@@ -544,15 +543,8 @@ fn run_cached(real: &Path, argv: &[std::ffi::OsString]) -> Result<i32> {
         start,
     };
 
-    let local_prediction = run.prediction()?;
-    if let Some(prediction) = &local_prediction
-        && run.config.build_script_hermetic
-        && let Some(code) = hermetic::run(&run, real, argv, prediction)?
-    {
-        return Ok(code);
-    }
     // The action key folds the declarations stored with the run.
-    let prediction = local_prediction;
+    let prediction = run.prediction()?;
     // Everything below writes into `OUT_DIR` itself.
     detach_out_dir(&run.environment.out_dir)?;
     if let Some(prediction) = &prediction {
@@ -2194,34 +2186,6 @@ fn collect_out_dir_inner(
         symlinks,
         rooted_symlinks,
     })
-}
-
-/// How long a hermetic run no target directory links to stays for the next
-/// worktree that needs it.
-pub(crate) const HERMETIC_UNLINKED_RETENTION: std::time::Duration =
-    std::time::Duration::from_secs(604_800);
-
-/// Remove hermetic runs no target directory links to that have gone
-/// unlinked for `keep_unlinked`. See [`hermetic::sweep`].
-pub(crate) fn sweep_hermetic_out_dirs(
-    cache_dir: &Path,
-    keep_unlinked: std::time::Duration,
-) -> Result<hermetic::Sweep> {
-    hermetic::sweep(cache_dir, std::time::SystemTime::now(), keep_unlinked)
-}
-
-/// [`sweep_hermetic_out_dirs`] with the standing retention, for the GC
-/// drivers. A failed sweep leaves the runs in place for the next one.
-pub(crate) fn sweep_hermetic_out_dirs_for_gc(cache_dir: &Path) {
-    match sweep_hermetic_out_dirs(cache_dir, HERMETIC_UNLINKED_RETENTION) {
-        Ok(sweep) => log::debug!("build-script run sweep: {sweep:?}"),
-        Err(error) => log::warn!("build-script run sweep failed: {error:#}"),
-    }
-}
-
-/// Whether `path` lies in a sealed hermetic build-script `OUT_DIR`.
-pub(crate) fn in_sealed_out_dir(path: &Path) -> bool {
-    hermetic::in_sealed_out_dir(path)
 }
 
 /// Turn an `OUT_DIR` that a hermetic run left as a symlink to its shared,
@@ -3928,33 +3892,26 @@ mod tests {
         };
         let prediction = prediction_with(Some(Vec::new()), true);
         let keys = || {
-            [
-                run.action_key_with(&prediction, None, &ToolSnapshot::new())
-                    .unwrap(),
-                hermetic::key(&run, &prediction, Path::new("debug/build/x-1/out")).unwrap(),
-            ]
+            run.action_key_with(&prediction, None, &ToolSnapshot::new())
+                .unwrap()
         };
         let absent = keys();
         std::fs::write(&absolute, "one").unwrap();
         let before = keys();
-        for (absent, before) in absent.iter().zip(&before) {
-            assert_ne!(absent, before, "an absent dependency path becomes present");
-        }
+        assert_ne!(absent, before, "an absent dependency path becomes present");
         std::fs::write(&absolute, "two").unwrap();
         let after = keys();
-        for (before, after) in before.iter().zip(&after) {
-            assert_ne!(
-                before, after,
-                "the file behind an absolute DEP_ path is keyed"
-            );
-        }
+        assert_ne!(
+            before, after,
+            "the file behind an absolute DEP_ path is keyed"
+        );
         std::fs::write(dir.path().join("relative.h"), "unrelated").unwrap();
         assert_eq!(after, keys());
     }
 
     #[cfg(unix)]
     #[test]
-    fn non_utf8_dependency_values_are_distinct_in_both_action_keys() {
+    fn non_utf8_dependency_values_are_distinct_in_the_action_key() {
         use std::os::unix::ffi::OsStringExt;
 
         let _lock = crate::test_support::process_state_test_lock();
@@ -3982,11 +3939,8 @@ mod tests {
                     std::ffi::OsString::from_vec(value),
                 );
             }
-            [
-                run.action_key_with(&prediction, None, &ToolSnapshot::new())
-                    .unwrap(),
-                hermetic::key(&run, &prediction, Path::new("debug/build/x-1/out")).unwrap(),
-            ]
+            run.action_key_with(&prediction, None, &ToolSnapshot::new())
+                .unwrap()
         });
         unsafe {
             match saved {
@@ -3994,12 +3948,10 @@ mod tests {
                 None => std::env::remove_var("DEP_KT_BINARY_METADATA"),
             }
         }
-        for (a, b) in keys[0].iter().zip(&keys[1]) {
-            assert_ne!(
-                a, b,
-                "non-UTF-8 dependency metadata is an environment input"
-            );
-        }
+        assert_ne!(
+            keys[0], keys[1],
+            "non-UTF-8 dependency metadata is an environment input"
+        );
     }
 
     #[cfg(unix)]
@@ -4226,108 +4178,6 @@ mod tests {
         );
     }
 
-    /// A hermetic key sees values as the script does: two target directories
-    /// agree except where a value the script reads spells its own target
-    /// directory, which the regular key maps away. `OUT_DIR` itself is left
-    /// out, and where it sits below the target directory is in.
-    #[test]
-    fn a_hermetic_key_leaves_out_only_the_out_dir() {
-        let _lock = crate::test_support::process_state_test_lock();
-        let dir = tempfile::tempdir().unwrap();
-        let config = crate::test_support::test_config(dir.path().join("cache"));
-        let run = |target: &str, cargo_home: &str| Run {
-            store: Store::open(&config).unwrap(),
-            config: config.clone(),
-            binary_hash: "aaaa".to_string(),
-            environment: checkout_environment(
-                &dir.path().join(target),
-                &dir.path().join(cargo_home),
-            ),
-            start: std::time::Instant::now(),
-        };
-        let prediction = prediction_with(Some(Vec::new()), true);
-        let below = Path::new("debug/build/x-1/out");
-        let saved = std::env::var_os("CARGO_MANIFEST_DIR");
-        let key = |run: &Run, below: &Path| {
-            // SAFETY: the process-state lock serialises environment edits.
-            unsafe { std::env::set_var("CARGO_MANIFEST_DIR", &run.environment.manifest_dir) };
-            hermetic::key(run, &prediction, below).unwrap()
-        };
-        let (a, b, elsewhere) = (
-            run("a/target", "cargo"),
-            run("b/target", "cargo"),
-            run("b/target", "other-cargo"),
-        );
-        assert_eq!(key(&a, below), key(&b, below), "OUT_DIR is not keyed");
-        assert_ne!(key(&a, below), key(&a, Path::new("release/build/x-1/out")));
-        assert_ne!(
-            key(&b, below),
-            key(&elsewhere, below),
-            "the manifest directory is keyed as the script sees it"
-        );
-
-        let spelled = |run: &Run, target: &str| {
-            let value = dir.path().join(target).join("debug/build/y-1/out");
-            // SAFETY: the process-state lock serialises environment edits.
-            unsafe { std::env::set_var("DEP_Y_ROOT", &value) };
-            let keys = (key(run, below), run.action_key(&prediction).unwrap());
-            unsafe { std::env::remove_var("DEP_Y_ROOT") };
-            keys
-        };
-        let (hermetic_a, regular_a) = spelled(&a, "a/target");
-        let (hermetic_b, regular_b) = spelled(&b, "b/target");
-
-        // What the script declared: an env var's value, an input's content,
-        // and what sits behind a `DEP_*` path.
-        let input = dir.path().join("input.txt");
-        std::fs::write(&input, b"one").unwrap();
-        let mut declared = prediction.clone();
-        declared.env = vec!["KACHE_TEST_HERMETIC_VAR".into()];
-        declared.inputs = vec![input.to_string_lossy().into_owned()];
-        let declared_key = || {
-            unsafe { std::env::set_var("CARGO_MANIFEST_DIR", &a.environment.manifest_dir) };
-            hermetic::key(&a, &declared, below).unwrap()
-        };
-        unsafe { std::env::set_var("KACHE_TEST_HERMETIC_VAR", "x") };
-        let base = declared_key();
-        unsafe { std::env::set_var("KACHE_TEST_HERMETIC_VAR", "y") };
-        assert_ne!(declared_key(), base, "a declared variable's value");
-        unsafe { std::env::set_var("KACHE_TEST_HERMETIC_VAR", "x") };
-        std::fs::write(&input, b"two").unwrap();
-        assert_ne!(declared_key(), base, "a declared input's content");
-        std::fs::write(&input, b"one").unwrap();
-        assert_eq!(declared_key(), base);
-        let dep = dir.path().join("dep-out");
-        std::fs::create_dir(&dep).unwrap();
-        std::fs::write(dep.join("z.h"), b"1").unwrap();
-        unsafe { std::env::set_var("DEP_Y_ROOT", &dep) };
-        let mut dependent = run("a/target", "cargo");
-        dependent.environment.dependency_roots =
-            outside::dependency_roots([("DEP_Y_ROOT".into(), dep.clone().into_os_string())]);
-        let with_dep = hermetic::key(&dependent, &declared, below).unwrap();
-        std::fs::write(dep.join("z.h"), b"2").unwrap();
-        assert_ne!(
-            hermetic::key(&dependent, &declared, below).unwrap(),
-            with_dep,
-            "what a captured DEP_ path holds"
-        );
-        unsafe {
-            std::env::remove_var("DEP_Y_ROOT");
-            std::env::remove_var("KACHE_TEST_HERMETIC_VAR");
-        }
-
-        match saved {
-            Some(value) => unsafe { std::env::set_var("CARGO_MANIFEST_DIR", value) },
-            None => unsafe { std::env::remove_var("CARGO_MANIFEST_DIR") },
-        }
-        assert_eq!(regular_a, regular_b, "the regular key maps the target away");
-        assert_ne!(hermetic_a, hermetic_b, "the script reads each spelling");
-    }
-
-    /// libgit2-sys reads libz-sys's `OUT_DIR` through `DEP_Z_ROOT`, and
-    /// zlib's pkg-config file there names that directory. The same file in
-    /// two target directories keys the dependent the same; other content
-    /// does not.
     #[test]
     fn a_links_dependency_is_keyed_by_its_text_with_the_roots_mapped() {
         let mut lock = crate::test_support::process_state_test_lock();

@@ -2690,7 +2690,6 @@ pub fn run_gc_local(config: &Config, mode: GcMode) -> Result<crate::store::GcSta
         crate::wrapper::SESSION_MARKER_RETENTION,
         std::time::SystemTime::now(),
     );
-    crate::build_script::sweep_hermetic_out_dirs_for_gc(&config.cache_dir);
     let backfilled = store.backfill_content_hashes().unwrap_or(0);
     if verbose {
         if backfilled > 0 {
@@ -3289,16 +3288,6 @@ pub fn purge(config: &Config, crate_filter: Option<&str>) -> Result<()> {
     } else {
         store.clear()?;
         println!("Cleared entire local store.");
-        // Runs a target directory still links to stay: removing them would
-        // break its next build.
-        let sweep = crate::build_script::sweep_hermetic_out_dirs(
-            &config.cache_dir,
-            std::time::Duration::ZERO,
-        )?;
-        println!(
-            "Removed {} build-script runs; kept {} that target directories link to.",
-            sweep.removed, sweep.kept
-        );
     }
 
     Ok(())
