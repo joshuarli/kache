@@ -245,9 +245,8 @@ gitignore = true
 # ubuntu lane never compiles. Their parsers and the procfs readers are
 # platform-neutral and stay in scope; the macOS Test lane runs the real
 # wrappers through the host smoke test.
-# The sccache preflight adapter calls Darwin-only process and sandbox APIs.
-# Its decision logic lives in src/fallback/sandbox.rs and stays in this Linux
-# lane. Test (macOS) covers the native adapter with allowed/denied subprocesses.
+# The compiler handoff adapter calls Darwin-only sandbox APIs. Its decision
+# logic lives in src/fallback/sandbox.rs and stays in this Linux lane.
 # The Linux mutation runner does not compile these Windows modules. Native
 # process, token, console and pipe behavior belongs to the required Windows
 # test job. Portable execution DTOs, retry policy and Unix transport stay here.
