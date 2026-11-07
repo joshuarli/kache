@@ -76,8 +76,6 @@ Eviction affects only the local store. It also sweeps each `[cache.volumes]` sha
 
 Eviction reports store bytes removed separately from bytes reclaimed on disk. It keeps an entry when its last store blob is still cloned into a build output, because unlinking that blob would free no disk and destroy a usable hit. This can leave the registered store size above `cache.local_max_size`; remove stale targets to reclaim the blocks. A size sweep leaves those held bytes out of its budget instead of evicting other entries to make up for them.
 
-Set `cache.gc_evict_shared = true` or `KACHE_GC_EVICT_SHARED=1` to restore the older namespace-first policy. That lowers the registered store size but does not reclaim blocks retained by target directories, and the discarded entry becomes a future miss. See [Configuration: GC and shared build outputs](/docs/getting-started/configuration#gc-and-shared-build-outputs).
-
 Eviction flushes any entries still pending durability before it judges them (see [Architecture](/docs/how-it-works/architecture)).
 
 `kache gc` evicts by the size and age limits now, as the daemon does. `kache purge` removes cache entries. They are hidden from `--help`.

@@ -60,13 +60,13 @@ fn absolutize_volume_path(path: &Path) -> PathBuf {
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Default `[cache] event_log_max_size`. Rotation keeps the build in
+/// Fixed event-log rotation threshold. Rotation keeps the build in
 /// progress up to half of this, which covers about 1,700 events of the
 /// largest events seen (about 19 KB each, in a substrate build) and over
 /// 20,000 of the usual 1.4 KB (kunobi-ninja/kache#1209).
 pub const DEFAULT_EVENT_LOG_MAX_SIZE: u64 = 64 * 1024 * 1024;
 
-/// Default `[cache] event_log_keep_lines`.
+/// Fixed retained event-log line count.
 pub const DEFAULT_EVENT_LOG_KEEP_LINES: usize = 1000;
 
 /// The free-space floor below which builds evict cache entries, unless

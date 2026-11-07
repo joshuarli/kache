@@ -99,7 +99,7 @@ fn wrapper(cache: &Path) -> Command {
     let config = isolated_config_path(cache);
     fs::write(
         &config,
-        "[cache]\nauto_gc = false\ndaemon_publish = false\nevent_log_max_size = \"1B\"\n",
+        "[cache]\nauto_gc = false\ndaemon_publish = false\n",
     )
     .unwrap();
     let mut command = hermetic_command(kache_binary(), cache, Some(&config));

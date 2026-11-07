@@ -8,11 +8,9 @@
 //! directory is empty, the path is all the compile reads from it.
 //!
 //! Such a unit compiles with `OUT_DIR` pointing at
-//! `<alias root>/v1/d/<pkg>-<hash>/out` instead. The root defaults to
-//! `<cache>/out-dirs`; fleets can set `out_dir_alias_root` to the same absolute
-//! path across stores and hosts. Kache creates it empty with mode 0555 and never
-//! writes into it, so no process can put anything there and sharing it shares
-//! no state.
+//! `<cache>/out-dirs/v1/d/<pkg>-<hash>/out` instead. Kache creates it empty
+//! with mode 0555 and never writes into it, so no process can put anything
+//! there and sharing it shares no state.
 //!
 //! Proc macros are aliased on their first build. A lib is aliased only once
 //! this machine has seen every direct consumer of the unit and all of them
@@ -566,15 +564,7 @@ fn is_private_dir(path: &Path, euid: u32) -> bool {
     }
 }
 
-/// The configured private root, or `<canonical cache_dir>/out-dirs`.
-fn alias_root(cache_dir: &Path, configured: Option<&Path>, euid: u32) -> Option<PathBuf> {
-    if let Some(root) = configured {
-        create_private_dir_all(root).ok()?;
-        if !is_private_dir(root, euid) {
-            return None;
-        }
-        return std::fs::canonicalize(root).ok();
-    }
+fn alias_root(cache_dir: &Path) -> Option<PathBuf> {
     std::fs::create_dir_all(cache_dir).ok()?;
     Some(std::fs::canonicalize(cache_dir).ok()?.join(ROOT_NAME))
 }
@@ -977,7 +967,7 @@ fn apply_after_host_check(
     let compiler = RustcCompiler::new_for(invocation).with_base_dirs(config.base_dirs.clone());
     let args = compiler.parse(wrapper_args).ok()?;
     let cache_dir = invocation.resolve(&config.cache_dir)?;
-    let root = alias_root(&cache_dir, None, euid)?;
+    let root = alias_root(&cache_dir)?;
     if let Some(code) = checks_before_decision(&args, &root, &mut crate::invocation::io::stderr()) {
         return Some(code);
     }
@@ -1211,35 +1201,11 @@ mod tests {
     }
 
     #[test]
-    fn configured_root_is_private_canonical_and_independent_of_the_store() {
-        use std::os::unix::fs::{PermissionsExt, symlink};
+    fn alias_root_is_under_canonical_store() {
         let tmp = tempfile::tempdir().unwrap();
         let base = std::fs::canonicalize(tmp.path()).unwrap();
         let cache = base.join("cache");
-        let root = base.join("shared");
-        let euid = effective_uid();
-        assert_eq!(alias_root(&cache, None, euid), Some(cache.join("out-dirs")));
-        assert_eq!(alias_root(&cache, Some(&root), euid), Some(root.clone()));
-        assert_eq!(
-            alias_root(&base.join("another-store"), Some(&root), euid),
-            Some(root.clone())
-        );
-        assert!(!base.join("another-store").exists());
-        assert_eq!(
-            std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-        let link = base.join("linked-parent");
-        symlink(&base, &link).unwrap();
-        assert_eq!(
-            alias_root(&cache, Some(&link.join("shared")), euid),
-            Some(root.clone())
-        );
-        let link = base.join("linked-root");
-        symlink(&root, &link).unwrap();
-        assert_eq!(alias_root(&cache, Some(&link), euid), None);
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o777)).unwrap();
-        assert_eq!(alias_root(&cache, Some(&root), euid), None);
+        assert_eq!(alias_root(&cache), Some(cache.join("out-dirs")));
     }
 
     #[test]
