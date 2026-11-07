@@ -74,8 +74,7 @@ help:
 
 # What a PR must survive before opening: the clippy gate, the client-only
 # dependency graph (feature unification must not hide a dependency), the
-# resource-guard self-check, and the full workspace tests. Changed Rust
-# lines additionally go through `make pr` (same mutants-diff scope CI runs).
+# resource-guard self-check, and the full workspace tests.
 check: lint client-crates-check test-resource-guard-check test
 
 # Check the client-only dependency graph separately so feature unification
@@ -119,6 +118,7 @@ e2e:
 	  --scenarios ./scenarios \
 	  --select suite:e2e \
 	  --select tier:gate \
+	  --deny-missing-tools \
 	  --out tmp/e2e/results.json
 
 # Bench a scenario twice against one shared kache cache — cold, then warm —

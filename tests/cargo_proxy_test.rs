@@ -9,19 +9,20 @@ use std::process::Command;
 mod common;
 use common::hermetic_command;
 
-fn kache_bin() -> std::path::PathBuf {
-    common::kache_binary()
+fn kache_bin() -> &'static str {
+    static BIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BIN.get_or_init(|| common::kache_binary().to_str().unwrap().to_string())
+        .as_str()
 }
 
 fn proxied_cargo(home: &Path, cache: &Path, target: &Path) -> Command {
-    let bin = kache_bin();
-    let mut command = hermetic_command(&bin, cache, Some(&cache.join("config.toml")));
+    let mut command = hermetic_command(kache_bin(), cache, Some(&cache.join("config.toml")));
     command
         .env("HOME", home)
         .env("CARGO_HOME", home.join(".cargo"))
         .env("CARGO_TARGET_DIR", target)
         .env("CARGO_INCREMENTAL", "0")
-        .env("RUSTC_WRAPPER", bin)
+        .env("RUSTC_WRAPPER", kache_bin())
         .env("KACHE_LOG", "off")
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
@@ -39,7 +40,7 @@ fn cargo_command_passes_arguments_and_installs_the_wrapper() {
         &cargo,
         "#!/bin/sh\nprintf '%s\\n' \"$RUSTC_WRAPPER\" \"$@\" > \"$PROXY_RECORD\"\nexit 23\n",
     );
-    let output = hermetic_command(KACHE_BIN, &dir.path().join("cache"), None)
+    let output = hermetic_command(kache_bin(), &dir.path().join("cache"), None)
         .env("KACHE_REAL_CARGO", &cargo)
         .env("PROXY_RECORD", &record)
         .env_remove("RUSTC_WRAPPER")
@@ -49,7 +50,7 @@ fn cargo_command_passes_arguments_and_installs_the_wrapper() {
     assert_eq!(output.status.code(), Some(23));
     let recorded = std::fs::read_to_string(record).unwrap();
     let mut lines = recorded.lines();
-    assert_eq!(lines.next(), Some(KACHE_BIN));
+    assert_eq!(lines.next(), Some(kache_bin()));
     assert_eq!(lines.collect::<Vec<_>>(), ["check", "--offline"]);
 }
 
@@ -59,7 +60,7 @@ fn cargo_command_preserves_a_signal_exit() {
     let dir = tempfile::tempdir().unwrap();
     let cargo = dir.path().join("cargo");
     kache_fs::testutil::write_executable(&cargo, "#!/bin/sh\nkill -TERM $$\n");
-    let output = hermetic_command(KACHE_BIN, &dir.path().join("cache"), None)
+    let output = hermetic_command(kache_bin(), &dir.path().join("cache"), None)
         .env("KACHE_REAL_CARGO", &cargo)
         .args(["cargo", "--", "check"])
         .output()
@@ -116,7 +117,7 @@ fn non_utf8_cargo_argument_passes_through_without_cli_panic() {
     let fake_cargo = dir.path().join("cargo");
     kache_fs::testutil::write_executable(&fake_cargo, "#!/bin/sh\nexit 0\n");
 
-    let output = Command::new(KACHE_BIN)
+    let output = Command::new(kache_bin())
         .args(["cargo", "--", "build"])
         .arg(OsString::from_vec(vec![b'f', b'o', 0x80]))
         .env("KACHE_REAL_CARGO", &fake_cargo)
@@ -140,7 +141,7 @@ fn non_utf8_wrapper_argument_fails_closed_before_compiler_execution() {
         format!("#!/bin/sh\ntouch '{}'\n", sentinel.display()),
     );
 
-    let output = Command::new(KACHE_BIN)
+    let output = Command::new(kache_bin())
         .arg(&fake_rustc)
         .arg(OsString::from_vec(vec![b's', b'r', b'c', b'/', 0x80]))
         .env("RUSTC", &fake_rustc)
@@ -176,7 +177,7 @@ fn configured_build_dir_reaches_cargo_without_proxy_override() {
         "#!/bin/sh\nprintf '%s %s' \"${CARGO_BUILD_BUILD_DIR-unset}\" \"$*\" > \"$KACHE_TEST_CAPTURE\"\n",
     );
 
-    let output = Command::new(KACHE_BIN)
+    let output = Command::new(kache_bin())
         .args(["cargo", "--", "build"])
         .current_dir(&project)
         .env("HOME", &home)

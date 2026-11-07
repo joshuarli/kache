@@ -217,6 +217,7 @@ fn reuse_outer_build() -> bool {
 /// failure — including its stderr, which is where `No space left on device`
 /// shows up.
 static KACHE_BIN: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+#[allow(dead_code)]
 static KACHE_ENGINE_BIN: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 
 /// A TOML basic string, with quotes and backslashes escaped.
@@ -254,6 +255,7 @@ pub fn kache_binary() -> PathBuf {
     }
 }
 
+#[allow(dead_code)]
 pub fn kache_engine_binary() -> PathBuf {
     match KACHE_ENGINE_BIN.get_or_init(bootstrap_kache_engine) {
         Ok(path) => path.clone(),
@@ -277,6 +279,7 @@ pub fn resolve_kache_binary_with(explicit: Option<&Path>) -> Result<PathBuf, Str
     bootstrap_kache_build()
 }
 
+#[allow(dead_code)]
 pub fn resolve_kache_engine_binary_with(kache: &Path, explicit: bool) -> Result<PathBuf, String> {
     let engine = kache.with_file_name(format!("kache-engine{}", std::env::consts::EXE_SUFFIX));
     if engine.is_file() {
@@ -295,6 +298,7 @@ fn bootstrap_kache() -> Result<PathBuf, String> {
     resolve_kache_binary_with(std::env::var_os("KACHE_TEST_BINARY").as_deref().map(Path::new))
 }
 
+#[allow(dead_code)]
 fn bootstrap_kache_engine() -> Result<PathBuf, String> {
     resolve_kache_engine_binary_with(
         &kache_binary(),

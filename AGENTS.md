@@ -1,6 +1,6 @@
 # Agent notes
 
-`make check` is not the merge gate. CI mutation-tests changed Rust lines in the kache binary. A PR that only ran `cargo test` on the new tests will go red on Mutation testing. That is the usual failure.
+`make check` is the pre-PR verification gate.
 
 ## Before `gh pr create`
 
@@ -10,9 +10,9 @@ make check
 
 That is the clippy gate, the client-crates graph, the resource-guard self-check, and the workspace tests. Do not open the PR until it exits 0.
 
-Mutants run in CI, not on your machine. Open the PR as a draft; the `Mutation testing (diff k/n)` shards test every changed Rust line in parallel on Linux runners and finish in well under an hour. A red shard prints the missed mutants in its log and uploads them as `missed.txt` in its `mutation-diff-report-<k>` artifact; add the test that kills each one, push, and mark the PR ready when every shard is green. A laptop running the same diff at one to three jobs takes hours and the load makes the fixture-based tests flake.
+For end-to-end scenario verification, `make e2e` runs gate scenarios with `--deny-missing-tools` to ensure required compilers and tools are present.
 
-`make pr` still exists for a Linux box with cores to spare: it is `make check` plus `make mutants-diff` against `origin/main`, the same scope CI runs. If you use it:
+`make pr` runs `make check` plus `make mutants-diff` against `origin/main`. If you use it:
 
 ```sh
 cargo install --locked cargo-mutants --version 27.1.0

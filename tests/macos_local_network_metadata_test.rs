@@ -18,7 +18,8 @@ fn kache_binaries_embed_local_network_privacy_metadata() {
 
 fn assert_privacy_metadata(binary: &Path) {
     let output = Command::new("otool")
-        .args(["-s", "__TEXT", "__info_plist", binary])
+        .args(["-s", "__TEXT", "__info_plist"])
+        .arg(binary)
         .output()
         .expect("run otool against the built kache binary");
     assert!(

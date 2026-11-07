@@ -101,7 +101,7 @@ fn family_probe_without_kache_cc_does_not_use_fake_compiler() {
     let probe_file = dir.path().join("detect_compiler_family.c");
     fs::write(&probe_file, b"int main(void){return 0;}\n").unwrap();
 
-    let _ = PathBuf::from(kache_binary());
+    let _ = kache_binary();
     let output = common::hermetic_command(
         kache_binary(),
         &dir.path().join("cache"),

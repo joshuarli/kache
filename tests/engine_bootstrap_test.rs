@@ -48,8 +48,8 @@ impl Fixture {
         }
     }
 
-    fn command(&self, program: impl AsRef<std::path::Path>) -> Command {
-        let mut command = Command::new(program.as_ref());
+    fn command(&self, program: &std::path::Path) -> Command {
+        let mut command = Command::new(program);
         command
             .env_clear()
             .env("PATH", env!("PATH"))
@@ -136,7 +136,7 @@ fn a_renamed_frontend_installs_shims_to_its_original_image() {
     let shims = fixture.root.path().join("shims");
     let (_, status) = fixture.run(
         fixture
-            .command(frontend.to_str().unwrap())
+            .command(&frontend)
             .args(["init", "--shims"])
             .arg(&shims)
             .arg("--canonical-only"),
@@ -159,7 +159,7 @@ fn cargo_refuses_the_original_frontend_as_its_real_cargo_program() {
     let frontend = fixture.renamed_frontend();
     let (_, status) = fixture.run(
         fixture
-            .command(frontend.to_str().unwrap())
+            .command(&frontend)
             .args(["cargo", "--version"])
             .env("KACHE_REAL_CARGO", &frontend),
     );

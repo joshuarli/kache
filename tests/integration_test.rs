@@ -3103,6 +3103,12 @@ fn test_cc_legacy_compound_depinfo_entry_self_heals_and_why_miss_explains_it() {
         .expect("fixed cold entry should use the semantic dep-info name");
     depinfo["name"] = deser_value::Value::from("foo.d.tmp".to_string());
     std::fs::write(&meta_path, deser_json::SerializerConfig::builder().pretty(deser_json::Indent::Spaces(2)).build().to_string(&meta).map(String::into_bytes).unwrap()).unwrap();
+    let db = rusqlite::Connection::open(cache_dir.path().join("index.db")).unwrap();
+    db.execute(
+        "UPDATE entries SET content_hash = NULL, metadata_hash = NULL WHERE cache_key = ?1",
+        rusqlite::params![key],
+    )
+    .unwrap();
 
     std::fs::remove_dir_all(project.path().join("build")).unwrap();
     std::fs::create_dir_all(project.path().join("build")).unwrap();
@@ -3119,8 +3125,12 @@ fn test_cc_legacy_compound_depinfo_entry_self_heals_and_why_miss_explains_it() {
     assert!(why.status.success());
     let stdout = String::from_utf8_lossy(&why.stdout);
     assert!(
-        stdout.contains("now cached"),
-        "why-miss should report the self-healed entry is now cached: {stdout}"
+        stdout.contains("matching key was found but rejected before restore"),
+        "why-miss should report the exact-key rejection: {stdout}"
+    );
+    assert!(
+        stdout.contains("matching entry lacks dep-info required by this invocation"),
+        "why-miss should name the missing artifact role: {stdout}"
     );
     assert!(
         !stdout.contains("Diagnosis: key mismatch"),
@@ -3542,7 +3552,7 @@ cache_executables = true
         size_after <= gc_budget as i64,
         "auto-GC failed to evict store below budget {gc_budget}, current size: {size_after}"
     );
-    assert!(size_after < (size_before * 2) as i64);
+    assert!(size_after < size_before * 2);
 }
 
 /// Issue #505: unrecognized RUSTC_WORKSPACE_WRAPPER tools must pass through

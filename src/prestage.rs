@@ -1392,7 +1392,7 @@ mod tests {
                 ));
                 let probe = child.as_mut().unwrap();
                 let deadline = std::time::Instant::now() + Duration::from_secs(30);
-                while !dir.path().join("blocked").is_file() {
+                while std::fs::read(dir.path().join("blocked")).ok().as_deref() != Some(b"blocked".as_slice()) {
                     let status = probe.0.try_wait()?;
                     assert!(
                         status.is_none(),

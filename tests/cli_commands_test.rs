@@ -20,12 +20,12 @@ mod common;
 use common::{hermetic_command, settle_writes, stop_daemon};
 
 fn kache_bin() -> &'static Path {
-    static BIN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    static BIN: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     BIN.get_or_init(common::kache_binary).as_path()
 }
 
 fn kache_engine_bin() -> &'static Path {
-    static ENGINE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    static ENGINE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     ENGINE.get_or_init(common::kache_engine_binary).as_path()
 }
 
@@ -4121,7 +4121,7 @@ fn copy_kache_binary(path: &Path) {
                 .arg(destination)
                 .status()
                 .unwrap();
-            assert!(status.success(), "copying {source} failed: {status}");
+            assert!(status.success(), "copying {} failed: {status}", source.display());
         }
         #[cfg(not(unix))]
         std::fs::copy(source, destination).unwrap();
