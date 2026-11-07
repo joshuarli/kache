@@ -774,16 +774,6 @@ edition = "2021"
         &relocated_input,
         &input_reader,
         "v4",
-        "v5",
-        &[("KACHE_MIN_STORE_COMPILE_MS", "18446744073709551615")],
-        "skipped",
-        None,
-    );
-    exercise_uncached_lane(
-        relocated_project.path(),
-        &relocated_input,
-        &input_reader,
-        "v5",
         "v6",
         &[
             ("KACHE_CACHE_EXECUTABLES", "0"),

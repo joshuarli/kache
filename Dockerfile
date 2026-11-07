@@ -47,6 +47,8 @@ RUN case "$TARGETARCH" in \
 # "linker `cc` not found".
 RUN ln -s /opt/llvm-musl/bin/clang /usr/local/bin/cc \
     && ln -s /opt/llvm-musl/bin/clang++ /usr/local/bin/c++ \
+    && ln -s /opt/llvm-musl/bin/clang /usr/bin/cc \
+    && ln -s /opt/llvm-musl/bin/clang++ /usr/bin/c++ \
     && cc --version
 
 RUN for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do \

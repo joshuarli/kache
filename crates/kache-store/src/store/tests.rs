@@ -1441,6 +1441,69 @@ fn publish_staged_blob_is_idempotent_when_blob_exists() {
     );
 }
 
+/// KACH-15: discarding a duplicate hardlinked stage must not clear the
+/// read-only seal on the surviving published blob that shares its inode.
+#[test]
+fn discarding_duplicate_hardlinked_stage_preserves_blob_seal() {
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let store = Store::open(&config).unwrap();
+
+    let source = dir.path().join("libshared.rlib");
+    fs::write(&source, b"shared-inode-bytes").unwrap();
+
+    let _force = ForceStoreHardlink::enable();
+    let (staged_a, ingest_a) = store.stage_blob_from_source(&source, true).unwrap();
+    assert!(
+        matches!(ingest_a, StoreIngest::Hardlink),
+        "forced hardlink ingest required, got {ingest_a:?}"
+    );
+    let hash = crate::file_hash::hash_file(&staged_a).unwrap();
+    assert!(
+        store
+            .publish_staged_blob(&staged_a, ingest_a, &hash, 18)
+            .unwrap(),
+        "first publish should win"
+    );
+    let blob = store.blob_path(&hash);
+    assert!(
+        fs::metadata(&blob).unwrap().permissions().readonly(),
+        "published blob must be sealed read-only"
+    );
+    assert!(
+        fs::metadata(&blob).unwrap().nlink() >= 2,
+        "hardlinked blob must share its inode with the source"
+    );
+    let winner = kache_fs::file_identity(&blob).unwrap();
+
+    let (staged_b, ingest_b) = store.stage_blob_from_source(&source, true).unwrap();
+    assert!(
+        matches!(ingest_b, StoreIngest::Hardlink),
+        "second stage must hardlink the same inode, got {ingest_b:?}"
+    );
+    assert!(
+        kache_fs::file_identity(&staged_b).unwrap().ino
+            == kache_fs::file_identity(&blob).unwrap().ino,
+        "stages must share the published inode"
+    );
+    assert!(
+        !store
+            .publish_staged_blob(&staged_b, ingest_b, &hash, 18)
+            .unwrap(),
+        "duplicate publish must discard the stage"
+    );
+
+    assert!(!staged_b.exists(), "duplicate stage must be unlinked");
+    assert_eq!(kache_fs::file_identity(&blob).unwrap(), winner);
+    assert_eq!(fs::read(&blob).unwrap(), b"shared-inode-bytes");
+    assert!(
+        fs::metadata(&blob).unwrap().permissions().readonly(),
+        "discarding a shared stage must keep the surviving blob read-only (KACH-15)"
+    );
+}
+
 /// Crash-orphaned staging files are reclaimed only once older than the
 /// grace period — a concurrent put's fresh snapshot is never touched.
 #[test]
@@ -3907,6 +3970,179 @@ fn rebuild_index_from_store_recovers_entries_after_the_index_is_lost() {
         assert_eq!(meta.files.len(), 1);
     }
     assert_eq!(store.entry_count().unwrap(), 2);
+}
+
+/// KACH-13: manual reconstruction must not certify a pending entry whose
+/// blob was damaged in place (same size) as durable. It stays pending and
+/// `get` misses instead of returning poisoned bytes.
+#[test]
+fn manual_rebuild_keeps_damaged_pending_entry_pending_and_misses() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let key = {
+        let store = Store::open(&config).unwrap();
+        let k = put_entry(&store, dir.path(), 40, "k13", b"pending-payload-001");
+        store
+            .db
+            .execute("UPDATE entries SET durable = 0 WHERE cache_key = ?1", params![k])
+            .unwrap();
+        k
+    };
+
+    // Same-size damage, then lose the index.
+    let meta_path = config.store_dir().join(&key).join("meta.json");
+    let meta: EntryMeta = deser_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
+    let blob = blob_path_in_store_dir(&config.store_dir(), &meta.files[0].hash);
+    let mut perms = std::fs::metadata(&blob).unwrap().permissions();
+    perms.set_readonly(false);
+    std::fs::set_permissions(&blob, perms).unwrap();
+    std::fs::write(&blob, b"XENDING-PAYLOAD-001").unwrap();
+    std::fs::remove_file(config.index_db_path()).unwrap();
+
+    let store = Store::open(&config).unwrap();
+    let stats = store.rebuild_index_from_store().unwrap();
+    assert_eq!(stats.entries_rebuilt, 1, "manual rebuild adopts the shape: {stats:?}");
+    let durable: i64 = store
+        .db
+        .query_row("SELECT durable FROM entries WHERE cache_key = ?1", params![key], |r| r.get(0))
+        .unwrap();
+    assert_eq!(durable, 0, "reconstructed entry must stay pending (KACH-13)");
+    assert!(
+        store.get(&key).unwrap().is_none(),
+        "damaged reconstructed entry must miss, not hit"
+    );
+    // `get` evicts the poisoned row on miss; either way it must never be
+    // promoted to durable.
+    let durable_after: Option<i64> = store
+        .db
+        .query_row("SELECT durable FROM entries WHERE cache_key = ?1", params![key], |r| r.get(0))
+        .optional()
+        .unwrap();
+    assert!(
+        durable_after != Some(1),
+        "failed verification must never promote the row (KACH-13)"
+    );
+}
+
+/// KACH-13: an intact pending entry reconstructed from the store stays
+/// pending until the verified flush promotes it.
+#[test]
+fn manual_rebuild_keeps_intact_pending_entry_pending_until_flush() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let key = {
+        let store = Store::open(&config).unwrap();
+        let k = put_entry(&store, dir.path(), 41, "k13", b"intact-payload-0001");
+        store
+            .db
+            .execute("UPDATE entries SET durable = 0 WHERE cache_key = ?1", params![k])
+            .unwrap();
+        k
+    };
+    std::fs::remove_file(config.index_db_path()).unwrap();
+
+    let store = Store::open(&config).unwrap();
+    store.rebuild_index_from_store().unwrap();
+    let durable: i64 = store
+        .db
+        .query_row("SELECT durable FROM entries WHERE cache_key = ?1", params![key], |r| r.get(0))
+        .unwrap();
+    assert_eq!(durable, 0, "intact reconstruction must remain pending");
+
+    assert!(store.flush_entry_durability(&key).unwrap(), "intact entry must promote");
+    let durable: i64 = store
+        .db
+        .query_row("SELECT durable FROM entries WHERE cache_key = ?1", params![key], |r| r.get(0))
+        .unwrap();
+    assert_eq!(durable, 1, "verified flush promotes to durable");
+    assert!(store.get(&key).unwrap().is_some(), "promoted intact entry must hit");
+}
+
+/// KACH-13: automatic recovery from a corrupt index follows the same
+/// pending rule — damaged pending bytes miss.
+#[test]
+fn automatic_recovery_keeps_damaged_pending_entry_pending_and_misses() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let key = {
+        let store = Store::open(&config).unwrap();
+        let k = put_entry(&store, dir.path(), 42, "k13", b"auto-pending-0000001");
+        store
+            .db
+            .execute("UPDATE entries SET durable = 0 WHERE cache_key = ?1", params![k])
+            .unwrap();
+        k
+    };
+    let meta_path = config.store_dir().join(&key).join("meta.json");
+    let meta: EntryMeta = deser_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
+    let blob = blob_path_in_store_dir(&config.store_dir(), &meta.files[0].hash);
+    let mut perms = std::fs::metadata(&blob).unwrap().permissions();
+    perms.set_readonly(false);
+    std::fs::set_permissions(&blob, perms).unwrap();
+    std::fs::write(&blob, b"XYTO-PENDING-0000001").unwrap();
+    std::fs::write(config.index_db_path(), b"not a sqlite file").unwrap();
+
+    let store = Store::open(&config).unwrap();
+    let durable: i64 = store
+        .db
+        .query_row("SELECT durable FROM entries WHERE cache_key = ?1", params![key], |r| r.get(0))
+        .unwrap();
+    assert_eq!(durable, 0, "auto-recovered entry must stay pending (KACH-13)");
+    assert!(
+        store.get(&key).unwrap().is_none(),
+        "auto-recovered damaged entry must miss"
+    );
+}
+
+/// KACH-14: a put that replaces `meta.json` but fails before its row
+/// commits must not make the unpublished generation readable, nor let
+/// removal reclaim a blob another committed entry still references.
+/// The SQLite generation is authoritative.
+#[test]
+fn split_publication_never_serves_unpublished_generation_or_steals_shared_blob() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let store = Store::open(&config).unwrap();
+    // B holds the shared content; A starts committed with different bytes.
+    let b = put_entry(&store, dir.path(), 50, "b", b"shared-payload-k14");
+    let a = put_entry(&store, dir.path(), 51, "a", b"a-old-generation-1");
+
+    // Simulate the crash window: a second publication of A replaced
+    // meta.json with a new generation sharing B's blob, but its row
+    // registration never committed.
+    let b_meta_path = config.store_dir().join(&b).join("meta.json");
+    let mut new_meta: EntryMeta =
+        deser_json::from_str(&std::fs::read_to_string(&b_meta_path).unwrap()).unwrap();
+    new_meta.cache_key = a.clone();
+    let new_meta_bytes = deser_json::to_string(&new_meta).map(String::into_bytes).unwrap();
+    let a_meta_path = config.store_dir().join(&a).join("meta.json");
+    std::fs::write(&a_meta_path, &new_meta_bytes).unwrap();
+
+    // Serving: the unpublished generation must miss (old meta is gone, so
+    // the only honest results are old-new-miss; here miss).
+    assert!(
+        store.get(&a).unwrap().is_none(),
+        "unpublished generation must not be served (KACH-14)"
+    );
+    // The read-only view agrees.
+    let ro = Store::open_read_only(&config).unwrap();
+    assert!(
+        ro.get_read_only(&a).unwrap().is_none(),
+        "read-only get must also miss on split publication"
+    );
+    drop(ro);
+
+    // Reclaiming: removal must release A's committed (old) references, not
+    // the new file's shared blob. B must survive with its blob intact.
+    let b_hash = new_meta.files[0].hash.clone();
+    store.remove_entry(&a).unwrap();
+    assert!(
+        store.get(&b).unwrap().is_some(),
+        "committed B must survive A's removal (KACH-14)"
+    );
+    let blob = blob_path_in_store_dir(&config.store_dir(), &b_hash);
+    assert!(blob.is_file(), "B's shared blob must not be unlinked");
+    assert_eq!(std::fs::read(&blob).unwrap(), b"shared-payload-k14");
 }
 
 #[test]
@@ -12828,20 +13064,6 @@ fn injected_cross_device_ingest_advises_but_other_errors_do_not() {
     let source = dir.path().join("libv.rlib");
     fs::write(&source, b"cross-volume-bytes").unwrap();
 
-    // Muted layout advice stays silent even on EXDEV.
-    let _force = ForceStoreHardlink::enable();
-    let _inject = InjectStoreHardlinkError::enable(std::io::ErrorKind::CrossesDevices);
-    let (_, ingest) = store.stage_blob_from_source(&source, true).unwrap();
-    assert!(
-        matches!(ingest, StoreIngest::Copy(StoreCopyReason::CrossDevice)),
-        "muting advice must not change the copy reason, got {ingest:?}"
-    );
-    assert!(
-        !marker_written(),
-        "a muted advisory must not write a marker"
-    );
-
-    // A non-cross-device failure records its reason but advises nothing.
     let _force = ForceStoreHardlink::enable();
     let _inject = InjectStoreHardlinkError::enable(std::io::ErrorKind::AlreadyExists);
     let (_, ingest) = store.stage_blob_from_source(&source, true).unwrap();

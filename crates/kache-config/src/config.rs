@@ -419,7 +419,6 @@ const IGNORE_ENV_GATED_VARS: &[&str] = &[
 
     "KACHE_KEY_ENV_VARS",
     "KACHE_TRUST_DAEMON_EXECUTION",
-    "KACHE_HEARTBEAT_SECS",
 ];
 
 /// Every file-backed `KACHE_*` variable and the config key it overrides, as
