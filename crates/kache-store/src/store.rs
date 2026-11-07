@@ -1707,6 +1707,9 @@ fn initialize_db(db: &Connection) -> rusqlite::Result<()> {
     // Whether the entry's blobs and metadata were fsynced (deferred
     // durability). Rows from before the column were always flushed on put.
     let _ = db.execute_batch("ALTER TABLE entries ADD COLUMN durable INTEGER NOT NULL DEFAULT 1");
+    let _ = db.execute_batch(
+        "ALTER TABLE entries ADD COLUMN durability_attempts INTEGER NOT NULL DEFAULT 0",
+    );
     // What a miss on this entry would cost to rebuild (kunobi-ninja/kache#594).
     // Recorded in every entry's meta.json since long before this column, so
     // pre-existing rows are backfilled by `backfill_compile_times` rather than
@@ -1761,7 +1764,8 @@ fn initialize_db(db: &Connection) -> rusqlite::Result<()> {
     let _ = db.execute_batch("ALTER TABLE entries ADD COLUMN imported_at INTEGER");
     db.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_entries_crate_name ON entries(crate_name);
-         CREATE INDEX IF NOT EXISTS idx_entries_crate_unit ON entries(crate_name, unit_id);",
+         CREATE INDEX IF NOT EXISTS idx_entries_crate_unit ON entries(crate_name, unit_id);
+         CREATE INDEX IF NOT EXISTS idx_entries_durability_attempts ON entries(durability_attempts, created_at);",
     )?;
 
     // Post-eviction demand tracking (kunobi-ninja/kache#594).
@@ -4455,18 +4459,36 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         let keys: Vec<String> = {
             let mut stmt = self.db.prepare_cached(
                 "SELECT cache_key FROM entries WHERE committed = 1 AND durable = 0
-                 ORDER BY created_at LIMIT ?1",
+                 ORDER BY durability_attempts ASC, created_at ASC LIMIT ?1",
             )?;
             let rows = stmt.query_map(params![limit as i64], |row| row.get::<_, String>(0))?;
             rows.collect::<Result<_, _>>()?
         };
         let mut flushed = 0;
         for key in keys {
-            if self.flush_entry_durability(&key)? {
-                flushed += 1;
+            match self.flush_entry_durability(&key) {
+                Ok(true) => {
+                    flushed += 1;
+                }
+                Ok(false) => {
+                    self.record_durability_attempt_failed(&key)?;
+                }
+                Err(error) => {
+                    log::debug!("durability flush for entry {key} failed: {error:#}");
+                    self.record_durability_attempt_failed(&key)?;
+                }
             }
         }
         Ok(flushed)
+    }
+
+    fn record_durability_attempt_failed(&self, cache_key: &str) -> Result<()> {
+        self.db.execute(
+            "UPDATE entries SET durability_attempts = durability_attempts + 1
+             WHERE cache_key = ?1 AND committed = 1 AND durable = 0",
+            params![cache_key],
+        )?;
+        Ok(())
     }
 
     /// Verify and flush one pending entry before marking it durable. Changed,
@@ -4594,7 +4616,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             return Ok(false);
         }
         let promoted = tx.execute(
-            "UPDATE entries SET durable = 1 WHERE cache_key = ?1",
+            "UPDATE entries SET durable = 1, durability_attempts = 0 WHERE cache_key = ?1",
             params![cache_key],
         )?;
         tx.commit()?;

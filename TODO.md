@@ -1,15 +1,6 @@
 Prefix: KACH
 Next: 20
 
-### KACH-16 · P2 · Failed entries monopolize every bounded durability sweep
-
-- **Area:** Data
-- **Where:** `crates/kache-store/src/store.rs:4393`, `crates/kache-store/src/store.rs:4400`, `crates/kache-store/src/store.rs:4414`, `src/daemon.rs:715`, `src/daemon.rs:1643`, `src/cli.rs:2659`
-- **Problem:** Reachable defect, reproduced against `221cf7d` with 65 pending entries and three sweeps. Pending entries implicitly include both retryable failures and never-attempted work, but each sweep selects only the oldest `limit` rows (`store.rs:4307-4308`). Unreadable, changed or corrupt entries return false and retain their selection position (`store.rs:4349-4356`, `store.rs:4376-4379`). If the oldest 64 entries reference damaged bytes, every daemon sweep selects those same entries (`daemon.rs:724`; batch size `cli.rs:2659`), and healthy entry 65 never gets flushed. A single shared damaged blob suffices to block all 64. The reproducer kept all 65 pending after three bounded sweeps; an explicit unbounded GC-style flush reached and promoted the healthy entry. This breaks bounded background progress and leaves later hits paying mandatory hashing until failed rows are removed or another path flushes them. The existing corruption-continuation test (`store/tests.rs:2775-2824`) puts the good entry inside the same two-item batch, so it misses starvation across the batch boundary. This is distinct from KACH-12's automatic-GC integration coverage. Replayed against `79d0449`: all 65 entries still remained pending after three bounded sweeps, and the unbounded flush reached the healthy entry. KACH-13's repair now correctly queues reconstructed entries as pending, so queue fairness also matters after recovery.
-- **Recommendation:** Make failed work yield its place while preserving bounded work per sweep: advance a persistent or daemon-owned cursor, apply fair retry scheduling, or retire definitively corrupt entries through the existing safe removal path. Keep transient failures retryable. Add more-than-one-batch tests with corrupt, unreadable and transiently failing early entries; prove later healthy entries eventually flush and a recovered failed entry is revisited. Explicit CLI GC (`src/cli.rs:2676`) is a recovery path, not a substitute for fair periodic progress.
-- **Fix with:** durable-state
-- **Effort:** M
-
 ### KACH-17 · P2 · Release integration tests ignore the distributable binary selector
 
 - **Area:** Tests

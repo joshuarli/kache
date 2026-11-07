@@ -2888,6 +2888,139 @@ fn durability_flush_verifies_reopened_imports_and_continues_after_corruption() {
     }
 }
 
+#[test]
+fn durability_flush_failed_entries_do_not_starve_healthy_entries_across_batches() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let store = Store::open_with_options(&config, StoreOptions::from_env(|_| None)).unwrap();
+
+    let mut keys = Vec::new();
+    for i in 0..65 {
+        let k = format!("key-{i:03}");
+        put_test_entry(&store, dir.path(), &k, 16 + i);
+        keys.push(k);
+    }
+
+    store
+        .db
+        .execute("UPDATE entries SET durable = 0", [])
+        .unwrap();
+    assert_eq!(store.pending_durability().unwrap(), 65);
+
+    let mut original_blob_0 = Vec::new();
+    let mut blob_0_path = PathBuf::new();
+    for (i, k) in keys.iter().take(64).enumerate() {
+        if i == 0 {
+            let meta_path = store.entry_dir(k).join("meta.json");
+            let meta_bytes = fs::read(&meta_path).unwrap();
+            let meta: EntryMeta = deser_json::from_slice(&meta_bytes).unwrap();
+            let blob = store.blob_path(&meta.files[0].hash);
+            let mut permissions = fs::metadata(&blob).unwrap().permissions();
+            permissions.set_readonly(false);
+            fs::set_permissions(&blob, permissions).unwrap();
+            let mut bytes = fs::read(&blob).unwrap();
+            original_blob_0 = bytes.clone();
+            blob_0_path = blob.clone();
+            bytes[0] ^= 0xff;
+            fs::write(&blob, &bytes).unwrap();
+        } else if i < 30 {
+            let meta_path = store.entry_dir(k).join("meta.json");
+            let meta_bytes = fs::read(&meta_path).unwrap();
+            let meta: EntryMeta = deser_json::from_slice(&meta_bytes).unwrap();
+            let blob = store.blob_path(&meta.files[0].hash);
+            let mut permissions = fs::metadata(&blob).unwrap().permissions();
+            permissions.set_readonly(false);
+            fs::set_permissions(&blob, permissions).unwrap();
+            let mut bytes = fs::read(&blob).unwrap();
+            bytes[0] ^= 0xff;
+            fs::write(&blob, &bytes).unwrap();
+        } else if i < 50 {
+            let meta_path = store.entry_dir(k).join("meta.json");
+            fs::write(&meta_path, b"not json").unwrap();
+        } else if i < 63 {
+            let meta_path = store.entry_dir(k).join("meta.json");
+            let _ = fs::remove_file(&meta_path);
+        } else if i == 63 {
+            let meta_path = store.entry_dir(k).join("meta.json");
+            let meta_bytes = fs::read(&meta_path).unwrap();
+            let meta: EntryMeta = deser_json::from_slice(&meta_bytes).unwrap();
+            let blob = store.blob_path(&meta.files[0].hash);
+            fs::rename(&blob, blob.with_extension("bak")).unwrap();
+        }
+    }
+
+    assert_eq!(store.flush_durability(64).unwrap(), 0);
+    assert!(!store.entry_is_durable(&keys[64]));
+    assert_eq!(store.pending_durability().unwrap(), 65);
+
+    assert_eq!(store.flush_durability(64).unwrap(), 1);
+    assert!(store.entry_is_durable(&keys[64]));
+    assert_eq!(store.pending_durability().unwrap(), 64);
+
+    let transient_key = &keys[63];
+    let meta_path = store.entry_dir(transient_key).join("meta.json");
+    let meta_bytes = fs::read(&meta_path).unwrap();
+    let meta: EntryMeta = deser_json::from_slice(&meta_bytes).unwrap();
+    let blob = store.blob_path(&meta.files[0].hash);
+    fs::rename(blob.with_extension("bak"), &blob).unwrap();
+
+    assert_eq!(store.flush_durability(64).unwrap(), 1);
+    assert!(store.entry_is_durable(transient_key));
+    assert_eq!(store.pending_durability().unwrap(), 63);
+
+    fs::write(&blob_0_path, &original_blob_0).unwrap();
+    assert_eq!(store.flush_durability(64).unwrap(), 1);
+    assert!(store.entry_is_durable(&keys[0]));
+    assert_eq!(store.pending_durability().unwrap(), 62);
+}
+
+#[test]
+fn durability_flush_shared_damaged_blob_does_not_starve_healthy_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let store = Store::open_with_options(&config, StoreOptions::from_env(|_| None)).unwrap();
+
+    let mut keys = Vec::new();
+    for i in 0..64 {
+        let k = format!("shared-{i:03}");
+        put_test_entry(&store, dir.path(), &k, 32);
+        keys.push(k);
+    }
+    let healthy_key = "healthy-065".to_string();
+    put_test_entry(&store, dir.path(), &healthy_key, 64);
+    keys.push(healthy_key);
+
+    store
+        .db
+        .execute("UPDATE entries SET durable = 0", [])
+        .unwrap();
+    assert_eq!(store.pending_durability().unwrap(), 65);
+
+    let meta_path = store.entry_dir(&keys[0]).join("meta.json");
+    let meta_bytes = fs::read(&meta_path).unwrap();
+    let meta: EntryMeta = deser_json::from_slice(&meta_bytes).unwrap();
+    let shared_blob = store.blob_path(&meta.files[0].hash);
+    let mut permissions = fs::metadata(&shared_blob).unwrap().permissions();
+    permissions.set_readonly(false);
+    fs::set_permissions(&shared_blob, permissions).unwrap();
+    let mut bytes = fs::read(&shared_blob).unwrap();
+    let original_bytes = bytes.clone();
+    bytes[0] ^= 0xff;
+    fs::write(&shared_blob, &bytes).unwrap();
+
+    assert_eq!(store.flush_durability(64).unwrap(), 0);
+    assert!(!store.entry_is_durable(&keys[64]));
+    assert_eq!(store.pending_durability().unwrap(), 65);
+
+    assert_eq!(store.flush_durability(64).unwrap(), 1);
+    assert!(store.entry_is_durable(&keys[64]));
+    assert_eq!(store.pending_durability().unwrap(), 64);
+
+    fs::write(&shared_blob, &original_bytes).unwrap();
+    assert_eq!(store.flush_durability(64).unwrap(), 64);
+    assert_eq!(store.pending_durability().unwrap(), 0);
+}
+
 /// The metadata and row can be replaced or removed during bulk verification,
 /// which must not hold the writer lock or promote the next generation.
 #[test]
