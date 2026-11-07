@@ -25,7 +25,7 @@
 //! writable directory.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use rustc_hash::FxHashSet;
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::marker::PhantomData;
@@ -365,14 +365,14 @@ fn unit_package(unit: &str) -> Option<&str> {
 }
 
 /// Every `<pkg>-<hash>` whose alias `bytes` spells a path in.
-fn alias_units_in(bytes: &[u8], root: &Path) -> BTreeSet<String> {
+fn alias_units_in(bytes: &[u8], root: &Path) -> FxHashSet<String> {
     let mut prefix = root
         .join(LAYOUT)
         .join("d")
         .into_os_string()
         .into_encoded_bytes();
     prefix.push(b'/');
-    let mut units = BTreeSet::new();
+    let mut units = FxHashSet::default();
     let mut rest = bytes;
     while let Some(at) = rest
         .windows(prefix.len())
@@ -401,7 +401,7 @@ fn loaded_macros(externs: &[ExternDep]) -> impl Iterator<Item = &Path> {
 
 /// Every alias a proc macro this compile loads has baked in. A lib's alias is
 /// baked into the macro that links it, not into the compile that fails.
-fn loaded_aliases(externs: &[ExternDep], root: &Path) -> BTreeSet<String> {
+fn loaded_aliases(externs: &[ExternDep], root: &Path) -> FxHashSet<String> {
     loaded_macros(externs)
         .filter_map(|path| std::fs::read(path).ok())
         .flat_map(|bytes| alias_units_in(&bytes, root))
@@ -413,15 +413,15 @@ fn loaded_aliases(externs: &[ExternDep], root: &Path) -> BTreeSet<String> {
 /// so its own alias is the write target; aliases it merely mentions belong
 /// to units it links. Underscores match dashes: crate `wasm_macro` bakes the
 /// package directory `wasm-macro-<hash>`.
-fn own_aliases(dep: &ExternDep, root: &Path) -> BTreeSet<String> {
+fn own_aliases(dep: &ExternDep, root: &Path) -> FxHashSet<String> {
     let Some(path) = dep.path.as_deref() else {
-        return BTreeSet::new();
+        return FxHashSet::default();
     };
     if path.extension() != Some(std::ffi::OsStr::new(std::env::consts::DLL_EXTENSION)) {
-        return BTreeSet::new();
+        return FxHashSet::default();
     }
     let Ok(bytes) = std::fs::read(path) else {
-        return BTreeSet::new();
+        return FxHashSet::default();
     };
     let want = dep.name.replace('-', "_");
     alias_units_in(&bytes, root)
@@ -434,11 +434,14 @@ fn own_aliases(dep: &ExternDep, root: &Path) -> BTreeSet<String> {
 
 /// The one-line hint for a compile that failed to write, naming the packages
 /// of `units`.
-pub(crate) fn permission_hint(units: &BTreeSet<String>) -> String {
-    let packages: BTreeSet<&str> = units.iter().filter_map(|unit| unit_package(unit)).collect();
+pub(crate) fn permission_hint(units: &FxHashSet<String>) -> String {
+    let packages: FxHashSet<&str> = units.iter().filter_map(|unit| unit_package(unit)).collect();
     let clean = if packages.is_empty() {
         "-p <macro crate>".to_string()
     } else {
+        // Sorted: the hint is user-facing text.
+        let mut packages: Vec<&str> = packages.into_iter().collect();
+        packages.sort_unstable();
         packages
             .iter()
             .map(|package| format!("-p {package}"))
@@ -475,7 +478,7 @@ fn failure_hint(
     for unit in &known {
         let _ = deny(root, unit);
     }
-    let mut suspected = BTreeSet::new();
+    let mut suspected = FxHashSet::default();
     for dep in externs {
         suspected.extend(own_aliases(dep, root));
     }
@@ -654,7 +657,7 @@ pub(crate) fn ensure_alias_dir(dir: &Path, euid: u32) -> bool {
 }
 
 /// The unit ids registered as candidate libs.
-fn listed_candidates(root: &Path) -> BTreeSet<String> {
+fn listed_candidates(root: &Path) -> FxHashSet<String> {
     std::fs::read_dir(libs_dir(root))
         .into_iter()
         .flatten()
@@ -663,7 +666,7 @@ fn listed_candidates(root: &Path) -> BTreeSet<String> {
 }
 
 /// The candidate unit id an `--extern` links, if it is listed.
-fn listed_extern<'a>(dep: &'a ExternDep, listed: &BTreeSet<String>) -> Option<(&'a Path, String)> {
+fn listed_extern<'a>(dep: &'a ExternDep, listed: &FxHashSet<String>) -> Option<(&'a Path, String)> {
     let path = dep.path.as_deref()?;
     let id = crate::args::unit_id_from_artifact_path(path)?;
     listed.contains(&id).then_some((path, id))
@@ -672,7 +675,7 @@ fn listed_extern<'a>(dep: &'a ExternDep, listed: &BTreeSet<String>) -> Option<(&
 /// Record this compile as a consumer of every listed lib it links.
 pub(crate) fn record_consumers(
     root: &Path,
-    listed: &BTreeSet<String>,
+    listed: &FxHashSet<String>,
     externs: &[ExternDep],
     kind: ConsumerKind,
 ) {
@@ -687,7 +690,7 @@ pub(crate) fn record_consumers(
 /// Remove every aliased lib an `other` consumer links, so Cargo rebuilds it
 /// unaliased. Returns the extern names it removed.
 pub(crate) fn trip(
-    listed: &BTreeSet<String>,
+    listed: &FxHashSet<String>,
     externs: &[ExternDep],
     kind: ConsumerKind,
 ) -> Vec<String> {
@@ -1374,7 +1377,7 @@ mod tests {
             SkipReason::LibEvidence(LibVerdict::Other),
             SkipReason::Sidecar,
         ];
-        let labels: BTreeSet<&str> = reasons.iter().map(|reason| reason.as_str()).collect();
+        let labels: FxHashSet<&str> = reasons.iter().map(|reason| reason.as_str()).collect();
         assert_eq!(labels.len(), reasons.len());
         assert!(
             labels
@@ -1694,8 +1697,11 @@ mod tests {
         bytes.extend(b"/c/out-dirs/v1/libs/lib-0123456789abcdef/pm");
         bytes.extend(b"/d/out-dirs/v1/d/elsewhere-0123456789abcdef/out");
         bytes.extend(b"/c/out-dirs/v1/d/end-0123456789abcdef");
+        // The set is unordered; sort to assert membership.
+        let mut units: Vec<String> = alias_units_in(&bytes, root).into_iter().collect();
+        units.sort();
         assert_eq!(
-            alias_units_in(&bytes, root).into_iter().collect::<Vec<_>>(),
+            units,
             [
                 "end-0123456789abcdef",
                 "my_mac-fedcba9876543210",
@@ -1708,7 +1714,7 @@ mod tests {
 
     #[test]
     fn permission_hint_names_the_packages_to_clean() {
-        let units = |names: &[&str]| -> BTreeSet<String> {
+        let units = |names: &[&str]| -> FxHashSet<String> {
             names.iter().map(|name| name.to_string()).collect()
         };
         let one = permission_hint(&units(&["sp-api-0123456789abcdef"]));
@@ -2147,10 +2153,10 @@ mod tests {
             assert!(listed_candidates(&root).is_empty());
             register_candidate(&root, "aaaa").unwrap();
             register_candidate(&root, "bbbb").unwrap();
-            assert_eq!(
-                listed_candidates(&root).into_iter().collect::<Vec<_>>(),
-                ["aaaa", "bbbb"]
-            );
+            // The set is unordered; sort to assert membership.
+            let mut candidates: Vec<String> = listed_candidates(&root).into_iter().collect();
+            candidates.sort();
+            assert_eq!(candidates, ["aaaa", "bbbb"]);
             assert_eq!(read_verdict(&root, "aaaa"), LibVerdict::Unseen);
 
             deny(&root, "dmac-0123").unwrap();

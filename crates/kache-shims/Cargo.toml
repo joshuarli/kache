@@ -13,6 +13,7 @@ categories = ["development-tools::build-utils", "filesystem"]
 
 [dependencies]
 kache-fs = { version = "2.0.0-rc.2", path = "../kache-fs" }
+rustc-hash = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

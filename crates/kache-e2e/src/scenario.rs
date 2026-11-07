@@ -8,12 +8,13 @@
 
 use anyhow::{Context, Result};
 use deser::Deserialize;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::bench_profile::BenchProfile;
 use crate::fixture::Fixture;
 use crate::phase::Phase;
+use rustc_hash::FxHashSet;
 
 /// Where a scenario's source comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -69,7 +70,7 @@ impl Selector {
         &self.raw
     }
 
-    fn matches(&self, name: &str, tags: &BTreeSet<String>, source_kind: SourceKind) -> bool {
+    fn matches(&self, name: &str, tags: &FxHashSet<String>, source_kind: SourceKind) -> bool {
         let raw = self.raw.as_str();
         if tags.contains(raw) {
             return true;
@@ -137,8 +138,8 @@ impl Selectors {
 
 /// Tags used for matching. Source kind is always implicit, and the default
 /// tier is implicit unless the TOML declares an explicit `tier:*` tag.
-pub fn effective_tags(source_kind: SourceKind, explicit_tags: &[String]) -> BTreeSet<String> {
-    let mut tags = BTreeSet::new();
+pub fn effective_tags(source_kind: SourceKind, explicit_tags: &[String]) -> FxHashSet<String> {
+    let mut tags = FxHashSet::default();
     tags.insert(source_kind.source_tag().to_string());
     if !explicit_tags.iter().any(|tag| tag.starts_with("tier:")) {
         tags.insert(source_kind.default_tier_tag().to_string());

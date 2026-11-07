@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use deser::{Deserialize, Serialize};
-use std::{borrow::Cow, collections::BTreeMap, path::PathBuf};
+use rustc_hash::FxHashMap;
+use std::{borrow::Cow, path::PathBuf};
 
 // Keep the original text and explicit replacement ranges. A literal sentinel
 // in a warning or a source excerpt must never become a consumer path.
@@ -34,7 +35,7 @@ pub(super) fn store<'a>(text: &'a str, roots: &Roots) -> Cow<'a, str> {
         .collect::<Vec<_>>();
     roots.sort_by_key(|(path, _, priority)| std::cmp::Reverse((**priority, path.len())));
     let json = deser_json::from_str::<deser_value::Value>(text).is_ok();
-    let mut paths = BTreeMap::<usize, Location>::new();
+    let mut paths = FxHashMap::<usize, Location>::default();
     for (path, token, _) in roots {
         let spelling = if json {
             json_fragment(path)
@@ -73,9 +74,13 @@ pub(super) fn store<'a>(text: &'a str, roots: &Roots) -> Cow<'a, str> {
     if paths.is_empty() && !text.starts_with(PREFIX) {
         return Cow::Borrowed(text);
     }
+    // Sorted by offset: `restore` walks these ranges in order to rebuild the
+    // text, so it must not depend on the map's iteration order.
+    let mut paths: Vec<Location> = paths.into_values().collect();
+    paths.sort_unstable_by_key(|location| location.start);
     let record = Record {
         text: text.to_string(),
-        paths: paths.into_values().collect(),
+        paths,
     };
     Cow::Owned(format!(
         "{PREFIX}{}",

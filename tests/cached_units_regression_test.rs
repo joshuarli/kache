@@ -402,7 +402,7 @@ fn concurrent_checkout_builds(changed_source: bool) {
         );
     }
     let events = events_since(&fx.cache, mark);
-    let mut runs = std::collections::BTreeMap::new();
+    let mut runs = rustc_hash::FxHashMap::default();
     for event in &events {
         let key = field(event, "cache_key");
         if !key.is_empty() {

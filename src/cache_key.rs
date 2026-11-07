@@ -8,11 +8,12 @@ pub(crate) use kache_format::is_valid_cache_key;
 pub(crate) use kache_store::file_hash::*;
 use std::borrow::Cow;
 use std::cell::{Cell, OnceCell, RefCell};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{HashMap};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::key_env::KeyEnv;
+use rustc_hash::FxHashMap;
 
 mod apple_install_name;
 
@@ -678,7 +679,7 @@ pub(crate) const KEY_FIELD_HEX: usize = 16;
 /// sub-hasher just keeps accumulating.
 struct GroupedHasher {
     main: blake3::Hasher,
-    groups: std::collections::BTreeMap<&'static str, blake3::Hasher>,
+    groups: rustc_hash::FxHashMap<&'static str, blake3::Hasher>,
     current: &'static str,
 }
 
@@ -686,7 +687,7 @@ impl GroupedHasher {
     fn new(initial_group: &'static str) -> Self {
         GroupedHasher {
             main: blake3::Hasher::new(),
-            groups: std::collections::BTreeMap::new(),
+            groups: rustc_hash::FxHashMap::default(),
             current: initial_group,
         }
     }
@@ -701,7 +702,7 @@ impl GroupedHasher {
     }
 
     /// Final key digest + the per-group hex prefixes for event persistence.
-    fn finalize_with_fields(self) -> (blake3::Hash, std::collections::BTreeMap<String, String>) {
+    fn finalize_with_fields(self) -> (blake3::Hash, rustc_hash::FxHashMap<String, String>) {
         let fields = self
             .groups
             .into_iter()
@@ -726,10 +727,10 @@ impl GroupedHasher {
 pub struct KeyOutputs {
     /// Per-group digests of the key, for the event log and `explain_miss`
     /// (kunobi-ninja/kache#131). Set only once the whole key was hashed.
-    pub fields: Option<BTreeMap<String, String>>,
+    pub fields: Option<FxHashMap<String, String>>,
     /// Hashes of normalized compiler-reported environment values, keyed by
     /// variable name. Values are never written to the event log.
-    pub env_deps: Option<BTreeMap<String, String>>,
+    pub env_deps: Option<FxHashMap<String, String>>,
     /// Per-extern artifact digests (kunobi-ninja/kache#609).
     ///
     /// The `externs` group digest says only THAT some dependency's artifact
@@ -743,7 +744,7 @@ pub struct KeyOutputs {
     /// folded into the key), truncated to [`KEY_FIELD_HEX`] — not a digest of
     /// the folded segment. `Some` once the externs group was hashed, even
     /// when the map is empty (a crate with no dependencies).
-    pub externs: Option<BTreeMap<String, String>>,
+    pub externs: Option<FxHashMap<String, String>>,
     /// Producing-unit identity per extern, teed off the same loop that fills
     /// [`KeyOutputs::externs`] and set with it (kunobi-ninja/kache#627).
     ///
@@ -756,7 +757,7 @@ pub struct KeyOutputs {
     ///
     /// Absent for an extern whose path carries no such suffix (sysroot crates,
     /// non-cargo invocations); the walk then falls back to matching by name.
-    pub extern_units: Option<BTreeMap<String, String>>,
+    pub extern_units: Option<FxHashMap<String, String>>,
     /// The compiling unit's own identity: its `-C extra-filename`, `None`
     /// when cargo passed none. Set however the computation ends.
     pub unit_id: Option<String>,
@@ -3295,7 +3296,7 @@ fn compute_key_into(
         let aliased_out_dir = crate::out_dir_alias::active_alias();
         let env_dep_paths = EnvDepPaths::new(out_dir.as_deref(), &dep_info.source_files);
         let mut bakes_out_dir = false;
-        let mut env_fields = BTreeMap::new();
+        let mut env_fields = FxHashMap::default();
         for (var, val) in &dep_info.env_deps {
             fold_field(&mut hasher, b"env_dep_var:", var.as_bytes());
             fold_field(
@@ -3354,11 +3355,11 @@ fn compute_key_into(
     // — it is one map insert per extern, no extra I/O, since the hash is
     // already in hand — while the decision to PERSIST it stays with the
     // wrapper's `explain_miss` gate.
-    let mut extern_digests = std::collections::BTreeMap::new();
+    let mut extern_digests = rustc_hash::FxHashMap::default();
     // Producing-unit ids, from the artifact filename rather than the extern
     // name, so a renamed or duplicated dependency still joins to its producer
     // (kunobi-ninja/kache#627).
-    let mut extern_units = std::collections::BTreeMap::new();
+    let mut extern_units = rustc_hash::FxHashMap::default();
     for ext in &externs {
         if let Some(path) = &ext.path {
             if let Some(unit) = crate::args::unit_id_from_artifact_path(path) {
@@ -5144,8 +5145,8 @@ fn fold_native_link_inputs<H: KeyFold>(
 
 /// rustc merges libraries by name at their last mention. An explicit kind
 /// replaces the previous kind and its modifiers; a kindless spec keeps it.
-fn effective_native_libraries(libraries: &[String]) -> BTreeMap<usize, &str> {
-    let mut by_name: BTreeMap<&str, (usize, &str)> = BTreeMap::new();
+fn effective_native_libraries(libraries: &[String]) -> FxHashMap<usize, &str> {
+    let mut by_name: FxHashMap<&str, (usize, &str)> = FxHashMap::default();
     for (index, library) in libraries.iter().enumerate() {
         let (kind, name) = library.split_once('=').unwrap_or(("", library));
         let spec = if kind.is_empty() {
@@ -7057,7 +7058,7 @@ fn prediction_identity_in_env(
     for arg in parts.closure_args {
         fold_field(&mut hasher, b"closure_arg:", arg.as_bytes());
     }
-    let by_name: std::collections::BTreeMap<Vec<u8>, &std::ffi::OsString> = vars
+    let by_name: rustc_hash::FxHashMap<Vec<u8>, &std::ffi::OsString> = vars
         .iter()
         .map(|(name, value)| (env_text_key_bytes(name), value))
         .collect();
@@ -9643,7 +9644,7 @@ fn codegen_backend_libraries(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             entries => entries.with_context(|| format!("listing {}", directory.display()))?,
         };
-        let mut libraries = BTreeMap::new();
+        let mut libraries = FxHashMap::default();
         for entry in entries {
             let path = entry?.path();
             if let Some(library) = path
@@ -9654,6 +9655,9 @@ fn codegen_backend_libraries(
                 libraries.insert(library.to_string(), path.clone());
             }
         }
+        // Sorted by library name: the returned list feeds the key.
+        let mut libraries: Vec<(String, PathBuf)> = libraries.into_iter().collect();
+        libraries.sort_unstable_by(|left, right| left.0.cmp(&right.0));
         for (library, path) in libraries {
             let content = file_hasher
                 .hash(&path)
@@ -10084,7 +10088,7 @@ pub(crate) fn probe_linux_crt_objects_memoized_for(
     driver: &Path,
     hash: impl Fn(&Path) -> Result<String>,
     env: &InvocationEnv,
-) -> Result<BTreeMap<String, String>> {
+) -> Result<FxHashMap<String, String>> {
     let _trace = crate::phase_trace::phase("native_crt");
     let driver = env
         .resolve_program(driver)
@@ -10103,7 +10107,7 @@ pub(crate) fn probe_linux_crt_objects_memoized_for(
     probe_files_with_hash(LINUX_PROBES, |name| placements.get(name).cloned(), hash)
 }
 
-fn place_linux_crt_objects(driver: &Path, env: &InvocationEnv) -> BTreeMap<String, PathBuf> {
+fn place_linux_crt_objects(driver: &Path, env: &InvocationEnv) -> FxHashMap<String, PathBuf> {
     LINUX_PROBES
         .startup
         .iter()
@@ -10116,11 +10120,11 @@ fn place_linux_crt_objects(driver: &Path, env: &InvocationEnv) -> BTreeMap<Strin
 #[derive(deser::Serialize, deser::Deserialize)]
 struct CrtPlacementMemo {
     /// Name to absolute path, for the names the driver placed.
-    placed: BTreeMap<String, PathBuf>,
+    placed: FxHashMap<String, PathBuf>,
     /// Directory to `mtime_ns:ctime_ns` for every directory that decides a
     /// placement: the driver's library search directories and the parent of
     /// each placed file.
-    stamps: BTreeMap<PathBuf, String>,
+    stamps: FxHashMap<PathBuf, String>,
 }
 
 /// Variables that change where a GCC or Clang driver looks for files.
@@ -10171,7 +10175,7 @@ fn crt_placement_memo_for(
     memo_dir: &Path,
     driver: &Path,
     env: &InvocationEnv,
-) -> Option<BTreeMap<String, PathBuf>> {
+) -> Option<FxHashMap<String, PathBuf>> {
     let (_, digest) = crt_memo_material(driver, env)?;
     let path = probe_memo::memo_path(memo_dir, "crt-placements", "json", &digest);
     let body = probe_memo::read_verified(&path, &digest)?;
@@ -10193,7 +10197,7 @@ fn crt_placement_memo_for(
 fn record_crt_placement_memo(
     memo_dir: &Path,
     driver: &Path,
-    placed: &BTreeMap<String, PathBuf>,
+    placed: &FxHashMap<String, PathBuf>,
     env: &InvocationEnv,
 ) {
     let Some((canonical, digest)) = crt_memo_material(driver, env) else {
@@ -10205,7 +10209,7 @@ fn record_crt_placement_memo(
             .values()
             .filter_map(|path| path.parent().map(Path::to_path_buf)),
     );
-    let mut stamps = BTreeMap::new();
+    let mut stamps = FxHashMap::default();
     for directory in directories {
         let Ok(directory) = std::fs::canonicalize(&directory) else {
             continue;
@@ -10283,8 +10287,8 @@ fn probe_files_with_hash(
     probes: FileProbes,
     place: impl Fn(&str) -> Option<PathBuf>,
     hash: impl Fn(&Path) -> Result<String>,
-) -> Result<BTreeMap<String, String>> {
-    let mut resolved = BTreeMap::new();
+) -> Result<FxHashMap<String, String>> {
+    let mut resolved = FxHashMap::default();
     for name in probes
         .startup
         .iter()
@@ -10527,7 +10531,7 @@ pub(crate) fn place_linker_memoized_for(
 struct LinkerPlacementMemo {
     placed: PathBuf,
     /// Searched location to its [`location_stamp`] when the memo was written.
-    locations: BTreeMap<PathBuf, String>,
+    locations: FxHashMap<PathBuf, String>,
 }
 
 /// What a search location looks like, so a memo can tell it changed.
@@ -10606,7 +10610,7 @@ fn record_linker_placement_memo(
         directories.extend(std::env::split_paths(&path).filter_map(|dir| env.resolve(&dir)));
     }
     directories.extend(placed.parent().map(Path::to_path_buf));
-    let mut locations = BTreeMap::new();
+    let mut locations = FxHashMap::default();
     for directory in directories {
         for location in [directory.join(name), directory] {
             let Some(stamp) = location_stamp(&location) else {
@@ -10749,9 +10753,13 @@ fn xcrun(arguments: &[&str], env: &InvocationEnv) -> Result<String> {
 }
 
 /// Encode resolved CRT objects as a stable `name=digest` list.
-pub(crate) fn encode_crt_objects(objects: &BTreeMap<String, String>) -> String {
+pub(crate) fn encode_crt_objects(objects: &FxHashMap<String, String>) -> String {
     let mut encoded = String::new();
-    for (name, digest) in objects {
+    // Sorted by name: the encoded list is folded into the key, so its order
+    // must come from the content, not from the map's iteration order.
+    let mut ordered: Vec<(&String, &String)> = objects.iter().collect();
+    ordered.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    for (name, digest) in ordered {
         if !encoded.is_empty() {
             encoded.push('\n');
         }
@@ -10930,7 +10938,7 @@ fn fold_native_link_runtime_identity<H, Crt, Linker, Sdk>(
 ) -> Result<()>
 where
     H: KeyFold,
-    Crt: FnOnce(&Path) -> Result<BTreeMap<String, String>>,
+    Crt: FnOnce(&Path) -> Result<FxHashMap<String, String>>,
     Linker: FnOnce(&Path, &str) -> Result<String>,
     Sdk: FnOnce(Option<String>) -> Result<String>,
 {
@@ -10962,7 +10970,7 @@ fn fold_native_link_runtime_identity_for<H, Crt, Linker, Sdk>(
 ) -> Result<()>
 where
     H: KeyFold,
-    Crt: FnOnce(&Path) -> Result<BTreeMap<String, String>>,
+    Crt: FnOnce(&Path) -> Result<FxHashMap<String, String>>,
     Linker: FnOnce(&Path, &str) -> Result<String>,
     Sdk: FnOnce(Option<String>) -> Result<String>,
 {

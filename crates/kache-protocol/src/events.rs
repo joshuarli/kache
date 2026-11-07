@@ -318,12 +318,12 @@ pub struct BuildEvent {
     /// final key hashes. Powers `explain_miss` — diffing two events' maps
     /// names which input group changed. Empty for cc compiles and
     /// passthroughs.
-    #[deser(default, skip_serializing_if = std::collections::BTreeMap::is_empty)]
-    pub key_fields: std::collections::BTreeMap<String, String>,
+    #[deser(default, skip_serializing_if = rustc_hash::FxHashMap::is_empty)]
+    pub key_fields: rustc_hash::FxHashMap<String, String>,
     /// Normalized environment-input hashes under `explain_miss`. `None`
     /// means unrecorded; an empty map means no compiler-reported variables.
     #[deser(default, skip_serializing_if = Option::is_none)]
-    pub key_env_deps: Option<std::collections::BTreeMap<String, String>>,
+    pub key_env_deps: Option<rustc_hash::FxHashMap<String, String>>,
     /// On a miss with `[cache] explain_miss` on: the key groups whose digests
     /// changed vs this crate's last hit in the same build tree.
     #[deser(default, skip_serializing_if = Vec::is_empty)]
@@ -342,8 +342,8 @@ pub struct BuildEvent {
     /// when `[cache] explain_miss` is on: a crate with 150 dependencies would
     /// otherwise add 150 entries to every event on the hot path. Empty for cc
     /// compiles, passthroughs, and pre-#609 wrappers.
-    #[deser(default, skip_serializing_if = std::collections::BTreeMap::is_empty)]
-    pub key_externs: std::collections::BTreeMap<String, String>,
+    #[deser(default, skip_serializing_if = rustc_hash::FxHashMap::is_empty)]
+    pub key_externs: rustc_hash::FxHashMap<String, String>,
     /// Whether `key_externs` was recorded for this compile, as opposed to being
     /// absent (kunobi-ninja/kache#609).
     ///
@@ -383,8 +383,8 @@ pub struct BuildEvent {
     ///
     /// Recovered from the `--extern` artifact filename, so an extern without
     /// that suffix simply has no entry and the walk falls back to name matching.
-    #[deser(default, skip_serializing_if = std::collections::BTreeMap::is_empty)]
-    pub extern_units: std::collections::BTreeMap<String, String>,
+    #[deser(default, skip_serializing_if = rustc_hash::FxHashMap::is_empty)]
+    pub extern_units: rustc_hash::FxHashMap<String, String>,
     /// Typed class of [`Self::passthrough_reason`]. Schema 22.
     #[deser(default, skip_serializing_if = MissReason::is_none)]
     pub miss_reason: MissReason,

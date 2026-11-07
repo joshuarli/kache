@@ -14,7 +14,7 @@
 //! Divergences are classified and recorded on the hit event.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 
 /// Named outcome of comparing one restored artifact to a fresh compile.
@@ -202,7 +202,7 @@ pub(crate) fn compare_artifact_trees(restored: &Path, compiled: &Path) -> Compar
 /// artifact name.
 pub(crate) fn compare_named_artifacts(
     restored: &[(String, PathBuf)],
-    compiled_by_name: &BTreeMap<String, PathBuf>,
+    compiled_by_name: &FxHashMap<String, PathBuf>,
 ) -> CompareReport {
     let mut artifacts = Vec::with_capacity(restored.len());
     for (name, restored_path) in restored {
@@ -431,14 +431,14 @@ fn looks_like_path(bytes: &[u8]) -> bool {
 }
 
 #[cfg(test)]
-fn collect_relative_files(root: &Path) -> BTreeMap<String, PathBuf> {
-    let mut files = BTreeMap::new();
+fn collect_relative_files(root: &Path) -> FxHashMap<String, PathBuf> {
+    let mut files = FxHashMap::default();
     collect_relative_files_into(root, root, &mut files);
     files
 }
 
 #[cfg(test)]
-fn collect_relative_files_into(root: &Path, dir: &Path, files: &mut BTreeMap<String, PathBuf>) {
+fn collect_relative_files_into(root: &Path, dir: &Path, files: &mut FxHashMap<String, PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -837,7 +837,7 @@ mod tests {
             ("libfoo.rlib".to_string(), restored),
             ("nested/libbar.rlib".to_string(), nested_restored),
         ];
-        let mut compiled_by_name = BTreeMap::new();
+        let mut compiled_by_name = FxHashMap::default();
         compiled_by_name.insert("libfoo.rlib".to_string(), compiled);
         compiled_by_name.insert("libbar.rlib".to_string(), nested_compiled);
         let report = compare_named_artifacts(&restored_list, &compiled_by_name);
@@ -854,7 +854,7 @@ mod tests {
         let restored = dir.path().join("libfoo.rlib");
         std::fs::write(&restored, b"cached").unwrap();
         let report =
-            compare_named_artifacts(&[("libfoo.rlib".to_string(), restored)], &BTreeMap::new());
+            compare_named_artifacts(&[("libfoo.rlib".to_string(), restored)], &FxHashMap::default());
         assert_eq!(report.artifacts.len(), 1);
         assert_eq!(report.artifacts[0].class, DivergenceClass::Content);
         assert_eq!(report.artifacts[0].detail, "missing from recompile");

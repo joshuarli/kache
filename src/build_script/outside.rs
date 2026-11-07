@@ -12,7 +12,7 @@
 
 use crate::store::{EntryMeta, Store, link};
 use anyhow::{Context, Result};
-use std::collections::BTreeSet;
+use rustc_hash::FxHashSet;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
@@ -158,7 +158,7 @@ pub(super) fn restore(
     environment: &Environment,
     meta: &EntryMeta,
     manifest: &Manifest,
-    rewritten: &BTreeSet<&str>,
+    rewritten: &FxHashSet<&str>,
 ) -> Result<u64> {
     if manifest.outside_directories.is_empty()
         && manifest.outside_empty_files.is_empty()

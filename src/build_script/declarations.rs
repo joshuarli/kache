@@ -61,8 +61,8 @@ pub(super) fn parse_declarations(
     stdout: &str,
     environment: &Environment,
 ) -> Option<(Vec<String>, Vec<String>, bool)> {
-    let mut inputs = std::collections::BTreeSet::new();
-    let mut env = std::collections::BTreeSet::new();
+    let mut inputs = rustc_hash::FxHashSet::default();
+    let mut env = rustc_hash::FxHashSet::default();
     for line in stdout.lines() {
         match rerun_directive(line.trim()) {
             Some(Rerun::Changed(path)) => {
@@ -88,11 +88,13 @@ pub(super) fn parse_declarations(
     if default_package {
         inputs.insert("${KACHE_MANIFEST_DIR}".to_string());
     }
-    Some((
-        inputs.into_iter().collect(),
-        env.into_iter().collect(),
-        default_package,
-    ))
+    // Sorted: the declarations are folded and recorded, so their order must be
+    // the content's, not the set's.
+    let mut inputs: Vec<String> = inputs.into_iter().collect();
+    let mut env: Vec<String> = env.into_iter().collect();
+    inputs.sort_unstable();
+    env.sort_unstable();
+    Some((inputs, env, default_package))
 }
 
 #[cfg(test)]

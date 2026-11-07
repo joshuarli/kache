@@ -96,6 +96,7 @@ tempfile = "3"
 # lookarounds — matters because the wrapper runs the classifier on
 # every cc compile argument; bounded cost is a design requirement.
 regex-lite = "0.1"
+rustc-hash = "2"
 
 [dev-dependencies]
 kache-core = { version = "2.0.0-rc.2", path = "crates/kache-core" }

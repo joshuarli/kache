@@ -590,6 +590,7 @@ dependencies = [
  "predicates",
  "regex-lite",
  "rusqlite",
+ "rustc-hash",
  "tar",
  "tempfile",
  "zstd",
@@ -610,6 +611,7 @@ dependencies = [
  "kache-shims",
  "libc",
  "log",
+ "rustc-hash",
  "syn 3.0.9",
  "tempfile",
 ]
@@ -629,6 +631,7 @@ dependencies = [
  "kache-log",
  "kache-shims",
  "log",
+ "rustc-hash",
  "tempfile",
 ]
 
@@ -655,6 +658,7 @@ dependencies = [
  "kache-core",
  "kache-fs",
  "lexopt",
+ "rustc-hash",
  "tempfile",
 ]
 
@@ -675,6 +679,7 @@ dependencies = [
  "deser-json",
  "deser-value",
  "libc",
+ "rustc-hash",
  "tempfile",
 ]
 
@@ -690,6 +695,7 @@ dependencies = [
  "kunobi-daemon",
  "libc",
  "log",
+ "rustc-hash",
  "tempfile",
 ]
 
@@ -713,6 +719,7 @@ dependencies = [
  "deser-value",
  "kache-core",
  "kache-format",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -721,6 +728,7 @@ version = "2.0.0-rc.2"
 dependencies = [
  "kache-fs",
  "libc",
+ "rustc-hash",
  "tempfile",
 ]
 
@@ -740,6 +748,7 @@ dependencies = [
  "libc",
  "log",
  "rusqlite",
+ "rustc-hash",
  "tempfile",
 ]
 
@@ -1146,6 +1155,12 @@ dependencies = [
  "serde_json",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "rustc-hash"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 
 [[package]]
 name = "rustix"

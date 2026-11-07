@@ -34,7 +34,7 @@ use crate::cache_key::{FileFingerprint, FileHasher};
 use crate::tree_stamp::fold_metadata_stamp;
 use anyhow::{Context, Result};
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use rustc_hash::FxHashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
@@ -296,7 +296,7 @@ pub(crate) fn resolve(located: &Located, resolver: &Resolver<'_, '_>) -> Result<
     };
     let roots = Roots::of(located);
     let cargo_home = cargo_home(resolver.var);
-    let mut paths: BTreeMap<Vec<u8>, String> = BTreeMap::new();
+    let mut paths: FxHashMap<Vec<u8>, String> = FxHashMap::default();
     let mut budget = resolver.max_entries;
     // Cargo watches the package root for an empty path.
     let mut package_mode = declared.paths.is_empty() && declared.env.is_empty();
@@ -337,7 +337,7 @@ pub(crate) fn resolve(located: &Located, resolver: &Resolver<'_, '_>) -> Result<
             }
         }
     }
-    let vars: BTreeMap<Vec<u8>, EnvState> = declared
+    let vars: FxHashMap<Vec<u8>, EnvState> = declared
         .env
         .iter()
         .map(|name| {
@@ -544,15 +544,21 @@ fn is_script_out_dir(name: &str, value: &OsStr, located: &Located) -> bool {
             == crate::cargo_layout::out_dir_profile(&located.out_dir)
 }
 
-fn digest(paths: &BTreeMap<Vec<u8>, String>, vars: &BTreeMap<Vec<u8>, EnvState>) -> String {
+fn digest(paths: &FxHashMap<Vec<u8>, String>, vars: &FxHashMap<Vec<u8>, EnvState>) -> String {
     use crate::build_script::fold;
     let mut hasher = blake3::Hasher::new();
     fold(&mut hasher, "kind", DIGEST_TAG);
-    for (spelling, state) in paths {
+    // Sorted by the folded spelling: the digest is over a map, so its fold
+    // order must be content-determined, never the map's iteration order.
+    let mut ordered: Vec<(&Vec<u8>, &String)> = paths.iter().collect();
+    ordered.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    for (spelling, state) in ordered {
         fold(&mut hasher, "path", spelling);
         fold(&mut hasher, "state", state.as_bytes());
     }
-    for (name, state) in vars {
+    let mut ordered: Vec<(&Vec<u8>, &EnvState)> = vars.iter().collect();
+    ordered.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    for (name, state) in ordered {
         fold(&mut hasher, "env_name", name);
         match state {
             EnvState::Set(value) => fold(&mut hasher, "env_value", value),

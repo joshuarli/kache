@@ -524,8 +524,8 @@ pub fn stats(
             /// The `-wal` file alone, also counted in `index_bytes`.
             #[deser(skip_serializing_if = Option::is_none)]
             index_wal_bytes: Option<u64>,
-            #[deser(skip_serializing_if = std::collections::BTreeMap::is_empty)]
-            index_rowid_high_water: std::collections::BTreeMap<&'static str, u64>,
+            #[deser(skip_serializing_if = rustc_hash::FxHashMap::is_empty)]
+            index_rowid_high_water: rustc_hash::FxHashMap<&'static str, u64>,
             /// The last GC run, from `gc_stats.json`.
             #[deser(skip_serializing_if = Option::is_none)]
             gc: Option<crate::report::GcStatsPersisted>,

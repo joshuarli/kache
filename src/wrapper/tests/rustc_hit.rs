@@ -7,7 +7,7 @@ const CACHE_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456
 fn key_record() -> KeyEventRecord {
     let mut record = KeyEventRecord::default();
     record.absorb(&crate::cache_key::KeyOutputs {
-        fields: Some(std::collections::BTreeMap::from([(
+        fields: Some(rustc_hash::FxHashMap::from_iter([(
             "args".to_string(),
             "aaaa".to_string(),
         )])),

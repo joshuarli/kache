@@ -96,15 +96,16 @@ mod tests {
 pub(crate) mod fake {
     use super::Fs;
     use kache_fs::InodeId;
-    use std::collections::{BTreeMap, VecDeque};
+    use rustc_hash::FxHashMap;
+    use std::collections::VecDeque;
     use std::ffi::OsString;
     use std::path::{Component, Path, PathBuf};
 
     #[derive(Default)]
     pub(crate) struct FakeFs {
         /// Identity and execute bit.
-        files: BTreeMap<PathBuf, (InodeId, bool)>,
-        links: BTreeMap<PathBuf, PathBuf>,
+        files: FxHashMap<PathBuf, (InodeId, bool)>,
+        links: FxHashMap<PathBuf, PathBuf>,
         next_ino: u64,
     }
 

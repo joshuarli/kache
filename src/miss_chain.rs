@@ -77,7 +77,8 @@
 //! filesystem, no clock. `cli` renders the result.
 
 use crate::events::{BuildEvent, EventResult};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{HashSet};
+use rustc_hash::FxHashMap;
 
 /// Hops to follow down one branch before giving up.
 const MAX_DEPTH: usize = 12;
@@ -301,12 +302,15 @@ pub(crate) fn changed_env_inputs(events: &[BuildEvent], miss_index: usize) -> Ve
     let (Some(current), Some(previous)) = (&compiled.key_env_deps, &baseline.key_env_deps) else {
         return Vec::new();
     };
-    let names: std::collections::BTreeSet<_> = current.keys().chain(previous.keys()).collect();
-    names
+    let names: rustc_hash::FxHashSet<_> = current.keys().chain(previous.keys()).collect();
+    let mut changed: Vec<String> = names
         .into_iter()
         .filter(|name| current.get(*name) != previous.get(*name))
         .cloned()
-        .collect()
+        .collect();
+    // Sorted: the list is rendered in order.
+    changed.sort_unstable();
+    changed
 }
 
 /// Baseline of the compile a walk starts from, and whether it is in another
@@ -402,7 +406,7 @@ pub fn analyze(events: &[BuildEvent], miss_index: usize) -> Option<Chain> {
     // Branches that reached each node, counted independently of `roots`: a node
     // can be reached again while it is still queued, long before it becomes an
     // endpoint.
-    let mut reached: BTreeMap<String, usize> = BTreeMap::new();
+    let mut reached: FxHashMap<String, usize> = FxHashMap::default();
     let mut roots: Vec<Root> = Vec::new();
     let mut nodes = 0usize;
     let mut truncated = None;
@@ -608,9 +612,9 @@ fn changed_deps_at(
 /// into. A dependency that only exists in the baseline has no unit recorded and
 /// falls back to name matching, which is all that state supports anyway.
 fn diff_externs(
-    before: &BTreeMap<String, String>,
-    after: &BTreeMap<String, String>,
-    units: &BTreeMap<String, String>,
+    before: &FxHashMap<String, String>,
+    after: &FxHashMap<String, String>,
+    units: &FxHashMap<String, String>,
 ) -> Vec<ChangedDep> {
     let mut out = Vec::new();
     for (name, to) in after {
@@ -694,7 +698,7 @@ fn classify_at(
 
 /// Key input groups that differ, `externs` excluded: dependency movement is
 /// the walk's business, not the crate's own.
-fn own_groups(before: &BTreeMap<String, String>, after: &BTreeMap<String, String>) -> Vec<String> {
+fn own_groups(before: &FxHashMap<String, String>, after: &FxHashMap<String, String>) -> Vec<String> {
     let mut out: Vec<String> = after
         .iter()
         .filter(|(group, digest)| before.get(*group) != Some(digest))
@@ -726,7 +730,7 @@ fn passthroughs_for(
     before: usize,
 ) -> Vec<PassthroughGroup> {
     let needle = crate_name.replace('_', "-");
-    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut counts: FxHashMap<String, usize> = FxHashMap::default();
     for event in &events[..before.min(events.len())] {
         if event.result != EventResult::Passthrough {
             continue;
@@ -1726,13 +1730,13 @@ mod tests {
 
     #[test]
     fn diff_externs_reports_added_and_removed() {
-        let before: BTreeMap<String, String> = [
+        let before: FxHashMap<String, String> = [
             ("keep".to_string(), "1".to_string()),
             ("gone".to_string(), "2".to_string()),
         ]
         .into_iter()
         .collect();
-        let after: BTreeMap<String, String> = [
+        let after: FxHashMap<String, String> = [
             ("keep".to_string(), "1".to_string()),
             ("new".to_string(), "3".to_string()),
         ]
@@ -1740,7 +1744,7 @@ mod tests {
         .collect();
         // The unit map covers only the current dependency set, so the removed
         // one carries no unit and the added one does.
-        let units: BTreeMap<String, String> = [("new".to_string(), "unit3".to_string())]
+        let units: FxHashMap<String, String> = [("new".to_string(), "unit3".to_string())]
             .into_iter()
             .collect();
         assert_eq!(

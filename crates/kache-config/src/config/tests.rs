@@ -944,7 +944,7 @@ fn every_env_var_config_reads_maps_to_a_config_key() {
     ];
     // The tests live in their own file, so config.rs is all non-test code.
     let source = include_str!("../config.rs");
-    let read: std::collections::BTreeSet<&str> = source
+    let read: rustc_hash::FxHashSet<&str> = source
         .match_indices("\"KACHE_")
         .map(|(start, _)| {
             let name = &source[start + 1..];
@@ -954,7 +954,7 @@ fn every_env_var_config_reads_maps_to_a_config_key() {
             &name[..end]
         })
         .collect();
-    let mapped: std::collections::BTreeSet<&str> =
+    let mapped: rustc_hash::FxHashSet<&str> =
         ENV_FILE_KEYS.iter().map(|(var, _)| *var).collect();
     assert_eq!(
         mapped.len(),
@@ -970,7 +970,7 @@ fn every_env_var_config_reads_maps_to_a_config_key() {
     for var in &mapped {
         assert!(read.contains(var), "{var} is listed but never read");
     }
-    let gated: std::collections::BTreeSet<&str> = IGNORE_ENV_GATED_VARS.iter().copied().collect();
+    let gated: rustc_hash::FxHashSet<&str> = IGNORE_ENV_GATED_VARS.iter().copied().collect();
     assert_eq!(
         gated, mapped,
         "ignore_env gates exactly the file-backed variables"

@@ -515,15 +515,15 @@ pub fn measure_file(path: &Path) -> io::Result<FileSizing> {
 #[cfg(any(test, feature = "testing"))]
 pub mod testutil {
     use super::VolumeUsage;
-    use std::collections::BTreeMap;
+    use rustc_hash::FxHashMap;
     use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static SEQ: AtomicU32 = AtomicU32::new(0);
 
-    static VOLUMES: std::sync::Mutex<BTreeMap<PathBuf, Option<VolumeUsage>>> =
-        std::sync::Mutex::new(BTreeMap::new());
+    static VOLUMES: std::sync::LazyLock<std::sync::Mutex<FxHashMap<PathBuf, Option<VolumeUsage>>>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(FxHashMap::default()));
 
     /// Simulate volume readings beneath one test's unique scratch directory.
     /// Worker threads see the same readings; other test directories use their

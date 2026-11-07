@@ -2009,7 +2009,7 @@ mod tests {
 /// as a subcommand.
 pub(crate) mod shim {
     use kache_shims::farm;
-    use std::collections::BTreeSet;
+    use rustc_hash::FxHashSet;
     use std::path::{Path, PathBuf};
 
     /// Whether `argv[0]` names a compiler, meaning kache is being invoked
@@ -2170,7 +2170,7 @@ pub(crate) mod shim {
         is_marked: &dyn Fn(&Path) -> bool,
     ) -> Vec<String> {
         let self_real = self_exe.and_then(resolve);
-        let mut names = BTreeSet::new();
+        let mut names = FxHashSet::default();
         for dir in path_dirs {
             if is_marked(dir) {
                 continue;
@@ -2197,7 +2197,10 @@ pub(crate) mod shim {
                 }
             }
         }
-        names.into_iter().collect()
+        // Sorted: the shim list is written out in this order.
+        let mut names: Vec<String> = names.into_iter().collect();
+        names.sort_unstable();
+        names
     }
 
     /// What `kache install-shims` and `kache init` link besides
