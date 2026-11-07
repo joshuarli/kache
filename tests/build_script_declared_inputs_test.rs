@@ -15,7 +15,7 @@
 #![cfg(unix)]
 
 use deser_value::Value;
-use std::collections::BTreeMap;
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -152,7 +152,7 @@ fn build(
     target: &Path,
     cache: &Path,
     mode: Option<&str>,
-) -> BTreeMap<String, Value> {
+) -> FxHashMap<String, Value> {
     let env: Vec<(&str, &str)> = mode.map(|mode| ("APP_MODE", mode)).into_iter().collect();
     build_units(workspace, target, cache, &UNITS, &env)
 }
@@ -166,7 +166,7 @@ fn build_units(
     cache: &Path,
     units: &[&str],
     env: &[(&str, &str)],
-) -> BTreeMap<String, Value> {
+) -> FxHashMap<String, Value> {
     let mut command = hermetic_command("cargo", cache, Some(&isolated_config_path(cache)));
     command
         .args(["build", "--offline", "--quiet", "--workspace"])
@@ -190,7 +190,7 @@ fn build_units(
         "Cargo failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let mut latest = BTreeMap::new();
+    let mut latest = FxHashMap::default();
     for line in std::fs::read_to_string(log).unwrap()[before..].lines() {
         let event: Value = deser_json::from_str(line).unwrap();
         if let Some(name) = event["crate_name"].as_str()
@@ -214,7 +214,7 @@ fn outputs(target: &Path) -> [String; 4] {
     ["app-cli", "app2", "app3", "app4"].map(|binary| run(target, binary))
 }
 
-fn key(events: &BTreeMap<String, Value>, unit: &str) -> String {
+fn key(events: &FxHashMap<String, Value>, unit: &str) -> String {
     let key = events
         .get(unit)
         .unwrap_or_else(|| panic!("no event for {unit}: {events:?}"))["cache_key"]
@@ -225,7 +225,7 @@ fn key(events: &BTreeMap<String, Value>, unit: &str) -> String {
     key
 }
 
-fn result<'a>(events: &'a BTreeMap<String, Value>, unit: &str) -> &'a str {
+fn result<'a>(events: &'a FxHashMap<String, Value>, unit: &str) -> &'a str {
     events[unit]["result"].as_str().unwrap()
 }
 

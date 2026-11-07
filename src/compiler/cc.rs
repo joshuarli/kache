@@ -4582,8 +4582,8 @@ fn push_cargo_dep_out_dir_maps(
     let Some(target) = crate::build_script::target_dir(&own) else {
         return;
     };
-    let mut units: std::collections::BTreeMap<String, Vec<PathBuf>> =
-        std::collections::BTreeMap::new();
+    let mut units: rustc_hash::FxHashMap<String, Vec<PathBuf>> =
+        rustc_hash::FxHashMap::default();
     for dir in include_dirs {
         let Some((unit_out, name)) = crate::cargo_layout::unit_out_dir_under(&target, dir) else {
             continue;
@@ -4596,6 +4596,10 @@ fn push_cargo_dep_out_dir_maps(
             dirs.push(unit_out);
         }
     }
+    // Sorted by unit name: `maps` order must not depend on the map's iteration
+    // order.
+    let mut units: Vec<(String, Vec<PathBuf>)> = units.into_iter().collect();
+    units.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     for (name, dirs) in units {
         let [unit_out] = dirs.as_slice() else {
             continue;
@@ -5631,7 +5635,7 @@ fn digest_cc_include_shadowing(parsed: &CcArgs, read_inputs: &[PathBuf]) -> Resu
 /// header's parent for quoted names. Local lookup paths stay out of the key.
 #[derive(Default, Clone)]
 struct CcShadowingNames {
-    names: std::collections::BTreeSet<PathBuf>,
+    names: rustc_hash::FxHashSet<PathBuf>,
     probes: Vec<CcProbedHeader>,
 }
 
@@ -6274,7 +6278,11 @@ fn digest_cc_shadowing_names_stamped(
     let dirs = cc_user_include_dirs(parsed, cwd);
     let mut hasher = blake3::Hasher::new();
     let mut listings = CcDirectoryListings::default();
-    for name in &names.names {
+    // Sorted: the names are folded into the key in this order, so it must come
+    // from the content rather than the set's iteration order.
+    let mut ordered_names: Vec<&std::path::PathBuf> = names.names.iter().collect();
+    ordered_names.sort_unstable();
+    for name in ordered_names {
         hasher.update(name.as_os_str().as_encoded_bytes());
         hasher.update(b"\x1f");
         match cc_first_include_dir_providing_cached(&dirs, name, &mut listings)? {

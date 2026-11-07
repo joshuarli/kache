@@ -27,3 +27,4 @@ deser-value = "0.10.2"
 [build-dependencies]
 syn = { version = "3", default-features = false, features = ["derive", "parsing"] }
 heck = "0.5"
+rustc-hash = "2"

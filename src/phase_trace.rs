@@ -183,7 +183,7 @@ mod tests {
                 });
             }
         });
-        let mut lanes = std::collections::BTreeSet::new();
+        let mut lanes = rustc_hash::FxHashSet::default();
         for entry in std::fs::read_dir(directory.path()).unwrap() {
             let data: Value =
                 deser_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap();

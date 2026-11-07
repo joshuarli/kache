@@ -1637,7 +1637,7 @@ fn a_passthrough_after_a_deferred_compile_keeps_the_first_exit_code() {
     .unwrap();
     let mut key_record = KeyEventRecord::default();
     key_record.absorb(&crate::cache_key::KeyOutputs {
-        fields: Some(std::collections::BTreeMap::from([(
+        fields: Some(rustc_hash::FxHashMap::from_iter([(
             "args".to_string(),
             "aaaa".to_string(),
         )])),
@@ -5890,7 +5890,7 @@ fn an_event_carries_its_invocations_key_record() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path().join("cache"));
     let map = |name: &str, value: &str| {
-        std::collections::BTreeMap::from([(name.to_string(), value.to_string())])
+        rustc_hash::FxHashMap::from_iter([(name.to_string(), value.to_string())])
     };
     let log = |config: &Config, key_record: KeyEventRecord| {
         log_event(

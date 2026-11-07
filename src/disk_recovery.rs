@@ -6,7 +6,7 @@ use crate::config::Config;
 use crate::store::Store;
 use anyhow::Result;
 use kache_fs::VolumeUsage;
-use std::collections::BTreeMap;
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -18,7 +18,8 @@ const LAST_CHECK: &str = "disk-recovery.last";
 /// When this process last recovered each store whose timestamp it could not
 /// write, by cache dir. On a full disk every write of the timestamp fails;
 /// this keeps the process to the same interval.
-static UNRECORDED: Mutex<BTreeMap<PathBuf, u64>> = Mutex::new(BTreeMap::new());
+static UNRECORDED: std::sync::LazyLock<Mutex<FxHashMap<PathBuf, u64>>> =
+    std::sync::LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
 fn last_check(cache_dir: &Path) -> Result<u64> {
     match std::fs::read_to_string(cache_dir.join(LAST_CHECK)) {
@@ -28,7 +29,7 @@ fn last_check(cache_dir: &Path) -> Result<u64> {
     }
 }
 
-fn unrecorded() -> MutexGuard<'static, BTreeMap<PathBuf, u64>> {
+fn unrecorded() -> MutexGuard<'static, FxHashMap<PathBuf, u64>> {
     UNRECORDED.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

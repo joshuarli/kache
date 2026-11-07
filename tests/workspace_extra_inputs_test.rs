@@ -2,7 +2,7 @@
 //! proc-macro provider executes must re-key that provider's direct consumers.
 
 use deser_value::Value;
-use std::collections::BTreeMap;
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
@@ -235,8 +235,8 @@ fn events(cache: &Path) -> Vec<Value> {
         .collect()
 }
 
-fn latest_by_crate(events: &[Value]) -> BTreeMap<String, &Value> {
-    let mut latest = BTreeMap::new();
+fn latest_by_crate(events: &[Value]) -> FxHashMap<String, &Value> {
+    let mut latest = FxHashMap::default();
     for event in events {
         if let Some(name) = event["crate_name"].as_str() {
             latest.insert(name.to_string(), event);
@@ -245,7 +245,7 @@ fn latest_by_crate(events: &[Value]) -> BTreeMap<String, &Value> {
     latest
 }
 
-fn event_key<'a>(events: &'a BTreeMap<String, &Value>, name: &str) -> &'a str {
+fn event_key<'a>(events: &'a FxHashMap<String, &Value>, name: &str) -> &'a str {
     events[name]["cache_key"]
         .as_str()
         .unwrap_or_else(|| panic!("{name} event has no cache key: {:?}", events[name]))

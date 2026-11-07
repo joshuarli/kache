@@ -371,8 +371,8 @@ fn render_key_divergence(cold: &KeytraceFields, relocate: &KeytraceFields) -> Op
         let Some(reloc_fields) = relocate.get(crate_name) else {
             continue;
         };
-        let cold_set: std::collections::BTreeSet<&String> = cold[crate_name].iter().collect();
-        let reloc_set: std::collections::BTreeSet<&String> = reloc_fields.iter().collect();
+        let cold_set: rustc_hash::FxHashSet<&String> = cold[crate_name].iter().collect();
+        let reloc_set: rustc_hash::FxHashSet<&String> = reloc_fields.iter().collect();
         if cold_set == reloc_set {
             continue;
         }

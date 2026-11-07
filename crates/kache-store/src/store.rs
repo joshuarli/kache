@@ -1135,8 +1135,8 @@ impl BlobIndexDrift {
 
 #[derive(Default)]
 struct AuthoritativeBlobIndex {
-    entry_mappings: std::collections::BTreeMap<(String, String), i64>,
-    blobs: std::collections::BTreeMap<String, (i64, i64)>,
+    entry_mappings: rustc_hash::FxHashMap<(String, String), i64>,
+    blobs: rustc_hash::FxHashMap<String, (i64, i64)>,
 }
 
 /// The local content-addressed store.
@@ -3392,10 +3392,10 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                     .entry((key.clone(), file.hash.clone()))
                     .or_insert(0) += 1;
                 match index.blobs.entry(file.hash.clone()) {
-                    std::collections::btree_map::Entry::Vacant(slot) => {
+                    std::collections::hash_map::Entry::Vacant(slot) => {
                         slot.insert((file.size as i64, 1));
                     }
-                    std::collections::btree_map::Entry::Occupied(mut slot) => {
+                    std::collections::hash_map::Entry::Occupied(mut slot) => {
                         let (size, refs) = slot.get_mut();
                         if *size != file.size as i64 {
                             anyhow::bail!(
@@ -3447,12 +3447,12 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         let entry_mappings = {
             let mut stmt = conn.prepare("SELECT cache_key, hash, refs FROM entry_blobs")?;
             stmt.query_map([], |row| Ok(((row.get(0)?, row.get(1)?), row.get(2)?)))?
-                .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?
+                .collect::<Result<rustc_hash::FxHashMap<_, _>, _>>()?
         };
         let blobs = {
             let mut stmt = conn.prepare("SELECT hash, size, refcount FROM blobs")?;
             stmt.query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))))?
-                .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?
+                .collect::<Result<rustc_hash::FxHashMap<_, _>, _>>()?
         };
         Ok(AuthoritativeBlobIndex {
             entry_mappings,
@@ -3468,7 +3468,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             .entry_mappings
             .keys()
             .chain(actual.entry_mappings.keys())
-            .collect::<std::collections::BTreeSet<_>>()
+            .collect::<rustc_hash::FxHashSet<_>>()
             .into_iter()
             .filter(|key| expected.entry_mappings.get(*key) != actual.entry_mappings.get(*key))
             .count();
@@ -3476,7 +3476,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             .blobs
             .keys()
             .chain(actual.blobs.keys())
-            .collect::<std::collections::BTreeSet<_>>()
+            .collect::<rustc_hash::FxHashSet<_>>()
             .into_iter()
             .filter(|hash| expected.blobs.get(*hash) != actual.blobs.get(*hash))
             .count();

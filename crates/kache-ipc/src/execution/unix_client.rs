@@ -229,7 +229,7 @@ impl Client {
         if originals.len() != indices.len() {
             return Err(invalid("invalid compiler jobserver mapping"));
         }
-        let mut used = std::collections::BTreeSet::new();
+        let mut used = rustc_hash::FxHashSet::default();
         let jobserver = crate::jobserver::Descriptors::new(
             indices
                 .into_iter()

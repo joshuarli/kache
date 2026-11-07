@@ -16,6 +16,7 @@ deser-json = "0.10.2"
 log = "0.4"
 anyhow = "1"
 kunobi-daemon = { version = "0.10.3", default-features = false, features = ["local"] }
+rustc-hash = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

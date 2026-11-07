@@ -5852,7 +5852,7 @@ fn run_verify_recompile(
     let result = crate::opcounts::suspend_spawn_counts(|| compiler.execute(&staged_args))
         .context("running KACHE_VERIFY recompile")?;
     verify_recompile_exit_status(result.exit_code, &result.stderr)?;
-    let mut compiled_by_name = std::collections::BTreeMap::new();
+    let mut compiled_by_name = rustc_hash::FxHashMap::default();
     for artifact in result.artifacts.outputs() {
         compiled_by_name.insert(artifact.store_name.clone(), artifact.path.clone());
         if let Some(file_name) = artifact.path.file_name() {
@@ -7003,10 +7003,10 @@ pub(crate) fn write_event(config: &Config, event: &BuildEvent) {
 /// computed no key carry an empty record.
 #[derive(Clone, Default)]
 pub(crate) struct KeyEventRecord {
-    fields: Option<std::collections::BTreeMap<String, String>>,
-    env_deps: Option<std::collections::BTreeMap<String, String>>,
-    externs: Option<std::collections::BTreeMap<String, String>>,
-    extern_units: Option<std::collections::BTreeMap<String, String>>,
+    fields: Option<rustc_hash::FxHashMap<String, String>>,
+    env_deps: Option<rustc_hash::FxHashMap<String, String>>,
+    externs: Option<rustc_hash::FxHashMap<String, String>>,
+    extern_units: Option<rustc_hash::FxHashMap<String, String>>,
     unit_id: Option<String>,
 }
 
@@ -7215,7 +7215,7 @@ fn explain_miss_diff(
     crate_name: &str,
     result: EventResult,
     cache_key: &str,
-    key_fields: &std::collections::BTreeMap<String, String>,
+    key_fields: &rustc_hash::FxHashMap<String, String>,
 ) -> Vec<String> {
     if true
         || !matches!(result, EventResult::Miss | EventResult::Dup)

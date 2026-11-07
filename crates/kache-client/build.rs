@@ -1,5 +1,5 @@
 use heck::ToKebabCase;
-use std::collections::BTreeSet;
+use rustc_hash::FxHashSet;
 use std::path::PathBuf;
 
 /// Aliases the parser accepts alongside the kebab-case variant name.
@@ -13,8 +13,8 @@ fn main() {
     let syn::Data::Enum(commands) = parsed.data else {
         panic!("Commands must be an enum");
     };
-    let mut names = BTreeSet::from(["help".to_owned()]);
-    let mut variants = BTreeSet::new();
+    let mut names = FxHashSet::from_iter(["help".to_owned()]);
+    let mut variants = FxHashSet::default();
     for variant in commands.variants {
         if variant.attrs.iter().any(|attr| !attr.path().is_ident("doc")) {
             panic!("routing reads variant names only; remove attributes from the schema");
@@ -30,6 +30,9 @@ fn main() {
         );
         names.extend(aliases.iter().map(|alias| (*alias).to_owned()));
     }
+    // Sorted: the generated array of command names must be stable and ordered.
+    let mut names: Vec<String> = names.into_iter().collect();
+    names.sort_unstable();
     let output = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
-    std::fs::write(output.join("commands.rs"), format!("#[doc(hidden)]\n#[macro_export]\nmacro_rules! define_engine_commands {{ () => {{ {schema} }}; }}\npub fn engine_command_names() -> &'static [&'static str] {{ &{:?} }}\n", names.into_iter().collect::<Vec<_>>())).expect("write shared command definition");
+    std::fs::write(output.join("commands.rs"), format!("#[doc(hidden)]\n#[macro_export]\nmacro_rules! define_engine_commands {{ () => {{ {schema} }}; }}\npub fn engine_command_names() -> &'static [&'static str] {{ &{:?} }}\n", names)).expect("write shared command definition");
 }

@@ -1225,7 +1225,7 @@ mod tests {
                 let job_numbers = jobs
                     .iter()
                     .map(|(original, received)| (*original, received.as_raw_fd()))
-                    .collect::<std::collections::BTreeMap<_, _>>();
+                    .collect::<rustc_hash::FxHashMap<_, _>>();
                 let (_client, control) = UnixStream::pair().unwrap();
                 let (_pipes_client, pipes) = UnixDatagram::pair().unwrap();
                 descriptors.extend([OwnedFd::from(control), OwnedFd::from(pipes)]);

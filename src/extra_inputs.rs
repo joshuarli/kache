@@ -49,8 +49,8 @@
 use crate::cache_key::FileHasher;
 use crate::invocation::InvocationEnv;
 use anyhow::{Context, Result};
-use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// The co-located per-crate config file. Deliberately distinct from the
 /// project config `.kache.toml` so a crate-local file can never shadow the
@@ -284,10 +284,10 @@ fn combine_snapshots(
     contributions.sort_by(|left, right| left.0.cmp(&right.0));
 
     let mut labeled_digests = Vec::new();
-    let mut config_paths = BTreeSet::new();
-    let mut normalized_patterns = BTreeSet::new();
-    let mut matched_files = BTreeSet::new();
-    let mut watch_paths = BTreeSet::new();
+    let mut config_paths = FxHashSet::default();
+    let mut normalized_patterns = FxHashSet::default();
+    let mut matched_files = FxHashSet::default();
+    let mut watch_paths = FxHashSet::default();
     let mut observations = Vec::new();
 
     for (label, snapshot) in contributions {
@@ -324,13 +324,23 @@ fn combine_snapshots(
         Some(hasher.finalize().to_hex().to_string())
     };
 
+    // Sorted: these lists are recorded and folded, so their order is fixed by
+    // their content rather than by the sets' iteration order.
+    let mut additional_config_paths: Vec<PathBuf> = config_paths.collect();
+    let mut normalized_patterns: Vec<String> = normalized_patterns.into_iter().collect();
+    let mut matched_files: Vec<PathBuf> = matched_files.into_iter().collect();
+    let mut watch_paths: Vec<PathBuf> = watch_paths.into_iter().collect();
+    additional_config_paths.sort();
+    normalized_patterns.sort();
+    matched_files.sort();
+    watch_paths.sort();
     Some(ExtraInputsSnapshot {
         config_path,
-        additional_config_paths: config_paths.collect(),
-        normalized_patterns: normalized_patterns.into_iter().collect(),
+        additional_config_paths,
+        normalized_patterns,
         digest,
-        matched_files: matched_files.into_iter().collect(),
-        watch_paths: watch_paths.into_iter().collect(),
+        matched_files,
+        watch_paths,
         observations,
     })
 }
@@ -509,7 +519,7 @@ fn resolve_workspace_snapshot(
     // Resolve only package/crate identities here. Input globs can be large or
     // fail closed on unsafe filesystem topology, so they are deliberately
     // evaluated later and only for the current provider/direct extern.
-    let mut providers_by_package: BTreeMap<String, WorkspaceProviderSpec> = BTreeMap::new();
+    let mut providers_by_package: FxHashMap<String, WorkspaceProviderSpec> = FxHashMap::default();
 
     for (rule_index, rule) in workspace_config_body.extra_inputs.iter().enumerate() {
         if rule.crates.is_empty() {
@@ -517,7 +527,7 @@ fn resolve_workspace_snapshot(
                 "workspace.extra_inputs rule must select at least one package in `crates`"
             );
         }
-        let mut selectors = BTreeSet::new();
+        let mut selectors = FxHashSet::default();
         for selector in &rule.crates {
             if workspace_package_selector_is_invalid(selector) {
                 anyhow::bail!(
@@ -556,7 +566,7 @@ fn resolve_workspace_snapshot(
         }
     }
 
-    let mut providers_by_crate: BTreeMap<String, Vec<&WorkspaceProviderSpec>> = BTreeMap::new();
+    let mut providers_by_crate: FxHashMap<String, Vec<&WorkspaceProviderSpec>> = FxHashMap::default();
     for provider in providers_by_package.values() {
         if provider
             .rule_indices
@@ -575,20 +585,20 @@ fn resolve_workspace_snapshot(
         }
     }
 
-    let mut relevant: BTreeMap<
+    let mut relevant: FxHashMap<
         String,
         (
             bool,
             &WorkspaceProviderSpec,
-            BTreeMap<PathBuf, InputObservation>,
+            FxHashMap<PathBuf, InputObservation>,
         ),
-    > = BTreeMap::new();
+    > = FxHashMap::default();
     if let Some(current_package) = current_package
         && let Some(provider) = providers_by_package.get(&current_package.package_name)
     {
         relevant.insert(
             current_package.package_name.clone(),
-            (true, provider, BTreeMap::new()),
+            (true, provider, FxHashMap::default()),
         );
     }
 
@@ -627,7 +637,7 @@ fn resolve_workspace_snapshot(
                 (
                     false,
                     provider,
-                    BTreeMap::from([(observation.path.clone(), observation)]),
+                    FxHashMap::from_iter([(observation.path.clone(), observation)]),
                 )
             });
     }
@@ -671,7 +681,7 @@ fn resolve_workspace_provider_snapshot(
     file_hasher: &FileHasher<'_>,
 ) -> Result<ExtraInputsSnapshot> {
     let package_name = &provider.package.package_name;
-    let mut snapshots = BTreeMap::new();
+    let mut snapshots = FxHashMap::default();
 
     for rule_index in &provider.rule_indices {
         let rule = &rules[*rule_index];
@@ -892,7 +902,7 @@ fn resolve_artifact_provider_for<'a>(
             identity.crate_name
         )
     })?;
-    let dependencies: BTreeSet<PathBuf> = dependencies
+    let dependencies: FxHashSet<PathBuf> = dependencies
         .into_iter()
         .map(|path| {
             env.resolve(&path)
@@ -941,7 +951,7 @@ fn resolve_artifact_provider_for<'a>(
 fn load_workspace_packages(
     workspace_root: &Path,
     workspace_manifest: &Path,
-) -> Result<BTreeMap<String, WorkspacePackage>> {
+) -> Result<FxHashMap<String, WorkspacePackage>> {
     let root_manifest = read_cargo_manifest(workspace_manifest)?;
     let workspace = root_manifest.workspace.as_ref().ok_or_else(|| {
         anyhow::anyhow!(
@@ -950,20 +960,20 @@ fn load_workspace_packages(
         )
     })?;
 
-    let mut manifests = BTreeSet::new();
+    let mut manifests = FxHashSet::default();
     if root_manifest.package.is_some() {
         manifests.insert(workspace_manifest.to_path_buf());
     }
     for member in &workspace.members {
         manifests.extend(expand_workspace_member_pattern(workspace_root, member)?);
     }
-    let mut excluded = BTreeSet::new();
+    let mut excluded = FxHashSet::default();
     for pattern in &workspace.exclude {
         excluded.extend(expand_workspace_member_pattern(workspace_root, pattern)?);
     }
     manifests.retain(|manifest| !excluded.contains(manifest));
 
-    let mut packages = BTreeMap::new();
+    let mut packages = FxHashMap::default();
     for manifest_path in manifests {
         let manifest = read_cargo_manifest(&manifest_path)?;
         let Some(package) = manifest.package else {
@@ -1023,7 +1033,7 @@ fn absolute_source_file(source_file: &Path, env: &InvocationEnv) -> Result<PathB
 }
 
 fn current_workspace_package<'a>(
-    packages: &'a BTreeMap<String, WorkspacePackage>,
+    packages: &'a FxHashMap<String, WorkspacePackage>,
     source_file: &Path,
     cargo_manifest_dir: Option<&Path>,
 ) -> Option<&'a WorkspacePackage> {
@@ -1384,7 +1394,7 @@ fn resolve_declared_inputs(
     // Normalize the declared patterns. Out-of-crate patterns (absolute / `..`)
     // are kept (with a portability warning); only a pattern smuggling in the
     // fold separator is skipped.
-    let mut by_glob = BTreeMap::new();
+    let mut by_glob = FxHashMap::default();
     let mut rejected_patterns = Vec::new();
     for pattern in patterns {
         if strict_watches && pattern_uses_dynamic_expansion(pattern) {
@@ -1428,7 +1438,10 @@ fn resolve_declared_inputs(
             rejected_patterns.len()
         );
     }
-    let normalized: Vec<NormalizedInputPattern> = by_glob.into_values().collect();
+    // Sorted by glob: the previous map iterated in glob order, and the pattern
+    // list is folded into the key in this order.
+    let mut normalized: Vec<NormalizedInputPattern> = by_glob.into_values().collect();
+    normalized.sort_by(|left, right| left.glob.cmp(&right.glob));
     let normalized_patterns: Vec<String> = normalized
         .iter()
         .map(|pattern| pattern.glob.clone())
@@ -1563,7 +1576,7 @@ fn resolve_declared_inputs(
     // and enumeration must not let `glob` follow an unbounded/non-UTF-8 tree
     // that was absent from the key's safety check.
     let observed_watch_dirs = if strict_watches {
-        let mut directories = BTreeSet::new();
+        let mut directories = FxHashSet::default();
         for watch in &watch_paths {
             directories.extend(inspect_safe_watch_tree(watch).with_context(|| {
                 format!(
@@ -1574,7 +1587,7 @@ fn resolve_declared_inputs(
         }
         directories
     } else {
-        BTreeSet::new()
+        FxHashSet::default()
     };
 
     // Empirical breadth guard: catches an over-broad glob regardless of shape
@@ -1676,12 +1689,15 @@ fn resolve_declared_inputs(
         normalized.len()
     );
 
-    let dependencies: BTreeSet<PathBuf> = std::iter::once(config_path.clone())
+    let dependencies: FxHashSet<PathBuf> = std::iter::once(config_path.clone())
         .chain(matched.iter().cloned())
         .chain(watch_paths.iter().cloned())
         .collect();
     if strict_watches {
-        for dependency in &dependencies {
+        // Sorted so which offending dependency is reported is content-determined.
+        let mut ordered: Vec<&PathBuf> = dependencies.iter().collect();
+        ordered.sort();
+        for dependency in ordered {
             if let Some(symlink) = first_symlink_below_common(&crate_dir, dependency) {
                 anyhow::bail!(
                     "active extra_inputs dependency {} crosses symlink {}; Cargo canonicalizes \
@@ -1692,11 +1708,14 @@ fn resolve_declared_inputs(
             }
         }
     }
-    let observation_paths: BTreeSet<PathBuf> = std::iter::once(config_path.clone())
+    let observation_paths: FxHashSet<PathBuf> = std::iter::once(config_path.clone())
         .chain(matched.iter().cloned())
         .chain(observed_watch_dirs)
         .collect();
     let observations = if strict_watches {
+        // Sorted so the recorded order does not depend on the set's iteration.
+        let mut observation_paths: Vec<PathBuf> = observation_paths.into_iter().collect();
+        observation_paths.sort();
         observation_paths
             .iter()
             .map(|path| observe_dependency(path))
@@ -2023,7 +2042,7 @@ fn resolve_watch_paths(
     let crate_dir = lexical_normalize(crate_dir);
     let canonical_crate_dir =
         std::fs::canonicalize(&crate_dir).unwrap_or_else(|_| crate_dir.clone());
-    let mut watches = BTreeSet::new();
+    let mut watches = FxHashSet::default();
 
     for pattern in patterns {
         // Invalid globs retain their existing digest semantics and are skipped
@@ -2080,7 +2099,10 @@ fn resolve_watch_paths(
         }
     }
 
-    Ok(watches.into_iter().collect())
+    // Sorted: the watch list is recorded and folded in this order.
+    let mut watches: Vec<PathBuf> = watches.into_iter().collect();
+    watches.sort();
+    Ok(watches)
 }
 
 /// True if a glob's literal prefix (the part before the first glob
@@ -2174,12 +2196,12 @@ fn merge_snapshot_dep_info_content(
         compiler_cwd.is_absolute(),
         "extra_inputs dep-info requires an absolute invocation directory"
     );
-    let existing: BTreeSet<PathBuf> = existing_words
+    let existing: FxHashSet<PathBuf> = existing_words
         .iter()
         .map(|word| anchor_input_path(compiler_cwd, Path::new(word)))
         .collect();
 
-    let mut dependency_paths = BTreeSet::new();
+    let mut dependency_paths = FxHashSet::default();
     dependency_paths.insert(lexical_normalize(&snapshot.config_path));
     dependency_paths.extend(
         snapshot

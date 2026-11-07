@@ -15,6 +15,7 @@ categories = ["filesystem", "development-tools::build-utils"]
 libc = "0.2"
 deser = { version = "0.10.2", features = ["derive"], optional = true }
 tempfile = { version = "3", optional = true }
+rustc-hash = "2"
 
 [dev-dependencies]
 deser-json = "0.10.2"

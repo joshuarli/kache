@@ -35,6 +35,7 @@ deser-json = "0.10.2"
 deser-value = "0.10.2"
 tempfile = "3"
 deser-toml = "0.10.2"
+rustc-hash = "2"
 
 [lints.rust]
 warnings = "deny"

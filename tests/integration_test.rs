@@ -1265,7 +1265,7 @@ fn probe_keyed_flags_cache_and_key_on_value_live() {
         .as_seq()
         .expect("report should include all_events");
     assert_eq!(events.len(), 5, "expected one event per compile: {report:?}");
-    let keys: std::collections::BTreeSet<&str> = events
+    let keys: rustc_hash::FxHashSet<&str> = events
         .iter()
         .map(|e| {
             let key = e["cache_key"].as_str().unwrap_or_default();
@@ -2260,7 +2260,7 @@ fn test_cc_no_omit_leaf_frame_pointer_keys_on_probe_issue_839() {
         .as_seq()
         .expect("report should include all_events");
     assert_eq!(events.len(), 3, "expected one event per compile: {report:?}");
-    let keys: std::collections::BTreeSet<&str> = events
+    let keys: rustc_hash::FxHashSet<&str> = events
         .iter()
         .map(|e| {
             let key = e["cache_key"].as_str().unwrap_or_default();
@@ -2487,7 +2487,7 @@ fn test_cc_gdwarf2_caches_and_keys_dwarf_version_issue_838() {
         .as_seq()
         .expect("report should include all_events");
     assert_eq!(events.len(), 4, "expected one event per compile: {report:?}");
-    let keys: std::collections::BTreeSet<&str> = events
+    let keys: rustc_hash::FxHashSet<&str> = events
         .iter()
         .map(|event| {
             let key = event["cache_key"].as_str().unwrap_or_default();

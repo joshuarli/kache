@@ -43,7 +43,6 @@ use crate::events::EventResult;
 use crate::store::{EntryMeta, Store, StorePutResult};
 use crate::wrapper::EventInputs;
 use anyhow::{Context, Result};
-use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -60,6 +59,7 @@ use declarations::parse_declarations;
 use inputs::{TREE_MEMO_DIR, input_state, input_state_as};
 #[cfg(all(test, unix))]
 use inputs::{tree_digest_memo, tree_stamp};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Set by the launcher to the path Cargo invoked, which is where the preserved
 /// binary lives beside.
@@ -969,7 +969,7 @@ impl Environment {
     }
 
     /// The placeholders of the roots `contents` spells.
-    fn spelled_roots(&self, contents: &[u8]) -> BTreeSet<&'static str> {
+    fn spelled_roots(&self, contents: &[u8]) -> FxHashSet<&'static str> {
         self.roots()
             .filter(|(root, _)| find_bytes(contents, root.as_os_str().as_encoded_bytes()).is_some())
             .map(|(_, placeholder)| placeholder)
@@ -1032,7 +1032,7 @@ impl Environment {
     ) -> Result<OutputRoots> {
         let mut stored = Vec::with_capacity(files.len());
         let mut rewritten = Vec::new();
-        let mut embedded = BTreeSet::new();
+        let mut embedded = FxHashSet::default();
         for (index, (path, name)) in files.into_iter().enumerate() {
             let contents = std::fs::read(&path)?;
             let spelled = self.spelled_roots(&contents);
@@ -1054,10 +1054,14 @@ impl Environment {
                 stored.push((path, name));
             }
         }
+        // Sorted so the recorded roots and the fold order over them stay
+        // deterministic.
+        let mut embedded: Vec<String> = embedded.into_iter().map(str::to_string).collect();
+        embedded.sort_unstable();
         Ok(OutputRoots {
             files: stored,
             rewritten,
-            embedded: embedded.into_iter().map(str::to_string).collect(),
+            embedded,
         })
     }
 
@@ -1284,7 +1288,7 @@ pub(crate) fn replace_all(haystack: &[u8], needle: &[u8], replacement: &[u8]) ->
 
 /// Cargo-provided environment that shapes a run and is not otherwise keyed.
 /// `NUM_JOBS` and the jobserver variables describe the machine, not the run.
-fn cargo_environment(environment: &Environment) -> BTreeMap<String, Option<Vec<u8>>> {
+fn cargo_environment(environment: &Environment) -> FxHashMap<String, Option<Vec<u8>>> {
     cargo_environment_names()
         .into_iter()
         .map(|name| {
@@ -1336,10 +1340,10 @@ struct ToolState {
     identity: kache_store::file_hash::FileFingerprint,
 }
 
-type ToolSnapshot = BTreeMap<String, ToolState>;
+type ToolSnapshot = FxHashMap<String, ToolState>;
 
 /// The variables Cargo gives a build script that decide whether it reruns.
-fn cargo_environment_names() -> std::collections::BTreeSet<String> {
+fn cargo_environment_names() -> rustc_hash::FxHashSet<String> {
     const FIXED: &[&str] = &[
         "CARGO_ENCODED_RUSTFLAGS",
         "CARGO_MANIFEST_DIR",
@@ -1358,7 +1362,7 @@ fn cargo_environment_names() -> std::collections::BTreeSet<String> {
         "RUSTDOC",
         "TARGET",
     ];
-    let mut names: std::collections::BTreeSet<String> =
+    let mut names: rustc_hash::FxHashSet<String> =
         FIXED.iter().map(|name| (*name).to_string()).collect();
     names.extend(std::env::vars_os().filter_map(|(name, _)| {
         let name = name.into_string().ok()?;
@@ -1482,7 +1486,12 @@ impl Run {
         fold(&mut hasher, "arch", std::env::consts::ARCH.as_bytes());
         let file_hasher = self.store.file_hasher();
         let mut budget = MAX_INPUT_FILES;
-        for (name, value) in cargo_environment(&self.environment) {
+        // Sorted by name so the fold order is content-determined: the key must
+        // not depend on the map's iteration order.
+        let mut cargo_env: Vec<(String, Option<Vec<u8>>)> =
+            cargo_environment(&self.environment).into_iter().collect();
+        cargo_env.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        for (name, value) in cargo_env {
             fold(&mut hasher, "cargo_env_name", name.as_bytes());
             if let Some(tool) = tools.get(&name) {
                 fold(&mut hasher, "cargo_env_value", tool.normalized.as_bytes());
@@ -1615,7 +1624,7 @@ impl Run {
     }
 
     fn restore_outputs(&self, blobs: &Store, meta: &EntryMeta, manifest: &Manifest) -> Result<u64> {
-        let rewritten: BTreeSet<&str> = manifest.rewritten.iter().map(String::as_str).collect();
+        let rewritten: FxHashSet<&str> = manifest.rewritten.iter().map(String::as_str).collect();
         let out_dir = &self.environment.out_dir;
         for directory in &manifest.directories {
             std::fs::create_dir_all(out_dir.join(checked_relative(directory)?))?;
@@ -1695,7 +1704,7 @@ impl Run {
     }
 
     fn tool_snapshot(&self) -> Result<ToolSnapshot> {
-        let mut tools = ToolSnapshot::new();
+        let mut tools = ToolSnapshot::default();
         let file_hasher = self.store.file_hasher();
         for name in ["RUSTC_LINKER", "RUSTC", "RUSTDOC"] {
             let Ok(value) = std::env::var(name) else {
@@ -3892,7 +3901,7 @@ mod tests {
         };
         let prediction = prediction_with(Some(Vec::new()), true);
         let keys = || {
-            run.action_key_with(&prediction, None, &ToolSnapshot::new())
+            run.action_key_with(&prediction, None, &ToolSnapshot::default())
                 .unwrap()
         };
         let absent = keys();
@@ -3939,7 +3948,7 @@ mod tests {
                     std::ffi::OsString::from_vec(value),
                 );
             }
-            run.action_key_with(&prediction, None, &ToolSnapshot::new())
+            run.action_key_with(&prediction, None, &ToolSnapshot::default())
                 .unwrap()
         });
         unsafe {
@@ -4710,7 +4719,7 @@ mod tests {
             );
         }
         let prediction = prediction_with(Some(Vec::new()), true);
-        let tools = ToolSnapshot::new();
+        let tools = ToolSnapshot::default();
         assert_ne!(
             a.action_key_as(b"kache-build-script-action-v2", &prediction, None, &tools)
                 .unwrap(),

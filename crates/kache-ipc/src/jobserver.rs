@@ -1,7 +1,7 @@
 //! Request-owned Unix jobserver descriptors and native environment rewriting.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use rustc_hash::FxHashSet;
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -150,7 +150,7 @@ fn relevant(key: &OsStr) -> bool {
 /// Numeric endpoints in stable transfer order. FIFO jobservers keep their
 /// native flags and need no descriptor transfer.
 pub fn original_fds(env: &[(OsString, OsString)]) -> io::Result<Vec<i32>> {
-    let mut fds = BTreeSet::new();
+    let mut fds = FxHashSet::default();
     for (_, value) in env.iter().filter(|(key, _)| relevant(key)) {
         for pair in pairs(value)? {
             fds.insert(pair.read);
@@ -160,7 +160,11 @@ pub fn original_fds(env: &[(OsString, OsString)]) -> io::Result<Vec<i32>> {
     if fds.len() > crate::descriptors::MAX_DESCRIPTORS - 4 {
         return Err(invalid());
     }
-    Ok(fds.into_iter().collect())
+    // Sorted: the transfer order is this vector's order, and `rewrite`
+    // binary-searches it.
+    let mut fds: Vec<i32> = fds.into_iter().collect();
+    fds.sort_unstable();
+    Ok(fds)
 }
 
 /// Duplicate native client endpoints without borrowing possibly-invalid fds.

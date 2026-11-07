@@ -1721,7 +1721,7 @@ pub(crate) fn build_bypass_analysis(events: &[BuildEvent], top: usize) -> Bypass
         .filter(|detail| detail.route == "direct")
         .count();
 
-    let mut grouped = std::collections::BTreeMap::<(String, String, String), BypassReason>::new();
+    let mut grouped = rustc_hash::FxHashMap::<(String, String, String), BypassReason>::default();
     for detail in &details {
         let key = (
             detail.result.clone(),
@@ -1749,6 +1749,10 @@ pub(crate) fn build_bypass_analysis(events: &[BuildEvent], top: usize) -> Bypass
             std::cmp::Reverse(reason.count),
             std::cmp::Reverse(reason.max_elapsed_ms),
             reason.reason.clone(),
+            // The grouping key's remaining components break ties, so the report
+            // never depends on the map's iteration order.
+            reason.result.clone(),
+            reason.route.clone(),
         )
     });
     reasons.truncate(top);

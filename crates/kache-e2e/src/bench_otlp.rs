@@ -629,7 +629,7 @@ mod tests {
             .unwrap_or_else(|| panic!("missing metric {name}"))
     }
 
-    fn attr_map(point: &Value) -> std::collections::BTreeMap<String, String> {
+    fn attr_map(point: &Value) -> rustc_hash::FxHashMap<String, String> {
         point["attributes"]
             .as_seq()
             .unwrap()
@@ -643,8 +643,8 @@ mod tests {
             .collect()
     }
 
-    fn all_attr_keys(body: &Value) -> std::collections::BTreeSet<String> {
-        let mut keys = std::collections::BTreeSet::new();
+    fn all_attr_keys(body: &Value) -> rustc_hash::FxHashSet<String> {
+        let mut keys = rustc_hash::FxHashSet::default();
         for attr in body["resourceMetrics"][0]["resource"]["attributes"]
             .as_seq()
             .unwrap()
@@ -852,7 +852,7 @@ mod tests {
     fn attribute_set_is_the_allowlist() {
         let body = serialize_metrics(&kache_run());
         let keys = all_attr_keys(&body);
-        let expected: std::collections::BTreeSet<_> = [
+        let expected: rustc_hash::FxHashSet<_> = [
             "kache.telemetry.schema_version",
             "kache.bench.git_ref",
             "kache.bench.cache_tool_version",

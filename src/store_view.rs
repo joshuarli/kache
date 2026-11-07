@@ -1,6 +1,5 @@
 //! One inventory for commands that inspect the main store and volume shards.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -8,6 +7,7 @@ use anyhow::Result;
 use crate::config::Config;
 use crate::daemon::StatsEntry;
 use crate::store::{BlobStats, Store};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 pub(crate) use kache_protocol::StoreSummary;
 
@@ -29,7 +29,7 @@ fn identity(path: &Path) -> PathBuf {
 /// Include missing shards in diagnostics, but never open (and recreate) them.
 /// Several volume mappings may share one store; inspect that directory once.
 pub(crate) fn shard_configs(config: &Config) -> Vec<Config> {
-    let mut seen = BTreeSet::from([identity(&config.cache_dir)]);
+    let mut seen = FxHashSet::from_iter([identity(&config.cache_dir)]);
     config
         .volume_stores
         .iter()
@@ -70,7 +70,7 @@ fn read_with_evidence(
     // Keep the ordinary single-store stats path on COUNT/SUM queries.
     let collect_entries = include_entries || !shards.is_empty();
     let mut view = StoreView::default();
-    let mut by_key = BTreeMap::new();
+    let mut by_key = FxHashMap::default();
     add_store(
         &mut view,
         &mut by_key,
@@ -128,7 +128,7 @@ fn read_with_evidence(
 
 fn add_store(
     view: &mut StoreView,
-    by_key: &mut BTreeMap<String, StatsEntry>,
+    by_key: &mut FxHashMap<String, StatsEntry>,
     config: &Config,
     store: &Store,
     collect_entries: bool,

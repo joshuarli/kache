@@ -85,7 +85,7 @@
 
 use anyhow::{Context, Result, bail};
 use deser::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -100,6 +100,7 @@ use crate::report;
 use crate::scenario::{MeasureSpec, ScenarioAssertSpec, Selectors};
 use crate::source;
 use crate::source::run;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 const SCCACHE_BENCH_CACHE_SIZE: &str = "80G";
 // Firefox can spend many minutes in non-cacheable link/Rust-LTO work. Keep the
@@ -1033,7 +1034,7 @@ fn starts_path(rest: &str) -> bool {
 /// Passthrough reasons merged by [`reason_label`] as `(label, compiles,
 /// elapsed_ms)`, costliest first, at most `limit` of them.
 fn passthrough_reason_series(reasons: &[ReasonCount], limit: usize) -> Vec<(String, u64, u64)> {
-    let mut merged: std::collections::BTreeMap<String, (u64, u64)> = Default::default();
+    let mut merged: rustc_hash::FxHashMap<String, (u64, u64)> = Default::default();
     for rc in reasons {
         let entry = merged.entry(reason_label(&rc.reason)).or_default();
         entry.0 += rc.count;
@@ -1043,7 +1044,9 @@ fn passthrough_reason_series(reasons: &[ReasonCount], limit: usize) -> Vec<(Stri
         .into_iter()
         .map(|(label, (compiles, elapsed_ms))| (label, compiles, elapsed_ms))
         .collect();
-    series.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
+    // Ties break on the label so the series order never depends on the map's
+    // iteration order.
+    series.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)).then(a.0.cmp(&b.0)));
     series.truncate(limit);
     series
 }
@@ -2695,15 +2698,15 @@ fn compute_key_divergence(
     let mut by_crate: Vec<KeyCrateDiff> = Vec::new();
     let mut filtered_tu_artifacts = 0;
     let mut filtered_tu_samples: Vec<KeyCrateDiff> = Vec::new();
-    // BTreeMap so the field iteration order is deterministic.
-    let mut by_field: BTreeMap<String, (u64, BTreeSet<String>, BTreeSet<String>)> = BTreeMap::new();
+    // FxHashMap so the field iteration order is deterministic.
+    let mut by_field: FxHashMap<String, (u64, FxHashSet<String>, FxHashSet<String>)> = FxHashMap::default();
 
     for name in cold.keys() {
         let Some(warm_lines) = warm.get(name) else {
             continue;
         };
-        let cold_set: BTreeSet<&str> = cold[name].iter().map(String::as_str).collect();
-        let warm_set: BTreeSet<&str> = warm_lines.iter().map(String::as_str).collect();
+        let cold_set: FxHashSet<&str> = cold[name].iter().map(String::as_str).collect();
+        let warm_set: FxHashSet<&str> = warm_lines.iter().map(String::as_str).collect();
         if cold_set == warm_set {
             continue;
         }
@@ -2733,14 +2736,14 @@ fn compute_key_divergence(
         // Per-crate distinct fields — one count per crate per field even
         // if a single crate has many diverging payloads under the same
         // field. (Counting payloads inflates the headline number.)
-        let mut crate_fields: BTreeSet<String> = BTreeSet::new();
+        let mut crate_fields: FxHashSet<String> = FxHashSet::default();
         for p in only_cold.iter().chain(only_warm.iter()) {
             crate_fields.insert(field_of(p));
         }
         for f in &crate_fields {
             let entry = by_field
                 .entry(f.clone())
-                .or_insert_with(|| (0, BTreeSet::new(), BTreeSet::new()));
+                .or_insert_with(|| (0, FxHashSet::default(), FxHashSet::default()));
             entry.0 += 1;
         }
         // Sample payloads per field (capped at 5 each, to keep the
@@ -2748,7 +2751,7 @@ fn compute_key_divergence(
         for p in &only_cold {
             let entry = by_field
                 .entry(field_of(p))
-                .or_insert_with(|| (0, BTreeSet::new(), BTreeSet::new()));
+                .or_insert_with(|| (0, FxHashSet::default(), FxHashSet::default()));
             if entry.1.len() < 5 {
                 entry.1.insert(p.clone());
             }
@@ -2756,7 +2759,7 @@ fn compute_key_divergence(
         for p in &only_warm {
             let entry = by_field
                 .entry(field_of(p))
-                .or_insert_with(|| (0, BTreeSet::new(), BTreeSet::new()));
+                .or_insert_with(|| (0, FxHashSet::default(), FxHashSet::default()));
             if entry.2.len() < 5 {
                 entry.2.insert(p.clone());
             }
@@ -2772,14 +2775,21 @@ fn compute_key_divergence(
     let diverging_fields = by_field.len() as u64;
     let mut aggregate: Vec<KeyFieldAggregate> = by_field
         .into_iter()
-        .map(|(field, (crates, cold_s, warm_s))| KeyFieldAggregate {
-            field,
-            crates,
-            cold_unique_samples: cold_s.into_iter().collect(),
-            warm_unique_samples: warm_s.into_iter().collect(),
+        .map(|(field, (crates, cold_s, warm_s))| {
+            // Sorted so the samples and the tie order below are deterministic.
+            let mut cold_unique_samples: Vec<String> = cold_s.into_iter().collect();
+            let mut warm_unique_samples: Vec<String> = warm_s.into_iter().collect();
+            cold_unique_samples.sort();
+            warm_unique_samples.sort();
+            KeyFieldAggregate {
+                field,
+                crates,
+                cold_unique_samples,
+                warm_unique_samples,
+            }
         })
         .collect();
-    aggregate.sort_by_key(|a| std::cmp::Reverse(a.crates));
+    aggregate.sort_by(|a, b| b.crates.cmp(&a.crates).then(a.field.cmp(&b.field)));
 
     // Stable, bounded sample of the filtered set (HashMap order is random).
     filtered_tu_samples.sort_by(|a, b| a.crate_name.cmp(&b.crate_name));
@@ -3048,16 +3058,16 @@ fn mbx_trace_path(work_dir: &Path, phase: &str) -> PathBuf {
 
 /// Session files present under the store. Missing `sessions/v1` is empty, not
 /// an error: a fixture or a command that compiled nothing leaves nothing.
-fn list_mbx_session_files(cache_dir: &Path) -> Result<BTreeSet<PathBuf>> {
+fn list_mbx_session_files(cache_dir: &Path) -> Result<FxHashSet<PathBuf>> {
     let dir = mbx_sessions_dir(cache_dir);
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(FxHashSet::default()),
         Err(err) => {
             return Err(err).with_context(|| format!("reading {}", dir.display()));
         }
     };
-    let mut files = BTreeSet::new();
+    let mut files = FxHashSet::default();
     for entry in entries {
         let path = entry
             .with_context(|| format!("reading {}", dir.display()))?
@@ -3122,7 +3132,7 @@ fn export_new_mbx_session_trace(
     cache_dir: &Path,
     work_dir: &Path,
     phase: &str,
-    before: &BTreeSet<PathBuf>,
+    before: &FxHashSet<PathBuf>,
 ) -> Result<()> {
     let after = list_mbx_session_files(cache_dir)?;
     let Some(session) = after
@@ -3188,7 +3198,7 @@ struct MbxPhaseMetrics {
     unconsulted: u64,
     /// Bypass reason -> count, as reported.
     #[deser(default)]
-    bypasses: BTreeMap<String, u64>,
+    bypasses: FxHashMap<String, u64>,
     bypassed: u64,
     compiler_invocations_avoided: u64,
     /// Compiler time the report says its hits avoided, in seconds.
@@ -3215,7 +3225,7 @@ impl MbxPhaseMetrics {
         } else {
             0.0
         };
-        let bypasses: BTreeMap<String, u64> = raw["bypasses"]
+        let bypasses: FxHashMap<String, u64> = raw["bypasses"]
             .as_map()
             .map(|reasons| {
                 reasons

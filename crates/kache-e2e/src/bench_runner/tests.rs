@@ -1745,7 +1745,7 @@ fn export_new_mbx_session_trace_picks_the_session_this_phase_created() {
     let new = sessions.join("100-1-new.jsonl");
     std::fs::write(&old, b"old\n").unwrap();
     std::fs::write(&new, b"new\n").unwrap();
-    let mut before = BTreeSet::new();
+    let mut before = FxHashSet::default();
     before.insert(old);
     export_new_mbx_session_trace(
         &fake_mbx_trace(dir.path()),
@@ -1759,7 +1759,7 @@ fn export_new_mbx_session_trace_picks_the_session_this_phase_created() {
     assert!(body.contains("100-1-new.jsonl"), "{body}");
     assert!(!body.contains("900-1-old.jsonl"), "{body}");
 
-    // Two new sessions: BTreeSet path order would pick `100-` first;
+    // Two new sessions: FxHashSet path order would pick `100-` first;
     // the later timestamp must win.
     std::fs::write(sessions.join("200-1-later.jsonl"), b"later\n").unwrap();
     export_new_mbx_session_trace(
@@ -1783,7 +1783,7 @@ fn export_new_mbx_session_trace_is_a_noop_without_a_new_session() {
     std::fs::create_dir_all(&sessions).unwrap();
     let old = sessions.join("1-1-old.jsonl");
     std::fs::write(&old, b"old\n").unwrap();
-    let mut before = BTreeSet::new();
+    let mut before = FxHashSet::default();
     before.insert(old);
     export_new_mbx_session_trace(
         &fake_mbx_trace(dir.path()),

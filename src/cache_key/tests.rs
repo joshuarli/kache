@@ -137,8 +137,11 @@ fn grouped_hasher_main_digest_matches_plain_blake3() {
     }
     let (hash, fields) = grouped.finalize_with_fields();
     assert_eq!(hash, plain.finalize(), "grouping must not perturb the key");
+    // The map is unordered; sort to assert membership.
+    let mut groups: Vec<&str> = fields.keys().map(String::as_str).collect();
+    groups.sort_unstable();
     assert_eq!(
-        fields.keys().collect::<Vec<_>>(),
+        groups,
         ["args", "compiler", "link", "sources"],
         "only groups that received bytes appear",
     );
@@ -349,7 +352,7 @@ fn runtime_fold_key(
         linux,
         macos,
         |_| {
-            let mut objects = BTreeMap::new();
+            let mut objects = FxHashMap::default();
             for pair in crt.split(';').filter(|pair| !pair.is_empty()) {
                 let (name, digest) = pair.split_once('=').unwrap();
                 objects.insert(name.to_string(), digest.to_string());
@@ -500,7 +503,7 @@ fn native_linux_linker_probe_fails_closed() {
         true,
         false,
         |_| {
-            Ok(BTreeMap::from([
+            Ok(FxHashMap::from_iter([
                 ("crt1.o".to_string(), "aaa".to_string()),
                 ("libc.so.6".to_string(), "bbb".to_string()),
             ]))
@@ -679,7 +682,7 @@ fn a_new_linker_behind_the_same_driver_changes_the_native_link_key() {
             true,
             false,
             |_| {
-                Ok(BTreeMap::from([
+                Ok(FxHashMap::from_iter([
                     ("crt1.o".to_string(), "aaa".to_string()),
                     ("libc.so.6".to_string(), "bbb".to_string()),
                 ]))

@@ -1165,10 +1165,10 @@ diff --git a/hello.txt b/hello.txt
             .files
             .iter()
             .map(|file| file.path.as_str())
-            .collect::<std::collections::BTreeSet<_>>();
+            .collect::<rustc_hash::FxHashSet<_>>();
         assert_eq!(
             well_known_types,
-            std::collections::BTreeSet::from([
+            rustc_hash::FxHashSet::from_iter([
                 "protos/google/protobuf/any.proto",
                 "protos/google/protobuf/empty.proto",
                 "protos/google/protobuf/timestamp.proto",

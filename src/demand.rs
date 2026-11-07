@@ -2,7 +2,7 @@
 //! thread-local memory; the existing build event persists it at wrapper exit.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use rustc_hash::FxHashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kache_core::timeline::KeyDemand;
@@ -13,7 +13,7 @@ struct Observation {
 }
 
 #[derive(Default)]
-struct DemandLog(BTreeMap<String, Observation>);
+struct DemandLog(FxHashMap<String, Observation>);
 
 impl DemandLog {
     fn record(&mut self, key: &str, at_ms: u64) {
@@ -23,13 +23,16 @@ impl DemandLog {
     }
 
     fn take(&mut self) -> Vec<KeyDemand> {
-        std::mem::take(&mut self.0)
+        let mut demands: Vec<KeyDemand> = std::mem::take(&mut self.0)
             .into_iter()
             .map(|(cache_key, observation)| KeyDemand {
                 cache_key,
                 first_demand_at_ms: observation.first_demand_at_ms,
             })
-            .collect()
+            .collect();
+        // Sorted by key: the list is persisted in an event.
+        demands.sort_unstable_by(|left, right| left.cache_key.cmp(&right.cache_key));
+        demands
     }
 }
 

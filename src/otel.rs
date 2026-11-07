@@ -397,7 +397,7 @@ pub(crate) fn one_minute_load(written: i32, one_minute: f64) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
+    use rustc_hash::FxHashSet;
 
     fn sample_snap() -> OtelSnapshot {
         OtelSnapshot {
@@ -416,8 +416,8 @@ mod tests {
             .unwrap_or_else(|| panic!("missing metric {name}"))
     }
 
-    fn all_attr_keys(body: &Value) -> BTreeSet<String> {
-        let mut keys = BTreeSet::new();
+    fn all_attr_keys(body: &Value) -> FxHashSet<String> {
+        let mut keys = FxHashSet::default();
         for attr in body["resourceMetrics"][0]["resource"]["attributes"]
             .as_seq()
             .unwrap()
@@ -456,7 +456,7 @@ mod tests {
             None,
             None,
         );
-        let expected: BTreeSet<_> = [
+        let expected: FxHashSet<_> = [
             "service.name",
             "service.version",
             "kache.telemetry.schema_version",
@@ -527,7 +527,7 @@ mod tests {
         }
     }
 
-    fn metric_names(body: &Value) -> BTreeSet<String> {
+    fn metric_names(body: &Value) -> FxHashSet<String> {
         body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
             .as_seq()
             .unwrap()
