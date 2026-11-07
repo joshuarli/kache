@@ -247,14 +247,14 @@ fn removal_without_a_terminal_names_yes_once() {
 fn bare_config_lists_values_without_a_terminal() {
     let e = env();
     e.cmd()
-        .args(["config", "set", "cache.explain_miss", "true"])
+        .args(["config", "set", "cache.cache_executables", "true"])
         .assert()
         .success();
     e.cmd()
         .arg("config")
         .assert()
         .success()
-        .stdout(predicates::str::contains("cache.explain_miss"));
+        .stdout(predicates::str::contains("cache.cache_executables"));
 }
 
 #[test]
@@ -3816,8 +3816,8 @@ fn why_miss_both_formats_include_unresolved_dependency_cascade() {
 }
 
 /// Events for one build of `app -> mid -> leaf` per `(root, leaf env digest,
-/// leaf artifact digest)`, in order, as `[cache] explain_miss` records them.
-/// Keys follow the inputs, and unit ids are the same in every build tree.
+/// leaf artifact digest)`, in order. Keys follow the inputs, and unit ids
+/// are the same in every build tree.
 fn write_checkout_builds(e: &Env, builds: &[(&str, &str, &str)]) {
     let mut events = Vec::new();
     for (minute, (root, leaf_env, leaf_out)) in builds.iter().enumerate() {
