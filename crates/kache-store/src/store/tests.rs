@@ -2950,6 +2950,11 @@ fn durability_flush_checks_metadata_even_when_blob_content_is_unchanged() {
                     false,
                 )
                 .unwrap();
+                tx.execute(
+                    "UPDATE entries SET metadata_hash = ?1 WHERE cache_key = 'metadata-generation'",
+                    params![super::compute_metadata_hash(&meta)],
+                )
+                .unwrap();
                 tx.commit().unwrap();
             },)
             .unwrap()
@@ -4097,52 +4102,302 @@ fn automatic_recovery_keeps_damaged_pending_entry_pending_and_misses() {
 /// KACH-14: a put that replaces `meta.json` but fails before its row
 /// commits must not make the unpublished generation readable, nor let
 /// removal reclaim a blob another committed entry still references.
-/// The SQLite generation is authoritative.
+fn put_entry_with_diagnostics(
+    store: &Store,
+    dir: &Path,
+    seed: u8,
+    crate_name: &str,
+    content: &[u8],
+    stdout: &str,
+    stderr: &str,
+) -> String {
+    let k = key(seed);
+    let src = dir.join(format!("out-{seed}.rlib"));
+    std::fs::write(&src, content).unwrap();
+    store
+        .put(
+            &k,
+            crate_name,
+            &["lib".to_string()],
+            &["std".to_string()],
+            "x86_64-unknown-linux-gnu",
+            "dev",
+            &[(src, format!("lib{crate_name}.rlib"))],
+            stdout,
+            stderr,
+        )
+        .unwrap();
+    let _ = std::fs::remove_file(dir.join(format!("out-{seed}.rlib")));
+    k
+}
+
+fn put_zero_output_entry(store: &Store, seed: u8, crate_name: &str) -> String {
+    let k = key(seed);
+    store
+        .put(
+            &k,
+            crate_name,
+            &["lib".to_string()],
+            &["std".to_string()],
+            "x86_64-unknown-linux-gnu",
+            "dev",
+            &[],
+            "",
+            "",
+        )
+        .unwrap();
+    k
+}
+
+fn plant_uncommitted_metadata(config: &Config, target_key: &str, source_key: &str) -> String {
+    let source_meta_path = config.store_dir().join(source_key).join("meta.json");
+    let mut meta: EntryMeta =
+        deser_json::from_str(&std::fs::read_to_string(&source_meta_path).unwrap()).unwrap();
+    meta.cache_key = target_key.to_string();
+    let bytes = deser_json::to_string(&meta).map(String::into_bytes).unwrap();
+    let target_meta_path = config.store_dir().join(target_key).join("meta.json");
+    std::fs::write(&target_meta_path, &bytes).unwrap();
+    meta.files[0].hash.clone()
+}
+
 #[test]
-fn split_publication_never_serves_unpublished_generation_or_steals_shared_blob() {
+fn split_publication_read_only_get_misses_without_evicting_and_preserves_shared_blob() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
-    // B holds the shared content; A starts committed with different bytes.
-    let b = put_entry(&store, dir.path(), 50, "b", b"shared-payload-k14");
+    let b = put_entry(&store, dir.path(), 50, "b", b"shared-payload-1");
     let a = put_entry(&store, dir.path(), 51, "a", b"a-old-generation-1");
+    let b_hash = plant_uncommitted_metadata(&config, &a, &b);
 
-    // Simulate the crash window: a second publication of A replaced
-    // meta.json with a new generation sharing B's blob, but its row
-    // registration never committed.
-    let b_meta_path = config.store_dir().join(&b).join("meta.json");
-    let mut new_meta: EntryMeta =
-        deser_json::from_str(&std::fs::read_to_string(&b_meta_path).unwrap()).unwrap();
-    new_meta.cache_key = a.clone();
-    let new_meta_bytes = deser_json::to_string(&new_meta).map(String::into_bytes).unwrap();
-    let a_meta_path = config.store_dir().join(&a).join("meta.json");
-    std::fs::write(&a_meta_path, &new_meta_bytes).unwrap();
-
-    // Serving: the unpublished generation must miss (old meta is gone, so
-    // the only honest results are old-new-miss; here miss).
-    assert!(
-        store.get(&a).unwrap().is_none(),
-        "unpublished generation must not be served (KACH-14)"
-    );
-    // The read-only view agrees.
     let ro = Store::open_read_only(&config).unwrap();
-    assert!(
-        ro.get_read_only(&a).unwrap().is_none(),
-        "read-only get must also miss on split publication"
-    );
+    assert!(ro.get_read_only(&a).unwrap().is_none());
+    assert!(ro.get_read_only(&b).unwrap().is_some());
     drop(ro);
 
-    // Reclaiming: removal must release A's committed (old) references, not
-    // the new file's shared blob. B must survive with its blob intact.
-    let b_hash = new_meta.files[0].hash.clone();
-    store.remove_entry(&a).unwrap();
-    assert!(
-        store.get(&b).unwrap().is_some(),
-        "committed B must survive A's removal (KACH-14)"
-    );
+    let committed: Option<bool> = store
+        .db
+        .query_row(
+            "SELECT committed FROM entries WHERE cache_key = ?1",
+            params![a],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap();
+    assert_eq!(committed, Some(true));
+
     let blob = blob_path_in_store_dir(&config.store_dir(), &b_hash);
-    assert!(blob.is_file(), "B's shared blob must not be unlinked");
-    assert_eq!(std::fs::read(&blob).unwrap(), b"shared-payload-k14");
+    assert!(blob.is_file());
+    assert_eq!(std::fs::read(&blob).unwrap(), b"shared-payload-1");
+    assert_eq!(blob_refcount(&store, &b_hash), Some(1));
+}
+
+#[test]
+fn split_publication_writable_get_evicts_safely_and_preserves_shared_blob() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let store = Store::open(&config).unwrap();
+    let b = put_entry(&store, dir.path(), 52, "b", b"shared-payload-2");
+    let a = put_entry(&store, dir.path(), 53, "a", b"a-old-generation-2");
+    let b_hash = plant_uncommitted_metadata(&config, &a, &b);
+
+    assert!(store.get(&a).unwrap().is_none());
+    assert!(!config.store_dir().join(&a).exists());
+    assert!(store.get(&b).unwrap().is_some());
+
+    let blob = blob_path_in_store_dir(&config.store_dir(), &b_hash);
+    assert!(blob.is_file());
+    assert_eq!(std::fs::read(&blob).unwrap(), b"shared-payload-2");
+    assert_eq!(blob_refcount(&store, &b_hash), Some(1));
+}
+
+#[test]
+fn split_publication_direct_remove_preserves_shared_blob() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let store = Store::open(&config).unwrap();
+    let b = put_entry(&store, dir.path(), 54, "b", b"shared-payload-3");
+    let a = put_entry(&store, dir.path(), 55, "a", b"a-old-generation-3");
+    let b_hash = plant_uncommitted_metadata(&config, &a, &b);
+
+    store.remove_entry(&a).unwrap();
+    assert!(!config.store_dir().join(&a).exists());
+    assert!(store.get(&b).unwrap().is_some());
+
+    let blob = blob_path_in_store_dir(&config.store_dir(), &b_hash);
+    assert!(blob.is_file());
+    assert_eq!(std::fs::read(&blob).unwrap(), b"shared-payload-3");
+    assert_eq!(blob_refcount(&store, &b_hash), Some(1));
+}
+
+#[test]
+fn split_publication_zero_output_read_only_get_misses_and_preserves_shared_blob() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let store = Store::open(&config).unwrap();
+    let b = put_entry(&store, dir.path(), 56, "b", b"shared-payload-4");
+    let a = put_zero_output_entry(&store, 57, "a");
+
+    let mapped_refs_count: i64 = store
+        .db
+        .query_row(
+            "SELECT COUNT(*) FROM entry_blobs WHERE cache_key = ?1",
+            params![a],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(mapped_refs_count, 0);
+
+    let b_hash = plant_uncommitted_metadata(&config, &a, &b);
+
+    let ro = Store::open_read_only(&config).unwrap();
+    assert!(ro.get_read_only(&a).unwrap().is_none());
+    assert!(ro.get_read_only(&b).unwrap().is_some());
+    drop(ro);
+
+    let blob = blob_path_in_store_dir(&config.store_dir(), &b_hash);
+    assert!(blob.is_file());
+    assert_eq!(std::fs::read(&blob).unwrap(), b"shared-payload-4");
+    assert_eq!(blob_refcount(&store, &b_hash), Some(1));
+}
+
+#[test]
+fn split_publication_zero_output_writable_get_evicts_safely_and_preserves_shared_blob() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let store = Store::open(&config).unwrap();
+    let b = put_entry(&store, dir.path(), 58, "b", b"shared-payload-5");
+    let a = put_zero_output_entry(&store, 59, "a");
+    let b_hash = plant_uncommitted_metadata(&config, &a, &b);
+
+    assert!(store.get(&a).unwrap().is_none());
+    assert!(!config.store_dir().join(&a).exists());
+    assert!(store.get(&b).unwrap().is_some());
+
+    let blob = blob_path_in_store_dir(&config.store_dir(), &b_hash);
+    assert!(blob.is_file());
+    assert_eq!(std::fs::read(&blob).unwrap(), b"shared-payload-5");
+    assert_eq!(blob_refcount(&store, &b_hash), Some(1));
+}
+
+#[test]
+fn split_publication_zero_output_direct_remove_preserves_shared_blob() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let store = Store::open(&config).unwrap();
+    let b = put_entry(&store, dir.path(), 60, "b", b"shared-payload-6");
+    let a = put_zero_output_entry(&store, 61, "a");
+    let b_hash = plant_uncommitted_metadata(&config, &a, &b);
+
+    store.remove_entry(&a).unwrap();
+    assert!(!config.store_dir().join(&a).exists());
+    assert!(store.get(&b).unwrap().is_some());
+
+    let blob = blob_path_in_store_dir(&config.store_dir(), &b_hash);
+    assert!(blob.is_file());
+    assert_eq!(std::fs::read(&blob).unwrap(), b"shared-payload-6");
+    assert_eq!(blob_refcount(&store, &b_hash), Some(1));
+}
+
+#[test]
+fn split_publication_diagnostics_mismatch_never_serves_uncommitted_diagnostics() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let store = Store::open(&config).unwrap();
+    let a = put_entry_with_diagnostics(
+        &store,
+        dir.path(),
+        62,
+        "a",
+        b"diag-content-1",
+        "committed-stdout",
+        "committed-stderr",
+    );
+
+    let a_meta_path = config.store_dir().join(&a).join("meta.json");
+    let mut meta: EntryMeta =
+        deser_json::from_str(&std::fs::read_to_string(&a_meta_path).unwrap()).unwrap();
+    meta.stdout = "uncommitted-stdout".to_string();
+    meta.stderr = "uncommitted-stderr".to_string();
+    let bytes = deser_json::to_string(&meta).map(String::into_bytes).unwrap();
+    std::fs::write(&a_meta_path, &bytes).unwrap();
+
+    let ro = Store::open_read_only(&config).unwrap();
+    assert!(ro.get_read_only(&a).unwrap().is_none());
+    drop(ro);
+
+    assert!(store.get(&a).unwrap().is_none());
+}
+
+#[test]
+fn split_publication_injected_registration_abort_preserves_shared_blob() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let store = Store::open(&config).unwrap();
+    let b = put_entry(&store, dir.path(), 63, "b", b"shared-payload-7");
+    let a = put_zero_output_entry(&store, 64, "a");
+
+    let b_meta_path = config.store_dir().join(&b).join("meta.json");
+    let b_meta: EntryMeta =
+        deser_json::from_str(&std::fs::read_to_string(&b_meta_path).unwrap()).unwrap();
+    let b_hash = b_meta.files[0].hash.clone();
+    let b_blob = store.blob_path(&b_hash);
+
+    store
+        .db
+        .execute_batch(&format!(
+            "CREATE TRIGGER fail_replace BEFORE INSERT ON entries
+             WHEN NEW.cache_key = '{a}'
+             BEGIN
+                 SELECT RAISE(ABORT, 'injected registration failure');
+             END;"
+        ))
+        .unwrap();
+
+    let replace_err = store.put(
+        &a,
+        "a",
+        &["lib".to_string()],
+        &["std".to_string()],
+        "x86_64-unknown-linux-gnu",
+        "dev",
+        &[(b_blob.clone(), "libb.rlib".to_string())],
+        "",
+        "",
+    );
+    assert!(replace_err.is_err());
+
+    store.db.execute_batch("DROP TRIGGER fail_replace").unwrap();
+
+    let ro = Store::open_read_only(&config).unwrap();
+    assert!(ro.get_read_only(&a).unwrap().is_none());
+    assert!(ro.get_read_only(&b).unwrap().is_some());
+    drop(ro);
+
+    assert!(store.get(&a).unwrap().is_none());
+    assert!(store.get(&b).unwrap().is_some());
+    assert!(b_blob.is_file());
+    assert_eq!(blob_refcount(&store, &b_hash), Some(1));
+}
+
+#[test]
+fn split_publication_reopen_recovers_cleanly() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (a, b, b_hash) = {
+        let store = Store::open(&config).unwrap();
+        let b = put_entry(&store, dir.path(), 65, "b", b"shared-payload-8");
+        let a = put_zero_output_entry(&store, 66, "a");
+        let b_hash = plant_uncommitted_metadata(&config, &a, &b);
+        (a, b, b_hash)
+    };
+
+    let reopened = Store::open(&config).unwrap();
+    assert!(reopened.get(&a).unwrap().is_none());
+    assert!(reopened.get(&b).unwrap().is_some());
+    let blob = blob_path_in_store_dir(&config.store_dir(), &b_hash);
+    assert!(blob.is_file());
+    assert_eq!(std::fs::read(&blob).unwrap(), b"shared-payload-8");
+    assert_eq!(blob_refcount(&reopened, &b_hash), Some(1));
 }
 
 #[test]
