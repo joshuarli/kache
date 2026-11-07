@@ -3205,7 +3205,7 @@ fn test_cc_depinfo_restore_preserves_parent_relative_deps() {
 }
 
 #[test]
-fn test_auto_gc_bounds_store_size() {
+fn test_manual_gc_after_releasing_targets() {
     build_kache();
 
     let test_project = TempDir::new().unwrap();
@@ -3234,9 +3234,6 @@ edition = "2021"
     )
     .unwrap();
 
-    // First populate one entry with auto-GC disabled. The budget used for the
-    // second build is derived from this entry's actual size, which varies
-    // substantially across platforms/toolchains.
     let config_content = r#"[cache]
 local_only = true
 local_max_size = "10GiB"
@@ -3246,7 +3243,6 @@ cache_executables = true
     let config_path = isolated_config_path(cache_dir.path());
     std::fs::write(&config_path, config_content).unwrap();
 
-    // First build (populates the cache past the size budget)
     let output = hermetic_command("cargo", cache_dir.path(), Some(&config_path))
         .args(["build"])
         .current_dir(&test_project)
@@ -3263,10 +3259,6 @@ cache_executables = true
         String::from_utf8_lossy(&output.stderr)
     );
 
-    println!("STDOUT:\n{}", String::from_utf8_lossy(&output.stdout));
-    println!("STDERR:\n{}", String::from_utf8_lossy(&output.stderr));
-
-    // Connect to SQLite to check initial size and age the entries
     let db_path = cache_dir.path().join("index.db");
     assert!(db_path.exists(), "index.db should exist");
 
@@ -3302,17 +3294,10 @@ cache_executables = true
         "first build should populate exactly one cache entry"
     );
 
-    println!("Store size before GC: {size_before} bytes");
     assert!(size_before > 0, "store should be populated");
 
-    // Age the first entry so the background worker's first sweep can evict it
-    // immediately. This avoids depending on the retry-delay env var surviving
-    // Cargo's rustc-wrapper environment on every platform.
     age_entries();
 
-    // Set the budget so one entry fits but two entries exceed max+slack. The
-    // second build below changes the source to force a second cache entry; GC
-    // should evict the aged first entry and leave the fresh entry intact.
     let gc_budget = ((size_before as u64) * 3 / 2).max(size_before as u64 + 1);
     let config_content = format!(
         r#"[cache]
@@ -3324,8 +3309,6 @@ cache_executables = true
     );
     std::fs::write(&config_path, config_content).unwrap();
 
-    // The first build started a daemon with the original GC policy. Restart
-    // it so the second build's budget also governs background eviction.
     common::stop_daemon(
         hermetic_command(kache_binary(), cache_dir.path(), Some(&config_path))
             .args(["daemon", "stop"]),
@@ -3345,7 +3328,6 @@ cache_executables = true
     )
     .unwrap();
 
-    // Second build creates a second entry and triggers put() -> after_store
     let output = hermetic_command("cargo", cache_dir.path(), Some(&config_path))
         .args(["build"])
         .current_dir(test_project.path())
@@ -3369,11 +3351,6 @@ cache_executables = true
         "second build should trigger background auto-GC.\nstderr: {stderr}"
     );
 
-    // The second build's outputs hold the fresh entry's blobs (reflink/hardlink).
-    // Automatic eviction correctly skips held entries (effective size already
-    // under target), so drop the target dir and run a synchronous GC to verify
-    // the store bounds to budget. The hint assertion above already proves the
-    // automatic trigger fired.
     let _ = std::fs::remove_dir_all(target_dir.path());
     let gc_out = hermetic_command(kache_binary(), cache_dir.path(), Some(&config_path))
         .args(["gc"])
@@ -3389,7 +3366,6 @@ cache_executables = true
         String::from_utf8_lossy(&gc_out.stderr)
     );
 
-    // Poll fresh SQLite connections until the aged first entry is evicted.
     let mut size_after = total_store_size();
     let start = std::time::Instant::now();
     while start.elapsed() < std::time::Duration::from_secs(10) {
@@ -3400,21 +3376,173 @@ cache_executables = true
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    println!("Store size after GC: {size_after} bytes");
-    if size_after > gc_budget as i64 {
-        let log_path = cache_dir.path().join("auto-gc.log");
-        if log_path.exists()
-            && let Ok(log_content) = std::fs::read_to_string(&log_path)
-        {
-            println!("--- AUTO-GC.LOG CONTENT ---");
-            println!("{}", log_content);
-            println!("----------------------------");
+    assert!(
+        size_after <= gc_budget as i64,
+        "manual GC failed to evict store below budget {gc_budget}, current size: {size_after}"
+    );
+}
+
+#[test]
+fn test_auto_gc_bounds_store_size() {
+    build_kache();
+
+    let test_project = TempDir::new().unwrap();
+    let cache_dir = TempDir::new().unwrap();
+    let _cache_dir_daemon = common::DaemonGuard::new(kache_binary(), cache_dir.path());
+    let target_dir = TempDir::new().unwrap();
+    let src_dir = test_project.path().join("src");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    std::fs::write(
+        test_project.path().join("Cargo.toml"),
+        r#"[package]
+name = "hello-world"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        src_dir.join("main.rs"),
+        r#"fn main() {
+    println!("Hello from kache test project v1!");
+}
+"#,
+    )
+    .unwrap();
+
+    let config_content = r#"[cache]
+local_only = true
+local_max_size = "10GiB"
+auto_gc = false
+cache_executables = true
+"#;
+    let config_path = isolated_config_path(cache_dir.path());
+    std::fs::write(&config_path, config_content).unwrap();
+
+    let output = hermetic_command("cargo", cache_dir.path(), Some(&config_path))
+        .args(["build"])
+        .current_dir(&test_project)
+        .env("RUSTC_WRAPPER", kache_binary())
+        .env("CARGO_TARGET_DIR", target_dir.path())
+        .env("CARGO_INCREMENTAL", "0")
+        .output()
+        .expect("failed to run cargo build");
+    assert!(
+        output.status.success(),
+        "first cargo build failed.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let db_path = cache_dir.path().join("index.db");
+    assert!(db_path.exists(), "index.db should exist");
+
+    let total_store_size = || -> i64 {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.pragma_update(None, "busy_timeout", "5000").unwrap();
+        conn.query_row("SELECT COALESCE(SUM(size), 0) FROM entries", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    };
+
+    let age_entries = || {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.pragma_update(None, "busy_timeout", "5000").unwrap();
+        conn.execute(
+            "UPDATE entries SET last_accessed = datetime('now', '-300 seconds'), created_at = datetime('now', '-300 seconds')",
+            [],
+        )
+        .unwrap();
+    };
+
+    let size_before = total_store_size();
+    let entry_count_before: i64 = {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.pragma_update(None, "busy_timeout", "5000").unwrap();
+        conn.query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+            .unwrap()
+    };
+    assert_eq!(
+        entry_count_before, 1,
+        "first build should populate exactly one cache entry"
+    );
+    assert!(size_before > 0, "store should be populated");
+
+    age_entries();
+
+    let gc_budget = size_before as u64 + 10_000;
+    let config_content = format!(
+        r#"[cache]
+local_only = true
+local_max_size = "{gc_budget}B"
+auto_gc = true
+cache_executables = true
+"#
+    );
+    std::fs::write(&config_path, config_content).unwrap();
+
+    common::stop_daemon(
+        hermetic_command(kache_binary(), cache_dir.path(), Some(&config_path))
+            .args(["daemon", "stop"]),
+        cache_dir.path(),
+    );
+    common::wait_for_daemon_exit(cache_dir.path(), std::time::Duration::ZERO).unwrap();
+    let _ = std::fs::remove_file(cache_dir.path().join("auto-gc-check.stamp"));
+    let _ = std::fs::remove_file(cache_dir.path().join("auto-gc-backoff.json"));
+    let _ = std::fs::remove_dir_all(target_dir.path());
+    let _ = std::fs::create_dir_all(target_dir.path());
+
+    std::fs::write(
+        src_dir.join("main.rs"),
+        r#"fn main() {
+    println!("Hello from kache test project v2!");
+}
+"#,
+    )
+    .unwrap();
+
+    let output = hermetic_command("cargo", cache_dir.path(), Some(&config_path))
+        .args(["build"])
+        .current_dir(test_project.path())
+        .env("RUSTC_WRAPPER", kache_binary())
+        .env("CARGO_TARGET_DIR", target_dir.path())
+        .env("CARGO_INCREMENTAL", "0")
+        .env("KACHE_AUTO_GC_RETRY_DELAY_SECS", "0")
+        .env("KACHE_LOG", "kache=debug")
+        .output()
+        .expect("failed to run cargo build");
+    assert!(
+        output.status.success(),
+        "second cargo build failed.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("auto-gc: spawned background `kache gc`")
+            || stderr.contains("auto-gc: handed the sweep to the daemon"),
+        "second build should trigger background auto-GC.\nstderr: {stderr}"
+    );
+
+    let mut size_after = total_store_size();
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(10) {
+        size_after = total_store_size();
+        if size_after <= gc_budget as i64 {
+            break;
         }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
+
     assert!(
         size_after <= gc_budget as i64,
         "auto-GC failed to evict store below budget {gc_budget}, current size: {size_after}"
     );
+    assert!(size_after < (size_before * 2) as i64);
 }
 
 /// Issue #505: unrecognized RUSTC_WORKSPACE_WRAPPER tools must pass through
