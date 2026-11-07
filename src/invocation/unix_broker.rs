@@ -186,7 +186,7 @@ impl Broker {
         #[cfg(target_os = "macos")]
         let identity = match macos::Identity::capture(pid) {
             Ok(identity) => Some(identity),
-            Err(error) => {
+            Err(mut error) => {
                 // An instant compiler may already be a zombie before its task
                 // port can be pinned. Its status remains owned by the client.
                 if matches!(
@@ -201,8 +201,29 @@ impl Broker {
                 ) {
                     None
                 } else {
-                    let _ = self.done(Command::Release { id });
-                    return Err(error);
+                    // The probe is still running, so pinning failed transiently
+                    // (e.g. task_name_for_pid during fork/exec). Retry before
+                    // giving up compilation for a cleanup optimization.
+                    let mut pinned = None;
+                    for _ in 0..3 {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        match macos::Identity::capture(pid) {
+                            Ok(identity) => {
+                                pinned = Some(identity);
+                                break;
+                            }
+                            Err(retry_error) => {
+                                error = retry_error;
+                            }
+                        }
+                    }
+                    match pinned {
+                        Some(identity) => Some(identity),
+                        None => {
+                            let _ = self.done(Command::Release { id });
+                            return Err(error);
+                        }
+                    }
                 }
             }
         };

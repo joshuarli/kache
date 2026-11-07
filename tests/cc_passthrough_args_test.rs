@@ -514,6 +514,12 @@ fn cc_header_availability_creation_uses_current_compiler_output() {
 /// program's exit code.
 fn compile_and_run_unit(root: &std::path::Path, discovery: &str, args: &[&str]) -> (String, i32) {
     let _ = fs::remove_file(root.join("unit.o"));
+    let event_path = root.join("cache/events.jsonl");
+    let previous_events = match fs::read_to_string(&event_path) {
+        Ok(events) => events.lines().count(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => panic!("reading {}: {error}", event_path.display()),
+    };
     let compiled = cacheable_cc_command(root)
         .args(["/usr/bin/cc", "-c"])
         .args(args)
@@ -529,8 +535,20 @@ fn compile_and_run_unit(root: &std::path::Path, discovery: &str, args: &[&str]) 
         "{}",
         String::from_utf8_lossy(&compiled.stderr)
     );
-    let events = fs::read_to_string(root.join("cache/events.jsonl")).unwrap();
-    let event: deser_value::Value = deser_json::from_str(events.lines().last().unwrap()).unwrap();
+    // Daemon publishes events asynchronously after the compile returns.
+    // Poll for a new line (as deferred_cc_reuses_setup does) instead of
+    // stopping the daemon, which costs ~1s per restart.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let event: deser_value::Value = loop {
+        if let Ok(events) = fs::read_to_string(&event_path)
+            && events.ends_with('\n')
+            && let Some(line) = events.lines().nth(previous_events)
+        {
+            break deser_json::from_str(line).unwrap();
+        }
+        assert!(std::time::Instant::now() < deadline, "event not published");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
     let linked = Command::new("/usr/bin/cc")
         .current_dir(root)
         .args(["unit.o", "-o", "check-value"])
