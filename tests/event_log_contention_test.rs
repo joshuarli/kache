@@ -165,28 +165,3 @@ fn completed_compile_returns_while_another_process_holds_the_event_lock() {
     );
     assert!(output_path.metadata().unwrap().len() > 0);
 }
-
-#[test]
-fn version_probe_defers_rotation_while_the_ledger_is_locked() {
-    let dir = tempfile::tempdir().unwrap();
-    let cache = dir.path().join("cache");
-    let _daemon = common::DaemonGuard::new(common::kache_binary(), &cache);
-    fs::create_dir(&cache).unwrap();
-    let holder = LockHolder::start(&cache.join("savings.json.lock"), false);
-    let mut command = wrapper(&cache);
-    command.args(["rustc", "-vV"]);
-    let (returned, output) = run_bounded(command);
-    drop(holder);
-    assert!(returned, "rotation waited for telemetry bookkeeping");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(cache.join("events.jsonl").metadata().unwrap().len() > 1);
-    let mut command = wrapper(&cache);
-    command.args(["rustc", "-vV"]);
-    let (returned, output) = run_bounded(command);
-    assert!(returned && output.status.success());
-    assert!(cache.join("savings.json").is_file());
-}

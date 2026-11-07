@@ -6302,7 +6302,7 @@ mod tests {
         std::fs::write(
             path,
             format!(
-                "[cache]\nignore_env = true\nbuild_script_hermetic = false\nlocal_store = {}\nruntime_dir = {}\n",
+                "[cache]\nignore_env = true\nlocal_store = {}\nruntime_dir = {}\n",
                 quote_path(cache),
                 quote_path(cache),
             ),

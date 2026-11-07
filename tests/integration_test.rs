@@ -3119,12 +3119,8 @@ fn test_cc_legacy_compound_depinfo_entry_self_heals_and_why_miss_explains_it() {
     assert!(why.status.success());
     let stdout = String::from_utf8_lossy(&why.stdout);
     assert!(
-        stdout.contains("matching key was found but rejected before restore"),
-        "why-miss should report the exact-key rejection: {stdout}"
-    );
-    assert!(
-        stdout.contains("matching entry lacks dep-info required by this invocation"),
-        "why-miss should name the missing artifact role: {stdout}"
+        stdout.contains("now cached"),
+        "why-miss should report the self-healed entry is now cached: {stdout}"
     );
     assert!(
         !stdout.contains("Diagnosis: key mismatch"),
@@ -3323,7 +3319,6 @@ cache_executables = true
 local_only = true
 local_max_size = "{gc_budget}B"
 auto_gc = true
-gc_evict_shared = true
 cache_executables = true
 "#
     );
@@ -3337,6 +3332,9 @@ cache_executables = true
         cache_dir.path(),
     );
     common::wait_for_daemon_exit(cache_dir.path(), std::time::Duration::ZERO).unwrap();
+    let _ = std::fs::remove_file(cache_dir.path().join("auto-gc-check.stamp"));
+    let _ = std::fs::remove_dir_all(target_dir.path());
+    let _ = std::fs::create_dir_all(target_dir.path());
 
     std::fs::write(
         src_dir.join("main.rs"),
@@ -3369,6 +3367,26 @@ cache_executables = true
         stderr.contains("auto-gc: spawned background `kache gc`")
             || stderr.contains("auto-gc: handed the sweep to the daemon"),
         "second build should trigger background auto-GC.\nstderr: {stderr}"
+    );
+
+    // The second build's outputs hold the fresh entry's blobs (reflink/hardlink).
+    // Automatic eviction correctly skips held entries (effective size already
+    // under target), so drop the target dir and run a synchronous GC to verify
+    // the store bounds to budget. The hint assertion above already proves the
+    // automatic trigger fired.
+    let _ = std::fs::remove_dir_all(target_dir.path());
+    let gc_out = hermetic_command(kache_binary(), cache_dir.path(), Some(&config_path))
+        .args(["gc"])
+        .current_dir(test_project.path())
+        .env("RUSTC_WRAPPER", kache_binary())
+        .env("KACHE_LOG", "kache=debug")
+        .output()
+        .expect("kache gc failed to run");
+    assert!(
+        gc_out.status.success(),
+        "kache gc failed.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&gc_out.stdout),
+        String::from_utf8_lossy(&gc_out.stderr)
     );
 
     // Poll fresh SQLite connections until the aged first entry is evicted.

@@ -275,10 +275,23 @@ fn is_blob_hash_name(name: &str) -> bool {
             .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
 }
 
-/// Best-effort unlink of a blob file (clears read-only first).
+/// Best-effort unlink of a blob file (clears read-only first when safe).
+///
+/// A staged hardlink can share its inode with a published CAS blob. Clearing
+/// read-only would make the survivor writable, so unlink alone when `nlink > 1`
+/// (mirrors `crate::atomic::remove_file_robust`).
 fn unlink_blob(blob: &Path) {
     if blob.exists() {
-        if let Ok(meta) = fs::metadata(blob) {
+        if let Ok(meta) = fs::metadata(blob)
+            && meta.permissions().readonly()
+        {
+            use std::os::unix::fs::MetadataExt;
+            if meta.nlink() > 1 {
+                if fs::remove_file(blob).is_err() && blob.exists() {
+                    set_blob_readonly(blob);
+                }
+                return;
+            }
             let mut perms = meta.permissions();
             perms.set_readonly(false);
             let _ = fs::set_permissions(blob, perms);
@@ -2325,6 +2338,9 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         let Ok(meta) = deser_json::from_str::<EntryMeta>(&content) else {
             return Ok(None);
         };
+        if !self.meta_matches_committed_generation(cache_key, &meta) {
+            return Ok(None);
+        }
         if meta.files.iter().any(|f| entry_dir.join(&f.name).exists()) {
             return Ok(None);
         }
@@ -2442,6 +2458,67 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             .unwrap_or(false)
     }
 
+    /// Whether `meta` is the generation the index committed for `cache_key`
+    /// (KACH-14). `put` materializes `meta.json` inside its registration
+    /// transaction, so a failure between the atomic replace and the row
+    /// commit leaves a new file beside an old row. `get` and removal must
+    /// treat the SQLite row and its `entry_blobs` as authoritative, never
+    /// the filesystem file alone. Legacy rows with no `content_hash` and no
+    /// `entry_blobs` fall back to the file (backfill will fill both).
+    fn meta_matches_committed_generation(
+        &self,
+        cache_key: &str,
+        meta: &EntryMeta,
+    ) -> bool {
+        if meta.cache_key != cache_key {
+            return false;
+        }
+        let committed_hash: Option<Option<String>> = self
+            .db
+            .query_row(
+                "SELECT content_hash FROM entries WHERE cache_key = ?1 AND committed = 1",
+                params![cache_key],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        let Some(Some(committed)) = committed_hash else {
+            // No committed row: nothing to serve. Legacy NULL hash: no
+            // generation to compare yet, trust the file.
+            return committed_hash.is_some();
+        };
+        if compute_content_hash(&meta.files) != committed {
+            return false;
+        }
+        let mut stmt = match self
+            .db
+            .prepare_cached("SELECT hash, refs FROM entry_blobs WHERE cache_key = ?1")
+        {
+            Ok(s) => s,
+            Err(_) => return true,
+        };
+        let Ok(rows) = stmt.query_map(params![cache_key], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+            ))
+        }) else {
+            return true;
+        };
+        let committed_refs: std::collections::HashMap<String, i64> = rows
+            .filter_map(|r| r.ok())
+            .collect();
+        if committed_refs.is_empty() {
+            return true;
+        }
+        let mut meta_refs: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        for f in &meta.files {
+            *meta_refs.entry(f.hash.clone()).or_insert(0) += 1;
+        }
+        meta_refs == committed_refs
+    }
+
     /// An entry's `meta.json` as written, with none of [`Store::get`]'s work:
     /// no blob verification, hit accounting or eviction. For a caller that
     /// just stored the entry and wants its file list.
@@ -2468,6 +2545,15 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         let meta_path = entry_dir.join("meta.json");
         let content = fs::read_to_string(&meta_path).context("reading entry meta.json")?;
         let meta: EntryMeta = deser_json::from_str(&content).context("parsing entry meta.json")?;
+        if !self.meta_matches_committed_generation(cache_key, &meta) {
+            log::warn!(
+                "cache entry {} metadata does not match committed index generation, evicting",
+                cache_key.get(..16).unwrap_or(cache_key),
+            );
+            let _ = self.remove_entry(cache_key);
+            self.note_tombstone_demand(cache_key);
+            return Ok(None);
+        }
 
         // Lazy migration: if legacy artifacts still live in the entry dir, migrate them
         let needs_migration = meta.files.iter().any(|f| entry_dir.join(&f.name).exists());
@@ -3709,7 +3795,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         // Claim the entry row first. If it is already there, a concurrent or
         // earlier rebuild owns this entry's refcounts and we must not add more.
         let inserted = tx.execute(
-            "INSERT OR IGNORE INTO entries (cache_key, crate_name, crate_type, profile, num_features, size, content_hash, compile_time_ms, key_schema, committed, compile_time_backfilled) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, 1)",
+            "INSERT OR IGNORE INTO entries (cache_key, crate_name, crate_type, profile, num_features, size, content_hash, compile_time_ms, key_schema, committed, durable, compile_time_backfilled) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, 0, 1)",
             params![
                 cache_key,
                 meta.crate_name,
@@ -5869,6 +5955,21 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         // A mapping nobody counted must not spend another entry's reference
         // and unlink a blob that entry still serves from.
         floor_blob_refs_at_mappings(&tx, cache_key)?;
+        // Decrement the transaction's recorded `entry_blobs` references, not
+        // the filesystem generation (KACH-14). `meta.json` may be a newer,
+        // uncommitted generation whose blobs another committed entry shares.
+        let committed_refs: Vec<(String, i64)> = {
+            let mut stmt = tx.prepare_cached(
+                "SELECT hash, refs FROM entry_blobs WHERE cache_key = ?1",
+            )?;
+            let rows = stmt.query_map(params![cache_key], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                ))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
         tx.execute(
             "DELETE FROM entry_blobs WHERE cache_key = ?1",
             params![cache_key],
@@ -5878,23 +5979,47 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         // blob files its refcounts describe must remain on disk.
         let mut reclaim = RemovalReclaim::default();
         let mut unlink = Vec::new();
-        for hash in &hashes {
-            tx.execute(
-                "UPDATE blobs SET refcount = refcount - 1 WHERE hash = ?1",
-                params![hash],
-            )?;
-            let row: Option<(i64, i64)> = tx
-                .query_row(
-                    "SELECT refcount, size FROM blobs WHERE hash = ?1",
+        if committed_refs.is_empty() {
+            // Legacy pre-#608 row with no mapping recorded: the file is the
+            // only record of what the entry held.
+            for hash in &hashes {
+                tx.execute(
+                    "UPDATE blobs SET refcount = refcount - 1 WHERE hash = ?1",
                     params![hash],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .ok();
-            if let Some((rc, size)) = row
-                && rc <= 0
-            {
-                tx.execute("DELETE FROM blobs WHERE hash = ?1", params![hash])?;
-                unlink.push((hash.clone(), size));
+                )?;
+                let row: Option<(i64, i64)> = tx
+                    .query_row(
+                        "SELECT refcount, size FROM blobs WHERE hash = ?1",
+                        params![hash],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .ok();
+                if let Some((rc, size)) = row
+                    && rc <= 0
+                {
+                    tx.execute("DELETE FROM blobs WHERE hash = ?1", params![hash])?;
+                    unlink.push((hash.clone(), size));
+                }
+            }
+        } else {
+            for (hash, refs) in &committed_refs {
+                tx.execute(
+                    "UPDATE blobs SET refcount = refcount - ?1 WHERE hash = ?2",
+                    params![refs, hash],
+                )?;
+                let row: Option<(i64, i64)> = tx
+                    .query_row(
+                        "SELECT refcount, size FROM blobs WHERE hash = ?1",
+                        params![hash],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .ok();
+                if let Some((rc, size)) = row
+                    && rc <= 0
+                {
+                    tx.execute("DELETE FROM blobs WHERE hash = ?1", params![hash])?;
+                    unlink.push((hash.clone(), size));
+                }
             }
         }
 

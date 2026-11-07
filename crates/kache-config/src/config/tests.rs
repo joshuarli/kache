@@ -894,7 +894,7 @@ fn host_status_names_the_variable_config_reads() {
     let (host, chosen) = write_host_and_chosen(
         dir.path(),
         "[cache]\nlocal_max_size = \"50GiB\"\nlocal_store = \"/srv/kache\"\n\
-             daemon_idle_timeout_secs = 60\n\n\
+             cache_executables = true\n\n\
              [cc]\nextra_allowlist_flags = [\"-x\"]\n",
         Some("[cache]\n"),
     );
@@ -903,10 +903,7 @@ fn host_status_names_the_variable_config_reads() {
     let expected = [
         ("cache.local_max_size", "KACHE_MAX_SIZE"),
         ("cache.local_store", "KACHE_CACHE_DIR"),
-        (
-            "cache.daemon_idle_timeout_secs",
-            "KACHE_DAEMON_IDLE_TIMEOUT",
-        ),
+        ("cache.cache_executables", "KACHE_CACHE_EXECUTABLES"),
         ("cc.extra_allowlist_flags", "KACHE_CC_EXTRA_ALLOWLIST_FLAGS"),
     ];
     let _unset: Vec<_> = ENV_FILE_KEYS
