@@ -14,7 +14,7 @@ fn script(path: &Path, body: &str) {
 #[test]
 fn untrusted_codegen_backend_runs_rustc_directly_every_time() {
     let dir = tempfile::tempdir().unwrap();
-    let _daemon = common::DaemonGuard::new(env!("CARGO_BIN_EXE_kache"), dir.path().join("cache"));
+    let _daemon = common::DaemonGuard::new(common::kache_binary(), dir.path().join("cache"));
     let rustc = dir.path().join("rustc");
     let calls = dir.path().join("calls");
     // The fake backend writes a device artifact beside the source, which is
@@ -39,7 +39,7 @@ printf 'binary' > app
     for _ in 0..2 {
         fs::remove_file(dir.path().join("kernel.ptx")).ok();
         let output = common::hermetic_command(
-            env!("CARGO_BIN_EXE_kache"),
+            common::kache_binary(),
             &dir.path().join("cache"),
             Some(&dir.path().join("absent.toml")),
         )

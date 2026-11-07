@@ -24,10 +24,8 @@ use std::path::PathBuf;
 #[allow(dead_code)]
 mod common;
 
-/// Path to the kache binary under test (Cargo sets this for the
-/// integration-test harness).
-fn kache_binary() -> &'static str {
-    env!("CARGO_BIN_EXE_kache")
+fn kache_binary() -> PathBuf {
+    common::kache_binary()
 }
 
 /// The marker the fake compiler prints — proof the probe reached *it*
@@ -59,7 +57,7 @@ fn family_probe_forwards_to_real_compiler_recovered_from_cc_env() {
     // Reproduce the cc crate's mis-parse: CC = "<kache> <real-compiler>".
     // The cc crate would invoke `kache -E <probe_file>`, dropping the
     // real compiler from argv — so kache must recover it from CC here.
-    let cc_value = format!("{} {}", kache_binary(), fake.display());
+    let cc_value = format!("{} {}", kache_binary().display(), fake.display());
 
     let output = common::hermetic_command(
         kache_binary(),

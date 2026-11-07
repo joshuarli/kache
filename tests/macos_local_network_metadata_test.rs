@@ -1,18 +1,22 @@
 #![cfg(target_os = "macos")]
 
+use std::path::Path;
 use std::process::Command;
+
+#[allow(dead_code)]
+mod common;
 
 #[test]
 fn kache_binaries_embed_local_network_privacy_metadata() {
     for binary in [
-        env!("CARGO_BIN_EXE_kache"),
-        env!("CARGO_BIN_EXE_kache-engine"),
+        common::kache_binary(),
+        common::kache_engine_binary(),
     ] {
-        assert_privacy_metadata(binary);
+        assert_privacy_metadata(&binary);
     }
 }
 
-fn assert_privacy_metadata(binary: &str) {
+fn assert_privacy_metadata(binary: &Path) {
     let output = Command::new("otool")
         .args(["-s", "__TEXT", "__info_plist", binary])
         .output()

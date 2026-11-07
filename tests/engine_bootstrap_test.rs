@@ -9,8 +9,13 @@ use std::time::{Duration, Instant};
 #[allow(dead_code)]
 mod common;
 
-const FRONTEND: &str = env!("CARGO_BIN_EXE_kache");
-const ENGINE: &str = env!("CARGO_BIN_EXE_kache-engine");
+fn frontend_bin() -> PathBuf {
+    common::kache_binary()
+}
+
+fn engine_bin() -> PathBuf {
+    common::kache_engine_binary()
+}
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -43,8 +48,8 @@ impl Fixture {
         }
     }
 
-    fn command(&self, program: &str) -> Command {
-        let mut command = Command::new(program);
+    fn command(&self, program: impl AsRef<std::path::Path>) -> Command {
+        let mut command = Command::new(program.as_ref());
         command
             .env_clear()
             .env("PATH", env!("PATH"))
@@ -62,15 +67,15 @@ impl Fixture {
 
     fn renamed_frontend(&self) -> PathBuf {
         let frontend = self.root.path().join("custom-kache");
-        std::fs::copy(FRONTEND, &frontend).unwrap();
-        std::fs::copy(ENGINE, self.root.path().join("kache-engine")).unwrap();
+        std::fs::copy(frontend_bin(), &frontend).unwrap();
+        std::fs::copy(engine_bin(), self.root.path().join("kache-engine")).unwrap();
         assert!(!self.root.path().join("kache").exists());
         frontend
     }
 
     fn run_compiler(&self, disabled: bool) -> (u32, ExitStatus) {
         self.run(
-            self.command(ENGINE)
+            self.command(&engine_bin())
                 .arg(&self.compiler)
                 .arg("--version")
                 .env("KACHE_DISABLED", if disabled { "1" } else { "0" }),
@@ -118,7 +123,7 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         common::stop_daemon(
-            self.command(FRONTEND).args(["daemon", "stop"]),
+            self.command(&frontend_bin()).args(["daemon", "stop"]),
             &self.runtime,
         );
     }
@@ -196,7 +201,7 @@ fn trusted_linux_frontend_keeps_native_children_and_reports_execution_separately
     let mut config = std::fs::read_to_string(&fixture.config).unwrap();
     config.push_str("trust_daemon_execution=true\n");
     std::fs::write(&fixture.config, config).unwrap();
-    let (_, started) = fixture.run(fixture.command(FRONTEND).args(["daemon", "start"]));
+    let (_, started) = fixture.run(fixture.command(&frontend_bin()).args(["daemon", "start"]));
     assert!(started.success());
     let image = fixture.root.path().join("parent-image");
     kache_fs::testutil::write_executable(
@@ -205,7 +210,7 @@ fn trusted_linux_frontend_keeps_native_children_and_reports_execution_separately
     );
     let (frontend_pid, status) = fixture.run(
         fixture
-            .command(FRONTEND)
+            .command(&frontend_bin())
             .arg(&fixture.compiler)
             .arg("--version")
             .env("PARENT_IMAGE", &image),
@@ -213,9 +218,9 @@ fn trusted_linux_frontend_keeps_native_children_and_reports_execution_separately
     assert_eq!(fixture.assert_compiler_output(status), vec![frontend_pid]);
     assert_eq!(
         std::fs::read_to_string(image).unwrap().trim(),
-        std::fs::canonicalize(FRONTEND).unwrap().to_str().unwrap()
+        std::fs::canonicalize(frontend_bin()).unwrap().to_str().unwrap()
     );
-    let (_, status) = fixture.run(fixture.command(FRONTEND).args(["doctor", "--json"]));
+    let (_, status) = fixture.run(fixture.command(&frontend_bin()).args(["doctor", "--json"]));
     let report: deser_value::Value =
         deser_json::from_slice(&std::fs::read(fixture.root.path().join("stdout")).unwrap())
             .unwrap();
@@ -234,7 +239,7 @@ fn trusted_linux_frontend_keeps_native_children_and_reports_execution_separately
             .contains("trusted daemon pipeline")
     );
     assert_eq!(check["optional"], true);
-    let (_, status) = fixture.run(fixture.command(FRONTEND).args([
+    let (_, status) = fixture.run(fixture.command(&frontend_bin()).args([
         "init",
         "--yes",
         "--no-shell",
@@ -265,12 +270,12 @@ fn trusted_unix_pipeline_restores_real_rust_outputs_without_recompiling() {
     let source = fixture.root.path().join("lib.rs");
     std::fs::write(&source, "pub fn answer() -> u64 { 42 }\n").unwrap();
     let output = fixture.root.path().join("out");
-    let (_, started) = fixture.run(fixture.command(FRONTEND).args(["daemon", "start"]));
+    let (_, started) = fixture.run(fixture.command(&frontend_bin()).args(["daemon", "start"]));
     assert!(started.success());
     let compile = || {
         let (_, status) = fixture.run(
             fixture
-                .command(FRONTEND)
+                .command(&frontend_bin())
                 .arg(&rustc)
                 .args([
                     "--crate-name",
@@ -287,7 +292,7 @@ fn trusted_unix_pipeline_restores_real_rust_outputs_without_recompiling() {
         assert!(status.success(), "{diagnostics}");
     };
     let stats = || {
-        let (_, status) = fixture.run(fixture.command(FRONTEND).args(["stats", "--json"]));
+        let (_, status) = fixture.run(fixture.command(&frontend_bin()).args(["stats", "--json"]));
         assert!(status.success());
         deser_json::from_slice::<deser_value::Value>(
             &std::fs::read(fixture.root.path().join("stdout")).unwrap(),
@@ -323,12 +328,12 @@ fn trusted_unix_pipeline_restores_c_objects_through_client_owned_stages() {
     let target = fixture.root.path().join("unit.o");
     std::fs::write(&source, "int answer(void) { return 42; }\n").unwrap();
     let cc = "cc";
-    let (_, started) = fixture.run(fixture.command(FRONTEND).args(["daemon", "start"]));
+    let (_, started) = fixture.run(fixture.command(&frontend_bin()).args(["daemon", "start"]));
     assert!(started.success());
     let compile = || {
         let (_, status) = fixture.run(
             fixture
-                .command(FRONTEND)
+                .command(&frontend_bin())
                 .arg(cc)
                 .arg("-c")
                 .arg(&source)
@@ -343,7 +348,7 @@ fn trusted_unix_pipeline_restores_c_objects_through_client_owned_stages() {
     std::fs::remove_file(&target).unwrap();
     compile();
     assert_eq!(std::fs::read(&target).unwrap(), original);
-    let (_, status) = fixture.run(fixture.command(FRONTEND).args(["stats", "--json"]));
+    let (_, status) = fixture.run(fixture.command(&frontend_bin()).args(["stats", "--json"]));
     assert!(status.success());
     let stats: deser_value::Value =
         deser_json::from_slice(&std::fs::read(fixture.root.path().join("stdout")).unwrap())
@@ -367,7 +372,7 @@ fn killing_a_client_stops_its_native_compiler() {
     let mut config = std::fs::read_to_string(&fixture.config).unwrap();
     config.push_str("trust_daemon_execution=true\n");
     std::fs::write(&fixture.config, config).unwrap();
-    let (_, started) = fixture.run(fixture.command(FRONTEND).args(["daemon", "start"]));
+    let (_, started) = fixture.run(fixture.command(&frontend_bin()).args(["daemon", "start"]));
     assert!(started.success());
     let marker = fixture.root.path().join("compiler-pid");
     kache_fs::testutil::write_executable(
@@ -375,7 +380,7 @@ fn killing_a_client_stops_its_native_compiler() {
         "#!/bin/sh\nprintf '%s' \"$$\" > \"$CHILD_RECORD\"\nexec sleep 30\n",
     );
     let mut client = fixture
-        .command(FRONTEND)
+        .command(&frontend_bin())
         .arg(&fixture.compiler)
         .arg("--version")
         .env("CHILD_RECORD", &marker)

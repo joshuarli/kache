@@ -3,8 +3,11 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[allow(dead_code)]
+mod common;
+
 fn run(root: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_kache"))
+    Command::new(common::kache_binary())
         .args(args)
         .current_dir(root)
         .env("HOME", root.join("home"))
@@ -112,7 +115,7 @@ fn project_scope_finds_the_nearest_existing_project_file() {
 fn get_and_list_report_file_values_without_applying_environment_overrides() {
     let root = tempfile::tempdir().unwrap();
     success(root.path(), &["config", "set", "cache.cache_executables", "false"]);
-    let output = Command::new(env!("CARGO_BIN_EXE_kache"))
+    let output = Command::new(common::kache_binary())
         .args(["config", "get", "cache.cache_executables"])
         .env("KACHE_CONFIG", root.path().join("selected.toml"))
         .env("KACHE_CACHE_EXECUTABLES", "1")

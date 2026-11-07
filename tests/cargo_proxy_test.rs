@@ -5,23 +5,23 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::process::Command;
 
-const KACHE_BIN: &str = env!("CARGO_BIN_EXE_kache");
-
-// Only the env plumbing is shared; this file drives the Cargo-built binary,
-// so the bootstrap helpers in `common` stay unused here.
 #[allow(dead_code)]
 mod common;
 use common::hermetic_command;
 
-/// `kache cargo` wired to a throwaway HOME, cache, and target directory.
+fn kache_bin() -> std::path::PathBuf {
+    common::kache_binary()
+}
+
 fn proxied_cargo(home: &Path, cache: &Path, target: &Path) -> Command {
-    let mut command = hermetic_command(KACHE_BIN, cache, Some(&cache.join("config.toml")));
+    let bin = kache_bin();
+    let mut command = hermetic_command(&bin, cache, Some(&cache.join("config.toml")));
     command
         .env("HOME", home)
         .env("CARGO_HOME", home.join(".cargo"))
         .env("CARGO_TARGET_DIR", target)
         .env("CARGO_INCREMENTAL", "0")
-        .env("RUSTC_WRAPPER", KACHE_BIN)
+        .env("RUSTC_WRAPPER", bin)
         .env("KACHE_LOG", "off")
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
@@ -74,7 +74,7 @@ fn explicit_rustflags_keep_their_cargo_precedence() {
     let project = home.join("work/project");
     let cargo_home = home.join(".cargo");
     let cache = dir.path().join("cache");
-    let _daemon = common::DaemonGuard::new(env!("CARGO_BIN_EXE_kache"), &cache);
+    let _daemon = common::DaemonGuard::new(kache_bin(), &cache);
     let target = dir.path().join("target");
     std::fs::create_dir_all(project.join("src")).unwrap();
     std::fs::create_dir_all(&cargo_home).unwrap();

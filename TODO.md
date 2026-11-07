@@ -1,15 +1,6 @@
 Prefix: KACH
 Next: 20
 
-### KACH-17 · P2 · Release integration tests ignore the distributable binary selector
-
-- **Area:** Tests
-- **Where:** `Makefile:2`, `Makefile:31`, `tests/common/mod.rs:204`, `tests/common/mod.rs:256`, `tests/common/mod.rs:288`, `.github/workflows/release.yml:98`, `.github/workflows/release.yml:116`, `tests/cc_family_probe_test.rs:29`
-- **Problem:** Source-verified testing defect at `221cf7d`, independent of the currently failing CI tests. `make test-ci` checks that the dist binary exists and exports `KACHE_TEST_BINARY` (`Makefile:31-34`), but no test/helper reads that variable. The common helper either selects Cargo's own binary via `KACHE_TEST_USE_CARGO_BIN_EXE` or runs an unprofiled `cargo build` and returns `debug/kache` (`tests/common/mod.rs:256-295`); other integration tests use `CARGO_BIN_EXE_kache` directly. The release workflow invokes this target, so its CLI integration results do not validate the exact `dist/kache` and neighboring `dist/kache-engine` pair being shipped. Running the test harness with `--release` does not fix this binary-selection mismatch.
-- **Recommendation:** Give process tests one authoritative explicit binary selector and use it throughout, including daemon startup/teardown and the engine companion. Release verification must exercise the actual distributable pair, with an assertion identifying the selected paths/build identity. A regression pointing the override at a missing or deliberately failing stub must fail instead of silently rebuilding another binary. Keep normal developer bootstrap behavior when no explicit override is supplied.
-- **Fix with:** none
-- **Effort:** M
-
 ### KACH-18 · P2 · Semantic verification suites exist without an active enforcement path
 
 - **Area:** Tests

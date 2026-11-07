@@ -217,6 +217,7 @@ fn reuse_outer_build() -> bool {
 /// failure — including its stderr, which is where `No space left on device`
 /// shows up.
 static KACHE_BIN: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+static KACHE_ENGINE_BIN: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 
 /// A TOML basic string, with quotes and backslashes escaped.
 #[allow(dead_code)]
@@ -253,10 +254,55 @@ pub fn kache_binary() -> PathBuf {
     }
 }
 
-fn bootstrap_kache() -> Result<PathBuf, String> {
+pub fn kache_engine_binary() -> PathBuf {
+    match KACHE_ENGINE_BIN.get_or_init(bootstrap_kache_engine) {
+        Ok(path) => path.clone(),
+        Err(message) => panic!("{message}"),
+    }
+}
+
+pub fn resolve_kache_binary_with(explicit: Option<&Path>) -> Result<PathBuf, String> {
+    if let Some(path) = explicit {
+        if !path.is_file() {
+            return Err(format!(
+                "KACHE_TEST_BINARY set to {} but file does not exist",
+                path.display()
+            ));
+        }
+        return Ok(path.to_path_buf());
+    }
     if reuse_outer_build() {
         return Ok(PathBuf::from(env!("CARGO_BIN_EXE_kache")));
     }
+    bootstrap_kache_build()
+}
+
+pub fn resolve_kache_engine_binary_with(kache: &Path, explicit: bool) -> Result<PathBuf, String> {
+    let engine = kache.with_file_name(format!("kache-engine{}", std::env::consts::EXE_SUFFIX));
+    if engine.is_file() {
+        return Ok(engine);
+    }
+    if explicit {
+        return Err(format!(
+            "kache-engine companion at {} does not exist",
+            engine.display()
+        ));
+    }
+    Ok(PathBuf::from(env!("CARGO_BIN_EXE_kache-engine")))
+}
+
+fn bootstrap_kache() -> Result<PathBuf, String> {
+    resolve_kache_binary_with(std::env::var_os("KACHE_TEST_BINARY").as_deref().map(Path::new))
+}
+
+fn bootstrap_kache_engine() -> Result<PathBuf, String> {
+    resolve_kache_engine_binary_with(
+        &kache_binary(),
+        std::env::var_os("KACHE_TEST_BINARY").is_some(),
+    )
+}
+
+fn bootstrap_kache_build() -> Result<PathBuf, String> {
     let target_dir = bootstrap_target_dir();
     let output = std::process::Command::new("cargo")
         .args([

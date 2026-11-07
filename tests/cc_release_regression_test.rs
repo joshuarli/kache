@@ -23,8 +23,9 @@ fn real_cc_regression(issue: &str) {
         }
     }
     let scratch = tempfile::tempdir().unwrap();
+    let kache_bin = common::kache_binary();
     let _daemon =
-        common::DaemonGuard::new(env!("CARGO_BIN_EXE_kache"), scratch.path().join("cache"));
+        common::DaemonGuard::new(&kache_bin, scratch.path().join("cache"));
     let mut command = common::hermetic_command(
         "bash",
         &scratch.path().join("cache"),
@@ -32,7 +33,7 @@ fn real_cc_regression(issue: &str) {
     );
     let output = command
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cc_release_regressions.sh"))
-        .args([env!("CARGO_BIN_EXE_kache"), "clang", issue])
+        .args([kache_bin.to_str().unwrap(), "clang", issue])
         .arg(scratch.path())
         .output()
         .expect("run real clang/Make regression");

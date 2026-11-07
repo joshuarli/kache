@@ -11,7 +11,7 @@ fn incremental_arguments_and_environment_pass_through_unchanged() {
         for response_file in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let cache = dir.path().join("cache");
-            let _daemon = common::DaemonGuard::new(env!("CARGO_BIN_EXE_kache"), &cache);
+            let _daemon = common::DaemonGuard::new(common::kache_binary(), &cache);
             let rustc = dir.path().join("rustc");
             let recorded = dir.path().join("argv");
             let environment = dir.path().join("environment");
@@ -39,7 +39,7 @@ fn incremental_arguments_and_environment_pass_through_unchanged() {
                 format!("-Cincremental={}", incremental.display()),
             ];
             let mut command = common::hermetic_command(
-                env!("CARGO_BIN_EXE_kache"),
+                common::kache_binary(),
                 &cache,
                 Some(&dir.path().join("missing.toml")),
             );
