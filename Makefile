@@ -41,16 +41,19 @@ release:
 	  --target $(TARGET)
 
 verify-release:
-	@test -f "target/$(TARGET)/dist/$(NAME)"
-	@if echo "$(TARGET)" | grep -q -- '-linux-musl$$'; then \
-		command -v readelf >/dev/null || { echo 'readelf is required for release verification'; exit 1; }; \
-		file "target/$(TARGET)/dist/$(NAME)" | grep -Eq 'static-pie linked|statically linked' || { echo 'release is not statically linked'; exit 1; }; \
-		file "target/$(TARGET)/dist/$(NAME)" | grep -q 'stripped' || { echo 'release is not stripped'; exit 1; }; \
-		! readelf -l "target/$(TARGET)/dist/$(NAME)" | grep -q INTERP || { echo 'release has a dynamic ELF interpreter'; exit 1; }; \
-		! readelf -d "target/$(TARGET)/dist/$(NAME)" | grep -q NEEDED || { echo 'release has dynamic dependencies'; exit 1; }; \
-	else \
-		echo "Skipping ELF checks for $(TARGET)"; \
-	fi
+	@for bin in $(NAME) $(NAME)-engine; do \
+		path="target/$(TARGET)/dist/$$bin"; \
+		test -f "$$path" || { echo "$$path is missing"; exit 1; }; \
+		if echo "$(TARGET)" | grep -q -- '-linux-musl$$'; then \
+			command -v readelf >/dev/null || { echo 'readelf is required for release verification'; exit 1; }; \
+			file "$$path" | grep -Eq 'static-pie linked|statically linked' || { echo "$$path is not statically linked"; exit 1; }; \
+			file "$$path" | grep -q 'stripped' || { echo "$$path is not stripped"; exit 1; }; \
+			! readelf -l "$$path" | grep -q INTERP || { echo "$$path has a dynamic ELF interpreter"; exit 1; }; \
+			! readelf -d "$$path" | grep -q NEEDED || { echo "$$path has dynamic dependencies"; exit 1; }; \
+		else \
+			echo "Skipping ELF checks for $$path on $(TARGET)"; \
+		fi; \
+	done
 
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
