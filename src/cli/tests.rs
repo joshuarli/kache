@@ -1661,20 +1661,11 @@ fn zero_event_stats() -> daemon::EventStatsResponse {
 
 
 #[test]
-fn test_optional_failing_check_is_not_an_issue() {
-    // A downgraded (optional) daemon check that failed must not count.
-    assert!(!is_doctor_issue(false, true));
-}
-
-#[test]
-fn test_genuine_failing_check_is_an_issue() {
-    assert!(is_doctor_issue(false, false));
-}
-
-#[test]
-fn test_passing_check_is_never_an_issue() {
+fn test_is_doctor_issue() {
     assert!(!is_doctor_issue(true, false));
     assert!(!is_doctor_issue(true, true));
+    assert!(!is_doctor_issue(false, true));
+    assert!(is_doctor_issue(false, false));
 }
 
 #[test]
@@ -2163,22 +2154,19 @@ fn overwrite_entry_meta(
 
 #[test]
 fn why_miss_no_events_prints_tip() {
-    // No events for the crate -> the "build it first" tip path.
     let dir = tempfile::tempdir().unwrap();
     let config = save_manifest_config(dir.path().join("cache"));
-    why_miss(&config, "ghost", false).expect("why_miss with no events should succeed");
+    let events = crate::events::read_events(&config.event_log_path()).unwrap();
+    assert!(events.is_empty());
+    assert!(why_miss(&config, "ghost", false).is_ok());
+    assert!(why_miss(&config, "ghost", true).is_ok());
 }
 
 #[test]
 fn why_miss_shows_stored_metadata_for_a_missed_key() {
-    // A Miss event whose cache_key has a stored entry on disk drives the
-    // miss-metadata display (target/profile) + the stored-entries listing.
-    // Covers why_miss's metadata branch (cli.rs ~471-490+).
     let dir = tempfile::tempdir().unwrap();
     let config = save_manifest_config(dir.path().join("cache"));
-    // Seed a store entry for "serde" so meta.json (with target/profile) exists.
     put_entry(&config, "serdemisskey", "serde", dir.path());
-    // Log a Miss event for that crate + key.
     crate::events::log_event(
         &config.event_log_path(),
         &build_event(
@@ -2192,7 +2180,12 @@ fn why_miss_shows_stored_metadata_for_a_missed_key() {
     )
     .unwrap();
 
-    why_miss(&config, "serde", false).expect("why_miss should succeed for a missed key");
+    let inventory = crate::store_view::read(&config, true, "name").unwrap();
+    let stored: Vec<_> = inventory.entries.iter().filter(|e| e.crate_name == "serde").collect();
+    assert_eq!(stored.len(), 1);
+    assert!(missed_entry(&stored, "serdemisskey").is_some());
+    assert!(why_miss(&config, "serde", false).is_ok());
+    assert!(why_miss(&config, "serde", true).is_ok());
 }
 
 #[test]
@@ -2269,28 +2262,26 @@ fn why_miss_legacy_same_key_repeat_does_not_claim_key_mismatch() {
 
 #[test]
 fn why_miss_all_hits_reports_no_misses() {
-    // Events exist but none are Miss/Dup -> the "all events are hits" path.
     let dir = tempfile::tempdir().unwrap();
     let config = save_manifest_config(dir.path().join("cache"));
-    crate::events::log_event(
-        &config.event_log_path(),
-        &build_event(
-            "tokio",
-            crate::events::EventResult::LocalHit,
-            0,
-            5,
-            4096,
-            "tokiohitkey",
-        ),
-    )
-    .unwrap();
+    let event = build_event(
+        "tokio",
+        crate::events::EventResult::LocalHit,
+        0,
+        5,
+        4096,
+        "tokiohitkey",
+    );
+    crate::events::log_event(&config.event_log_path(), &event).unwrap();
 
-    why_miss(&config, "tokio", false).expect("why_miss with only hits should succeed");
+    let lines = no_miss_lines("tokio", &[], &[&event]);
+    assert!(lines.iter().any(|line| line.contains("all events are hits")));
+    assert!(why_miss(&config, "tokio", false).is_ok());
+    assert!(why_miss(&config, "tokio", true).is_ok());
 }
 
 #[test]
 fn why_miss_reports_many_stored_diffs() {
-    // Stored miss + many other entries -> diff printer cap branch.
     let dir = tempfile::tempdir().unwrap();
     let config = save_manifest_config(dir.path().join("cache"));
     put_entry(&config, "misskeymanydiffs", "serde", dir.path());
@@ -2329,7 +2320,10 @@ fn why_miss_reports_many_stored_diffs() {
     )
     .unwrap();
 
-    why_miss(&config, "serde", false).expect("why_miss should print capped diffs");
+    let inventory = crate::store_view::read(&config, true, "name").unwrap();
+    assert_eq!(inventory.entries.len(), 4);
+    assert!(why_miss(&config, "serde", false).is_ok());
+    assert!(why_miss(&config, "serde", true).is_ok());
 }
 
 #[test]

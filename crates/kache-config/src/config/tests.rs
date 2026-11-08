@@ -232,9 +232,14 @@ fn test_shellexpand() {
 
 #[test]
 fn test_parse_size() {
-    assert_eq!(parse_size("50GiB"), Some(50 * 1024 * 1024 * 1024));
+    assert_eq!(parse_size("0B"), Some(0));
+    assert_eq!(parse_size("1KiB"), Some(1024));
     assert_eq!(parse_size("1MiB"), Some(1024 * 1024));
+    assert_eq!(parse_size("10GiB"), Some(10 * 1024 * 1024 * 1024));
+    assert_eq!(parse_size("50GiB"), Some(50 * 1024 * 1024 * 1024));
+    assert!(parse_size("").is_none());
     assert!(parse_size("invalid").is_none());
+    assert!(parse_size("abc").is_none());
 }
 
 #[test]
@@ -1411,11 +1416,11 @@ fn explain_miss_is_opt_in_from_env_or_file() {
 fn probe_memos_live_under_the_configured_cache_dir() {
     let _lock = config_path_lock();
     let dir = tempfile::tempdir().unwrap();
-    // SAFETY: the process-state lock serialises environment edits.
-    unsafe { std::env::set_var("KACHE_CACHE_DIR", dir.path()) };
-    let probes = probe_memo_dir();
-    unsafe { std::env::remove_var("KACHE_CACHE_DIR") };
-    assert_eq!(probes, dir.path().join("probes"));
+    {
+        let _cache = set_env_for_test("KACHE_CACHE_DIR", Some(dir.path().as_os_str()));
+        let probes = probe_memo_dir();
+        assert_eq!(probes, dir.path().join("probes"));
+    }
     let default = probe_memo_dir();
     assert_eq!(default, default_cache_dir().join("probes"));
     assert!(default.is_absolute());
@@ -1713,63 +1718,7 @@ fn test_env_overrides_detect() {
 }
 
 #[test]
-fn test_config_store_dir() {
-    let config = Config {
-        key_salt: None,
-        cc_extra_allowlist_flags: Vec::new(),
-        volume_stores: Vec::new(),
-        trust_daemon_execution: false,
-        project_rules: ProjectRules::default(),
-        auto_recover_min_free_bytes: 0,
-
-
-
-        path_only_env_vars: Vec::new(),
-        key_env_vars: Vec::new(),
-        base_dirs: Vec::new(),
-        cache_dir: PathBuf::from("/tmp/kache"),
-        runtime_dir: PathBuf::from("/tmp/kache"),
-        socket_path_override: None,
-        max_size: 1024,
-        disabled: false,
-        cache_executables: false,
-        explain_miss: false,
-    };
-    assert_eq!(config.store_dir(), PathBuf::from("/tmp/kache/store"));
-    assert_eq!(
-        config.upload_spool_dir(),
-        PathBuf::from("/tmp/kache/upload-queue")
-    );
-}
-
-#[test]
-fn test_config_index_db_path() {
-    let config = Config {
-        key_salt: None,
-        cc_extra_allowlist_flags: Vec::new(),
-        volume_stores: Vec::new(),
-        trust_daemon_execution: false,
-        project_rules: ProjectRules::default(),
-        auto_recover_min_free_bytes: 0,
-
-
-
-        path_only_env_vars: Vec::new(),
-        key_env_vars: Vec::new(),
-        base_dirs: Vec::new(),
-        cache_dir: PathBuf::from("/tmp/kache"),
-        runtime_dir: PathBuf::from("/tmp/kache"),
-        socket_path_override: None,
-        max_size: 1024,
-        disabled: false,
-        cache_executables: false,
-        explain_miss: false,
-    };
-    assert_eq!(config.index_db_path(), PathBuf::from("/tmp/kache/index.db"));
-}
-
-#[test]
-fn test_config_event_log_path() {
+fn test_config_path_resolution() {
     let config = Config {
         key_salt: None,
         cc_extra_allowlist_flags: Vec::new(),
@@ -1885,21 +1834,22 @@ fn runtime_dir_resolves_env_file_default_and_ignore_env() {
     assert_eq!(from_file.cache_dir, cache_dir);
     assert_eq!(from_file.runtime_dir, file_runtime);
 
-    unsafe { std::env::set_var("KACHE_RUNTIME_DIR", &env_runtime) };
-    assert_eq!(Config::load().unwrap().runtime_dir, env_runtime);
+    {
+        let _env = set_env_for_test("KACHE_RUNTIME_DIR", Some(env_runtime.as_os_str()));
+        assert_eq!(Config::load().unwrap().runtime_dir, env_runtime);
 
-    std::fs::write(
-        &config_path,
-        format!(
-            "[cache]\nlocal_store = {:?}\nruntime_dir = {:?}\nignore_env = true\n",
-            cache_dir.to_string_lossy(),
-            file_runtime.to_string_lossy()
-        ),
-    )
-    .unwrap();
-    assert_eq!(Config::load().unwrap().runtime_dir, file_runtime);
+        std::fs::write(
+            &config_path,
+            format!(
+                "[cache]\nlocal_store = {:?}\nruntime_dir = {:?}\nignore_env = true\n",
+                cache_dir.to_string_lossy(),
+                file_runtime.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        assert_eq!(Config::load().unwrap().runtime_dir, file_runtime);
+    }
 
-    unsafe { std::env::remove_var("KACHE_RUNTIME_DIR") };
     std::fs::write(
         &config_path,
         format!("[cache]\nlocal_store = {:?}\n", cache_dir.to_string_lossy()),
@@ -2381,15 +2331,6 @@ fn test_kache_config_env_expands_bare_tilde() {
         let resolved = resolve_config_path();
         assert_eq!(resolved, home);
     }
-}
-
-#[test]
-fn test_parse_size_various() {
-    assert_eq!(parse_size("1KiB"), Some(1024));
-    assert_eq!(parse_size("10GiB"), Some(10 * 1024 * 1024 * 1024));
-    assert_eq!(parse_size("0B"), Some(0));
-    assert!(parse_size("").is_none());
-    assert!(parse_size("abc").is_none());
 }
 
 #[test]

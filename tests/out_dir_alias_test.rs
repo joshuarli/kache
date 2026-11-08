@@ -326,7 +326,6 @@ fn units_that_bake_an_empty_out_dir_hit_in_another_checkout() {
     let base = std::fs::canonicalize(tmp.path()).unwrap();
     let cache = base.join("cache");
     let _daemon = common::DaemonGuard::new(kache_binary(), &cache);
-    let _daemon = common::DaemonGuard::new(kache_binary(), &cache);
     let tree = |name: &str| base.join(name);
     let out_dirs = cache.join("out-dirs");
     let probe = out_dirs.join("v1/d/probe-0123456789abcdef/gen.txt");
@@ -616,7 +615,6 @@ fn a_failed_rederivation_hints_and_denies_the_alias() {
     let tmp = TempDir::new().unwrap();
     let base = std::fs::canonicalize(tmp.path()).unwrap();
     let cache = base.join("cache");
-    let _daemon = common::DaemonGuard::new(kache_binary(), &cache);
     let _daemon = common::DaemonGuard::new(kache_binary(), &cache);
     let tree = base.join("tree");
     let out_dirs = cache.join("out-dirs");

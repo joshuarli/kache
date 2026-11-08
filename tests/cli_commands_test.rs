@@ -45,7 +45,11 @@ fn diagnostics_require_a_crate_and_do_not_select_recorded_sessions() {
         &["explain", "--all"][..],
         &["diff"][..],
     ] {
-        e.cmd().args(args).assert().failure();
+        e.cmd()
+            .args(args)
+            .assert()
+            .code(2)
+            .stderr(predicates::str::contains("error:"));
     }
 }
 
@@ -472,41 +476,34 @@ fn list_on_empty_cache_reports_no_entries() {
         .assert()
         .success()
         .stdout(predicates::str::contains("No cached entries"));
-}
-
-#[test]
-fn list_accepts_all_sort_modes() {
+    e.cmd()
+        .args(["list", "--no-pager"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("No cached entries"));
+    e.cmd()
+        .args(["list", "serde"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("No cached entries for serde"));
     for sort in ["name", "size", "hits", "age"] {
-        let e = env();
-        e.cmd().args(["list", "--sort", sort]).assert().success();
+        e.cmd()
+            .args(["list", "--sort", sort])
+            .assert()
+            .success()
+            .stdout(predicates::str::contains("No cached entries"));
     }
 }
 
 #[test]
-fn list_no_pager_flag_is_accepted() {
-    let e = env();
-    e.cmd().args(["list", "--no-pager"]).assert().success();
-}
-
-#[test]
-fn list_for_specific_missing_crate_succeeds() {
-    let e = env();
-    e.cmd().args(["list", "serde"]).assert().success();
-}
-
-#[test]
-fn stats_on_empty_cache_succeeds() {
-    let e = env();
-    e.cmd().arg("stats").assert().success();
-    let e = env();
-    e.cmd().args(["stats", "--since", "1h"]).assert().success();
-}
-
-/// #897: a sub-hour window is accepted and named as requested, and a value
-/// that does not parse is an error rather than a silent 24h fallback.
-#[test]
 fn stats_and_report_label_the_requested_window() {
     let e = env();
+    e.cmd().arg("stats").assert().success();
+    e.cmd()
+        .args(["stats", "--since", "1h"])
+        .assert()
+        .success()
+        .stdout(predicates::str::starts_with("kache · last 1h\n"));
     e.cmd()
         .args(["stats", "--since", "15m"])
         .assert()
@@ -1127,7 +1124,11 @@ fn purge_on_empty_cache_succeeds() {
 #[test]
 fn why_miss_on_unknown_crate_succeeds() {
     let e = env();
-    e.cmd().args(["why-miss", "serde"]).assert().success();
+    e.cmd()
+        .args(["why-miss", "serde"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("No events for `serde` yet"));
 }
 
 #[test]
@@ -1735,21 +1736,29 @@ fn doctor_reports_reachable_daemon_version() {
 #[test]
 fn doctor_verify_on_empty_cache_succeeds() {
     let e = env();
-    e.cmd().args(["doctor", "--verify"]).assert().success();
-    let e = env();
+    e.cmd()
+        .args(["doctor", "--verify"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Cache verification complete"))
+        .stdout(predicates::str::contains("0 corrupted"));
     e.cmd()
         .args(["doctor", "--verify", "--checksums"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicates::str::contains("Cache verification complete"))
+        .stdout(predicates::str::contains("0 checksum failures"));
 }
 
 #[test]
 fn doctor_fix_in_isolated_home_succeeds() {
-    // --fix may rewrite the (isolated) cargo wrapper config; with HOME and
-    // CARGO_HOME pointed at temp dirs this never touches the real setup.
     let e = env();
     std::fs::create_dir_all(e.home.join(".cargo")).unwrap();
-    e.cmd().args(["doctor", "--fix"]).assert().success();
+    e.cmd()
+        .args(["doctor", "--fix"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("kache · doctor"));
 }
 
 // Unix-only: migrate resolves `~/.zshrc` via `kache_fs::home_dir()`, which on
@@ -4390,4 +4399,71 @@ fn quarantine_backups_are_reported_and_only_removed_by_confirmed_full_clean() {
     }
     assert!(e.cache.join("index.db").is_file());
     e.cmd().args(["--json", "list"]).assert().success();
+}
+
+#[test]
+fn explicit_binary_selector_identifies_binary_and_engine_pair() {
+    let kache = common::kache_binary();
+    let engine = common::kache_engine_binary();
+
+    assert!(kache.is_file(), "kache binary must exist at {}", kache.display());
+    assert!(engine.is_file(), "kache-engine companion must exist at {}", engine.display());
+    assert_eq!(
+        engine,
+        kache.with_file_name(format!("kache-engine{}", std::env::consts::EXE_SUFFIX)),
+        "engine companion must sit beside kache frontend"
+    );
+
+    let output = std::process::Command::new(&kache).arg("--version").output().expect("kache --version");
+    assert!(output.status.success(), "kache --version failed");
+    let version_str = String::from_utf8_lossy(&output.stdout);
+    assert!(version_str.starts_with("kache "), "expected version output, got {version_str}");
+
+    if let Some(explicit) = std::env::var_os("KACHE_TEST_BINARY") {
+        let explicit_path = std::path::PathBuf::from(explicit);
+        assert_eq!(
+            kache, explicit_path,
+            "selected kache binary must match KACHE_TEST_BINARY"
+        );
+    }
+}
+
+#[test]
+fn explicit_binary_selector_fails_on_missing_or_stub_override() {
+    let missing_path = Path::new("/nonexistent/bin/kache_missing_binary_stub");
+    let res = common::resolve_kache_binary_with(Some(missing_path));
+    assert!(res.is_err(), "missing binary override must fail");
+    let err = res.unwrap_err();
+    assert!(
+        err.contains("KACHE_TEST_BINARY set to") && err.contains("file does not exist"),
+        "error must identify missing selector: {err}"
+    );
+
+    let temp = tempfile::tempdir().unwrap();
+    let stub_kache = temp.path().join("kache");
+    kache_fs::testutil::write_executable(&stub_kache, b"#!/bin/sh\nexit 1\n");
+
+    let res = common::resolve_kache_binary_with(Some(&stub_kache));
+    assert_eq!(res.unwrap(), stub_kache);
+
+    let engine_res = common::resolve_kache_engine_binary_with(&stub_kache, true);
+    assert!(engine_res.is_err(), "missing engine beside explicit kache must fail");
+    let engine_err = engine_res.unwrap_err();
+    assert!(
+        engine_err.contains("kache-engine companion at") && engine_err.contains("does not exist"),
+        "error must identify missing companion: {engine_err}"
+    );
+}
+
+#[test]
+fn default_binary_selector_bootstraps_companion_without_override() {
+    let res = common::resolve_kache_binary_with(None);
+    assert!(res.is_ok(), "default selector must resolve a binary: {:?}", res.err());
+    let bin = res.unwrap();
+    assert!(bin.is_file(), "default binary must exist");
+
+    let engine_res = common::resolve_kache_engine_binary_with(&bin, false);
+    assert!(engine_res.is_ok(), "default engine companion must resolve: {:?}", engine_res.err());
+    let engine = engine_res.unwrap();
+    assert!(engine.is_file(), "default engine companion must exist");
 }
