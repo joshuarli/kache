@@ -7576,8 +7576,8 @@ fn blob_path_is_panic_safe_for_short_hash() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
-    assert_eq!(store.blob_path("a"), store.blobs_dir().join("a"));
-    assert_eq!(store.blob_path(""), store.blobs_dir());
+    assert_eq!(store.blob_path("a"), store.blobs_dir().join("a").join("a"));
+    assert_eq!(store.blob_path(""), store.blobs_dir().join("").join(""));
 }
 
 #[test]
