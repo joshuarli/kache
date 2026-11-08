@@ -268,3 +268,34 @@ as diagnostic and rejects missing or truncated traces.
 `kache stats --format perfetto` remains the compact event-based view: its
 phase offsets are reconstructed from millisecond totals. The opt-in files
 above record actual interval placement and retain sub-millisecond work.
+
+## Edit loop and worktree seeding
+
+`scripts/bench-edit-loop.py` measures local development workflows on `cargo build -p kache-store`. Two checkouts of one revision stand in for two worktrees. Each sample starts with a fresh cache store and fresh target directories. The harness rotates arm execution order across samples. It tests cold builds and warm restores into an empty target in both checkouts. It also measures no-op builds on an intact target, repeated source edits, and a revert to the cached commit.
+
+```bash
+python3 scripts/bench-edit-loop.py --checkout-a /path/to/wt-a --checkout-b /path/to/wt-b \
+  --kache adaptive=/path/to/kache \
+  --mbx /path/to/mbx --samples 4 --output tmp/bench/edit-loop.json
+```
+
+Median wall seconds over four rotated samples on Apple Silicon (18 cores, macOS):
+
+| Phase | Plain Cargo | Kache | mbx v1.29.2 |
+| --- | --- | --- | --- |
+| Cold (empty cache) | 4.96 | 5.80 | 5.76 |
+| Warm cache, empty target (same checkout) | 5.74 | 0.97 | 1.24 |
+| Warm cache, empty target (other checkout) | 5.03 | 0.93 | 1.11 |
+| No-op on intact target | 0.25 | 0.09 | 0.11 |
+| First edit (`edit_1`) | 0.66 | 1.30 | 1.57 |
+| Subsequent edits (edits 2 through 5) | 0.62–0.84 | 0.56–0.87 | 0.78–1.29 |
+| Revert to cached commit | 0.64 | 0.58 | 0.93 |
+| Cache store disk usage | — | 91 MiB | 105 MiB |
+
+### Worktree seeding decision
+
+Kache does not copy or seed incremental compilation state across worktrees. mbx seeds incremental state across checkouts, but the benchmark shows no latency benefit from that transfer. Kache beats mbx on the first edit (1.30 seconds versus 1.57 seconds) and on subsequent edits (0.56 to 0.87 seconds versus 0.78 to 1.29 seconds).
+
+Cross-worktree seeding does not improve speed because rustc incremental compilation queries validate source paths and dependency metadata. When a second worktree imports seeded state, rustc detects path differences and cache key mismatches. That mismatch forces rustc to discard or recompute incremental data.
+
+Kache uses adaptive incremental compilation instead. It builds cached clean artifacts without Cargo's incremental directory. When you edit a unit, Kache isolates private incremental state under `<profile>/incremental.kache-auto/v3` inside that target directory. This strategy avoids cross-worktree state transfer and keeps the cache store smaller (91 MiB versus 105 MiB for mbx). It also delivers lower latency on both first and repeated edits.
