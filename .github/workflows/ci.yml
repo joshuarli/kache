@@ -41,6 +41,34 @@ jobs:
       - name: Test
         run: make test
 
+  e2e-macos:
+    name: e2e (macOS)
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: macos-26-e2e
+      - name: Install fixture tools
+        run: |
+          for tool in cmake ninja; do
+            command -v "$tool" >/dev/null || brew install "$tool"
+          done
+      - name: Fixture scenarios
+        run: make e2e
+      - name: Fixture scenarios with the cache disabled
+        run: make e2e-negative-control
+
   linux-musl:
     name: test (Linux ${{ matrix.arch }} musl)
     runs-on: ${{ matrix.runner }}
