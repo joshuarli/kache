@@ -350,7 +350,10 @@ pub(crate) fn drain_publications(
     progress: &PublishProgress,
     stall: Duration,
 ) -> usize {
-    let tick = stall.min(Duration::from_secs(1));
+    // Several checks per stall window: a single check per window times out
+    // whenever the worker's progress lands just after the check, which under
+    // load is a scheduling delay away from a slow-but-moving worker.
+    let tick = (stall / 4).min(Duration::from_secs(1));
     let mut last_done = progress.done();
     let mut last_change = std::time::Instant::now();
     loop {
@@ -1356,17 +1359,20 @@ mod tests {
         progress.accepted();
     }
     let (done_tx, done) = std::sync::mpsc::channel();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let worker = Arc::clone(&progress);
     std::thread::spawn(move || {
-        // Ten jobs, each slower than half the stall window: the whole
-        // queue takes several stall windows, but no single gap does.
+        let _ = ready_tx.send(());
+        // Ten jobs: the whole queue takes several stall windows, but no
+        // single gap comes near wedging the drain.
         for _ in 0..10 {
             std::thread::sleep(Duration::from_millis(60));
             worker.finished();
         }
         let _ = done_tx.send(());
     });
-    let left = drain_publications(done, &progress, Duration::from_millis(150));
+    ready_rx.recv().expect("worker started");
+    let left = drain_publications(done, &progress, Duration::from_millis(300));
     assert_eq!(left, 0);
     assert_eq!(progress.done(), 10);
     }
