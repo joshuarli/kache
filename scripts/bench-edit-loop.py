@@ -123,9 +123,16 @@ def allocated(path):
     return int(done.stdout.split()[0]) * 1024 if done.returncode == 0 and done.stdout else None
 
 
+def remove_tree(path):
+    if not path.exists():
+        return
+    subprocess.run(["chmod", "-R", "u+w", str(path)], check=False)
+    shutil.rmtree(path, ignore_errors=True)
+
+
 def sample(arm, index, args, scratch):
     root = scratch / f"{arm.name}-{index}"
-    shutil.rmtree(root, ignore_errors=True)
+    remove_tree(root)
     root.mkdir(parents=True)
     cache = root / "cache"
     target_a, target_a2, target_b = root / "target-a", root / "target-a2", root / "target-b"
@@ -152,7 +159,7 @@ def sample(arm, index, args, scratch):
         "target": allocated(target_a),
     }
     arm.stop(cache)
-    shutil.rmtree(root, ignore_errors=True)
+    remove_tree(root)
     return phases
 
 
