@@ -485,7 +485,7 @@ fn list_on_empty_cache_reports_no_entries() {
         .args(["list", "serde"])
         .assert()
         .success()
-        .stdout(predicates::str::contains("No cached entries for serde"));
+        .stdout(predicates::str::contains("No cached entries for 'serde'"));
     for sort in ["name", "size", "hits", "age"] {
         e.cmd()
             .args(["list", "--sort", sort])
