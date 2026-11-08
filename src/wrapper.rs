@@ -2975,6 +2975,7 @@ fn run_parsed_rustc(
     } else {
         None
     };
+    drop(trace_store_open);
 
     // Checked before the refusals below: those may hand the compile to a
     // configured fallback cache, which would replay the same incomplete
@@ -3265,7 +3266,6 @@ fn run_parsed_rustc(
         extra_inputs,
     };
 
-    drop(trace_store_open);
     if let Some(target_dir) = prestage_target_dir(args) {
         crate::prestage::maybe_hint(config, &target_dir);
     }
@@ -4723,6 +4723,7 @@ enum RestoredBytes {
 ///      `restore_from_cache`'s callers, which treat it as a **clean miss and
 ///      recompile** — never a false hit. ENOENT is called out below so the
 ///      degradation reads as the benign race it is rather than corruption.
+#[cfg(test)]
 fn materialize_cached_artifact(
     store: &Store,
     cached_file: &crate::store::CachedFile,
@@ -4737,19 +4738,39 @@ fn materialize_cached_artifact(
     context: &str,
     extra_inputs: Option<&crate::extra_inputs::ExtraInputsSnapshot>,
 ) -> Result<RestoredBytes> {
+    materialize_cached_artifact_with_precomputed(
+        store,
+        cached_file,
+        target_path,
+        kind,
+        shared_loadable,
+        depinfo_anchor,
+        depinfo_working_dir,
+        depinfo_workspace_dir,
+        depinfo_configured_roots,
+        platform,
+        context,
+        extra_inputs,
+        None,
+    )
+}
+
+fn materialize_cached_artifact_with_precomputed(
+    store: &Store,
+    cached_file: &crate::store::CachedFile,
+    target_path: &Path,
+    kind: ArtifactKind,
+    shared_loadable: Option<ArtifactKind>,
+    depinfo_anchor: &Path,
+    depinfo_working_dir: &Path,
+    depinfo_workspace_dir: Option<&Path>,
+    depinfo_configured_roots: &[(PathBuf, String, u8)],
+    platform: &dyn crate::compiler::Platform,
+    context: &str,
+    extra_inputs: Option<&crate::extra_inputs::ExtraInputsSnapshot>,
+    precomputed_depinfo: Option<Vec<u8>>,
+) -> Result<RestoredBytes> {
     let store_path = store.blob_path(&cached_file.hash);
-    if !store_path.exists() {
-        // Blob gone before we could open it — almost always a concurrent GC /
-        // purge of this entry (kunobi-ninja/kache#182). Surface it as a restore
-        // miss; the caller recompiles, never serves a partial hit.
-        anyhow::bail!(
-            "{context}: blob for {} (hash {}) was evicted before restore — \
-             treating as a cache miss: {}",
-            cached_file.name,
-            &cached_file.hash[..16.min(cached_file.hash.len())],
-            store_path.display()
-        );
-    }
 
     let plan = plan_post_restore(kind);
     let transforms: Vec<_> = plan
@@ -4759,11 +4780,24 @@ fn materialize_cached_artifact(
         .collect();
 
     let complete_extra_inputs = extra_inputs.filter(|_| kind == ArtifactKind::DepInfo);
-    let transformed = if transforms.is_empty() && complete_extra_inputs.is_none() {
+    let transformed = if let Some(precomputed) = precomputed_depinfo {
+        Some(precomputed)
+    } else if transforms.is_empty() && complete_extra_inputs.is_none() {
         None
     } else {
-        let original = std::fs::read(&store_path)
-            .with_context(|| format!("{context}: reading blob {}", store_path.display()))?;
+        let original = match std::fs::read(&store_path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                anyhow::bail!(
+                    "{context}: blob for {} (hash {}) was evicted before restore — \
+                     treating as a cache miss: {}",
+                    cached_file.name,
+                    &cached_file.hash[..16.min(cached_file.hash.len())],
+                    store_path.display()
+                );
+            }
+            Err(e) => return Err(e).with_context(|| format!("{context}: reading blob {}", store_path.display())),
+        };
         let mut content = original.clone();
         for action in &transforms {
             content = action.transform(content, depinfo_anchor);
@@ -4824,16 +4858,30 @@ fn materialize_cached_artifact(
                     .with_context(|| format!("{context}: copying {}", target_path.display()))?;
             } else {
                 let staged = take_prestaged(blob_strategy, cached_file, target_path);
-                if !staged {
-                    link::link_to_target(&store_path, target_path, blob_strategy).with_context(
-                        || {
-                            format!(
-                                "{context}: linking {} -> {}",
-                                store_path.display(),
-                                target_path.display()
-                            )
-                        },
-                    )?;
+                if !staged
+                    && let Err(e) = link::link_to_target_with_size(
+                        &store_path,
+                        target_path,
+                        blob_strategy,
+                        Some(cached_file.size),
+                    )
+                {
+                    if !store_path.exists() {
+                        anyhow::bail!(
+                            "{context}: blob for {} (hash {}) was evicted before restore — \
+                             treating as a cache miss: {}",
+                            cached_file.name,
+                            &cached_file.hash[..16.min(cached_file.hash.len())],
+                            store_path.display()
+                        );
+                    }
+                    return Err(e).with_context(|| {
+                        format!(
+                            "{context}: linking {} -> {}",
+                            store_path.display(),
+                            target_path.display()
+                        )
+                    });
                 }
             }
             // A link/clone keeps the blob's old mtime, so it must be
@@ -6489,6 +6537,7 @@ fn restore_from_cache_with_memo_store(
     // Validate every referenced path BEFORE materializing anything; a
     // miss evicts the entry so the recompile stores a portable one —
     // self-healing, mirroring the emit-coverage gate above.
+    let mut precomputed_depinfo = rustc_hash::FxHashMap::default();
     for cached_file in &meta.files {
         if !matches!(
             crate::compiler::classify_by_filename(&cached_file.name),
@@ -6573,6 +6622,7 @@ fn restore_from_cache_with_memo_store(
                 );
             }
         }
+        precomputed_depinfo.insert(cached_file.name.clone(), expanded.into_bytes());
     }
 
     // One platform per restore, shared across every cached file. The
@@ -6620,7 +6670,8 @@ fn restore_from_cache_with_memo_store(
         if kind == ArtifactKind::DebugBundle && !wants_debug_bundle(args) {
             continue;
         }
-        let restored = materialize_cached_artifact(
+        let precomputed = precomputed_depinfo.remove(&cached_file.name);
+        let restored = materialize_cached_artifact_with_precomputed(
             store,
             cached_file,
             &target_path,
@@ -6633,6 +6684,7 @@ fn restore_from_cache_with_memo_store(
             &*platform,
             "rustc restore",
             extra_inputs,
+            precomputed,
         )?;
         if let RestoredBytes::ExactBlobCopy(fingerprint) = restored {
             exact_restores.push((fingerprint, &cached_file.hash));

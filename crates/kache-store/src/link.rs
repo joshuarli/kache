@@ -419,12 +419,31 @@ pub fn link_to_target(store_path: &Path, target_path: &Path, strategy: LinkStrat
     link_to_target_via(store_path, target_path, strategy, try_reflink)
 }
 
+pub fn link_to_target_with_size(
+    store_path: &Path,
+    target_path: &Path,
+    strategy: LinkStrategy,
+    known_size: Option<u64>,
+) -> Result<()> {
+    link_to_target_with_size_via(store_path, target_path, strategy, known_size, try_reflink)
+}
+
 /// [`link_to_target`] with the reflink attempt passed in, so tests can run the
 /// no-CoW fallbacks on a filesystem that clones.
 fn link_to_target_via(
     store_path: &Path,
     target_path: &Path,
     strategy: LinkStrategy,
+    reflink: fn(&Path, &Path) -> Result<()>,
+) -> Result<()> {
+    link_to_target_with_size_via(store_path, target_path, strategy, None, reflink)
+}
+
+fn link_to_target_with_size_via(
+    store_path: &Path,
+    target_path: &Path,
+    strategy: LinkStrategy,
+    known_size: Option<u64>,
     reflink: fn(&Path, &Path) -> Result<()>,
 ) -> Result<()> {
     let do_link = || -> Result<()> {
@@ -444,13 +463,12 @@ fn link_to_target_via(
             return prepared.publish_replacing();
         }
 
-        // Remove existing file at target (link/clone calls fail if dst exists).
         clear_target(target_path)?;
 
-        // Logical size of the artifact, attributed to whichever restoration
-        // mechanism runs below. Best-effort — a metadata failure here must
-        // not fail the restore.
-        let bytes = fs::metadata(store_path).map(|m| m.len()).unwrap_or(0);
+        let bytes = match known_size {
+            Some(size) => size,
+            None => fs::metadata(store_path).map(|m| m.len()).unwrap_or(0),
+        };
 
         // Try reflink first. CoW gives us zero-copy *and* mutations don't
         // propagate to the cache blob — strictly better than hardlink when
@@ -1140,11 +1158,24 @@ fn clear_target(target_path: &Path) -> Result<()> {
             result => result.map_err(Into::into),
         };
     }
-    if target_path.exists() || target_path.symlink_metadata().is_ok() {
-        fs::remove_file(target_path)
-            .with_context(|| format!("removing existing file at {}", target_path.display()))?;
+    match fs::remove_file(target_path) {
+        Ok(()) => Ok(()),
+        Err(ref error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        #[cfg(windows)]
+        Err(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            if let Ok(metadata) = target_path.metadata() {
+                let mut permissions = metadata.permissions();
+                if permissions.readonly() {
+                    permissions.set_readonly(false);
+                    let _ = fs::set_permissions(target_path, permissions);
+                    return fs::remove_file(target_path)
+                        .with_context(|| format!("removing existing file at {}", target_path.display()));
+                }
+            }
+            Err(error).with_context(|| format!("removing existing file at {}", target_path.display()))
+        }
+        Err(error) => Err(error).with_context(|| format!("removing existing file at {}", target_path.display())),
     }
-    Ok(())
 }
 
 /// Materialize a restored artifact from content computed in memory.
