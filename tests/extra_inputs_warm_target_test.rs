@@ -792,7 +792,7 @@ edition = "2021"
             ("CARGO_INCREMENTAL", "1"),
         ],
         "passthrough",
-        Some("incremental compilation"),
+        Some("cache_executables=false"),
     );
     exercise_workspace_wrapper_lane(
         relocated_project.path(),

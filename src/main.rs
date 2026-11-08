@@ -22,6 +22,7 @@ mod events;
 mod extra_inputs;
 mod fallback;
 mod heartbeat;
+mod incremental_policy;
 mod index_compact;
 #[cfg(unix)]
 mod init_shell;

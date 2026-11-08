@@ -15,6 +15,7 @@ use crate::compiler::{
 };
 use crate::config::Config;
 use crate::events::{self, BuildEvent, EventResult};
+use crate::incremental_policy::{AdaptiveUnit, CompileOutcome, Lease, compile_outcome};
 use crate::key_env::KeyEnv;
 use crate::link;
 use crate::maintenance::unix_now_secs;
@@ -124,6 +125,92 @@ fn store_unavailable_message(err: &anyhow::Error) -> String {
 /// same trade-off `maybe_trigger_prefetch` and the store advisory already make,
 /// and it still turns #508's 670 lines into a handful.
 pub(crate) use kache_store::markers::WARN_SESSION_SECS;
+
+/// Kache-only semantic inputs that rustc incremental compilation cannot infer
+/// from argv. A change selects a fresh per-unit incremental directory before
+/// the early adaptive path can run.
+fn adaptive_policy_guard(config: &Config, env: &crate::invocation::InvocationEnv) -> [u8; 32] {
+    fn fold(hasher: &mut blake3::Hasher, label: &[u8], value: &[u8]) {
+        hasher.update(&(label.len() as u64).to_le_bytes());
+        hasher.update(label);
+        hasher.update(&(value.len() as u64).to_le_bytes());
+        hasher.update(value);
+    }
+
+    let mut hasher = blake3::Hasher::new();
+    fold(&mut hasher, b"policy", b"adaptive-incremental-v1");
+    if let Some(salt) = config.key_salt.as_deref() {
+        fold(&mut hasher, b"key-salt", salt.as_bytes());
+    }
+    if let Some(env_guard) = crate::cache_key::key_env_guard_in(&config.key_env_vars, env) {
+        fold(&mut hasher, b"key-env", env_guard.as_bytes());
+    }
+    for base_dir in &config.base_dirs {
+        fold(&mut hasher, b"base-dir", base_dir.as_bytes());
+    }
+    *hasher.finalize().as_bytes()
+}
+
+/// Whether a managed unit must key before it compiles. Without recorded
+/// policy state no seed can run, so the unit may compile first.
+fn managed_unit_keys_first(managed: bool, policy_state: bool) -> bool {
+    managed && policy_state
+}
+
+/// The one safety-checked unit adaptive incremental compiles use. Declared
+/// inputs are checked only after the narrow Cargo layout is known to be
+/// eligible; rejecting them also clears any old private state for that unit.
+fn managed_incremental_unit<F>(
+    config: &Config,
+    args: &RustcArgs,
+    extra_inputs_declared: F,
+) -> Option<AdaptiveUnit>
+where
+    F: FnOnce() -> bool,
+{
+    args.incremental.as_ref()?;
+    let guard = adaptive_policy_guard(config, args.invocation_env());
+    let unit = AdaptiveUnit::eligible(args, &guard)?;
+    if extra_inputs_declared() {
+        let _ = unit.reset();
+        return None;
+    }
+    Some(unit)
+}
+
+/// Whether the pre-key incremental lanes may run. Never on a re-entry after a
+/// deferred compile: that compile already ran, and with a result it already
+/// reached Cargo, so no lane may start a second one.
+fn incremental_fast_path_allowed(
+    has_refuse_reasons: bool,
+    source_excluded: bool,
+    skip_user_facing: bool,
+    reentered: bool,
+) -> bool {
+    !has_refuse_reasons && !source_excluded && !skip_user_facing && !reentered
+}
+
+/// Whether this is the keyed flow [`compile_before_key`] re-entered: with the
+/// compile's result after a miss, or with its emitted closure after it
+/// stopped the compile on a hit.
+fn reentered_after_deferred_compile(precompiled: bool, emitted_closure_waiting: bool) -> bool {
+    precompiled || emitted_closure_waiting
+}
+
+/// Whether an adaptive compile takes a slot in the scheduler's pool. A seed
+/// runs after a local miss, often as a full compile, so it waits for a slot
+/// like any other miss. The active and immediate lanes run before any key
+/// work, as passthroughs do.
+fn adaptive_lane_takes_permit(kind: crate::incremental_policy::LeaseKind) -> bool {
+    kind == crate::incremental_policy::LeaseKind::Seed
+}
+
+/// Whether this unit is refused caching outright: the compiler's own refusal
+/// list, or a codegen backend dylib kache will not replay. Either one also
+/// keeps the unit off the managed-incremental fast path.
+fn unit_refuses_caching(has_refuse_reasons: bool, untrusted_codegen_backend: bool) -> bool {
+    has_refuse_reasons || untrusted_codegen_backend
+}
 
 /// Dedup-marker path for a warn-once-per-build-session message of `kind`
 /// (`"store"`, `"cow"`, …).
@@ -2815,11 +2902,9 @@ fn run_parsed_rustc(
         heartbeat_lines_enabled(progress_level()),
     );
     maybe_notice_unknown_layout(config, args, &event_root, now_epoch_secs());
-    if args.incremental.is_some() {
-        return incremental_passthrough_with_event(
-            config, args, crate_name, &event_root, start, key_record,
-        );
-    }
+    let trace_adaptive = crate::phase_trace::phase("adaptive_unit");
+    let adaptive_unit = managed_incremental_unit(config, args, || extra_inputs.is_some());
+    drop(trace_adaptive);
     // Evaluate every cheap cache-eligibility gate before the learned fast
     // path. In particular, changing an exclusion or executable-cache policy
     // must take effect immediately even when this unit was already active.
@@ -2849,6 +2934,30 @@ fn run_parsed_rustc(
         args.invocation_env(),
     );
     let skip_user_facing = args.is_user_facing_executable() && !config.cache_executables;
+    // Read before the key takes the closure a stopped compile left.
+    let reentered = reentered_after_deferred_compile(
+        precompiled.is_some(),
+        crate::cache_key::dep_info_provided(),
+    );
+    if incremental_fast_path_allowed(
+        unit_refuses_caching(!refuse.is_empty(), untrusted_codegen_backend.is_some()),
+        excluded_source.is_some() || user_bypass.is_some(),
+        skip_user_facing,
+        reentered,
+    ) && let Some(lease) = adaptive_unit.as_ref().and_then(AdaptiveUnit::try_active)
+    {
+        return adaptive_incremental_with_event(
+            config,
+            args,
+            crate_name,
+            &event_root,
+            start,
+            lease,
+            "adaptive active",
+            None,
+            key_record,
+        );
+    }
     let rustc_route = volume_route_path_rustc(args);
     let mut fallback_stores = Vec::new();
     let trace_store_open = crate::phase_trace::phase("store_open");
@@ -2872,6 +2981,7 @@ fn run_parsed_rustc(
     // outputs.
     if untrusted_codegen_backend.is_some() {
         log::debug!("rustc codegen backend dylib not trusted; running rustc directly");
+        reset_adaptive_unit(adaptive_unit.as_ref());
         return rustc_direct_passthrough_with_event(
             config,
             args,
@@ -2893,6 +3003,7 @@ fn run_parsed_rustc(
             compiler.id().as_str(),
             reasons.join("; ")
         );
+        reset_adaptive_unit(adaptive_unit.as_ref());
         return passthrough_with_event(
             config,
             args,
@@ -2906,6 +3017,7 @@ fn run_parsed_rustc(
 
     if let Some(source) = excluded_source {
         log::debug!("rustc source excluded from cache: {}", source.display());
+        reset_adaptive_unit(adaptive_unit.as_ref());
         return passthrough_with_event(
             config,
             args,
@@ -2919,6 +3031,7 @@ fn run_parsed_rustc(
 
     if let Some(reason) = user_bypass {
         log::debug!("rustc invocation bypassed by user rule: {reason}");
+        reset_adaptive_unit(adaptive_unit.as_ref());
         return passthrough_with_event(
             config,
             args,
@@ -2939,12 +3052,13 @@ fn run_parsed_rustc(
     // that broke downstream cache keys via `extern:` hashes.
     if skip_user_facing {
         log::debug!("skipping cache for user-facing executable: {}", crate_name);
-        return passthrough_with_event(
+        return intentional_passthrough_with_event(
             config,
             args,
             crate_name,
             &event_root,
             start,
+            adaptive_unit.as_ref(),
             "user-facing executable (cache_executables=false)",
             key_record,
         );
@@ -3003,6 +3117,27 @@ fn run_parsed_rustc(
         extra_inputs_too_new,
         false,
     );
+    // Taken after the fast path, which resets corrupt or interrupted state:
+    // a unit left without state has no lane its key could open. A learning
+    // unit has no graph to reuse. Reserve a cold private compile before
+    // discovery, then qualify its seed from rustc's emitted closure.
+    let mut deferred_seed = if precompiled.is_none()
+        && stop_on_hit_allowed(args)
+        && deferral_allowed(args, false, extra_inputs)
+    {
+        adaptive_unit
+            .as_ref()
+            .and_then(AdaptiveUnit::try_deferred_seed)
+    } else {
+        None
+    };
+    let keys_first = deferred_seed.is_none()
+        && managed_unit_keys_first(
+            adaptive_unit.is_some(),
+            adaptive_unit
+                .as_ref()
+                .is_some_and(AdaptiveUnit::has_policy_state),
+        );
     let keyed = match compute_rustc_cache_key(
         config,
         compiler,
@@ -3024,7 +3159,7 @@ fn run_parsed_rustc(
             .and_then(|pre| Some((pre.dep_info.take()?, pre.tree_guard.take())))
         {
             Some((dep_info, tree)) => KeyDiscovery::Emitted(dep_info, tree),
-            None if deferral_allowed(args, extra_inputs) => {
+            None if deferral_allowed(args, keys_first, extra_inputs) => {
                 KeyDiscovery::Deferrable {
                     stop_on_hit: stop_on_hit_allowed(args),
                 }
@@ -3035,6 +3170,9 @@ fn run_parsed_rustc(
     ) {
         Ok(keyed) => keyed,
         Err(e) => {
+            if let Some(lease) = deferred_seed.take() {
+                let _ = lease.finish(CompileOutcome::Abnormal);
+            }
             // `{:#}` walks the cause chain; see `uncacheable_reason`.
             log::warn!("failed to compute cache key for {}: {:#}", crate_name, e);
             return passthrough_with_event(
@@ -3052,7 +3190,7 @@ fn run_parsed_rustc(
         mut cache_key,
         deferred,
         stop_on_hit,
-        discovery_flight: _discovery_flight,
+        discovery_flight,
         predicted,
         outputs: mut key_outputs,
         mut key_ms,
@@ -3080,6 +3218,20 @@ fn run_parsed_rustc(
         event_root: &event_root,
     };
     if deferred {
+        if let Some(lease) = deferred_seed.take() {
+            // Private incremental output is never published. Peers cannot
+            // wait on this compile to record an artifact or closure.
+            drop(discovery_flight);
+            return adaptive_compile_before_key(
+                &compile_first,
+                lease,
+                key_outputs.tree_guard,
+                guard_inputs,
+                key_record,
+                key_ms,
+                key_hash_stats,
+            );
+        }
         // No record and nowhere else the entry could be: compile now, then
         // key from what rustc emitted. `discovery_flight` stays held across
         // the recursion so peers wait for this compile.
@@ -3094,7 +3246,13 @@ fn run_parsed_rustc(
             key_hash_stats,
         );
     }
+    if let Some(lease) = deferred_seed.take() {
+        let _ = lease.finish(CompileOutcome::Abnormal);
+    }
     crate::out_dir_alias::register_after_key(key_outputs.bakes_out_dir);
+    let adaptive_key_fields = adaptive_unit
+        .as_ref()
+        .and_then(|_| key_outputs.fields.clone());
 
     let hit_context = RustcHitContext {
         config,
@@ -3134,7 +3292,11 @@ fn run_parsed_rustc(
     let mut lookup_ms = 0_u64;
     let mut record_closure = should_record_closure(predicted, false);
     let mut rederived = false;
-    let may_defer = deferral_allowed(args, extra_inputs);
+    // A unit that keyed first only so that its miss could take an
+    // incremental lane. A re-entry keys from the closure of a compile it
+    // stopped, and never compiles before its key again.
+    let keyed_first = keys_first && !reentered;
+    let may_defer = deferral_allowed(args, false, extra_inputs);
     // `Some(stop_on_hit)` once the miss is to compile before its key.
     let mut compile_then_key = None;
     while precompiled.is_none() {
@@ -3174,6 +3336,11 @@ fn run_parsed_rustc(
                     &key_record,
                 ) {
                     Ok(()) => {
+                        observe_adaptive_hit(
+                            adaptive_unit.as_ref(),
+                            adaptive_key_fields.as_ref(),
+                            &cache_key,
+                        );
                         return Ok(0);
                     }
                     Err(e) => {
@@ -3200,9 +3367,37 @@ fn run_parsed_rustc(
             }
         }
 
+        // Both lookups missed. Incremental compilation needs no artifact key
+        // re-derivation: rustc reads the current inputs and this result is never
+        // stored. Keep the ordinary lookup first so a hit still restores.
+        if let (Some(unit), Some(fields)) = (adaptive_unit.as_ref(), adaptive_key_fields.as_ref())
+            && let Some(lease) = unit.try_seed(&cache_key, fields)
+        {
+            // A seed stores no entry and records no closure, so a peer
+            // waiting on this unit's discovery flight would wait for nothing.
+            // Release it before the seed waits for a permit and compiles.
+            drop(discovery_flight);
+            return adaptive_incremental_with_event(
+                config,
+                args,
+                crate_name,
+                &event_root,
+                start,
+                lease,
+                "adaptive seed",
+                Some((&cache_key, key_ms, key_hash_stats, lookup_ms)),
+                key_record,
+            );
+        }
+
+        // Every incremental lane has declined by now.
         let owes = owes_rederivation(predicted, rederived);
-        compile_then_key =
-            compile_before_key_after_miss(may_defer, stop_on_hit_allowed(args), owes);
+        compile_then_key = compile_before_key_after_miss(
+            may_defer,
+            stop_on_hit_allowed(args),
+            owes,
+            keyed_first,
+        );
         if compile_then_key.is_some() || !owes {
             break;
         }
@@ -3262,12 +3457,13 @@ fn run_parsed_rustc(
                 may_defer,
                 stop_on_hit_allowed(args),
                 false,
+                keyed_first,
             );
             break;
         }
     }
     if let Some(stop_on_hit) = compile_then_key {
-        log::debug!("{crate_name}: compiling before keying again");
+        log::debug!("{crate_name}: no lane took the miss; compiling before keying again");
         return compile_before_key(
             &compile_first,
             stop_on_hit,
@@ -3345,6 +3541,11 @@ fn run_parsed_rustc(
                 key_record,
             );
         }
+        observe_adaptive_hit(
+            adaptive_unit.as_ref(),
+            adaptive_key_fields.as_ref(),
+            &cache_key,
+        );
         return Ok(0);
     }
 
@@ -3594,6 +3795,10 @@ fn run_parsed_rustc(
         print_progress(crate_name, EventResult::Skipped, elapsed, 0);
         drop(lock);
         return Ok(result.exit_code);
+    }
+
+    if let (Some(unit), Some(fields)) = (adaptive_unit.as_ref(), adaptive_key_fields.as_ref()) {
+        let _ = unit.observe_build(&cache_key, fields);
     }
 
     // 5. Store the output files
@@ -5026,6 +5231,145 @@ fn emitted_compile_key(
     )
 }
 
+/// Discover the exact key during a cold incremental compile. A local hit
+/// stops rustc before Cargo sees outputs; a qualifying miss activates only
+/// private state and never enters the artifact-store path.
+fn adaptive_compile_before_key(
+    ctx: &CompileFirst<'_>,
+    mut lease: Lease,
+    tree_guard: Option<crate::cache_key::TreeGuard>,
+    guard_inputs: Vec<crate::cache_key::ObservedFingerprint>,
+    mut key_record: KeyEventRecord,
+    mut key_ms: u64,
+    mut key_hash_stats: FileHashStats,
+) -> Result<i32> {
+    crate::out_dir_alias::register_before_compile();
+    let permit = scheduler::begin_keyless_compile(
+        &ctx.config.cache_dir,
+        ctx.crate_name,
+        ctx.args.invokes_linker(),
+    );
+    let compiler_args = lease.compiler_args(ctx.args);
+    let mut hit_closure = None;
+    let mut observed = None;
+    let mut lookup_ms = 0_u64;
+    let compile_start = std::time::Instant::now();
+    let mut on_dep_info = || {
+        let Some(dep_info) = emitted_dep_info(ctx.args) else {
+            return true;
+        };
+        let Ok(keyed) =
+            emitted_compile_key(ctx, dep_info.clone(), tree_guard.clone(), &mut key_record)
+        else {
+            return true;
+        };
+        let lookup_start = std::time::Instant::now();
+        let stored = ctx.store.get(&keyed.cache_key);
+        lookup_ms = lookup_ms.saturating_add(lookup_start.elapsed().as_millis() as u64);
+        (key_ms, key_hash_stats, _) = combine_key_measurements(
+            key_ms,
+            keyed.key_ms,
+            key_hash_stats,
+            keyed.key_hash_stats,
+            false,
+            false,
+        );
+        match stored {
+            Ok(Some(meta)) if cache_entry_has_files(&meta) => {
+                hit_closure = Some((dep_info, tree_guard.clone()));
+                false
+            }
+            Ok(_) => {
+                if let Some(fields) = &keyed.outputs.fields {
+                    observed = Some((keyed.cache_key, fields.clone()));
+                }
+                true
+            }
+            Err(_) => true,
+        }
+    };
+    let executed = ctx.compiler.execute_preserving_incremental_until_dep_info(
+        ctx.args,
+        &compiler_args,
+        &mut on_dep_info,
+    );
+    if hit_closure.is_none()
+        && let Some((cache_key, fields)) = &observed
+    {
+        // The in-flight marker and unit lock taken with the lease cover the child.
+        let _ = lease.qualify_deferred_seed(cache_key, fields);
+    }
+    if hit_closure.is_none() && executed.is_ok() {
+        permit.record_compile_rss(ctx.crate_name);
+    }
+    drop(permit);
+    if let Some((dep_info, tree)) = hit_closure {
+        let _ = lease.finish(CompileOutcome::Abnormal);
+        crate::cache_key::provide_dep_info(dep_info, tree);
+        return run_parsed_rustc(
+            ctx.config,
+            ctx.compiler,
+            ctx.args,
+            ctx.start,
+            ctx.invocation_start_ns,
+            ctx.extra_inputs,
+            ctx.extra_inputs_hash_stats,
+            ctx.extra_inputs_too_new,
+            ctx.extra_inputs_key_ms,
+            guard_inputs,
+            Some(ctx.build_script_inputs),
+            None,
+        );
+    }
+    let result = match executed {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = lease.finish(CompileOutcome::Abnormal);
+            return passthrough_with_event(
+                ctx.config,
+                ctx.args,
+                ctx.crate_name,
+                ctx.event_root,
+                ctx.start,
+                format!("adaptive compiler spawn failed: {error}"),
+                key_record,
+            );
+        }
+    };
+    let compile_time_ms = compile_start.elapsed().as_millis() as u64;
+    replay_diagnostics(
+        &result.stdout,
+        result.pending_stderr(),
+        crate::invocation::io::stdout(),
+        crate::invocation::io::stderr(),
+    );
+    after_rustc_exit(result.exit_code, &result.stderr, &ctx.args.externs);
+    let outcome = compile_outcome(result.exit_code, result.signaled, &result.stderr);
+    let _ = lease.finish(outcome);
+    let cache_key = observed.as_ref().map_or("", |(key, _)| key.as_str());
+    log_event(
+        ctx.config,
+        EventInputs::new(
+            ctx.event_root,
+            ctx.crate_name,
+            EventResult::Passthrough,
+            ctx.start.elapsed().as_millis() as u64,
+        )
+        .rebuilt(
+            result.exit_code == 0,
+            &result.artifacts,
+            ctx.key_env.var("CARGO_PKG_NAME"),
+        )
+        .compile_time_ms(compile_time_ms)
+        .keyed(cache_key, key_ms, key_hash_stats)
+        .lookup_ms(lookup_ms)
+        .passthrough_reason("adaptive seed".to_owned())
+        .exit_code(result.exit_code)
+        .key_record(key_record),
+    );
+    Ok(result.exit_code)
+}
+
 /// Compile before the key is known, then key from the dep-info the compile
 /// wrote and store as usual (re-entering [`run_parsed_rustc`] with the
 /// result). With `stop_on_hit`, key as soon as rustc reports that dep-info
@@ -5225,13 +5569,17 @@ fn emitted_dep_info(args: &RustcArgs) -> Option<crate::cache_key::DepInfo> {
     .ok()
 }
 
+/// Compile-before-key needs the dep-info the key is derived from afterwards
+/// (Cargo always asks for it; a bare rustc invocation may not). It rules out
+/// an extra-inputs declaration, whose key covers more than the closure, and a
+/// managed unit that must key first ([`managed_unit_keys_first`]) so a miss
+/// can take its incremental lane.
 fn deferral_allowed(
     args: &RustcArgs,
+    keys_first: bool,
     extra_inputs: Option<&crate::extra_inputs::ExtraInputsSnapshot>,
 ) -> bool {
-    // The compile must emit the dep-info the key is derived from afterwards
-    // (Cargo always asks for it; a bare rustc invocation may not).
-    args.dep_info_path().is_some() && extra_inputs.is_none()
+    args.dep_info_path().is_some() && !keys_first && extra_inputs.is_none()
 }
 
 /// Remember the input closure this invocation discovered, so a later build of
@@ -5678,12 +6026,34 @@ fn owes_rederivation(predicted: bool, already_rederived: bool) -> bool {
     predicted && !already_rederived
 }
 
+/// Does a miss that no incremental lane took compile before its key after
+/// all, and may that compile stop on a hit? `Some(stop_on_hit)` if so.
+/// `deferral_allowed` is [`deferral_allowed`] for a unit that need not key
+/// first.
+///
+/// A predicted key must be re-derived before anything is stored, and the
+/// running compile writes the closure the pre-pass would. A compile that
+/// links cannot stop on a hit, so a guess is re-derived through the pre-pass
+/// first, where a lookup can still find the entry under the real key.
+///
+/// A unit that keyed first did so only so that its miss could take an
+/// incremental lane, and none did. Its key was taken before the compile, and
+/// only a key from the compile's own closure is checked for a source written
+/// while the compile runs, so once the key is no longer a guess this unit
+/// compiles first as well, whether or not it links.
 fn compile_before_key_after_miss(
     deferral_allowed: bool,
     stop_on_hit_allowed: bool,
     owes_rederivation: bool,
+    keyed_first: bool,
 ) -> Option<bool> {
-    (deferral_allowed && stop_on_hit_allowed && owes_rederivation).then_some(true)
+    if !deferral_allowed {
+        return None;
+    }
+    if owes_rederivation {
+        return stop_on_hit_allowed.then_some(true);
+    }
+    keyed_first.then_some(stop_on_hit_allowed)
 }
 
 /// Should this invocation write what it discovered back to the record?
@@ -6519,27 +6889,140 @@ fn rustc_direct_passthrough_with_event(
     Ok(output.exit_code)
 }
 
-fn incremental_passthrough_with_event(
+/// A hit restored a unit's outputs without its incremental state. Count it as
+/// the unit's first build, so the next edit seeds state instead of first
+/// compiling once more without it.
+fn observe_adaptive_hit(
+    unit: Option<&AdaptiveUnit>,
+    fields: Option<&rustc_hash::FxHashMap<String, String>>,
+    cache_key: &str,
+) {
+    match (unit, fields) {
+        (Some(unit), Some(fields)) => {
+            let _ = unit.observe_build(cache_key, fields);
+        }
+        (unit, _) => reset_adaptive_unit(unit),
+    }
+}
+
+fn reset_adaptive_unit(unit: Option<&AdaptiveUnit>) {
+    if let Some(unit) = unit {
+        let _ = unit.reset();
+    }
+}
+
+/// Run a user-facing executable that artifact caching already excludes. An
+/// eligible unit keeps isolated incremental state immediately.
+#[allow(clippy::too_many_arguments)]
+fn intentional_passthrough_with_event<R: Into<String>>(
     config: &Config,
     args: &RustcArgs,
     crate_name: &str,
     root: &str,
     start: std::time::Instant,
+    adaptive_unit: Option<&AdaptiveUnit>,
+    reason: R,
     key_record: KeyEventRecord,
 ) -> Result<i32> {
-    let output = passthrough(args)?;
+    let reason = reason.into();
+    if let Some(lease) = adaptive_unit.and_then(AdaptiveUnit::try_immediate) {
+        return adaptive_incremental_with_event(
+            config,
+            args,
+            crate_name,
+            root,
+            start,
+            lease,
+            format!("adaptive passthrough: {reason}"),
+            None,
+            key_record,
+        );
+    }
+    passthrough_with_event(config, args, crate_name, root, start, reason, key_record)
+}
+
+/// Compile under the private lease; no result enters the artifact cache.
+#[allow(clippy::too_many_arguments)]
+fn adaptive_incremental_with_event<R: Into<String>>(
+    config: &Config,
+    args: &RustcArgs,
+    crate_name: &str,
+    root: &str,
+    start: std::time::Instant,
+    lease: Lease,
+    reason: R,
+    keyed: Option<(&str, u64, FileHashStats, u64)>,
+    key_record: KeyEventRecord,
+) -> Result<i32> {
+    let reason = reason.into();
+    let kind = lease.kind();
+    let compiler_args = lease.compiler_args(args);
+    let permit = adaptive_lane_takes_permit(kind).then(|| {
+        scheduler::begin_keyless_compile(&config.cache_dir, crate_name, args.invokes_linker())
+    });
+    let compile_start = std::time::Instant::now();
+    let compiler =
+        RustcCompiler::new_for(args.invocation_env()).with_base_dirs(config.base_dirs.clone());
+    let rebuilt_package = args.invocation_env().var("CARGO_PKG_NAME").ok();
+    let compile = if kind == crate::incremental_policy::LeaseKind::Immediate {
+        compiler.execute_passthrough_preserving_incremental(args, &compiler_args)
+    } else {
+        compiler.execute_preserving_incremental(args, &compiler_args)
+    };
+    if let (Some(permit), Ok(_)) = (&permit, &compile) {
+        permit.record_compile_rss(crate_name);
+    }
+    drop(permit);
+    let result = match compile {
+        Ok(result) => result,
+        Err(error) => {
+            // rustc never ran, or a pipe failure made kache kill it mid-session.
+            let _ = lease.finish(CompileOutcome::Abnormal);
+            log::warn!("adaptive incremental compiler spawn failed for {crate_name}: {error}");
+            return passthrough_with_event(
+                config,
+                args,
+                crate_name,
+                root,
+                start,
+                format!("adaptive compiler spawn failed: {error}"),
+                key_record,
+            );
+        }
+    };
+    let compile_time_ms = compile_start.elapsed().as_millis() as u64;
+    replay_diagnostics(
+        &result.stdout,
+        result.pending_stderr(),
+        crate::invocation::io::stdout(),
+        crate::invocation::io::stderr(),
+    );
+    after_rustc_exit(result.exit_code, &result.stderr, &args.externs);
+    let outcome = compile_outcome(result.exit_code, result.signaled, &result.stderr);
+    let kept = lease.finish(outcome);
+    log::debug!(
+        "adaptive incremental compiler lease finished; kind={kind:?} outcome={outcome:?} kept={kept}"
+    );
+
+    let (cache_key, key_ms, key_hash_stats, lookup_ms) =
+        keyed.unwrap_or(("", 0, FileHashStats::default(), 0));
     log_event(
         config,
-        EventInputs::passthrough(
+        EventInputs::new(
             root,
             crate_name,
+            EventResult::Passthrough,
             start.elapsed().as_millis() as u64,
-            "incremental compilation".to_string(),
-            &output,
         )
+        .rebuilt(result.exit_code == 0, &result.artifacts, rebuilt_package)
+        .compile_time_ms(compile_time_ms)
+        .keyed(cache_key, key_ms, key_hash_stats)
+        .lookup_ms(lookup_ms)
+        .passthrough_reason(reason)
+        .exit_code(result.exit_code)
         .key_record(key_record),
     );
-    Ok(output.exit_code)
+    Ok(result.exit_code)
 }
 
 /// A deferred C compile: run the compiler with dependency capture, then key

@@ -85,6 +85,10 @@ The check has costs:
 - A crate that reads a file outside the workspace, in a target directory
   other than its `OUT_DIR`, or through a symlinked directory always uses
   dependency discovery.
+- A crate you are editing that already has
+  [incremental](/docs/getting-started/quick-start#incremental-builds) state
+  runs dependency discovery before compiling, because its key decides whether
+  a miss compiles incrementally.
 
 The check does not see:
 
@@ -141,7 +145,10 @@ time cannot tell the two apart: within the same kernel clock tick (1 to 10 ms)
 on Linux, 1 ms on macOS and Windows, 20 ms on other systems, and 2 seconds on file systems
 that keep whole seconds, such as HFS+ and FAT. Peers of the same unit in other
 target directories wait for this compile as they would for a pre-pass.
-Crates with extra inputs keep the pre-pass. For a unit that links, a
+Crates with extra inputs keep the pre-pass. A unit with
+[incremental](/docs/getting-started/quick-start#incremental-builds) state keys
+first too; when it misses and no incremental lane takes the compile, it
+compiles before keying again from the closure the compile emits. For a unit that links, a
 predicted key is first re-derived with the pre-pass, because that compile
 cannot be stopped on a hit.
 

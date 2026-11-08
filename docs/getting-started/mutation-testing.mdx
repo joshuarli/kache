@@ -19,7 +19,7 @@ Cargo's `-C metadata` and `-C extra-filename` hashes enter the key verbatim. For
 ## What hits
 
 - registry crates
-- non-incremental workspace crates no mutant touched, and their proc-macros
+- workspace crates no mutant touched, and their proc-macros
 - test binaries and build-script binaries of those crates (Kache caches executables by default on Linux and macOS; see [Configuration](/docs/getting-started/configuration))
 
 These hit in every build directory, including all of them under `--jobs N`, and again on later runs. When several build directories miss the same key at the same time, one compiles it and the others wait for its entry and restore it.
@@ -28,7 +28,7 @@ These hit in every build directory, including all of them under `--jobs N`, and 
 
 The mutated crate rebuilds, together with every crate downstream of it and their test binaries. A dependent's key includes the content hash of each `--extern` artifact, so a changed rlib changes every key above it.
 
-Cargo passes incremental units straight to rustc with their existing incremental state. Kache caches eligible units that Cargo compiles without incremental state. Set `CARGO_INCREMENTAL=0` before starting cargo-mutants to let eligible workspace units use the artifact cache, or keep Cargo's default to reuse incremental state within each build directory.
+Kache caches workspace units that Cargo builds incrementally, compiling them without Cargo's incremental directory. A crate that cargo-mutants mutates repeatedly in one build directory gets private incremental state there after its second differing build, as described in [Incremental builds](/docs/getting-started/quick-start#incremental-builds).
 
 ## What to expect
 

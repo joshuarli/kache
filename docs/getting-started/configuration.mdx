@@ -270,7 +270,7 @@ links it, so the first checkout still rebuilds it. A `crate:VAR` entry for
 own `OUT_DIR`. A macro that writes debug output into the shared directory fails
 with a hint: run `cargo clean -p <crate>` and rebuild. The hint comes from rustc's error output, so a compile
 that Kache passes straight to rustc fails with rustc's error alone. That covers
-a `bypass_*` or `exclude` match and an incremental compile.
+a `bypass_*` or `exclude` match.
 
 `key_env_vars` accepts exact names and trailing-star prefix patterns:
 

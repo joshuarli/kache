@@ -60,7 +60,15 @@ new key. Explanation needs recorded key material; enable `[cache] explain_miss`
 when collecting builds to compare. See [cache keys](/docs/how-it-works/cache-key)
 and [build-script inputs](/docs/how-it-works/build-scripts).
 
-Cargo's incremental compiles pass through Kache unchanged. See [Incremental builds](/docs/getting-started/quick-start#incremental-builds).
+A unit you are editing can also compile from its private incremental state.
+See [Incremental builds](/docs/getting-started/quick-start#incremental-builds).
+
+## A crate fails only with Kache
+
+If one crate keeps failing with an error that goes away with
+`KACHE_DISABLED=1`, the incremental state Kache keeps for it may be damaged.
+Delete `target/<profile>/incremental.kache-auto` or run `cargo clean`.
+`cargo clean -p` does not remove that directory.
 
 ## Cargo fix cannot write old metadata
 
