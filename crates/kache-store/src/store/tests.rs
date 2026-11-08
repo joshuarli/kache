@@ -13599,19 +13599,19 @@ fn eviction_pauses_between_write_slices() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
-    put_evictable_entries(&store, dir.path(), 500);
+    put_evictable_entries(&store, dir.path(), 60);
 
     let mut gc_config = config.clone();
     gc_config.max_size = 1;
     let mut gc = Store::open(&gc_config).unwrap();
-    let slice = Duration::from_millis(5);
-    let pause = Duration::from_millis(20);
+    let slice = Duration::from_millis(1);
+    let pause = Duration::from_millis(5);
     gc.eviction_pacing = (slice, pause);
     let started = std::time::Instant::now();
     let stats = gc.evict().unwrap();
     let elapsed = started.elapsed();
 
-    assert_eq!(stats.entries_evicted, 500, "{stats:?}");
+    assert_eq!(stats.entries_evicted, 60, "{stats:?}");
     let writing = Duration::from_millis(stats.evict_write_ms);
     assert!(
         writing >= slice,

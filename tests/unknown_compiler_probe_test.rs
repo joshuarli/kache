@@ -42,6 +42,7 @@ fn probe_recovers_when_wrapper_fork_bombs() {
     .arg("-c")
     .arg("foo.c")
     .env("KACHE_CACHE_DIR", dir.path().join("cache"))
+    .env("KACHE_PROBE_TIMEOUT_MS", "150")
     .output()
     .expect("failed to run kache");
 
@@ -74,6 +75,7 @@ fn probe_recovers_when_wrapper_emits_8kb_then_hangs() {
     .arg("-c")
     .arg("foo.c")
     .env("KACHE_CACHE_DIR", dir.path().join("cache"))
+    .env("KACHE_PROBE_TIMEOUT_MS", "150")
     .output()
     .expect("failed to run kache");
 
@@ -111,6 +113,7 @@ fn probe_recovers_when_wrapper_leaves_descendant_on_stdout() {
     .arg("-c")
     .arg("foo.c")
     .env("KACHE_CACHE_DIR", dir.path().join("cache"))
+    .env("KACHE_PROBE_TIMEOUT_MS", "150")
     .output()
     .expect("failed to run kache");
 

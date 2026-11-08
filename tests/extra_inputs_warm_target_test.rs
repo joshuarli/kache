@@ -4,6 +4,7 @@
 use deser_value::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 use tempfile::TempDir;
 
 mod common;
@@ -83,6 +84,16 @@ pub fn declared_value(_input: TokenStream) -> TokenStream {
         .unwrap_or_else(|| panic!("input-reader {dylib_ext} missing in {}", out_dir.display()))
 }
 
+fn shared_input_reader() -> PathBuf {
+    static SCAFFOLDING: OnceLock<(TempDir, PathBuf)> = OnceLock::new();
+    let (_, path) = SCAFFOLDING.get_or_init(|| {
+        let temp = TempDir::new().unwrap();
+        let path = build_input_reader(temp.path());
+        (temp, path)
+    });
+    path.clone()
+}
+
 /// Build a transparent Cargo workspace wrapper that creates `kache.toml` once
 /// immediately before rustc. This makes the absent -> active race deterministic
 /// without timing sleeps or platform-specific shell scripts.
@@ -129,6 +140,44 @@ fn main() {
         String::from_utf8_lossy(&compile.stderr)
     );
     output
+}
+
+struct FixtureProject {
+    dir: TempDir,
+    input: PathBuf,
+}
+
+fn create_fixture_project(prefix: &str, initial_input: &str, extra_inputs_toml: &str) -> FixtureProject {
+    let dir = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir()
+        .unwrap();
+    let member = dir.path().join("app");
+    std::fs::create_dir_all(member.join("src")).unwrap();
+    std::fs::create_dir_all(member.join("data")).unwrap();
+    std::fs::write(
+        dir.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"app\"]\nresolver = \"2\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        member.join("Cargo.toml"),
+        r#"[package]
+name = "extra-input-warm-target"
+version = "0.1.0"
+edition = "2021"
+"#,
+    )
+    .unwrap();
+    std::fs::write(member.join("kache.toml"), extra_inputs_toml).unwrap();
+    std::fs::write(
+        member.join("src/main.rs"),
+        "fn main() { print!(\"{}\", input_reader::declared_value!()); }\n",
+    )
+    .unwrap();
+    let input = member.join("data/declared.txt");
+    std::fs::write(&input, initial_input).unwrap();
+    FixtureProject { dir, input }
 }
 
 fn cargo_build(
@@ -226,18 +275,6 @@ fn run_fixture(target_dir: &Path) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-fn copy_tree(source: &Path, destination: &Path) {
-    std::fs::create_dir_all(destination).unwrap();
-    for entry in std::fs::read_dir(source).unwrap() {
-        let entry = entry.unwrap();
-        let target = destination.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            std::fs::copy(entry.path(), target).unwrap();
-        }
-    }
-}
 
 #[allow(clippy::too_many_arguments)]
 fn exercise_uncached_lane(
@@ -400,8 +437,7 @@ fn declared_extra_input_invalidates_a_real_warm_cargo_target() {
     let target_dir = TempDir::new().unwrap();
     let cache_dir = TempDir::new().unwrap();
     let _daemon = common::DaemonGuard::new(kache_binary(), cache_dir.path());
-    let scaffolding = TempDir::new().unwrap();
-    let input_reader = build_input_reader(scaffolding.path());
+    let input_reader = shared_input_reader();
 
     let member = project.path().join("app");
     std::fs::create_dir_all(member.join("src")).unwrap();
@@ -769,24 +805,29 @@ edition = "2021"
     );
     assert_eq!(run_fixture(restored_target.path()), "v4");
 
+}
+
+#[test]
+fn uncached_lane_preserves_warm_target_freshness() {
+    build_kache();
+    let input_reader = shared_input_reader();
+    let fixture = create_fixture_project("uncached-lane", "v1", "extra_inputs = [\"data/**/*.txt\"]\n");
     exercise_uncached_lane(
-        relocated_project.path(),
-        &relocated_input,
+        fixture.dir.path(),
+        &fixture.input,
         &input_reader,
-        "v4",
-        "v6",
-        &[
-            ("KACHE_CACHE_EXECUTABLES", "0"),
-        ],
+        "v1",
+        "v2",
+        &[("KACHE_CACHE_EXECUTABLES", "0")],
         "passthrough",
         Some("cache_executables=false"),
     );
     exercise_uncached_lane(
-        relocated_project.path(),
-        &relocated_input,
+        fixture.dir.path(),
+        &fixture.input,
         &input_reader,
-        "v6",
-        "v7",
+        "v2",
+        "v3",
         &[
             ("KACHE_CACHE_EXECUTABLES", "0"),
             ("CARGO_INCREMENTAL", "1"),
@@ -794,27 +835,30 @@ edition = "2021"
         "passthrough",
         Some("cache_executables=false"),
     );
-    exercise_workspace_wrapper_lane(
-        relocated_project.path(),
-        &relocated_input,
-        &input_reader,
-        "v7",
-        "v8",
-    );
+}
 
-    // If the wrapper is already running when kache.toml appears, Kache can and
-    // must reject that one invocation. This is separate from the documented
-    // already-Fresh bootstrap case below, where Cargo never invokes a wrapper.
-    let activation_project = tempfile::Builder::new()
-        .prefix("activation-race #workspace")
-        .tempdir()
-        .unwrap();
-    copy_tree(relocated_project.path(), activation_project.path());
-    let activation_member = activation_project.path().join("app");
-    let activation_config = activation_member.join("kache.toml");
-    let activation_input = activation_member.join("data/declared.txt");
+#[test]
+fn workspace_wrapper_lane_preserves_warm_target_freshness() {
+    build_kache();
+    let input_reader = shared_input_reader();
+    let fixture = create_fixture_project("wrapper-lane", "v1", "extra_inputs = [\"data/**/*.txt\"]\n");
+    exercise_workspace_wrapper_lane(
+        fixture.dir.path(),
+        &fixture.input,
+        &input_reader,
+        "v1",
+        "v2",
+    );
+}
+
+#[test]
+fn activating_extra_inputs_during_build_fails_cleanly_for_retry() {
+    build_kache();
+    let input_reader = shared_input_reader();
+    let scaffolding = TempDir::new().unwrap();
+    let fixture = create_fixture_project("activation-race", "v1", "");
+    let activation_config = fixture.dir.path().join("app/kache.toml");
     std::fs::remove_file(&activation_config).unwrap();
-    std::fs::write(&activation_input, "v8").unwrap();
     let activation_target = TempDir::new().unwrap();
     let activation_cache = TempDir::new().unwrap();
     let _activation_daemon = common::DaemonGuard::new(kache_binary(), activation_cache.path());
@@ -826,10 +870,10 @@ edition = "2021"
         (ACTIVATE_CONFIG_ENV, activation_config_text.as_str()),
     ];
     let raced = cargo_build_with_env(
-        activation_project.path(),
+        fixture.dir.path(),
         activation_target.path(),
         activation_cache.path(),
-        &activation_input,
+        &fixture.input,
         &input_reader,
         &activation_env,
     );
@@ -842,59 +886,55 @@ edition = "2021"
     assert!(activation_config.is_file());
 
     let retried = cargo_build_with_env(
-        activation_project.path(),
+        fixture.dir.path(),
         activation_target.path(),
         activation_cache.path(),
-        &activation_input,
+        &fixture.input,
         &input_reader,
         &activation_env,
     );
     assert_build_succeeded(&retried);
-    assert_eq!(run_fixture(activation_target.path()), "v8");
+    assert_eq!(run_fixture(activation_target.path()), "v1");
+}
 
-    // Kache cannot retrofit Cargo's fingerprint when a previously
-    // unconfigured target is already Fresh: Cargo never starts the wrapper.
-    // Prove the documented one-time bootstrap, then prove normal tracking.
-    let bootstrap_project = tempfile::Builder::new()
-        .prefix("bootstrap #workspace")
-        .tempdir()
-        .unwrap();
-    copy_tree(relocated_project.path(), bootstrap_project.path());
-    let bootstrap_member = bootstrap_project.path().join("app");
-    let bootstrap_input = bootstrap_member.join("data/declared.txt");
-    std::fs::remove_file(bootstrap_member.join("kache.toml")).unwrap();
-    std::fs::write(&bootstrap_input, "v8").unwrap();
+#[test]
+fn untracked_fresh_target_bootstraps_extra_inputs_after_clean() {
+    build_kache();
+    let input_reader = shared_input_reader();
+    let fixture = create_fixture_project("bootstrap", "v1", "");
+    let member = fixture.dir.path().join("app");
+    std::fs::remove_file(member.join("kache.toml")).unwrap();
     let bootstrap_target = TempDir::new().unwrap();
     let bootstrap_cache = TempDir::new().unwrap();
     let _bootstrap_daemon = common::DaemonGuard::new(kache_binary(), bootstrap_cache.path());
 
     let pre_upgrade = cargo_build(
-        bootstrap_project.path(),
+        fixture.dir.path(),
         bootstrap_target.path(),
         bootstrap_cache.path(),
-        &bootstrap_input,
+        &fixture.input,
         &input_reader,
     );
     assert_build_succeeded(&pre_upgrade);
-    assert_eq!(run_fixture(bootstrap_target.path()), "v8");
+    assert_eq!(run_fixture(bootstrap_target.path()), "v1");
     let pre_upgrade_events = fixture_event_count(bootstrap_cache.path());
 
     std::fs::write(
-        bootstrap_member.join("kache.toml"),
+        member.join("kache.toml"),
         "extra_inputs = [\"data/**/*.txt\"]\n",
     )
     .unwrap();
-    std::fs::write(&bootstrap_input, "v9").unwrap();
+    std::fs::write(&fixture.input, "v2").unwrap();
     let still_fresh = cargo_build(
-        bootstrap_project.path(),
+        fixture.dir.path(),
         bootstrap_target.path(),
         bootstrap_cache.path(),
-        &bootstrap_input,
+        &fixture.input,
         &input_reader,
     );
     assert_build_succeeded(&still_fresh);
     assert!(cargo_reported_fixture_fresh(&still_fresh));
-    assert_eq!(run_fixture(bootstrap_target.path()), "v8");
+    assert_eq!(run_fixture(bootstrap_target.path()), "v1");
     assert_eq!(
         fixture_event_count(bootstrap_cache.path()),
         pre_upgrade_events,
@@ -903,7 +943,7 @@ edition = "2021"
 
     let clean = Command::new("cargo")
         .args(["clean", "--package", "extra-input-warm-target"])
-        .current_dir(bootstrap_project.path())
+        .current_dir(fixture.dir.path())
         .env("CARGO_TARGET_DIR", bootstrap_target.path())
         .env_remove("RUSTC_WRAPPER")
         .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
@@ -916,25 +956,25 @@ edition = "2021"
         String::from_utf8_lossy(&clean.stderr)
     );
     let bootstrapped = cargo_build(
-        bootstrap_project.path(),
+        fixture.dir.path(),
         bootstrap_target.path(),
         bootstrap_cache.path(),
-        &bootstrap_input,
+        &fixture.input,
         &input_reader,
     );
     assert_build_succeeded(&bootstrapped);
-    assert_eq!(run_fixture(bootstrap_target.path()), "v9");
+    assert_eq!(run_fixture(bootstrap_target.path()), "v2");
 
     let bootstrapped_events = fixture_event_count(bootstrap_cache.path());
-    std::fs::write(&bootstrap_input, "v10").unwrap();
+    std::fs::write(&fixture.input, "v3").unwrap();
     let tracked_after_bootstrap = cargo_build(
-        bootstrap_project.path(),
+        fixture.dir.path(),
         bootstrap_target.path(),
         bootstrap_cache.path(),
-        &bootstrap_input,
+        &fixture.input,
         &input_reader,
     );
     assert_build_succeeded(&tracked_after_bootstrap);
     assert!(fixture_event_count(bootstrap_cache.path()) > bootstrapped_events);
-    assert_eq!(run_fixture(bootstrap_target.path()), "v10");
+    assert_eq!(run_fixture(bootstrap_target.path()), "v3");
 }

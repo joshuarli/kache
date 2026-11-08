@@ -24,7 +24,7 @@ hit() { grep -q 'cc local cache hit' "$1" || fail "expected cache hit in $1"; }
 # Kache does not store a compile that starts within one stamp window of a
 # write to its inputs: 1 ms on Linux, macOS and Windows, 20 ms elsewhere, and about
 # two seconds where stamps keep whole seconds.
-settle() { sleep 2.1; }
+settle() { sleep 0.05; }
 
 case "$issue" in
 1459)

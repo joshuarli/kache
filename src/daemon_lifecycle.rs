@@ -42,9 +42,15 @@ fn ensured_after_replacement(
     }
 }
 
+fn daemon_start_timeout() -> Duration {
+    std::env::var("KACHE_TEST_DAEMON_START_TIMEOUT_MS")
+        .ok()
+        .and_then(|ms| ms.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(DAEMON_START_TIMEOUT)
+}
+
 pub(super) fn ensure_outcome(config: &Config, force: bool) -> Result<Ensured> {
-    // Fail before starting a daemon that could never bind its sockets. The
-    // control endpoint's path is derived from the socket's, so check both.
     for socket in [
         config.socket_path(),
         super::lifecycle_control::endpoint(config),
@@ -53,7 +59,8 @@ pub(super) fn ensure_outcome(config: &Config, force: bool) -> Result<Ensured> {
             anyhow::bail!(problem);
         }
     }
-    let deadline = Instant::now() + DAEMON_START_TIMEOUT;
+    let start_timeout = daemon_start_timeout();
+    let deadline = Instant::now() + start_timeout;
     if !force && let Some(health) = current(config, deadline)? {
         return Ok(Ensured::AlreadyRunning(
             (!health.version.is_empty()).then_some(health.version),
@@ -80,7 +87,7 @@ pub(super) fn ensure_outcome(config: &Config, force: bool) -> Result<Ensured> {
         &lock,
         Mode::Exclusive,
         Budgets {
-            setup: DAEMON_START_TIMEOUT,
+            setup: start_timeout,
             drain: Some(Duration::from_secs(35)),
         },
         &mut driver,
@@ -292,7 +299,7 @@ impl Driver for KacheReplacement<'_> {
                     use kunobi_daemon::readiness::channel::{NotReady, Signaled, SignaledError};
                     use kunobi_daemon::selection::{Budget, Selection, await_selection};
                     let mut evidence =
-                        Signaled::new(ReadinessProbe(config), channel, DAEMON_START_TIMEOUT);
+                        Signaled::new(ReadinessProbe(config), channel, daemon_start_timeout());
                     match await_selection(
                         Budget {
                             commit: deadline.saturating_duration_since(Instant::now()),

@@ -8,7 +8,6 @@
 use deser_value::Value;
 use std::path::Path;
 use std::process::{Command, Output};
-use std::time::Duration;
 use tempfile::TempDir;
 
 mod common;
@@ -173,10 +172,12 @@ fn restored_depinfo_tracks_the_consuming_worktree() {
         "consumer-rooted dep-info should let Cargo keep an unchanged unit Fresh"
     );
 
-    // Ensure Cargo's mtime freshness check can observe the edit even on
-    // filesystems with coarse timestamp granularity.
-    std::thread::sleep(Duration::from_millis(1100));
-    std::fs::write(workspace_a.join("shared/asset.txt"), "bravo").unwrap();
+    let asset = workspace_a.join("shared/asset.txt");
+    std::fs::write(&asset, "bravo").unwrap();
+    let later = filetime::FileTime::from_system_time(
+        std::time::SystemTime::now() + std::time::Duration::from_secs(2),
+    );
+    filetime::set_file_mtime(&asset, later).unwrap();
 
     let changed = cargo_build(&workspace_a, &target_a, &cache);
     assert_build_succeeded(&changed);

@@ -2646,7 +2646,7 @@ fn test_send_request_to_nonexistent_socket() {
     let socket_path = dir.path().join("nonexistent.sock");
 
     let req = Request::Gc(GcRequest::automatic(0));
-    let result = send_request_with_timeout(&socket_path, &req, Duration::from_secs(30));
+    let result = send_request_with_timeout(&socket_path, &req, Duration::from_millis(100));
     assert!(result.is_err());
 }
 

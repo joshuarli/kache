@@ -2067,7 +2067,7 @@ fn init_waits_for_a_new_service_and_rejects_failed_startup() {
 case " $* " in
   *" bootstrap "*|*" enable "*)
     if [ "$KACHE_TEST_START_FAILS" = 0 ]; then
-      (sleep 1.5; "$KACHE_TEST_BIN" daemon run) >/dev/null 2>&1 &
+      (sleep 0.2; "$KACHE_TEST_BIN" daemon run) >/dev/null 2>&1 &
     fi
     ;;
 esac
@@ -2092,6 +2092,10 @@ exit 0
             .env("PATH", path)
             .env("KACHE_TEST_BIN", kache_bin())
             .env("KACHE_TEST_START_FAILS", if fails { "1" } else { "0" })
+            .env(
+                "KACHE_TEST_DAEMON_START_TIMEOUT_MS",
+                if fails { "200" } else { "4000" },
+            )
             .timeout(std::time::Duration::from_secs(30))
             .output()
             .unwrap();

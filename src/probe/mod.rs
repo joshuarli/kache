@@ -362,7 +362,12 @@ fn run_family_probe_for(program: &str, env: &InvocationEnv) -> Result<Option<Pro
         }
         let _ = tx.send(buf);
     });
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let probe_timeout = std::env::var("KACHE_PROBE_TIMEOUT_MS")
+        .ok()
+        .and_then(|ms| ms.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_secs(5));
+    let deadline = Instant::now() + probe_timeout;
     let output = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
     if output.is_err() {
         let _ = child.kill();
