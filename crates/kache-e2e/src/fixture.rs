@@ -112,6 +112,12 @@ pub struct Fixture {
     #[deser(default)]
     pub check_depinfo: bool,
 
+    /// The verify command inspects an artifact Kache itself produces (a
+    /// baked `.dSYM`, say), which a build with the cache disabled cannot
+    /// have. Such a fixture has no uncached reference to compare against.
+    #[deser(default)]
+    pub verify_inspects_kache_artifacts: bool,
+
     /// External executables that must be on `PATH` for this fixture to
     /// run. If any is missing the harness SKIPS the fixture (status
     /// `"skip"`) rather than failing it — for fixtures that exercise an

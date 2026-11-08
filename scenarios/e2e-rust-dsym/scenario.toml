@@ -27,6 +27,10 @@ tags = ["suite:e2e", "lang:rust", "case:dsym"]
 os = ["macos"]
 requires = ["dsymutil", "dwarfdump"]
 
+# verify-dsym.sh inspects the bundle Kache bakes at store time; a build with
+# the cache disabled has none, so there is no uncached reference.
+verify_inspects_kache_artifacts = true
+
 [source]
 kind = "fixture"
 path = "source"

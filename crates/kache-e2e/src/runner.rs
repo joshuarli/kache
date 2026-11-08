@@ -15,6 +15,7 @@
 
 use anyhow::{Context, Result};
 use std::borrow::Cow;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
@@ -128,10 +129,32 @@ pub fn run_fixture(fixture: &Fixture, kache_path: &Path) -> Result<FixtureResult
     // here so the in-place phases (cold/warm/noop) stay simple and the
     // relocate-specific dir lifecycle doesn't leak into them.
     let phases = [Phase::Cold, Phase::Warm, Phase::Noop];
-    let mut phase_results = Vec::with_capacity(phases.len() + 2);
+    let mut phase_results = Vec::with_capacity(phases.len() + 3);
+    let reference_spec = fixture
+        .verify
+        .as_ref()
+        .filter(|_| !fixture.verify_inspects_kache_artifacts);
+    let reference = match reference_spec {
+        Some(spec) => {
+            let (outcome, result) = run_reference(fixture, spec)?;
+            let failed = result.status == "fail";
+            phase_results.push(result);
+            if failed {
+                daemon::stop(kache_path, cache_dir.path());
+                return Ok(FixtureResult {
+                    name: fixture.name.clone(),
+                    status: fixture_status(&phase_results),
+                    skip_reason: None,
+                    phases: phase_results,
+                });
+            }
+            outcome
+        }
+        None => None,
+    };
     let mut short_circuit = false;
     for phase in phases {
-        let (result, post) = run_phase(
+        let (mut result, post) = run_phase(
             phase,
             fixture,
             &fixture.dir,
@@ -144,6 +167,13 @@ pub fn run_fixture(fixture: &Fixture, kache_path: &Path) -> Result<FixtureResult
         if let Some((s, c)) = post {
             prev_summary = s;
             prev_event_count = c;
+        }
+        if let (Some(reference), Some(verify)) = (&reference, &result.verify) {
+            let check = reference.compare(verify);
+            if !check.passed {
+                result.status = "fail".to_string();
+            }
+            result.assertions.push(check);
         }
         let failed = result.status == "fail";
         phase_results.push(result);
@@ -177,7 +207,7 @@ pub fn run_fixture(fixture: &Fixture, kache_path: &Path) -> Result<FixtureResult
                     fixture,
                     &fixture.dir,
                     cache_dir.path(),
-                    None,
+                    &[],
                 );
 
                 let (mut result, post) = run_phase(
@@ -319,6 +349,116 @@ pub fn run_fixture(fixture: &Fixture, kache_path: &Path) -> Result<FixtureResult
         skip_reason: None,
         phases: phase_results,
     })
+}
+
+/// What the fixture's verify command observed after a build with the cache
+/// disabled. A cache phase in the same tree must observe exactly this.
+#[derive(Debug)]
+struct ReferenceObservation {
+    exit_code: i32,
+    stdout: String,
+}
+
+impl ReferenceObservation {
+    fn compare(&self, observed: &VerifyResult) -> AssertionCheck {
+        let matches = observed.exit_code == self.exit_code && observed.stdout == self.stdout;
+        AssertionCheck {
+            name: "verify_matches_reference",
+            expected: format!("exit {} stdout {:?}", self.exit_code, self.stdout),
+            actual: format!("exit {} stdout {:?}", observed.exit_code, observed.stdout),
+            passed: matches,
+        }
+    }
+}
+
+/// Build the fixture in place with `KACHE_DISABLED=1` against a private
+/// cache directory, then run its verify command without the binary path
+/// scans, which check Kache's own path remapping. `KACHE_DISABLED` makes every
+/// wrapper exec the real compiler with Cargo's or the build system's own
+/// arguments, so the cache phases that follow are judged against what the
+/// toolchain produces without Kache. The cold phase cleans the tree first,
+/// so nothing built here is reused.
+fn run_reference(
+    fixture: &Fixture,
+    spec: &Verify,
+) -> Result<(Option<ReferenceObservation>, PhaseResult)> {
+    let reference_cache = TempDir::new().context("creating reference cache dir")?;
+    let disabled: &[(&str, &OsStr)] = &[("KACHE_DISABLED", OsStr::new("1"))];
+    let mut result = PhaseResult {
+        phase: "reference".to_string(),
+        status: "fail".to_string(),
+        build_wall_s: 0,
+        build_exit_code: -1,
+        verify: None,
+        kache_report: deser_value::value!({}),
+        measurements: Vec::new(),
+        assertions: Vec::new(),
+    };
+    let clean = run_step(
+        &fixture.commands.clean,
+        fixture,
+        &fixture.dir,
+        reference_cache.path(),
+        disabled,
+    )?;
+    if !clean.exit.success() {
+        result.assertions.push(AssertionCheck {
+            name: "clean_step",
+            expected: "exit 0".to_string(),
+            actual: format!("exit {}", clean.exit.code().unwrap_or(1)),
+            passed: false,
+        });
+        return Ok((None, result));
+    }
+    let started = Instant::now();
+    let build = run_step(
+        &fixture.commands.build,
+        fixture,
+        &fixture.dir,
+        reference_cache.path(),
+        disabled,
+    )?;
+    result.build_wall_s = started.elapsed().as_secs();
+    result.build_exit_code = build.exit.code().unwrap_or(1);
+    if !build.exit.success() {
+        result.assertions.push(AssertionCheck {
+            name: "build_exit_code",
+            expected: "0".to_string(),
+            actual: result.build_exit_code.to_string(),
+            passed: false,
+        });
+        return Ok((None, result));
+    }
+    let toolchain_contract = Verify {
+        forbidden_substrings: Vec::new(),
+        required_substrings: Vec::new(),
+        required_substrings_linux: Vec::new(),
+        ..spec.clone()
+    };
+    let verify = run_verify(
+        &toolchain_contract,
+        fixture,
+        &fixture.dir,
+        reference_cache.path(),
+    );
+    result.assertions.push(AssertionCheck {
+        name: "verify",
+        expected: "artifact runs and stdout matches".to_string(),
+        actual: verify
+            .failure_reason
+            .clone()
+            .unwrap_or_else(|| "ok".to_string()),
+        passed: verify.passed,
+    });
+    let observation = verify.passed.then(|| ReferenceObservation {
+        exit_code: verify.exit_code,
+        stdout: verify.stdout.clone(),
+    });
+    if verify.passed {
+        result.status = "pass".to_string();
+    }
+    result.verify = Some(verify);
+    Ok((observation, result))
 }
 
 /// The directory holding a fixture's per-phase `keytrace-<phase>.log` files.
@@ -553,7 +693,7 @@ fn differential_relocate_check(
         ("relocate_diff_clean", &fixture.commands.clean),
         ("relocate_diff_build", &fixture.commands.build),
     ] {
-        let failure = match run_step(cmd, fixture, relocated, fresh_cache.path(), None) {
+        let failure = match run_step(cmd, fixture, relocated, fresh_cache.path(), &[]) {
             Ok(s) if s.exit.success() => None,
             Ok(s) => Some(format!("exit {}", s.exit.code().unwrap_or(1))),
             Err(e) => Some(format!("{e:?}")),
@@ -648,7 +788,7 @@ fn run_phase(
     diff_baseline: &mut std::collections::HashMap<String, Vec<u8>>,
 ) -> Result<(PhaseResult, Option<(crate::report::ReportSummary, usize)>)> {
     if phase.cleans_first() {
-        let status = run_step(&fixture.commands.clean, fixture, cwd, cache_dir, None)?;
+        let status = run_step(&fixture.commands.clean, fixture, cwd, cache_dir, &[])?;
         if !status.exit.success() {
             // Clean failures are unusual but not crashes; record as a
             // failed phase with build_wall_s=0 so consumers see what
@@ -687,13 +827,14 @@ fn run_phase(
         let _ = std::fs::create_dir_all(&kt_dir);
         kt_dir.join(format!("keytrace-{}.log", phase.name()))
     });
-    let build = run_step(
-        &fixture.commands.build,
-        fixture,
-        cwd,
-        cache_dir,
-        keytrace.as_deref(),
-    )?;
+    let keytrace_env: Vec<(&str, &OsStr)> = match &keytrace {
+        Some(path) => vec![
+            ("KACHE_LOG_FILE", OsStr::new("kache::cache_key=trace,kache=warn")),
+            ("KACHE_LOG_FILE_PATH", path.as_os_str()),
+        ],
+        None => Vec::new(),
+    };
+    let build = run_step(&fixture.commands.build, fixture, cwd, cache_dir, &keytrace_env)?;
     let build_wall_s = started.elapsed().as_secs();
     let build_exit_code = build.exit.code().unwrap_or(1);
     if fixture.daemon {
@@ -987,7 +1128,7 @@ fn run_step(
     fixture: &Fixture,
     cwd: &Path,
     cache_dir: &Path,
-    keytrace: Option<&Path>,
+    harness_env: &[(&str, &OsStr)],
 ) -> Result<StepOutcome> {
     let mut command = Command::new("sh");
     command
@@ -995,16 +1136,8 @@ fn run_step(
         .arg(cmd)
         .current_dir(cwd)
         .env("KACHE_CACHE_DIR", cache_dir)
-        .envs(&fixture.env);
-    // Capture every cache-key field to a per-phase file so a convergence
-    // failure can be diagnosed offline (see `report_key_divergence`). cargo
-    // swallows wrapper stderr, so the trace must go to a file. Set AFTER
-    // `fixture.env` so a scenario can't accidentally clobber it.
-    if let Some(path) = keytrace {
-        command
-            .env("KACHE_LOG_FILE", "kache::cache_key=trace,kache=warn")
-            .env("KACHE_LOG_FILE_PATH", path);
-    }
+        .envs(&fixture.env)
+        .envs(harness_env.iter().copied());
     let output = command
         .output()
         .with_context(|| format!("spawning `{cmd}` in {}", cwd.display()))?;
@@ -1329,7 +1462,7 @@ fn inspect_restored_depinfo(root: &Path) -> Option<String> {
 mod tests {
     use super::{
         KeytraceFields, artifact_candidates, inspect_restored_depinfo, key_divergence_report,
-        keytrace_dir, parse_keytrace, render_key_divergence, resolve_artifact,
+        VerifyResult, keytrace_dir, parse_keytrace, render_key_divergence, resolve_artifact,
     };
     use crate::phase::Phase;
     use std::path::{Path, PathBuf};
@@ -1560,6 +1693,7 @@ mod tests {
             modify: None,
             negative_control_exempt: false,
             check_depinfo: false,
+            verify_inspects_kache_artifacts: false,
             requires: Vec::new(),
             compiler_shims,
             daemon: false,
@@ -1586,6 +1720,72 @@ mod tests {
             expected_stdout_contains: stdout.iter().map(|s| s.to_string()).collect(),
         });
         fixture
+    }
+
+    fn reference_fixture(dir: &Path, build: &str) -> crate::fixture::Fixture {
+        let mut fixture = dummy_shim_fixture(false);
+        fixture.dir = dir.to_path_buf();
+        fixture.commands.build = build.into();
+        fixture.commands.clean = "rm -f app".into();
+        fixture.verify = Some(crate::fixture::Verify {
+            run: "./app".into(),
+            expected_exit_code: 0,
+            expected_stdout_contains: vec!["disabled=".into()],
+            timeout_s: 30,
+            forbidden_substrings: vec!["echo".into()],
+            required_substrings: Vec::new(),
+            required_substrings_linux: Vec::new(),
+        });
+        fixture
+    }
+
+    fn observed(exit_code: i32, stdout: &str) -> VerifyResult {
+        VerifyResult {
+            exit_code,
+            stdout: stdout.into(),
+            passed: true,
+            failure_reason: None,
+        }
+    }
+
+    #[test]
+    fn reference_builds_with_the_cache_disabled_and_rejects_a_divergent_phase() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = reference_fixture(
+            dir.path(),
+            r#"printf 'echo disabled=%s\n' "$KACHE_DISABLED" > app && chmod +x app"#,
+        );
+        let (observation, result) =
+            super::run_reference(&fixture, fixture.verify.as_ref().unwrap()).unwrap();
+        assert_eq!(result.phase, "reference");
+        assert_eq!(result.status, "pass", "{:?}", result.assertions);
+        let observation = observation.expect("a passing reference records its observation");
+        assert_eq!(observation.stdout, "disabled=1\n");
+
+        assert!(observation.compare(&observed(0, "disabled=1\n")).passed);
+        let divergent = observation.compare(&observed(0, "disabled=1\nextra\n"));
+        assert_eq!(divergent.name, "verify_matches_reference");
+        assert!(!divergent.passed);
+        assert!(!observation.compare(&observed(1, "disabled=1\n")).passed);
+    }
+
+    #[test]
+    fn reference_that_misses_the_fixture_contract_fails_before_any_cache_phase() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut fixture =
+            reference_fixture(dir.path(), "printf 'echo wrong\\n' > app && chmod +x app");
+        let (observation, result) =
+            super::run_reference(&fixture, fixture.verify.as_ref().unwrap()).unwrap();
+        assert!(observation.is_none());
+        assert_eq!(result.status, "fail");
+        assert!(result.assertions.iter().any(|c| c.name == "verify" && !c.passed));
+
+        fixture.commands.build = "exit 3".into();
+        let (observation, result) =
+            super::run_reference(&fixture, fixture.verify.as_ref().unwrap()).unwrap();
+        assert!(observation.is_none());
+        assert_eq!(result.status, "fail");
+        assert_eq!(result.build_exit_code, 3);
     }
 
     #[test]
