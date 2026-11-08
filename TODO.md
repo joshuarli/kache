@@ -10,15 +10,6 @@ Next: 24
 - **Fix with:** none
 - **Effort:** M
 
-### KACH-20 · P3 · Removed miss diagnostics still advertised and half-present
-
-- **Area:** Dead code
-- **Where:** `src/wrapper.rs:7075`, `src/wrapper.rs:7212`, `src/wrapper.rs:2441`, `src/cli.rs:1777`, `src/cli/miss_diagnosis.rs:54`, `src/miss_chain.rs`, `docs/commands/reference.mdx:224`, `docs/commands/reference.mdx:241`, `docs/commands/reference.mdx:251`, `docs/how-it-works/cache-key.mdx:228`, `docs/getting-started/quick-start.mdx:68`, `docs/getting-started/troubleshooting.mdx:59`
-- **Problem:** e5d57ab removed `explain_miss` ("no miss diagnostics") by turning its gates into `if true`/`if false`, so key-group digests, extern digests, unit ids and env-dependency hashes are never recorded. `kache explain` still prints "set explain_miss = true under [cache], then rebuild" for every miss, and six doc passages describe the checkout comparison, dependency cascade and env hints as available behind that setting. A config file with `explain_miss = true` is accepted silently and changes nothing. About 2.4k lines of `miss_chain` analyze only events written by older versions. The `if false` around `arm_too_new_guard` is the same leftover from the removed input guard.
-- **Recommendation:** Delete the neutered branches, the recording plumbing they guard, the `dependency_chain`/`checkout_comparison`/hint output and `miss_chain`, and the doc passages; surface the JSON output change.
-- **Fix with:** delete
-- **Effort:** M
-
 ### KACH-22 · P3 · Changed-line mutation testing runs in no gate
 
 - **Area:** Tests
