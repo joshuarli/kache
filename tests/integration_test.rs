@@ -3627,6 +3627,76 @@ fn workspace_wrapper_passthrough_executes_every_time() {
     );
 }
 
+fn link_and_run_value(project: &Path) -> String {
+    let link = Command::new("cc")
+        .args(["foo.o", "-o", "app"])
+        .current_dir(project)
+        .output()
+        .expect("failed to run cc");
+    assert!(
+        link.status.success(),
+        "link failed: {}",
+        String::from_utf8_lossy(&link.stderr)
+    );
+    let run = Command::new(project.join("app")).output().expect("failed to run app");
+    assert!(run.status.success());
+    String::from_utf8(run.stdout).unwrap()
+}
+
+/// A header that appears in an earlier include directory, a reordered
+/// search path, and a same-length header edit that keeps its mtime each
+/// change what the compiler reads. The object a hit restores must behave
+/// like a fresh compile of the current tree in every case.
+#[test]
+fn test_cc_hit_follows_include_shadowing_search_order_and_same_length_edits() {
+    build_kache();
+
+    let project = TempDir::new().unwrap();
+    let cache_dir = TempDir::new().unwrap();
+    let _cache_dir_daemon = common::DaemonGuard::new(kache_binary(), cache_dir.path());
+    let root = project.path();
+    std::fs::create_dir_all(root.join("a")).unwrap();
+    std::fs::create_dir_all(root.join("b")).unwrap();
+    std::fs::write(root.join("b/value.h"), "#define VALUE 7\n").unwrap();
+    std::fs::write(
+        root.join("foo.c"),
+        "#include <stdio.h>\n#include \"value.h\"\nint main(void) { printf(\"%d\\n\", VALUE); return 0; }\n",
+    )
+    .unwrap();
+    let a_first = ["cc", "-O0", "-g0", "-Ia", "-Ib", "-c", "foo.c", "-o", "foo.o"];
+    let b_first = ["cc", "-O0", "-g0", "-Ib", "-Ia", "-c", "foo.c", "-o", "foo.o"];
+    let rebuild = |args: &[&str]| {
+        let _ = std::fs::remove_file(root.join("foo.o"));
+        run_kache_cc(root, cache_dir.path(), args);
+        link_and_run_value(root)
+    };
+
+    assert_eq!(rebuild(&a_first), "7\n");
+    assert_eq!(rebuild(&a_first), "7\n");
+    assert_last_cc_event(&kache_report(cache_dir.path()), "local_hit", 0);
+
+    std::fs::write(root.join("a/value.h"), "#define VALUE 9\n").unwrap();
+    assert_eq!(rebuild(&a_first), "9\n");
+    assert_last_cc_event(&kache_report(cache_dir.path()), "miss", 1);
+
+    assert_eq!(rebuild(&b_first), "7\n");
+
+    let header = root.join("b/value.h");
+    let modified = std::fs::metadata(&header).unwrap().modified().unwrap();
+    std::fs::write(&header, "#define VALUE 8\n").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&header)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    assert_eq!(rebuild(&b_first), "8\n");
+    assert_last_cc_event(&kache_report(cache_dir.path()), "miss", 1);
+
+    std::fs::remove_file(root.join("a/value.h")).unwrap();
+    assert_eq!(rebuild(&a_first), "8\n");
+}
+
 /// Without a memo the key comes from what the compile read, so a cold
 /// object costs one compiler run and no preprocess; the memo it leaves
 /// makes the next build a hit, and a changed header a miss.
