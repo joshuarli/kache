@@ -632,9 +632,37 @@ fn link_arg_value(directive: &str) -> Option<&str> {
 fn push_link_arg(flag: &str, paths: &mut Vec<String>) {
     if flag.starts_with("-L") {
         push_link_flags(flag, paths);
+    } else if let Some(path) = strip_rpath_flag(flag) {
+        if !path.is_empty() {
+            paths.push(path.to_string());
+        }
+    } else if let Some(path) = flag
+        .strip_prefix("-Wl,")
+        .filter(|path| Path::new(path).is_absolute())
+    {
+        paths.push(path.to_string());
     } else if Path::new(flag).is_absolute() {
         paths.push(flag.to_string());
     }
+}
+
+fn strip_rpath_flag(flag: &str) -> Option<&str> {
+    let rest = flag.strip_prefix("-Wl,").unwrap_or(flag);
+    if let Some(path) = rest
+        .strip_prefix("-rpath,")
+        .or_else(|| rest.strip_prefix("-rpath="))
+        .or_else(|| rest.strip_prefix("-R,"))
+        .or_else(|| rest.strip_prefix("-R="))
+    {
+        return Some(path);
+    }
+    if let Some(rest) = rest.strip_prefix("-rpath").or_else(|| rest.strip_prefix("-R")) {
+        let trimmed = rest.trim_start();
+        if trimmed.len() < rest.len() {
+            return Some(trimmed);
+        }
+    }
+    None
 }
 
 fn push_link_flags(flags: &str, paths: &mut Vec<String>) {
@@ -832,6 +860,38 @@ mod tests {
         assert_eq!(
             paths(&format!("cargo:rustc-link-arg={archive}\n")),
             vec![archive.to_string()]
+        );
+        assert_eq!(
+            paths("cargo:rustc-link-arg=-Wl,-rpath,/t/g\n"),
+            vec!["/t/g".to_string()]
+        );
+        assert_eq!(
+            paths("cargo:rustc-link-arg=-Wl,-rpath=/t/g\n"),
+            vec!["/t/g".to_string()]
+        );
+        assert_eq!(
+            paths("cargo:rustc-link-arg=-Wl,-R,/t/g\n"),
+            vec!["/t/g".to_string()]
+        );
+        assert_eq!(
+            paths("cargo:rustc-link-arg=-Wl,-R=/t/g\n"),
+            vec!["/t/g".to_string()]
+        );
+        assert_eq!(
+            paths("cargo:rustc-link-arg=-rpath /t/g\n"),
+            vec!["/t/g".to_string()]
+        );
+        assert_eq!(
+            paths("cargo:rustc-link-arg=-rpath,/t/g\n"),
+            vec!["/t/g".to_string()]
+        );
+        assert_eq!(
+            paths("cargo:rustc-link-arg=-rpath=/t/g\n"),
+            vec!["/t/g".to_string()]
+        );
+        assert_eq!(
+            paths("cargo:rustc-link-arg=-Wl,/t/g\n"),
+            vec!["/t/g".to_string()]
         );
         assert!(paths("cargo:rustc-link-arg=-lfoo\n").is_empty());
         assert!(paths("cargo:rustc-link-arg=libfoo.a\n").is_empty());

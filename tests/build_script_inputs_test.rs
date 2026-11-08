@@ -61,6 +61,15 @@ fn main() {
         "relative" => PathBuf::from("../a/src"),
         "file" => directory.join("lib.rs"),
         "directory" => directory.clone(),
+        "manifest_rpath" => {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", manifest.join("lib").display());
+            PathBuf::from("../a/src")
+        }
+        "outside_rpath" => {
+            let outside = manifest.parent().unwrap().parent().unwrap().join("deps/release/lib");
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", outside.display());
+            PathBuf::from("../a/src")
+        }
         _ => panic!("unknown declaration mode"),
     };
     println!("cargo:rerun-if-changed={}", declared.display());
@@ -170,6 +179,42 @@ fn check_declarations(mode: &str) {
     let target = root.join("t3");
     build(&second, &target, &cache, mode);
     assert_current(&target);
+
+    if mode.ends_with("_rpath") {
+        let first_str = first.to_string_lossy();
+        let second_str = second.to_string_lossy();
+        let t1_stdout = find_build_script_stdout(&root.join("t1"));
+        assert!(t1_stdout.contains(&*first_str), "t1 stdout must contain first checkout path: {t1_stdout}");
+        assert!(!t1_stdout.contains(&*second_str), "t1 stdout must not contain second checkout path: {t1_stdout}");
+
+        let t2_stdout = find_build_script_stdout(&root.join("t2"));
+        assert!(t2_stdout.contains(&*first_str), "t2 stdout must contain first checkout path: {t2_stdout}");
+        assert!(!t2_stdout.contains(&*second_str), "t2 stdout must not contain second checkout path: {t2_stdout}");
+
+        let t3_stdout = find_build_script_stdout(&target);
+        assert!(t3_stdout.contains(&*second_str), "t3 stdout must contain second checkout path: {t3_stdout}");
+        assert!(!t3_stdout.contains(&*first_str), "t3 stdout must not contain first checkout path: {t3_stdout}");
+    }
+}
+
+fn find_build_script_stdout(target: &Path) -> String {
+    let mut stack = vec![target.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if (path.file_name() == Some(std::ffi::OsStr::new("stdout"))
+                || path.file_name() == Some(std::ffi::OsStr::new("output")))
+                && let Ok(text) = std::fs::read_to_string(&path)
+                && text.contains("-Wl,-rpath,")
+            {
+                return text;
+            }
+        }
+    }
+    panic!("build-script stdout containing -Wl,-rpath, not found in {}", target.display());
 }
 
 #[test]
@@ -185,4 +230,14 @@ fn absolute_file_declarations_do_not_replay_another_checkouts_inputs() {
 #[test]
 fn relative_directory_declarations_follow_the_current_checkout() {
     check_declarations("relative");
+}
+
+#[test]
+fn manifest_rpath_link_args_follow_the_current_checkout() {
+    check_declarations("manifest_rpath");
+}
+
+#[test]
+fn unmapped_rpath_link_args_do_not_replay_another_checkouts_paths() {
+    check_declarations("outside_rpath");
 }

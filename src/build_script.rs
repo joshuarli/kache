@@ -1037,6 +1037,9 @@ impl Environment {
             let contents = std::fs::read(&path)?;
             let spelled = self.spelled_roots(&contents);
             if spelled.is_empty() {
+                if has_unmapped_absolute_path(&contents) {
+                    embedded.insert(MANIFEST_DIR_PLACEHOLDER);
+                }
                 stored.push((path, name));
                 continue;
             }
@@ -1077,6 +1080,7 @@ impl Environment {
     }
 }
 
+const MANIFEST_DIR_PLACEHOLDER: &str = "${KACHE_MANIFEST_DIR}";
 const BASE_DIR_PLACEHOLDER: &str = "${KACHE_BASE_DIR}";
 const TARGET_DIR_PLACEHOLDER: &str = "${KACHE_TARGET_DIR}";
 
@@ -1226,6 +1230,109 @@ fn only_placeholder_paths(text: &[u8]) -> bool {
         }
     }
     true
+}
+
+fn is_system_path(candidate: &[u8]) -> bool {
+    #[cfg(unix)]
+    {
+        const SYSTEM_PREFIXES: &[&[u8]] = &[
+            b"/usr/lib",
+            b"/usr/include",
+            b"/usr/share",
+            b"/lib/",
+            b"/lib64/",
+            b"/lib32/",
+            b"/System/",
+            b"/Library/",
+        ];
+        for prefix in SYSTEM_PREFIXES {
+            if candidate.starts_with(prefix) {
+                return true;
+            }
+        }
+        if candidate.starts_with(b"/usr/")
+            && !candidate.starts_with(b"/usr/local/Cellar")
+            && !candidate.starts_with(b"/usr/local/Caskroom")
+            && !candidate.starts_with(b"/usr/src")
+        {
+            return true;
+        }
+    }
+    #[cfg(windows)]
+    {
+        const WINDOWS_SYSTEM_PREFIXES: &[&[u8]] = &[
+            b"C:\\Windows\\",
+            b"C:/Windows/",
+            b"C:\\Program Files\\",
+            b"C:/Program Files/",
+            b"C:\\Program Files (x86)\\",
+            b"C:/Program Files (x86)/",
+        ];
+        for prefix in WINDOWS_SYSTEM_PREFIXES {
+            if candidate.len() >= prefix.len()
+                && candidate[..prefix.len()].eq_ignore_ascii_case(prefix)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn is_unmapped_absolute_path_token(word: &[u8]) -> bool {
+    let candidate = if word.starts_with(b"-L") || word.starts_with(b"-I") {
+        &word[2..]
+    } else {
+        word
+    };
+    if candidate.starts_with(b"${") || is_system_path(candidate) {
+        return false;
+    }
+    if candidate.len() >= 3
+        && candidate[0].is_ascii_alphabetic()
+        && candidate[1] == b':'
+        && (candidate[2] == b'\\' || candidate[2] == b'/')
+    {
+        return true;
+    }
+    if candidate.starts_with(b"\\\\")
+        && candidate.len() > 2
+        && !candidate[2].is_ascii_whitespace()
+    {
+        return true;
+    }
+    #[cfg(unix)]
+    if candidate.starts_with(b"/") {
+        let rest = candidate.strip_prefix(b"//").unwrap_or(candidate);
+        let rest = rest.strip_prefix(b"/").unwrap_or(rest);
+        return !rest.is_empty() && !ends_word(rest[0]);
+    }
+    #[cfg(not(unix))]
+    if candidate.starts_with(b"/") && candidate.contains(&b'/') {
+        let rest = candidate.strip_prefix(b"//").unwrap_or(candidate);
+        let rest = rest.strip_prefix(b"/").unwrap_or(rest);
+        return rest.contains(&b'/') && !rest.is_empty() && !ends_word(rest[0]);
+    }
+    false
+}
+
+fn has_unmapped_absolute_path(text: &[u8]) -> bool {
+    let mut word_start = 0;
+    let mut url_end = 0;
+    for index in 0..text.len() {
+        if index < url_end {
+            continue;
+        }
+        let byte = text[index];
+        if ends_word(byte) {
+            word_start = index + 1;
+        } else if byte == b'/' && is_url_authority(text, index) {
+            url_end = end_of_url(text, index);
+        } else if index == word_start && is_unmapped_absolute_path_token(&text[word_start..]) {
+            return true;
+        }
+    }
+    false
 }
 
 /// A byte that ends a word of a path list or a pkg-config line.
@@ -1826,8 +1933,17 @@ impl Run {
         let OutputRoots {
             files,
             rewritten,
-            embedded,
+            mut embedded,
         } = self.environment.classify_outputs(files, staging.path())?;
+        let normalized_stdout = self.environment.normalize(stdout);
+        let normalized_stderr = self.environment.normalize(stderr);
+        if (has_unmapped_absolute_path(&normalized_stdout)
+            || has_unmapped_absolute_path(&normalized_stderr))
+            && !embedded.iter().any(|root| root == MANIFEST_DIR_PLACEHOLDER)
+        {
+            embedded.push(MANIFEST_DIR_PLACEHOLDER.to_string());
+            embedded.sort_unstable();
+        }
         let prediction = recorded_prediction(
             inputs,
             env,
@@ -1857,8 +1973,8 @@ impl Run {
             empty_files,
             symlinks,
             rooted_symlinks,
-            stdout: String::from_utf8_lossy(&self.environment.normalize(stdout)).into_owned(),
-            stderr: String::from_utf8_lossy(&self.environment.normalize(stderr)).into_owned(),
+            stdout: String::from_utf8_lossy(&normalized_stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&normalized_stderr).into_owned(),
             rewritten,
             outside_directories: outside_outputs.directories,
             outside_empty_files: outside_outputs.empty_files,
@@ -4371,6 +4487,169 @@ mod tests {
             kache_store::file_hash::hash_file(&out.join("lib/small.a")).unwrap()
         );
         assert_eq!(file_hasher.stats().bytes_hashed, 65_535);
+    }
+
+    #[test]
+    fn unmapped_absolute_paths_in_stdout_bind_run_to_manifest_dir() {
+        let mut lock = crate::test_support::process_state_test_lock();
+        let dir = lock.enter();
+        let config = crate::test_support::test_config(dir.as_path().join("cache"));
+        let run_in = |checkout: &str, target: &str| {
+            let target_path = dir.as_path().join(target);
+            let out_dir = target_path.join("debug/build/x-1/out");
+            let manifest_dir = dir.as_path().join(checkout).join("pkg");
+            let cargo_home = dir.as_path().join("cargo");
+            std::fs::create_dir_all(&out_dir).unwrap();
+            std::fs::create_dir_all(&manifest_dir).unwrap();
+            std::fs::write(manifest_dir.join("build.rs"), "fn main() {}").unwrap();
+            let mut mappings = vec![
+                (out_dir.clone(), "${KACHE_OUT_DIR}"),
+                (manifest_dir.clone(), "${KACHE_MANIFEST_DIR}"),
+                (target_path.clone(), "${KACHE_TARGET_DIR}"),
+                (cargo_home.clone(), "${KACHE_CARGO_HOME}"),
+            ];
+            mappings.sort_by_key(|(root, _)| std::cmp::Reverse(root.as_os_str().len()));
+            let spellings = mappings.clone();
+            let aliases: Vec<_> = mappings
+                .iter()
+                .filter_map(|(root, placeholder)| {
+                    let canonical = root.canonicalize().ok()?;
+                    (canonical != *root).then_some((canonical, *placeholder))
+                })
+                .collect();
+            mappings.extend(aliases);
+            mappings.sort_by_key(|(root, _)| std::cmp::Reverse(root.as_os_str().len()));
+            let environment = Environment {
+                out_dir,
+                manifest_dir,
+                target: None,
+                mappings,
+                spellings,
+                base_dirs: Vec::new(),
+                dependency_roots: Vec::new(),
+                ownership_roots: Vec::new(),
+            };
+            Run {
+                store: Store::open(&config).unwrap(),
+                config: config.clone(),
+                binary_hash: "aaaa".to_string(),
+                environment,
+                start: std::time::Instant::now(),
+            }
+        };
+        let a1 = run_in("a", "a/target1");
+        let foreign_rpath = dir.as_path().join("foreign/lib");
+        let stdout = format!("cargo:rustc-link-arg=-Wl,-rpath,{}\n", foreign_rpath.display());
+        let after_the_run = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        a1.record(stdout.as_bytes(), b"", 100, after_the_run).unwrap();
+
+        let a2 = run_in("a", "a/target2");
+        let prediction_a2 = a2.prediction().unwrap().expect("recorded prediction");
+        assert_eq!(
+            prediction_a2.embedded_roots,
+            Some(vec![MANIFEST_DIR_PLACEHOLDER.to_string()])
+        );
+        let key_a1 = a1.action_key(&prediction_a2).unwrap();
+        let key_a2 = a2.action_key(&prediction_a2).unwrap();
+        assert_eq!(key_a1, key_a2);
+        assert!(a2.store.get(&key_a2).unwrap().is_some());
+
+        let b = run_in("b", "b/target");
+        let prediction_b = b.prediction().unwrap().expect("recorded prediction");
+        assert_eq!(
+            prediction_b.embedded_roots,
+            Some(vec![MANIFEST_DIR_PLACEHOLDER.to_string()])
+        );
+        let key_b = b.action_key(&prediction_b).unwrap();
+        assert_ne!(key_a1, key_b);
+        assert!(b.store.get(&key_b).unwrap().is_none());
+        assert!(a1.store.get(&key_a1).unwrap().is_some());
+    }
+
+    #[test]
+    fn manifest_dir_rpath_in_stdout_is_portable_and_restores_per_checkout() {
+        let mut lock = crate::test_support::process_state_test_lock();
+        let dir = lock.enter();
+        let config = crate::test_support::test_config(dir.as_path().join("cache"));
+        let run_in = |target: &str| {
+            let environment =
+                checkout_environment(&dir.as_path().join(target), &dir.as_path().join("cargo"));
+            std::fs::create_dir_all(&environment.manifest_dir).unwrap();
+            std::fs::write(environment.manifest_dir.join("build.rs"), "fn main() {}").unwrap();
+            Run {
+                store: Store::open(&config).unwrap(),
+                config: config.clone(),
+                binary_hash: "aaaa".to_string(),
+                environment,
+                start: std::time::Instant::now(),
+            }
+        };
+        let a = run_in("a/target");
+        let stdout_a = format!(
+            "cargo:rustc-link-arg=-Wl,-rpath,{}\n",
+            a.environment.manifest_dir.display()
+        );
+        let after_the_run = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        a.record(stdout_a.as_bytes(), b"", 100, after_the_run).unwrap();
+
+        let b = run_in("b/target");
+        let prediction = b.prediction().unwrap().expect("recorded prediction");
+        assert_eq!(prediction.embedded_roots, Some(Vec::new()));
+        let key_a = a.action_key(&prediction).unwrap();
+        let key_b = b.action_key(&prediction).unwrap();
+        assert_eq!(key_a, key_b);
+        let meta = b.store.get(&key_b).unwrap().expect("cache hit across checkouts");
+        let manifest = stored_manifest(&b, &meta);
+        let denormalized_b = b.environment.denormalize_str(&manifest.stdout);
+        let expected_b = format!(
+            "cargo:rustc-link-arg=-Wl,-rpath,{}\n",
+            b.environment.manifest_dir.display()
+        );
+        assert_eq!(denormalized_b, expected_b);
+    }
+
+    #[test]
+    fn unmapped_absolute_path_detection() {
+        assert!(!has_unmapped_absolute_path(b"cargo:warning=compilation ok"));
+        assert!(!has_unmapped_absolute_path(b"cargo:rerun-if-changed=src/lib.rs"));
+        assert!(!has_unmapped_absolute_path(
+            b"cargo:rerun-if-changed=../crates/player-build/Cargo.toml"
+        ));
+        assert!(!has_unmapped_absolute_path(
+            b"cargo:rustc-link-arg=-Wl,-rpath,${KACHE_MANIFEST_DIR}/lib"
+        ));
+        assert!(!has_unmapped_absolute_path(
+            b"cargo:rustc-link-search=native=${KACHE_OUT_DIR}/lib"
+        ));
+        assert!(!has_unmapped_absolute_path(
+            b"cargo:warning=see https://libssh2.org/doc/index.html"
+        ));
+        assert!(!has_unmapped_absolute_path(b"cargo:warning=[1 / 10] building"));
+
+        assert!(has_unmapped_absolute_path(
+            b"cargo:rustc-link-arg=-Wl,-rpath,/opt/deps/lib"
+        ));
+        assert!(has_unmapped_absolute_path(
+            b"cargo:rustc-link-search=native=/opt/deps/lib"
+        ));
+        assert!(has_unmapped_absolute_path(
+            b"cargo:rustc-link-arg=-L/opt/deps/lib"
+        ));
+        assert!(has_unmapped_absolute_path(
+            b"cargo:rustc-flags=-I/opt/deps/include"
+        ));
+        assert!(!has_unmapped_absolute_path(
+            b"cargo:rustc-link-arg=/usr/lib/libasound.so"
+        ));
+        assert!(has_unmapped_absolute_path(
+            b"cargo:rustc-link-arg=/opt/custom/libasound.so"
+        ));
+        assert!(has_unmapped_absolute_path(
+            b"cargo:rustc-link-search=native=C:\\deps\\lib"
+        ));
+        assert!(has_unmapped_absolute_path(
+            b"cargo:rustc-link-search=native=\\\\server\\share\\lib"
+        ));
     }
 
     /// A restored `OUT_DIR` file is a copy of its blob, so its hash is known:
