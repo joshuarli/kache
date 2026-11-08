@@ -1,7 +1,7 @@
 use std::process::Command;
 
 #[test]
-fn lenient_skip_summary_reports_the_fixture_count() {
+fn a_selection_whose_fixtures_all_skip_fails() {
     let temp = tempfile::tempdir().unwrap();
     let scenario = temp.path().join("e2e-missing-tool");
     std::fs::create_dir_all(scenario.join("source")).unwrap();
@@ -35,9 +35,9 @@ clean = "unused"
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .contains("PASS: all executed fixtures green (1 skipped)")
+            .contains("FAIL: every selected fixture was skipped (1 skipped); nothing was verified")
     );
 }

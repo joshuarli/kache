@@ -17,7 +17,7 @@ endif
 
 .PHONY: help build test check test-ci release verify-release lint \
   client-crates-check test-resource-guard-check pr mutants-diff \
-  e2e bench bench-retry bench-trace bench-sccache bench-mbx bench-pr \
+  e2e e2e-negative-control bench bench-retry bench-trace bench-sccache bench-mbx bench-pr \
   bench-short test-bench-short bench-contention test-bench-contention \
   perf-gate-local trace-phases bump release-tag crates-status \
   crates-bootstrap crates-bootstrap-plan
@@ -64,6 +64,7 @@ help:
 	@echo "check                    the pre-PR gate: lint + client crates + resource guard + tests"
 	@echo "pr [BASE=origin/main]    check plus changed-lines mutation testing against BASE"
 	@echo "e2e                      fixture scenarios cold/warm/noop through the e2e harness"
+	@echo "e2e-negative-control     the e2e corpus with the cache disabled; cache-dependent fixtures must fail"
 	@echo "bench [PROFILE=] [ARGS=] list bench profiles, or cold/warm a profile (ARGS passes through)"
 	@echo "bench-retry/-trace/-sccache/-mbx  bench variants; PROFILE selects, ARGS passes through"
 	@echo "bench-pr                 one Kache side of hk, eza and aube"
@@ -123,6 +124,20 @@ e2e:
 	  --select tier:gate \
 	  --deny-missing-tools \
 	  --out tmp/e2e/results.json
+
+# The same corpus with KACHE_DISABLED=1: every fixture not marked
+# negative_control_exempt must fail, or its cache assertions are vacuous.
+e2e-negative-control:
+	cargo build --release -p kache
+	cargo build --release -p kache-e2e
+	./target/release/kache-scenario \
+	  --kache ./target/release/kache \
+	  --scenarios ./scenarios \
+	  --select suite:e2e \
+	  --select tier:gate \
+	  --deny-missing-tools \
+	  --negative-control \
+	  --out tmp/e2e/negative-control.json
 
 # Bench a scenario twice against one shared kache cache — cold, then warm —
 # and report wall-clock, speedup, hit rate and a verdict. Omit PROFILE to

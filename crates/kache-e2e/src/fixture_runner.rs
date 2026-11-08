@@ -201,19 +201,39 @@ pub fn run(config: FixtureRunConfig) -> Result<()> {
         );
         std::process::exit(1);
     }
-    let skipped = results
-        .fixtures
-        .iter()
-        .filter(|result| result.status == "skip")
-        .count();
+    let counts = SelectionCounts::of(&results.fixtures);
+    if counts.executed == 0 {
+        eprintln!(
+            "FAIL: every selected fixture was skipped ({} skipped); nothing was verified",
+            counts.skipped
+        );
+        std::process::exit(1);
+    }
+    let SelectionCounts { executed, skipped } = counts;
     if config.negative_control {
         eprintln!(
-            "PASS: negative-control — every executed non-exempt fixture is falsifiable ({skipped} skipped)"
+            "PASS: negative-control — every executed non-exempt fixture is falsifiable ({executed} executed, {skipped} skipped)"
         );
     } else {
-        eprintln!("PASS: all executed fixtures green ({skipped} skipped)");
+        eprintln!("PASS: all executed fixtures green ({executed} executed, {skipped} skipped)");
     }
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SelectionCounts {
+    executed: usize,
+    skipped: usize,
+}
+
+impl SelectionCounts {
+    fn of(results: &[FixtureResult]) -> Self {
+        let skipped = results.iter().filter(|r| r.status == "skip").count();
+        Self {
+            executed: results.len() - skipped,
+            skipped,
+        }
+    }
 }
 
 fn missing_tools(tools: &[String]) -> Vec<String> {
@@ -226,7 +246,25 @@ fn missing_tools(tools: &[String]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::missing_tools;
+    use super::{SelectionCounts, missing_tools};
+    use crate::result::FixtureResult;
+
+    fn result(status: &str) -> FixtureResult {
+        FixtureResult {
+            name: status.to_string(),
+            status: status.to_string(),
+            skip_reason: None,
+            phases: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn selection_counts_separate_skips_from_executed_fixtures() {
+        let all_skipped = SelectionCounts::of(&[result("skip"), result("skip")]);
+        assert_eq!(all_skipped, SelectionCounts { executed: 0, skipped: 2 });
+        let mixed = SelectionCounts::of(&[result("pass"), result("skip"), result("fail")]);
+        assert_eq!(mixed, SelectionCounts { executed: 2, skipped: 1 });
+    }
 
     #[test]
     fn cargo_requirement_is_detected_on_path() {

@@ -85,7 +85,7 @@ fn missing_tools_remain_lenient_by_default() {
 
     let status = run(temp.path(), &results, false);
 
-    assert!(status.success());
+    assert_eq!(status.code(), Some(1), "only the nothing-executed failure");
     let json = read_results(&results);
     assert_eq!(json["fixtures"][0]["status"], "skip");
     assert_eq!(json["fixtures"][0]["skip_reason"]["kind"], "missing_tools");
@@ -111,7 +111,7 @@ os = ["{other_os}"]"#
 
     let status = run_strict(temp.path(), &results);
 
-    assert!(status.success());
+    assert_eq!(status.code(), Some(1), "only the nothing-executed failure");
     let json = read_results(&results);
     assert_eq!(json["fixtures"][0]["status"], "skip");
     assert_eq!(json["fixtures"][0]["skip_reason"]["kind"], "unsupported_os");
