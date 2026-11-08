@@ -1136,6 +1136,12 @@ fn run_step(
         .arg(cmd)
         .current_dir(cwd)
         .env("KACHE_CACHE_DIR", cache_dir)
+        // CI strips debuginfo from kache's own dev profile via
+        // CARGO_PROFILE_DEV_DEBUG=0. A fixture build must keep its default
+        // debuginfo, or a debug-map fixture such as e2e-rust-dsym has nothing
+        // to bundle. A fixture env value still wins: it is applied after.
+        .env_remove("CARGO_PROFILE_DEV_DEBUG")
+        .env_remove("CARGO_PROFILE_DEV_STRIP")
         .envs(&fixture.env)
         .envs(harness_env.iter().copied());
     let output = command
