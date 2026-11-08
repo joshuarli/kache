@@ -11,8 +11,8 @@ use kache_protocol::execution::{
 };
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{BufRead, Read};
-use std::os::fd::{AsFd, OwnedFd};
+use std::io::BufRead;
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{UnixDatagram, UnixStream};
 
@@ -404,19 +404,49 @@ pub(super) fn handle(
         if let Some(descriptors) = channel.try_receive(expected)? {
             break descriptors;
         }
-        match reader.fill_buf() {
-            Ok(buffer) if !buffer.is_empty() => {
-                anyhow::bail!("compiler client disconnected or wrote before preparation");
+        if !reader.buffer().is_empty() {
+            anyhow::bail!("compiler client disconnected or wrote before preparation");
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!("descriptor receive timed out after {PREPARE_TIMEOUT:?}");
+        }
+        let timeout_ms = i32::try_from(remaining.as_millis().min(250)).unwrap_or(250);
+        let mut fds = [
+            libc::pollfd {
+                fd: channel.socket.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: stream.as_raw_fd(),
+                events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+                revents: 0,
+            },
+        ];
+        let ret = unsafe { libc::poll(fds.as_mut_ptr(), 2, timeout_ms) };
+        if ret < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
             }
-            Ok(_) => {
-                anyhow::bail!("compiler client disconnected or wrote before preparation");
+            return Err(error.into());
+        }
+        if fds[1].revents != 0 {
+            match reader.fill_buf() {
+                Ok(buffer) if !buffer.is_empty() => {
+                    anyhow::bail!("compiler client disconnected or wrote before preparation");
+                }
+                Ok(_) => {
+                    anyhow::bail!("compiler client disconnected or wrote before preparation");
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Err(error) => return Err(error.into()),
             }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
-            Err(error) => return Err(error.into()),
         }
         if Instant::now() >= deadline {
             anyhow::bail!("descriptor receive timed out after {PREPARE_TIMEOUT:?}");
@@ -457,9 +487,11 @@ pub(super) fn handle(
     write_reply(stream, &ExecutionReply::Accepted)?;
     let activity = daemon.request_clock.begin_activity();
 
+    let (wake_rx, wake_tx) = UnixStream::pair().context("creating worker wake channel")?;
     let worker = std::thread::Builder::new()
         .name("kache-execution".to_string())
         .spawn(move || {
+            let _wake = wake_tx;
             let _activity = activity;
             let _permit = permit;
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match entry {
@@ -470,27 +502,46 @@ pub(super) fn handle(
             }))
         });
     let worker = worker.context("spawning compiler worker")?;
-    let mut unexpected = [0; 1];
+    if !reader.buffer().is_empty() {
+        cancellation.cancel();
+        let _ = worker.join();
+        return Ok(());
+    }
+    let mut fds = [
+        libc::pollfd {
+            fd: wake_rx.as_raw_fd(),
+            events: libc::POLLIN | libc::POLLHUP,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+            revents: 0,
+        },
+    ];
     loop {
         if worker.is_finished() {
             break;
         }
-        match reader.read(&mut unexpected) {
-            Ok(_) => {
-                cancellation.cancel();
-                let _ = worker.join();
-                return Ok(());
+        fds[0].revents = 0;
+        fds[1].revents = 0;
+        let ret = unsafe { libc::poll(fds.as_mut_ptr(), 2, 250) };
+        if ret < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
             }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
-            Err(_) => {
-                cancellation.cancel();
-                let _ = worker.join();
-                return Ok(());
-            }
+            cancellation.cancel();
+            let _ = worker.join();
+            return Err(error.into());
+        }
+        if fds[0].revents != 0 || worker.is_finished() {
+            break;
+        }
+        if fds[1].revents != 0 {
+            cancellation.cancel();
+            let _ = worker.join();
+            return Ok(());
         }
     }
     let result = worker.join();
