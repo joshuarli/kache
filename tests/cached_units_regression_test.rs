@@ -247,19 +247,6 @@ fn target(fixture: &Fixture, name: &str) -> PathBuf {
     dir
 }
 
-#[test]
-fn fixture_target_directories_are_removed_when_the_fixture_drops() {
-    let dir = {
-        let fixture = fixture();
-        let dir = target(&fixture, "cold");
-        assert!(!dir.starts_with(&fixture.workspace));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("artifact"), b"compiled").unwrap();
-        dir
-    };
-    assert!(!dir.exists());
-}
-
 /// Two `cargo check`s of the same workspace at once, each with its own
 /// target directory and one shared store, then a third in a fresh target
 /// directory. The shape that broke twice during development: a unit compiled

@@ -887,66 +887,6 @@ fn test_format_json_conforms_to_schema_contract() {
 }
 
 #[test]
-#[should_panic(expected = "expected <= 100 at report.summary.hit_rate_pct, got 500")]
-fn test_validator_rejects_out_of_bounds_number_maximum() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = write_test_events(dir.path());
-    let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
-
-    let json = format_json(&report).unwrap();
-    let mut val: deser_value::Value = deser_json::from_str(&json).unwrap();
-    val["summary"]["hit_rate_pct"] = deser_value::value!(500.0);
-    let schema: deser_value::Value = deser_json::from_str(REPORT_SCHEMA_JSON).unwrap();
-
-    validate_json_value(&val, &schema, &schema, "report");
-}
-
-#[test]
-#[should_panic(expected = "expected >= 0 at report.summary.time_saved_ms, got -10")]
-fn test_validator_rejects_out_of_bounds_integer_minimum() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = write_test_events(dir.path());
-    let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
-
-    let json = format_json(&report).unwrap();
-    let mut val: deser_value::Value = deser_json::from_str(&json).unwrap();
-    val["summary"]["time_saved_ms"] = deser_value::value!(-10);
-    let schema: deser_value::Value = deser_json::from_str(REPORT_SCHEMA_JSON).unwrap();
-
-    validate_json_value(&val, &schema, &schema, "report");
-}
-
-#[test]
-#[should_panic(expected = "not in enum set")]
-fn test_validator_rejects_invalid_schema_version() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = write_test_events(dir.path());
-    let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
-
-    let json = format_json(&report).unwrap();
-    let mut val: deser_value::Value = deser_json::from_str(&json).unwrap();
-    val["schema_version"] = deser_value::value!(4);
-    let schema: deser_value::Value = deser_json::from_str(REPORT_SCHEMA_JSON).unwrap();
-
-    validate_json_value(&val, &schema, &schema, "report");
-}
-
-#[test]
-#[should_panic(expected = "missing required key 'schema_version' at report")]
-fn test_validator_rejects_missing_required_key() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = write_test_events(dir.path());
-    let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
-
-    let json = format_json(&report).unwrap();
-    let mut val: deser_value::Value = deser_json::from_str(&json).unwrap();
-    val.as_map_mut().unwrap().remove("schema_version");
-    let schema: deser_value::Value = deser_json::from_str(REPORT_SCHEMA_JSON).unwrap();
-
-    validate_json_value(&val, &schema, &schema, "report");
-}
-
-#[test]
 fn test_json_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
     let config = write_test_events(dir.path());

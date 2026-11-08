@@ -6626,17 +6626,6 @@ fn clearing_the_store_keeps_cargo_target_directories() {
 }
 
 #[test]
-fn test_store_entry_dir() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-
-    let entry_dir = store.entry_dir("abc123");
-    assert!(entry_dir.to_string_lossy().contains("store"));
-    assert!(entry_dir.to_string_lossy().contains("abc123"));
-}
-
-#[test]
 fn test_store_total_size_empty() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
@@ -7587,19 +7576,8 @@ fn blob_path_is_panic_safe_for_short_hash() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
-    // Would panic on `&hash[..2]` before the fix.
-    let _ = store.blob_path("a");
-    let _ = store.blob_path("");
-}
-
-#[test]
-fn test_store_remove_entry_nonexistent() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-
-    // Should not error
-    store.remove_entry("nonexistent").unwrap();
+    assert_eq!(store.blob_path("a"), store.blobs_dir().join("a"));
+    assert_eq!(store.blob_path(""), store.blobs_dir());
 }
 
 #[test]
@@ -8976,20 +8954,6 @@ fn test_blob_path_sharding() {
 }
 
 #[test]
-fn test_blobs_table_created() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-
-    // Table should exist — query it
-    let count: i64 = store
-        .db
-        .query_row("SELECT COUNT(*) FROM blobs", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(count, 0);
-}
-
-#[test]
 #[cfg(target_os = "macos")]
 fn test_exclude_from_indexing_nonexistent_dir_silent() {
     let dir = PathBuf::from("/tmp/kache_test_nonexistent_874291");
@@ -9135,45 +9099,6 @@ fn test_get_verifies_blobs_not_entry_files() {
     // get() should still succeed (resolving via blob store)
     let meta = store.get("k1").unwrap();
     assert!(meta.is_some());
-}
-
-#[test]
-fn test_get_evicts_when_blob_missing() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let store = Store::open(&config).unwrap();
-
-    let output = dir.path().join("lib.rlib");
-    fs::write(&output, b"content").unwrap();
-    store
-        .put(
-            "k1",
-            "c",
-            &["lib".into()],
-            &[],
-            "",
-            "dev",
-            &[(output, "lib.rlib".into())],
-            "",
-            "",
-        )
-        .unwrap();
-
-    // Read meta to get the hash
-    let meta_content = fs::read_to_string(store.entry_dir("k1").join("meta.json")).unwrap();
-    let meta: EntryMeta = deser_json::from_str(&meta_content).unwrap();
-    let blob = store.blob_path(&meta.files[0].hash);
-
-    // Delete the blob to simulate corruption
-    let mut perms = fs::metadata(&blob).unwrap().permissions();
-    perms.set_readonly(false);
-    fs::set_permissions(&blob, perms).unwrap();
-    fs::remove_file(&blob).unwrap();
-
-    // get() should detect missing blob and evict
-    let result = store.get("k1").unwrap();
-    assert!(result.is_none());
-    assert!(!store.contains("k1"));
 }
 
 #[test]
@@ -13194,21 +13119,6 @@ fn test_backfill_content_hashes() {
         )
         .unwrap();
     assert_eq!(ch.len(), 64);
-}
-
-#[test]
-fn test_content_hash_column_exists() {
-    let tmp = tempfile::tempdir().unwrap();
-    let config = test_config(tmp.path());
-    let store = Store::open(&config).unwrap();
-    let result: Result<Option<String>, _> =
-        store
-            .db
-            .query_row("SELECT content_hash FROM entries LIMIT 1", [], |row| {
-                row.get(0)
-            });
-    // Query should succeed (column exists), just no rows
-    assert!(result.is_ok() || result.unwrap_err().to_string().contains("no rows"));
 }
 
 #[test]

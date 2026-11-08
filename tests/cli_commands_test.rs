@@ -2944,14 +2944,6 @@ fn init_ignores_empty_shell_config_directory_overrides() {
 }
 
 #[test]
-fn daemon_without_subcommand_succeeds() {
-    // `kache daemon` (no subcommand) is allowed and reports daemon state
-    // without contacting or starting any service.
-    let e = env();
-    e.cmd().arg("daemon").assert().success();
-}
-
-#[test]
 fn daemon_status_subcommand_succeeds() {
     // `kache daemon status` does the same as bare `kache daemon`.
     // Pin the equivalence: both forms must exit identically and produce

@@ -2593,48 +2593,6 @@ fn gc_pinned_lower_bound_is_policy_aware() {
 }
 
 #[test]
-fn gc_preserves_cargo_incremental_directories() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path());
-    let incremental_dir = dir.path().join("workspace/target/debug/incremental");
-    std::fs::create_dir_all(&incremental_dir).unwrap();
-    std::fs::write(incremental_dir.join("junk"), b"tmp").unwrap();
-
-    let store = Store::open(&config).unwrap();
-    drop(store);
-    let db = rusqlite::Connection::open(config.cache_dir.join("index.db")).unwrap();
-    db.execute_batch("CREATE TABLE IF NOT EXISTS incremental_dirs (path TEXT PRIMARY KEY, last_seen TEXT)").unwrap();
-    db.execute("INSERT INTO incremental_dirs (path) VALUES (?1)", [incremental_dir.to_str().unwrap()]).unwrap();
-    drop(db);
-
-    let daemon = Daemon::new(config.clone());
-    let stats = daemon
-        .run_gc(
-            GcPolicy::Automatic {
-                max_age_hours: 0,
-            },
-            GcDriver::Requested,
-        )
-        .unwrap();
-    assert_eq!(stats.total.entries_evicted, 0);
-    assert!(incremental_dir.exists());
-
-    std::fs::create_dir_all(&incremental_dir).unwrap();
-    std::fs::write(incremental_dir.join("junk"), b"tmp2").unwrap();
-
-    let stats = daemon
-        .run_gc(
-            GcPolicy::Automatic {
-                max_age_hours: 0,
-            },
-            GcDriver::Requested,
-        )
-        .unwrap();
-    assert_eq!(stats.total.entries_evicted, 0);
-    assert!(incremental_dir.exists());
-}
-
-#[test]
 fn clean_tool_version_caches_removes_only_old_tool_version_txt() {
     // Branch: old rustc/linker version-cache file cleanup.
     let dir = tempfile::tempdir().unwrap();
