@@ -807,3 +807,54 @@ fn stale_native_archive_two_crates_down_reaches_the_binary() {
         "the binary must link the rebuilt archive"
     );
 }
+
+fn last_event_for(cache_dir: &Path, crate_name: &str) -> deser_value::Value {
+    let events = std::fs::read_to_string(cache_dir.join("events.jsonl")).unwrap();
+    events
+        .lines()
+        .rev()
+        .filter_map(|line| deser_json::from_str::<deser_value::Value>(line).ok())
+        .find(|event| event["crate_name"].as_str() == Some(crate_name))
+        .unwrap_or_else(|| panic!("no event for {crate_name}"))
+}
+
+/// Edits land in a target that still holds the previous build, so Cargo
+/// recompiles only what changed and Kache restores over live outputs instead
+/// of into an empty directory. Reverting to a generation the store already
+/// holds must restore that generation, and the binary must follow the source
+/// at every step.
+#[test]
+fn successive_edits_in_an_intact_target_follow_the_source() {
+    build_kache();
+    let project = copy_fixture();
+    let cache_dir = TempDir::new().unwrap();
+    let _daemon = common::DaemonGuard::new(kache_binary(), cache_dir.path());
+    let target_dir = TempDir::new().unwrap();
+    let lib_rs = project.path().join("src/lib.rs");
+    let v1 = std::fs::read_to_string(&lib_rs).unwrap();
+    let v2 = v1.replace("\"v1\"", "\"v2\"");
+    let build = || {
+        common::settle_writes(&[project.path()]);
+        build_and_run(project.path(), cache_dir.path(), target_dir.path(), &[], &[])
+    };
+
+    assert_eq!(build(), "v1.helper-v1.default.debug.plain");
+
+    std::fs::write(&lib_rs, &v2).unwrap();
+    assert_eq!(build(), "v2.helper-v1.default.debug.plain");
+    assert_eq!(last_event_for(cache_dir.path(), "stale_check")["result"].as_str(), Some("miss"));
+
+    std::fs::write(&lib_rs, &v1).unwrap();
+    assert_eq!(build(), "v1.helper-v1.default.debug.plain");
+    assert_eq!(
+        last_event_for(cache_dir.path(), "stale_check")["result"].as_str(),
+        Some("local_hit")
+    );
+
+    std::fs::write(&lib_rs, &v2).unwrap();
+    assert_eq!(build(), "v2.helper-v1.default.debug.plain");
+    assert_eq!(
+        last_event_for(cache_dir.path(), "stale_check")["result"].as_str(),
+        Some("local_hit")
+    );
+}
