@@ -3468,7 +3468,6 @@ fn verify_reports_no_findings_for_a_clean_store() {
 
 #[test]
 fn verify_detects_blob_size_mismatch() {
-    // Blob metadata length mismatch -> entry is marked corrupt.
     let dir = tempfile::tempdir().unwrap();
     let config = save_manifest_config(dir.path().join("cache"));
     let store = Store::open(&config).unwrap();
@@ -3488,7 +3487,9 @@ fn verify_detects_blob_size_mismatch() {
     }
     std::fs::write(&blob, vec![b'Y'; meta.files[0].size as usize + 1]).unwrap();
 
-    verify(&config, false, false).expect("verify with size mismatch should succeed");
+    let outcome = verify(&config, false, false).expect("verify with size mismatch should succeed");
+    assert_eq!(outcome.corrupted_entries, 1, "{outcome:?}");
+    assert_eq!(outcome.unresolved_integrity_findings(), 1, "{outcome:?}");
 }
 
 

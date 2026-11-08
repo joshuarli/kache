@@ -15,7 +15,7 @@ struct LockHolder {
 impl LockHolder {
     fn start(path: &Path, shared: bool) -> Self {
         let mut child = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "hold_log_lock_in_child", "--nocapture"])
+            .args(["--exact", "hold_log_lock_in_child", "--ignored", "--nocapture"])
             .env("KACHE_TEST_EVENT_LOCK", path)
             .env(
                 "KACHE_TEST_EVENT_LOCK_SHARED",
@@ -53,6 +53,7 @@ impl Drop for LockHolder {
 }
 
 #[test]
+#[ignore = "subprocess fixture"]
 fn hold_log_lock_in_child() {
     let Some(path) = std::env::var_os("KACHE_TEST_EVENT_LOCK") else {
         return;

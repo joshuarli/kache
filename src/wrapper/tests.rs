@@ -718,12 +718,14 @@ fn lookup_local_entry_prefers_primary_then_falls_back() {
     )
     .unwrap()
     .expect("fallback must serve a key the shard does not have");
+    assert_eq!(hit.0.cache_dir(), fallback.cache_dir());
     assert_eq!(hit.1.crate_name, "test-crate");
     put_test_entry(&primary, dir.path(), "vol-primary-key");
     let primary_hit =
         super::lookup_local_entry(&primary, std::slice::from_ref(&fallback), "vol-primary-key")
-            .unwrap();
-    assert!(primary_hit.is_some());
+            .unwrap()
+            .expect("primary should hit");
+    assert_eq!(primary_hit.0.cache_dir(), primary.cache_dir());
 }
 
 fn busy_index_error() -> anyhow::Error {

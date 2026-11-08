@@ -1704,10 +1704,12 @@ fn path_only_entries_naming_the_manifest_dir_are_reported_inert() {
 
 #[test]
 fn test_env_overrides_detect() {
-    // Just verify it doesn't panic — actual env var presence is environment-dependent
+    let _lock = crate::testing::config_path_lock();
+    let _g1 = crate::testing::set_env_for_test("KACHE_KEY_SALT", Some(std::ffi::OsStr::new("salt")));
+    let _g2 = crate::testing::set_env_for_test("KACHE_MAX_SIZE", Some(std::ffi::OsStr::new("10GiB")));
     let overrides = EnvOverrides::detect();
-    // In test environment, these are typically not set
-    let _ = overrides.cache_dir;
+    assert!(overrides.key_salt);
+    assert!(overrides.max_size);
 }
 
 #[test]

@@ -116,9 +116,13 @@ fn family_probe_without_kache_cc_does_not_use_fake_compiler() {
     .output()
     .expect("failed to run kache as a cc-family probe");
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        !stdout.contains(FAKE_MARKER),
-        "fallback path must not invent the fake compiler"
+        output.status.success(),
+        "probe fallback to system cc should succeed: status={:?}\nstderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
     );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains(FAKE_MARKER));
+    assert!(stdout.contains("main"));
 }

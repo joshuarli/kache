@@ -1554,10 +1554,10 @@ fn prediction_verification_reads_the_snapshot() {
         (inputs, out.used_prediction)
     };
 
-    assert_eq!(resolve(&KeyEnv::default()), (Some(closure), true));
+    assert_eq!(resolve(&KeyEnv::default()), (Some(closure.clone()), true));
     let (verified, predicted) = resolve(&env_with("KACHE_VERIFY_INPUT_PREDICTIONS", "always"));
     assert!(!predicted, "the pre-pass answered, not the record");
-    assert!(verified.is_some());
+    assert_eq!(verified, Some(closure));
 }
 
 /// With no record and deferral allowed, the key stops instead of running
