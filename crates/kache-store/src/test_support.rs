@@ -44,6 +44,12 @@ pub(crate) fn process_state_test_lock() -> ProcessStateTestGuard {
     }
 }
 
+#[cfg(unix)]
+pub(crate) fn running_as_root() -> bool {
+    // SAFETY: libc::getuid is always safe and has no failure mode.
+    unsafe { libc::getuid() == 0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::process_state_test_lock;

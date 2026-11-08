@@ -2191,7 +2191,10 @@ fn test_cc_no_omit_leaf_frame_pointer_keys_on_probe_issue_839() {
         .arg("-o")
         .arg(probe_dir.path().join("gate.o"))
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stderr).contains("-mno-omit-leaf-frame-pointer"))
+        .map(|o| {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            stderr.contains("-mno-omit-leaf-frame-pointer") || stderr.contains("-mframe-pointer=all")
+        })
         .unwrap_or(false);
     if by_default {
         eprintln!("skipping: `cc` already applies -mno-omit-leaf-frame-pointer by default");

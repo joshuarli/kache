@@ -8247,6 +8247,9 @@ fn test_store_get_evicts_entry_with_corrupted_file() {
 #[cfg(unix)]
 #[test]
 fn get_evicts_when_verified_blob_is_unreadable() {
+    if crate::test_support::running_as_root() {
+        return;
+    }
     // Covers get verification hash_file error branch.
     use std::os::unix::fs::PermissionsExt;
 
@@ -9730,6 +9733,9 @@ fn republication_during_removal_cleanup_is_never_stranded() {
 #[cfg(unix)]
 #[test]
 fn persistent_directory_cleanup_failure_is_an_error() {
+    if crate::test_support::running_as_root() {
+        return;
+    }
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().unwrap();

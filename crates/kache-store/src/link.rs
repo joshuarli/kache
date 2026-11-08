@@ -3855,6 +3855,9 @@ Unified_mm_ettings-WrongChannel0.o: Unified_mm_ettings-WrongChannel0.mm \\
     #[test]
     #[cfg(unix)] // Permissions are easier to test on Unix
     fn link_to_target_permission_denied_does_not_loop() {
+        if crate::test_support::running_as_root() {
+            return;
+        }
         let dir = tempfile::TempDir::new().unwrap();
         let src = dir.path().join("source.txt");
         fs::write(&src, "test").unwrap();
@@ -3879,6 +3882,9 @@ Unified_mm_ettings-WrongChannel0.o: Unified_mm_ettings-WrongChannel0.mm \\
     #[test]
     #[cfg(unix)]
     fn link_to_target_missing_parent_permission_denied_surfaces_real_cause() {
+        if crate::test_support::running_as_root() {
+            return;
+        }
         let dir = tempfile::TempDir::new().unwrap();
         let src = dir.path().join("source.txt");
         fs::write(&src, "test").unwrap();
@@ -3901,6 +3907,9 @@ Unified_mm_ettings-WrongChannel0.o: Unified_mm_ettings-WrongChannel0.mm \\
     #[test]
     #[cfg(unix)]
     fn write_restored_missing_parent_permission_denied_surfaces_real_cause() {
+        if crate::test_support::running_as_root() {
+            return;
+        }
         let dir = tempfile::TempDir::new().unwrap();
         let dst_dir = dir.path().join("readonly_parent");
         fs::create_dir_all(&dst_dir).unwrap();
