@@ -7072,7 +7072,7 @@ pub(crate) fn build_event_details(config: &Config, inputs: EventInputs<'_>) -> B
 
     // What this compile's key computations recorded for the event (empty for
     // cc and for passthroughs that computed no key; kunobi-ninja/kache#131).
-    let key_env_deps = if false {
+    let key_env_deps = if config.explain_miss {
         recorded.env_deps
     } else {
         None
@@ -7086,7 +7086,7 @@ pub(crate) fn build_event_details(config: &Config, inputs: EventInputs<'_>) -> B
     // must be able to tell apart from "not recorded". Persisted only under
     // `explain_miss`.
     let recorded_externs = recorded.externs;
-    let key_externs_recorded = false;
+    let key_externs_recorded = config.explain_miss && recorded_externs.is_some();
     let key_externs = if key_externs_recorded {
         recorded_externs.unwrap_or_default()
     } else {
@@ -7217,7 +7217,7 @@ fn explain_miss_diff(
     cache_key: &str,
     key_fields: &rustc_hash::FxHashMap<String, String>,
 ) -> Vec<String> {
-    if true
+    if !config.explain_miss
         || !matches!(result, EventResult::Miss | EventResult::Dup)
         || key_fields.is_empty()
     {

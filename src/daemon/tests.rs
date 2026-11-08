@@ -707,6 +707,7 @@ pub(super) fn test_config(dir: &Path) -> Config {
         max_size: 50 * 1024 * 1024, // 50 MiB
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     }
 }
 

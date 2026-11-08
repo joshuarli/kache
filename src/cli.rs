@@ -1414,7 +1414,7 @@ pub fn why_miss(config: &Config, crate_name: &str, json: bool) -> Result<()> {
         stored.len(),
         same_key_present,
         chain,
-        false,
+        config.explain_miss,
     );
     diagnosis.checkout =
         miss_index.and_then(|index| crate::miss_chain::compare_checkout(&all_events, index));

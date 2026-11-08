@@ -43,6 +43,7 @@ pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     }
 }
 
