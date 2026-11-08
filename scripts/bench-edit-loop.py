@@ -403,7 +403,9 @@ def main():
     (scratch / "empty-config.toml").write_text("")
     arms = [Arm("plain", None, args, scratch)]
     for spec in args.kache:
-        name, _, path = spec.partition("=")
+        name, sep, path = spec.partition("=")
+        if not sep:
+            name, path = "adaptive", name
         arms.append(Arm(f"kache-{name}", Path(path).resolve(), args, scratch))
     if args.mbx:
         arms.append(Arm("mbx", args.mbx.resolve(), args, scratch))
