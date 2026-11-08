@@ -2123,6 +2123,7 @@ fn save_manifest_config(
         max_size: 1024 * 1024,
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     }
 }
 

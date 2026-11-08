@@ -1374,6 +1374,40 @@ fn trusted_daemon_execution_requires_an_explicit_setting() {
     ));
 }
 #[test]
+fn explain_miss_is_opt_in_from_env_or_file() {
+    let file = |text| Ok(deser_toml::from_str::<FileConfig>(text).unwrap());
+    let invocation = |value: Option<&str>| {
+        InvocationEnv::from_parts(
+            value.into_iter().map(|value| ("KACHE_EXPLAIN_MISS", value)),
+            None,
+            None,
+            std::env::temp_dir(),
+        )
+    };
+    for (text, expected) in [
+        ("", false),
+        ("[cache]\nexplain_miss = false", false),
+        ("[cache]\nexplain_miss = true", true),
+    ] {
+        assert_eq!(
+            Config::explain_miss_enabled_for(&invocation(None), &file(text)),
+            expected
+        );
+        for (value, expected) in [("1", true), ("TRUE", true), ("0", false), ("yes", false)] {
+            assert_eq!(
+                Config::explain_miss_enabled_for(&invocation(Some(value)), &file(text)),
+                expected,
+                "{text:?} {value:?}"
+            );
+        }
+    }
+    assert!(!Config::explain_miss_enabled_for(
+        &invocation(Some("1")),
+        &file("[cache]\nignore_env = true")
+    ));
+}
+
+#[test]
 fn probe_memos_live_under_the_configured_cache_dir() {
     let _lock = config_path_lock();
     let dir = tempfile::tempdir().unwrap();
@@ -1410,6 +1444,7 @@ fn test_file_config_roundtrip() {
             runtime_dir: Some("~/my/runtime".to_string()),
             local_max_size: Some("50GiB".to_string()),
             cache_executables: Some(true),
+            explain_miss: None,
             exclude: Some(vec!["vendor/problem/**".to_string()]),
         }),
     };
@@ -1696,6 +1731,7 @@ fn test_config_store_dir() {
         max_size: 1024,
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     };
     assert_eq!(config.store_dir(), PathBuf::from("/tmp/kache/store"));
     assert_eq!(
@@ -1725,6 +1761,7 @@ fn test_config_index_db_path() {
         max_size: 1024,
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     };
     assert_eq!(config.index_db_path(), PathBuf::from("/tmp/kache/index.db"));
 }
@@ -1750,6 +1787,7 @@ fn test_config_event_log_path() {
         max_size: 1024,
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     };
     assert_eq!(
         config.event_log_path(),
@@ -1790,6 +1828,7 @@ fn test_config_socket_path() {
         max_size: 1024,
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     };
     assert_eq!(
         config.socket_path(),
@@ -2377,6 +2416,7 @@ fn test_save_and_load_file_config() {
             runtime_dir: Some("/tmp/my-runtime".to_string()),
             local_max_size: Some("10GiB".to_string()),
             cache_executables: Some(true),
+            explain_miss: None,
             exclude: None,
         }),
     };

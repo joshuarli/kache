@@ -100,6 +100,13 @@ pub struct Config {
     pub max_size: u64,
     pub disabled: bool,
     pub cache_executables: bool,
+    /// Opt-in miss diagnostics (kunobi-ninja/kache#131). Records each key's
+    /// input-group digests, dependency digests, unit ids and env-dependency
+    /// hashes on its event, and on a miss names the groups that changed since
+    /// the crate last hit in that build tree. Costs one event-log read per miss
+    /// and larger events, so off by default. Set via `KACHE_EXPLAIN_MISS=1`/
+    /// `=true` or `[cache] explain_miss`.
+    pub explain_miss: bool,
     /// An opaque string folded into every cache key. Lets a project
     /// force a cold cache on a change kache cannot otherwise observe —
     /// e.g. a cross-target libc/sysroot change, a toolchain-closure bump
@@ -230,6 +237,8 @@ pub struct CacheFileConfig {
     /// design (env must not re-enable env). See [`Config::ignore_env_enabled`].
     pub ignore_env: Option<bool>,
     pub cache_executables: Option<bool>,
+    /// Miss-diagnostics opt-in. See [`Config::explain_miss`].
+    pub explain_miss: Option<bool>,
     pub exclude: Option<Vec<String>>,
     /// Declarative bypass rules (kunobi-ninja/kache#222). Siblings of
     /// `exclude`, which already covers the source-path case; each entry means
@@ -412,7 +421,7 @@ const IGNORE_ENV_GATED_VARS: &[&str] = &[
     "KACHE_RUNTIME_DIR",
     "KACHE_MAX_SIZE",
     "KACHE_CACHE_EXECUTABLES",
-
+    "KACHE_EXPLAIN_MISS",
     "KACHE_KEY_SALT",
     "KACHE_CC_EXTRA_ALLOWLIST_FLAGS",
     "KACHE_PATH_ONLY_ENV_VARS",
@@ -430,7 +439,7 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
     ("KACHE_RUNTIME_DIR", "cache.runtime_dir"),
     ("KACHE_MAX_SIZE", "cache.local_max_size"),
     ("KACHE_CACHE_EXECUTABLES", "cache.cache_executables"),
-
+    ("KACHE_EXPLAIN_MISS", "cache.explain_miss"),
     ("KACHE_KEY_SALT", "cache.key_salt"),
     ("KACHE_CC_EXTRA_ALLOWLIST_FLAGS", "cc.extra_allowlist_flags"),
     ("KACHE_PATH_ONLY_ENV_VARS", "cache.path_only_env_vars"),
@@ -693,6 +702,7 @@ impl Config {
         }
 
         let trust_daemon_execution = Self::trust_daemon_execution_for(invocation, &file_config);
+        let explain_miss = Self::explain_miss_enabled_for(invocation, &file_config);
         let project_rules = ProjectRules::from_file_config(&file_config);
         let mut volume_stores = Self::load_volume_stores(&file_config, explicit_max_size);
         for shard in &mut volume_stores {
@@ -711,6 +721,7 @@ impl Config {
             ),
             volume_stores,
             cache_executables,
+            explain_miss,
             key_salt,
             path_only_env_vars,
             key_env_vars,
@@ -864,6 +875,22 @@ impl Config {
             .ok()
             .and_then(|c| c.cache.as_ref())
             .and_then(|c| c.ignore_env)
+            .unwrap_or(false)
+    }
+
+    fn explain_miss_enabled_for(
+        invocation: &InvocationEnv,
+        file_config: &Result<FileConfig>,
+    ) -> bool {
+        let ignore_env = Self::ignore_env_enabled(file_config);
+        if let Ok(v) = env_or_ignored_for(invocation, "KACHE_EXPLAIN_MISS", ignore_env) {
+            return v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        file_config
+            .as_ref()
+            .ok()
+            .and_then(|c| c.cache.as_ref())
+            .and_then(|c| c.explain_miss)
             .unwrap_or(false)
     }
 

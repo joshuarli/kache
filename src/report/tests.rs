@@ -425,6 +425,7 @@ fn write_test_events(dir: &std::path::Path) -> Config {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     };
 
     // Write build events
@@ -1596,6 +1597,7 @@ fn test_missing_transfer_data() {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     };
 
     // Only write build events, no transfers
@@ -1635,6 +1637,7 @@ fn test_suggestion_high_miss_share() {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     };
 
     // Mostly misses — should trigger high miss share suggestion
@@ -1683,6 +1686,7 @@ fn test_suggestion_high_hit_overhead() {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     };
 
     // Several hits, each with a high elapsed time -> avg overhead > 50ms
@@ -1732,6 +1736,7 @@ fn test_suggestion_network_download_failures_and_fanout() {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     };
 
     // One OK download (test_transfer sets request_count=4 -> 4 GETs for 1 hit,
@@ -1786,6 +1791,7 @@ fn test_suggestion_network_latency_thresholds() {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     };
 
     let slow = TransferEvent {
@@ -2241,6 +2247,7 @@ fn test_empty_report() {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     };
 
     let report = generate_report(&config, SinceWindow::DEFAULT, 10).unwrap();
@@ -2657,6 +2664,7 @@ fn report_counts_each_download_transfer_format() {
         socket_path_override: None,
         disabled: false,
         cache_executables: false,
+        explain_miss: false,
     };
     for fmt in ["v1", "v2", "weird-future-format"] {
         let t = test_transfer(fmt, TransferDirection::Download, fmt, 500, 40, true);

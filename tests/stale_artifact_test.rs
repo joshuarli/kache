@@ -807,3 +807,66 @@ fn stale_native_archive_two_crates_down_reaches_the_binary() {
         "the binary must link the rebuilt archive"
     );
 }
+
+fn kache_explain_json(cache_dir: &Path, crate_name: &str) -> deser_value::Value {
+    let output = hermetic_command(kache_binary(), cache_dir, Some(&isolated_config_path(cache_dir)))
+        .args(["--json", "explain", crate_name])
+        .output()
+        .expect("failed to run kache explain");
+    assert!(
+        output.status.success(),
+        "kache explain failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    deser_json::from_slice(&output.stdout).expect("explain should print json")
+}
+
+/// With `explain_miss` on, a miss after a hit in the same target names the
+/// key group that changed rather than only reporting a different key.
+#[test]
+fn explain_names_the_changed_key_group_when_explain_miss_is_on() {
+    build_kache();
+    let project = copy_fixture();
+    let cache_dir = TempDir::new().unwrap();
+    let _daemon = common::DaemonGuard::new(kache_binary(), cache_dir.path());
+    let target_dir = TempDir::new().unwrap();
+    let clean = || {
+        let _ = std::process::Command::new("cargo")
+            .args(["clean"])
+            .current_dir(project.path())
+            .env("CARGO_TARGET_DIR", target_dir.path())
+            .status();
+    };
+    let explain = [("KACHE_EXPLAIN_MISS", "1")];
+    let build = |extra: &[(&str, &str)]| {
+        build_and_run(project.path(), cache_dir.path(), target_dir.path(), extra, &[])
+    };
+
+    build(&explain);
+    clean();
+    build(&explain);
+    clean();
+    assert_eq!(
+        build(&[("KACHE_EXPLAIN_MISS", "1"), ("KACHE_TEST_VALUE", "custom")]),
+        "v1.helper-v1.custom.debug.plain"
+    );
+
+    let report = kache_explain_json(cache_dir.path(), "stale_check");
+    assert_eq!(report["diagnosis"].as_str(), Some("key_mismatch"));
+    assert_eq!(report["dependency_recording_missing"].as_bool(), Some(false));
+    let groups = &report["dependency_chain"]["roots"][0]["kind"]["groups"];
+    assert!(
+        groups
+            .as_seq()
+            .is_some_and(|groups| groups.iter().any(|g| g.as_str() == Some("env_deps"))),
+        "{report:?}"
+    );
+    assert!(
+        report["hints"]
+            .as_seq()
+            .is_some_and(|hints| hints
+                .iter()
+                .any(|h| h.as_str().is_some_and(|h| h.starts_with("KACHE_TEST_VALUE differs")))),
+        "{report:?}"
+    );
+}

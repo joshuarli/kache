@@ -1621,6 +1621,52 @@ fn record_auto_gc_outcome_persists_the_backoff_until_the_store_fits() {
     assert!(!auto_gc_backoff_path(&cfg.cache_dir).exists());
     assert!(auto_gc_sweep_due(&cfg, 5000));
 }
+/// #131: explain_miss names exactly the key groups whose digests changed
+/// vs the crate's last hit in the same tree, and stays silent (and
+/// log-read-free) when disabled, on hits, or with no prior hit.
+#[test]
+fn explain_miss_diff_names_changed_groups() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path().to_path_buf());
+    config.explain_miss = true;
+    let fields = |pairs: &[(&str, &str)]| -> rustc_hash::FxHashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    let fields_now = fields(&[("args", "bbbb"), ("sources", "ssss")]);
+    let diff = |config: &Config, result, fields: &rustc_hash::FxHashMap<String, String>| {
+        let mut diff = explain_miss_diff(config, "/w", "gkrust", result, "newkey", fields);
+        diff.sort();
+        diff
+    };
+
+    assert!(diff(&config, EventResult::Miss, &fields_now).is_empty());
+
+    let hit: crate::events::BuildEvent = deser_json::from_str(
+        r#"{"ts":"2026-07-23T00:00:00Z","crate_name":"gkrust","root":"/w",
+                "result":"local_hit","elapsed_ms":1,"size":1,
+                "key_fields":{"args":"aaaa","sources":"ssss","link":"llll"}}"#,
+    )
+    .unwrap();
+    events::log_event(&config.event_log_path(), &hit).unwrap();
+
+    assert_eq!(
+        diff(&config, EventResult::Miss, &fields_now),
+        ["args", "link"],
+        "changed digest + group missing from the new key both count"
+    );
+    let unchanged = fields(&[("args", "aaaa"), ("sources", "ssss"), ("link", "llll")]);
+    assert_eq!(
+        diff(&config, EventResult::Miss, &unchanged),
+        ["salt_or_extra_inputs"]
+    );
+    assert!(diff(&config, EventResult::LocalHit, &fields_now).is_empty());
+    config.explain_miss = false;
+    assert!(diff(&config, EventResult::Miss, &fields_now).is_empty());
+}
+
 /// After a deferred compile the keyed flow must never run the compiler
 /// again: Cargo has already consumed the first run's artifact
 /// notifications, and a second set makes it finish the unit twice.
@@ -5882,13 +5928,13 @@ fn log_event_with_store_stats_persists_timing_hash_and_store_fields() {
 /// each field is fed a magnitude ten times the last: a lower bound and a
 /// band catch a zeroed field and a swapped one, whatever ran before.
 /// An event carries the record its invocation's keys left. The extern maps
-/// and unit id are no longer recorded (explain_miss removed); the group
-/// digests do not need it.
+/// and unit id need `explain_miss`; the group digests do not.
 #[test]
 fn an_event_carries_its_invocations_key_record() {
     let _ = crate::verify_compare::take_last_report();
     let dir = tempfile::tempdir().unwrap();
-    let config = test_config(dir.path().join("cache"));
+    let mut config = test_config(dir.path().join("cache"));
+    config.explain_miss = true;
     let map = |name: &str, value: &str| {
         rustc_hash::FxHashMap::from_iter([(name.to_string(), value.to_string())])
     };
@@ -5914,21 +5960,22 @@ fn an_event_carries_its_invocations_key_record() {
     // but keeps the earlier digests.
     record.absorb(&crate::cache_key::KeyOutputs::default());
     log(&config, record);
+    config.explain_miss = false;
     let mut record = KeyEventRecord::default();
     record.absorb(&key);
     log(&config, record);
 
     let events = crate::events::read_events(&config.event_log_path()).unwrap();
     assert_eq!(events.len(), 4);
-    assert_eq!(events[0].key_env_deps, None, "explain_miss removed: no env deps");
+    assert_eq!(events[0].key_env_deps, Some(map("MODE", "eeee")));
     assert_eq!(events[1].key_env_deps, None);
-    assert_eq!(events[2].key_env_deps, None);
+    assert_eq!(events[2].key_env_deps, Some(map("MODE", "eeee")));
     assert_eq!(events[3].key_env_deps, None);
     assert_eq!(events[0].key_fields, map("args", "aaaa"));
-    assert!(!events[0].key_externs_recorded);
-    assert!(events[0].key_externs.is_empty());
-    assert!(events[0].extern_units.is_empty());
-    assert!(events[0].unit_id.is_empty());
+    assert!(events[0].key_externs_recorded);
+    assert_eq!(events[0].key_externs, map("dep", "dddd"));
+    assert_eq!(events[0].extern_units, map("dep", "uuuu"));
+    assert_eq!(events[0].unit_id, "self");
     assert!(events[1].key_fields.is_empty(), "no key, no record");
     assert!(!events[1].key_externs_recorded);
     assert_eq!(events[2].key_fields, map("args", "aaaa"));
