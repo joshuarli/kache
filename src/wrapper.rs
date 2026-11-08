@@ -6538,6 +6538,7 @@ fn restore_from_cache_with_memo_store(
     // miss evicts the entry so the recompile stores a portable one —
     // self-healing, mirroring the emit-coverage gate above.
     let mut precomputed_depinfo = rustc_hash::FxHashMap::default();
+    let trace_restore_depinfo = crate::phase_trace::phase("restore_depinfo");
     for cached_file in &meta.files {
         if !matches!(
             crate::compiler::classify_by_filename(&cached_file.name),
@@ -6624,6 +6625,7 @@ fn restore_from_cache_with_memo_store(
         }
         precomputed_depinfo.insert(cached_file.name.clone(), expanded.into_bytes());
     }
+    drop(trace_restore_depinfo);
 
     // One platform per restore, shared across every cached file. The
     // detect call is cheap (cfg cascade) but doing it once keeps the
@@ -6644,6 +6646,7 @@ fn restore_from_cache_with_memo_store(
     let mut exact_restores: Vec<(crate::cache_key::FileFingerprint, &str)> = Vec::new();
     let mut restored_paths: Vec<(String, PathBuf)> = Vec::with_capacity(meta.files.len());
 
+    let trace_restore_artifacts = crate::phase_trace::phase("restore_artifacts");
     for cached_file in &meta.files {
         // Defense-in-depth trust-boundary check (kunobi-ninja/kache#211):
         // `import_downloaded_entry` already rejects unsafe names, but a name that
@@ -6691,6 +6694,7 @@ fn restore_from_cache_with_memo_store(
         }
         restored_paths.push((cached_file.name.clone(), target_path));
     }
+    drop(trace_restore_artifacts);
 
     record_known_file_hashes(memo_store, &exact_restores);
 
