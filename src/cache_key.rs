@@ -481,6 +481,19 @@ pub(crate) fn apply_key_env_vars_in(
     keyed
 }
 
+/// Digest the configured `key_env_vars` patterns and their current raw values
+/// for an adaptive-incremental unit identity. A changed value must select a new
+/// rustc state directory before the full artifact key is computed.
+pub(crate) fn key_env_guard_in(
+    patterns: &[String],
+    env: &crate::invocation::InvocationEnv,
+) -> Option<String> {
+    (!patterns.is_empty()).then(|| {
+        let (matched, _) = matching_key_env_vars(patterns, env.vars_os());
+        key_env_digest(patterns, matched)
+    })
+}
+
 type RawEnvPair = (Vec<u8>, Vec<u8>);
 
 fn matching_key_env_vars(

@@ -17,7 +17,6 @@ path = "source"
 
 [env]
 RUSTC_WRAPPER = "$KACHE"
-CARGO_INCREMENTAL = "0"
 
 [commands]
 build = "cargo build"

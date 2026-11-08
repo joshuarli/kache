@@ -6,9 +6,22 @@ use std::process::ExitStatus;
 
 use crate::compiler::{ArtifactSet, classify_by_filename};
 
+/// How a rustc invocation handles Cargo's incremental codegen flag.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IncrementalMode {
+    /// Remove incremental state from artifact-cache compiles: the key leaves
+    /// the flag out, so a stored artifact must come from a compile without it.
+    Strip,
+    /// Keep an incremental path the adaptive policy isolated and locked.
+    PreserveIsolated,
+}
+
 /// Result of running rustc.
 pub struct CompileResult {
     pub exit_code: i32,
+    /// A Unix signal ended the compiler. `exit_code` then reads 1, as for a
+    /// compile error.
+    pub signaled: bool,
     pub stdout: String,
     /// Complete compiler stderr, retained for cache storage.
     pub stderr: String,
@@ -102,6 +115,7 @@ pub(crate) fn run_rustc(
     _linked_executable: bool,
     skip_remap: bool,
     path_normalizer: &crate::path_normalizer::PathNormalizer,
+    incremental_mode: IncrementalMode,
     metadata_sink: Option<&mut dyn Write>,
     on_dep_info: Option<&mut dyn FnMut() -> bool>,
 ) -> Result<CompileResult> {
@@ -166,7 +180,10 @@ pub(crate) fn run_rustc(
     };
 
     let mut compiler_args: Vec<&String> = remap_args.iter().collect();
-    compiler_args.extend(args.iter());
+    compiler_args.extend(match incremental_mode {
+        IncrementalMode::Strip => strip_incremental_flags(args),
+        IncrementalMode::PreserveIsolated => args.iter().collect(),
+    });
     let response_file = if use_response_file {
         let temp_dir = env
             .resolve(env.temp_dir())
@@ -286,6 +303,7 @@ pub(crate) fn run_rustc(
 
     Ok(CompileResult {
         exit_code,
+        signaled: status.code().is_none(),
         stdout,
         stderr: stderr.into_owned(),
         pending_stderr: forwarding_metadata
@@ -892,11 +910,13 @@ fi
                             false,
                             false,
                             &normalizer,
+                            IncrementalMode::Strip,
                             Some(&mut metadata),
                             None,
                         )
                         .unwrap();
                         assert_eq!(result.exit_code, 0, "{}", result.stderr);
+                        assert!(!result.signaled);
                         assert_eq!(
                             fs::read_to_string(cwd.join("actual-args")).unwrap(),
                             format!("{}\n", expected_args.join("\n"))
@@ -1145,6 +1165,7 @@ fi
         ] {
             let result = CompileResult {
                 exit_code: 0,
+                signaled: false,
                 stdout: String::new(),
                 stderr: "complete stderr".to_owned(),
                 pending_stderr: pending.map(str::to_owned),

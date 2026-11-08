@@ -78,3 +78,75 @@ fn incremental_arguments_and_environment_pass_through_unchanged() {
         }
     }
 }
+
+/// A compile whose result may be stored runs without Cargo's incremental
+/// directory: the key leaves the flag out, so a stored artifact must not
+/// depend on incremental state. This layout is outside the adaptive policy
+/// (the incremental directory is not `<profile>/incremental`), so the miss
+/// takes the ordinary cache path.
+#[test]
+fn a_cached_compile_never_runs_with_cargos_incremental_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("cache");
+    let _daemon = common::DaemonGuard::new(common::kache_binary(), &cache);
+    let rustc = dir.path().join("rustc");
+    let recorded = dir.path().join("argv");
+    let out = dir.path().join("target/debug/deps");
+    let real_rustc = std::process::Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .output()
+        .map(|output| {
+            std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+                .join("bin/rustc")
+        })
+        .unwrap();
+    kache_fs::testutil::write_executable(
+        &rustc,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$ARGV_DUMP\"\nexec '{}' \"$@\"\n",
+            real_rustc.display()
+        ),
+    );
+    let source = dir.path().join("lib.rs");
+    fs::write(&source, "pub fn answer() -> u8 { 42 }\n").unwrap();
+    let incremental = dir.path().join("elsewhere/incremental");
+    fs::create_dir_all(&incremental).unwrap();
+    fs::create_dir_all(&out).unwrap();
+    let output = common::hermetic_command(
+        common::kache_binary(),
+        &cache,
+        Some(&dir.path().join("missing.toml")),
+    )
+    .arg(&rustc)
+    .args([
+        "--crate-name",
+        "fixture",
+        "--crate-type",
+        "lib",
+        &source.display().to_string(),
+        "--out-dir",
+        &out.display().to_string(),
+        "--emit=metadata",
+        "-Cextra-filename=-1234abcd",
+        &format!("-Cincremental={}", incremental.display()),
+    ])
+    .current_dir(dir.path())
+    .env("ARGV_DUMP", &recorded)
+    .env("CARGO_PRIMARY_PACKAGE", "1")
+    .env("KACHE_LOG", "kache=debug")
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let argv = fs::read_to_string(&recorded).unwrap();
+    assert!(
+        argv.lines().any(|arg| arg == "fixture"),
+        "the compile ran: {argv}"
+    );
+    assert!(
+        !argv.contains("incremental="),
+        "a cacheable compile received Cargo's incremental directory: {argv}"
+    );
+    let events = fs::read_to_string(cache.join("events.jsonl")).unwrap();
+    let last: deser_value::Value = deser_json::from_str(events.lines().last().unwrap()).unwrap();
+    assert_eq!(last["result"], "miss", "{last:#?}");
+}

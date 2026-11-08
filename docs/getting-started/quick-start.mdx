@@ -38,11 +38,9 @@ Build once to make eligible outputs available in the cache:
 (
   set -e
   cd "$kache_trial/first"
-  CARGO_INCREMENTAL=0 cargo build --locked --target-dir "$PWD/target"
+  cargo build --locked --target-dir "$PWD/target"
 )
 ```
-
-Cargo enables incremental compilation for workspace members in its `dev` profile by default, and Kache passes those units through uncached by design (see [Incremental builds](#incremental-builds)). Without `CARGO_INCREMENTAL=0` the workspace crates bypass the cache and the second tree has nothing to reuse.
 
 Then build the same revision in the second worktree:
 
@@ -50,7 +48,7 @@ Then build the same revision in the second worktree:
 (
   set -e
   cd "$kache_trial/second"
-  KACHE_PROGRESS=hits CARGO_INCREMENTAL=0 cargo build --locked --target-dir "$PWD/target"
+  KACHE_PROGRESS=hits cargo build --locked --target-dir "$PWD/target"
   kache stats --full --root "$PWD"
 )
 ```
@@ -105,14 +103,15 @@ Kache caches eligible Rust executables by default: binaries, test binaries and b
 
 ## Incremental builds
 
-Cargo enables incremental compilation by default for workspace members and path dependencies in its `dev` profile. When Cargo enables it for a unit, Kache passes that compiler invocation through unchanged and leaves Cargo's incremental directory alone: the unit does not use Kache's artifact cache. Registry dependencies already build without incremental state, so they still hit.
+Cargo enables incremental compilation by default for workspace members and path dependencies in its `dev` profile. Kache compiles those units for the artifact cache without Cargo's incremental directory, so a fresh target or another worktree restores them like any other crate.
 
-That is a deliberate tradeoff:
+Kache also notices a unit you are editing: a build of it, then a miss in the same target where only its sources or dependencies changed. A `git pull`, a branch switch or a rebase counts as editing too, and so does a change in a local crate the unit depends on. That unit gets private incremental state under `<profile>/incremental.kache-auto`, and its next compiles use it. This covers every package Cargo builds incrementally, including a library you edit while running `cargo build -p app`.
 
-- Keep Cargo's default (`CARGO_INCREMENTAL` unset) to reuse incremental state *within* one target directory: edit rebuilds are fast there, but workspace crates never enter Kache's cache and never reuse across worktrees.
-- Set `CARGO_INCREMENTAL=0` (as the walkthrough above does) to let eligible workspace units use the artifact cache instead: cold builds fill the cache, and other worktrees restore from it, at the cost of slower edit rebuilds in the same directory.
+Kache does not store what it compiles this way. It skips the cache for up to eight builds of the unit. After the eighth, or after 15 minutes without a build of the unit, it checks the cache first: a hit restores the cached result and drops the state, and a miss keeps compiling incrementally. Until then, switching back to a version the cache already holds compiles it incrementally instead of restoring it.
 
-Mixing the two in the same target directory is allowed but each mode only reuses its own state. Use one setting per target directory when comparing hits.
+A compile error keeps the state, so the fix still compiles incrementally, as it does with plain Cargo. Kache discards the state when rustc crashes or reports a problem with its incremental files, and after an interrupted build. The state is per target directory and is never shared between worktrees.
+
+A unit Kache declines to cache, such as an excluded source or a compile the compiler refuses, passes through with Cargo's arguments unchanged.
 
 ## Temporarily disable caching
 
