@@ -3913,6 +3913,15 @@ fn external_target_predictions_guard_sources_and_generated_inputs() {
     let original = digest();
     std::fs::write(target.join("debug/deps/unrelated.rlib"), "output").unwrap();
     assert_eq!(digest(), original);
+    std::fs::create_dir_all(root.join(".work")).unwrap();
+    std::fs::write(root.join(".work/temp.log"), "log").unwrap();
+    assert_eq!(digest(), original);
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(root.join(".git/config"), "config").unwrap();
+    assert_eq!(digest(), original);
+    std::fs::create_dir_all(root.join("target")).unwrap();
+    std::fs::write(root.join("target/other.rlib"), "other").unwrap();
+    assert_eq!(digest(), original);
     std::fs::create_dir_all(root.join("assets")).unwrap();
     std::fs::write(root.join("assets/new.txt"), "macro input").unwrap();
     assert_ne!(digest(), original);
@@ -5100,12 +5109,12 @@ fn the_out_dir_guards_cover_target_and_git_under_out_dir() {
         )
     };
     let before = guards();
-    for name in ["target", ".git"] {
+    for name in ["target", ".git", ".work"] {
         std::fs::create_dir_all(package.join(name)).unwrap();
         std::fs::write(package.join(name).join("x"), "x").unwrap();
     }
     assert_eq!(guards().1, before.1, "the crate directory skips them");
-    for name in ["target", ".git"] {
+    for name in ["target", ".git", ".work"] {
         let nested = out.join(name);
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(nested.join("x"), "x").unwrap();

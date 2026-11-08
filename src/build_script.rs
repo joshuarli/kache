@@ -2367,7 +2367,11 @@ fn modified_since(path: &Path, excluded: &[PathBuf], since: std::time::SystemTim
 }
 
 fn package_exclusions(package: &Path, environment: &Environment) -> Vec<PathBuf> {
-    let mut excluded = vec![package.join(".git"), package.join("target")];
+    let mut excluded = vec![
+        package.join(".git"),
+        package.join("target"),
+        package.join(".work"),
+    ];
     for (root, placeholder) in &environment.mappings {
         if *placeholder == TARGET_DIR_PLACEHOLDER && root.starts_with(package) {
             excluded.push(root.clone());
@@ -2624,6 +2628,7 @@ mod tests {
             vec![
                 PathBuf::from("/src/pkg/.git"),
                 PathBuf::from("/src/pkg/target"),
+                PathBuf::from("/src/pkg/.work"),
                 PathBuf::from("/src/pkg/target/debug"),
             ],
             "only target roots under the package are excluded, never the manifest root"

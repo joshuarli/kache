@@ -303,6 +303,11 @@ def edit(checkout, path, n):
 
 def restore(checkout, path):
     subprocess.run(["git", "checkout", "--", path], cwd=checkout, check=True)
+    target_link = checkout / "target"
+    if target_link.is_symlink() or target_link.is_file():
+        target_link.unlink()
+    elif target_link.is_dir():
+        shutil.rmtree(target_link, ignore_errors=True)
 
 
 def allocated(path):

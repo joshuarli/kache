@@ -1082,7 +1082,7 @@ fn crate_tree_digest_in(
 /// in particular is rewritten by the build this key belongs to. `OUT_DIR`
 /// skips nothing: a build script wrote all of it before this unit, and a
 /// macro scanning it reads a nested `target` like any other file.
-const MANIFEST_DIR_SKIPPED: &[&str] = &["target", ".git"];
+const MANIFEST_DIR_SKIPPED: &[&str] = &["target", ".git", ".work"];
 
 /// Cap on entries digested for the `OUT_DIR` guard. Generated code is a few
 /// files; a directory past this is a build tree, and the pre-pass stays
@@ -2744,7 +2744,11 @@ fn ancestor_top_digest(directory: &Path, file_hasher: &FileHasher<'_>) -> Option
     let top = WalkedRoot {
         path: directory.to_path_buf(),
         role: b"ancestor".to_vec(),
-        excluded: vec![directory.join(".git")],
+        excluded: vec![
+            directory.join(".git"),
+            directory.join(".work"),
+            directory.join("target"),
+        ],
         rules: crate::tree_stamp::StampRules {
             link_text: true,
             skip_build_dirs: false,
@@ -2772,7 +2776,7 @@ fn ancestor_top_digest(directory: &Path, file_hasher: &FileHasher<'_>) -> Option
         // A directory in a clone, a file naming the repository in a git
         // worktree: either way it is not what a macro reads, and it differs
         // between checkouts.
-        if name == ".git" {
+        if name == ".git" || name == ".work" || name == "target" {
             continue;
         }
         let path = entry.path();
@@ -2831,7 +2835,10 @@ fn workspace_tree_digest_within(
     let target =
         suffix_within(workspace.target.as_os_str(), &workspace.root, 0).unwrap_or_default();
     let target = target.trim_start_matches(['/', '\\']);
-    let skipped = [target, ".git"];
+    let mut skipped = vec!["target", ".git", ".work"];
+    if !target.is_empty() && !skipped.contains(&target) {
+        skipped.push(target);
+    }
     let mut roots =
         vec![TreeRoot::new(workspace.root.clone(), b"workspace", &skipped).skipping_build_dirs()];
     if let Some(out_dir) = &workspace.out_dir {
