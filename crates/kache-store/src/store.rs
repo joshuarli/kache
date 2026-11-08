@@ -5268,7 +5268,10 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
     }
 
     /// Reclaim orphaned blob files — content-addressed files on disk with no
-    /// row in the `blobs` table. They accumulate when a crash interrupts a
+    /// row in the `blobs` table and no entry's `entry_blobs` mapping naming
+    /// them. A mapping without a counted row is refcount drift, not a free
+    /// blob, so it keeps the file. An unreadable reference row fails the
+    /// sweep rather than reading as unreferenced. They accumulate when a crash interrupts a
     /// `put`/import between materialize (Phase 1) and the commit transaction
     /// (Phase 2), or when `remove_entry` runs against an entry whose
     /// `meta.json` is gone (so its blob hashes can't be decremented). Nothing
@@ -5342,10 +5345,12 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         self.db.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<()> {
             let referenced: std::collections::HashSet<String> = {
-                let mut stmt = self.db.prepare("SELECT hash FROM blobs")?;
+                let mut stmt = self
+                    .db
+                    .prepare("SELECT hash FROM blobs UNION SELECT hash FROM entry_blobs")?;
                 stmt.query_map([], |row| row.get::<_, String>(0))?
-                    .filter_map(|r| r.ok())
-                    .collect()
+                    .collect::<rusqlite::Result<_>>()
+                    .context("reading blob references before the orphan sweep")?
             };
             for (hash, path, size) in &candidates {
                 if referenced.contains(hash) {

@@ -3530,6 +3530,72 @@ fn sweep_orphan_blobs_removes_unreferenced_files_only() {
 }
 
 #[test]
+fn sweep_orphan_blobs_keeps_blobs_a_committed_mapping_still_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let store = Store::open(&config).unwrap();
+    let output_file = dir.path().join("output.rlib");
+    std::fs::write(&output_file, b"mapped but uncounted").unwrap();
+    store
+        .put(
+            "mapped",
+            "mylib",
+            &["lib".to_string()],
+            &[],
+            "x86_64-unknown-linux-gnu",
+            "dev",
+            &[(output_file, "libmylib.rlib".to_string())],
+            "",
+            "",
+        )
+        .unwrap();
+    let hash = store.get("mapped").unwrap().unwrap().files[0].hash.clone();
+    store
+        .db
+        .execute("DELETE FROM blobs WHERE hash = ?1", params![hash])
+        .unwrap();
+
+    let stats = store.sweep_orphan_blobs(std::time::Duration::ZERO).unwrap();
+
+    assert_eq!(stats.removed, 0);
+    assert!(store.blob_path(&hash).is_file());
+    assert!(store.get("mapped").unwrap().is_some());
+}
+
+#[test]
+fn sweep_orphan_blobs_fails_when_a_reference_row_is_unreadable() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let store = Store::open(&config).unwrap();
+    let output_file = dir.path().join("output.rlib");
+    std::fs::write(&output_file, b"unreadable reference").unwrap();
+    store
+        .put(
+            "unreadable",
+            "mylib",
+            &["lib".to_string()],
+            &[],
+            "x86_64-unknown-linux-gnu",
+            "dev",
+            &[(output_file, "libmylib.rlib".to_string())],
+            "",
+            "",
+        )
+        .unwrap();
+    let hash = store.get("unreadable").unwrap().unwrap().files[0].hash.clone();
+    store
+        .db
+        .execute_batch(
+            "UPDATE blobs SET hash = CAST(hash AS BLOB);
+             UPDATE entry_blobs SET hash = CAST(hash AS BLOB);",
+        )
+        .unwrap();
+
+    assert!(store.sweep_orphan_blobs(std::time::Duration::ZERO).is_err());
+    assert!(store.blob_path(&hash).is_file());
+}
+
+#[test]
 fn sweep_orphan_blobs_respects_min_age() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
