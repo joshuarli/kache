@@ -22,7 +22,166 @@ import sys
 import time
 from pathlib import Path
 
-EDIT_MARKER = "\npub const KACHE_BENCH_EDIT: u32 = "
+EDIT_MARKER = "\n// --- KACHE BENCH EDIT WORKFLOW ---\n"
+LEGACY_MARKER = "\npub const KACHE_BENCH_EDIT: u32 = "
+
+REALISTIC_EDITS = (
+    (
+        "add_validator_helper",
+        """
+pub fn bench_validate_key(key: &str) -> Option<String> {
+    if key.is_empty() || key.len() > 1024 {
+        return None;
+    }
+    let mut out = String::with_capacity(key.len());
+    for ch in key.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    Some(out)
+}
+""",
+    ),
+    (
+        "tweak_validator_body",
+        """
+pub fn bench_validate_key(key: &str) -> Option<String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() || trimmed.len() > 2048 {
+        return None;
+    }
+    let mut out = String::with_capacity(trimmed.len());
+    for (idx, ch) in trimmed.chars().enumerate() {
+        if idx == 0 && ch.is_ascii_digit() {
+            out.push('k');
+            out.push('_');
+        }
+        match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '/' => out.push(ch),
+            ' ' | ':' | '=' => out.push('_'),
+            _ => out.push('x'),
+        }
+    }
+    Some(out)
+}
+""",
+    ),
+    (
+        "add_batch_consumer",
+        """
+pub fn bench_validate_key(key: &str) -> Option<String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() || trimmed.len() > 2048 {
+        return None;
+    }
+    let mut out = String::with_capacity(trimmed.len());
+    for (idx, ch) in trimmed.chars().enumerate() {
+        if idx == 0 && ch.is_ascii_digit() {
+            out.push('k');
+            out.push('_');
+        }
+        match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '/' => out.push(ch),
+            ' ' | ':' | '=' => out.push('_'),
+            _ => out.push('x'),
+        }
+    }
+    Some(out)
+}
+
+pub fn bench_process_batch(keys: &[&str]) -> Vec<String> {
+    keys.iter().filter_map(|k| bench_validate_key(k)).collect()
+}
+""",
+    ),
+    (
+        "refactor_consumer_dedup",
+        """
+pub fn bench_validate_key(key: &str) -> Option<String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() || trimmed.len() > 2048 {
+        return None;
+    }
+    let mut out = String::with_capacity(trimmed.len());
+    for (idx, ch) in trimmed.chars().enumerate() {
+        if idx == 0 && ch.is_ascii_digit() {
+            out.push('k');
+            out.push('_');
+        }
+        match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '/' => out.push(ch),
+            ' ' | ':' | '=' => out.push('_'),
+            _ => out.push('x'),
+        }
+    }
+    Some(out)
+}
+
+pub fn bench_process_batch(keys: &[&str]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(keys.len());
+    for &k in keys {
+        if let Some(clean) = bench_validate_key(k) {
+            if seen.insert(clean.clone()) {
+                out.push(clean);
+            }
+        }
+    }
+    out
+}
+""",
+    ),
+    (
+        "doc_and_error_handling",
+        """
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BenchKeyError {
+    Empty,
+    TooLong(usize),
+}
+
+pub fn bench_validate_key(key: &str) -> Result<String, BenchKeyError> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err(BenchKeyError::Empty);
+    }
+    if trimmed.len() > 2048 {
+        return Err(BenchKeyError::TooLong(trimmed.len()));
+    }
+    let mut out = String::with_capacity(trimmed.len());
+    for (idx, ch) in trimmed.chars().enumerate() {
+        if idx == 0 && ch.is_ascii_digit() {
+            out.push('k');
+            out.push('_');
+        }
+        match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '/' => out.push(ch),
+            ' ' | ':' | '=' => out.push('_'),
+            _ => out.push('x'),
+        }
+    }
+    Ok(out)
+}
+
+pub fn bench_process_batch(keys: &[&str]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(keys.len());
+    for &k in keys {
+        if let Ok(clean) = bench_validate_key(k) {
+            if seen.insert(clean.clone()) {
+                out.push(clean);
+            }
+        }
+    }
+    out
+}
+""",
+    ),
+)
+
 WRAPPER_ENV = (
     "KACHE_",
     "MBX_",
@@ -43,7 +202,6 @@ def arm_env(arm, binary, cache, target, scratch):
     env["CC_KNOWN_WRAPPER_CUSTOM"] = ""
     env["HOST_CC"] = "clang"
     env["HOST_CXX"] = "clang++"
-    # Empty values override a global `build.rustc-wrapper` and `[env]` table.
     env["RUSTC_WRAPPER"] = ""
     if arm.startswith("kache-"):
         env["RUSTC_WRAPPER"] = str(binary)
@@ -52,7 +210,6 @@ def arm_env(arm, binary, cache, target, scratch):
         env["KACHE_CACHE_DIR"] = str(cache)
         env["KACHE_CONFIG"] = str(scratch / "empty-config.toml")
     elif arm == "mbx":
-        # mbx defers to any configured wrapper, including a global one.
         del env["RUSTC_WRAPPER"]
         env["CARGO_BUILD_RUSTC_WRAPPER"] = ""
         env["MBX_CACHE_DIR"] = str(cache)
@@ -60,9 +217,15 @@ def arm_env(arm, binary, cache, target, scratch):
     return env
 
 
-def children_cpu():
+def children_resources():
     usage = resource.getrusage(resource.RUSAGE_CHILDREN)
-    return usage.ru_utime + usage.ru_stime
+    cpu_s = usage.ru_utime + usage.ru_stime
+    max_rss_bytes = (
+        usage.ru_maxrss
+        if sys.platform == "darwin"
+        else usage.ru_maxrss * 1024
+    )
+    return cpu_s, max_rss_bytes
 
 
 class Arm:
@@ -76,15 +239,20 @@ class Arm:
         cargo = ["build", "--offline", "-q", "-p", self.args.package]
         command = [str(self.binary), *cargo] if self.name == "mbx" else ["cargo", *cargo]
         env = arm_env(self.name, self.binary, cache, target, self.scratch)
-        cpu_before = children_cpu()
+        cpu_before, _ = children_resources()
         started = time.monotonic()
         done = subprocess.run(command, cwd=checkout, env=env, capture_output=True, text=True)
         wall = time.monotonic() - started
+        cpu_after, max_rss = children_resources()
         if done.returncode != 0:
             sys.exit(f"{self.name} build failed in {checkout}:\n{done.stderr}")
         if self.name == "mbx" and "deferring to it" in done.stderr:
             sys.exit(f"mbx deferred to another wrapper:\n{done.stderr}")
-        return {"wall_s": round(wall, 3), "cpu_s": round(children_cpu() - cpu_before, 3)}
+        return {
+            "wall_s": round(wall, 3),
+            "cpu_s": round(cpu_after - cpu_before, 3),
+            "max_rss_mb": round(max_rss / (1024 * 1024), 1),
+        }
 
     def last_event(self, cache):
         events = cache / "events.jsonl"
@@ -106,12 +274,31 @@ class Arm:
             subprocess.run([str(self.binary), "daemon", "stop"], env=env, capture_output=True)
 
 
+def edit_content(n):
+    if 1 <= n <= len(REALISTIC_EDITS):
+        name, snippet = REALISTIC_EDITS[n - 1]
+        return name, snippet.strip()
+    return f"additive_helper_{n}", f"""
+pub fn bench_extra_helper_{n}(seed: u64) -> u64 {{
+    let mut acc = seed ^ {n};
+    for i in 1..={n * 10} {{
+        acc = acc.wrapping_mul(6364136223846793005).wrapping_add(i);
+    }}
+    acc
+}}
+""".strip()
+
+
 def edit(checkout, path, n):
     source = checkout / path
     text = source.read_text()
     if EDIT_MARKER in text:
         text = text[: text.index(EDIT_MARKER)]
-    source.write_text(f"{text}{EDIT_MARKER}{n};\n")
+    elif LEGACY_MARKER in text:
+        text = text[: text.index(LEGACY_MARKER)]
+    kind, snippet = edit_content(n)
+    source.write_text(f"{text}{EDIT_MARKER}\n{snippet}\n")
+    return kind
 
 
 def restore(checkout, path):
@@ -143,6 +330,8 @@ def sample(arm, index, args, scratch):
 
     def record(name, result):
         result["event"] = arm.last_event(cache)
+        result["store_bytes"] = allocated(cache) if cache.exists() else 0
+        result["target_bytes"] = allocated(target_a) if target_a.exists() else 0
         phases[name] = result
 
     record("cold", arm.build(a, cache, target_a))
@@ -150,8 +339,10 @@ def sample(arm, index, args, scratch):
     record("warm_store_empty_target_other_checkout", arm.build(b, cache, target_b))
     record("noop_intact_target", arm.build(a, cache, target_a))
     for n in range(1, args.edits + 1):
-        edit(a, args.edit, n)
-        record(f"edit_{n}", arm.build(a, cache, target_a))
+        kind = edit(a, args.edit, n)
+        result = arm.build(a, cache, target_a)
+        result["edit_kind"] = kind
+        record(f"edit_{n}", result)
     restore(a, args.edit)
     record("revert_to_cached_source", arm.build(a, cache, target_a))
     phases["allocated_bytes"] = {

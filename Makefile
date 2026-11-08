@@ -18,7 +18,7 @@ endif
 .PHONY: help build test check test-ci release verify-release lint \
   client-crates-check test-resource-guard-check pr mutants-diff \
   e2e e2e-negative-control bench bench-retry bench-trace bench-sccache bench-mbx bench-pr \
-  bench-short test-bench-short bench-contention test-bench-contention \
+  bench-short test-bench-short test-bench-edit-loop bench-contention test-bench-contention \
   perf-gate-local trace-phases bump release-tag crates-status \
   crates-bootstrap crates-bootstrap-plan
 
@@ -217,6 +217,9 @@ bench-short:
 # Validate sample isolation, result admission and paired comparisons.
 test-bench-short:
 	@python3 -m unittest discover -s scripts/bench/tests -t scripts
+
+test-bench-edit-loop:
+	@python3 -m unittest scripts/bench/tests/test_edit_loop.py
 
 # Run six overlapping Cargo jobs on Linux; pass --output with a fresh directory.
 bench-contention:
