@@ -198,7 +198,8 @@ fn version_prints_package_version() {
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicates::str::contains(env!("CARGO_PKG_VERSION")));
+        .stdout(predicates::str::contains(env!("CARGO_PKG_VERSION")))
+        .stdout(predicates::str::contains("https://github.com/joshuarli/kache"));
 }
 
 #[test]

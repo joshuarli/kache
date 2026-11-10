@@ -546,7 +546,7 @@ fn run_main() -> Result<()> {
                     Vec::new(),
                 )?;
             } else {
-                println!("kache {VERSION}");
+                println!("kache {VERSION}\nhttps://github.com/joshuarli/kache");
             }
             return Ok(());
         }
