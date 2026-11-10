@@ -9612,3 +9612,21 @@ fn cc_prefix_maps_keep_the_source_parent_when_var_and_private_var_meet() {
     let _ = std::fs::remove_dir_all(dir.join("clone-a"));
 }
 
+#[test]
+fn clang_runtime_driver_flags_are_cacheable_and_keyed() {
+    let base = CcArgs::parse(&s(&["clang++", "-c", "unit.cc", "-Werror"])).unwrap();
+    let with_flags = CcArgs::parse(&s(&[
+        "clang++", "-c", "unit.cc", "-Werror", "-fuse-ld=lld",
+        "--rtlib=compiler-rt", "--unwindlib=libunwind",
+    ])).unwrap();
+    assert!(with_flags.refuse_reasons(&[]).is_empty());
+    assert_ne!(cc_raw_flags_for_key(&base, &[]), cc_raw_flags_for_key(&with_flags, &[]));
+    for flag in ["--rtlib=compiler-rt", "--unwindlib=libunwind"] {
+        let args = CcArgs::parse(&s(&["clang++", "-c", "unit.cc", "-Werror", flag])).unwrap();
+        assert!(args.refuse_reasons(&[]).is_empty());
+        assert!(cc_raw_flags_for_key(&args, &[]).contains(&flag.as_bytes().to_vec()));
+        let changed = format!("{flag}-changed");
+        let changed_args = CcArgs::parse(&s(&["clang++", "-c", "unit.cc", "-Werror", &changed])).unwrap();
+        assert_ne!(cc_raw_flags_for_key(&args, &[]), cc_raw_flags_for_key(&changed_args, &[]));
+    }
+}

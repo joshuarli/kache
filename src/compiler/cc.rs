@@ -3149,6 +3149,18 @@ pub static CC_FLAGS: &[FlagSpec] = &[
         dialect: Some(Dialect::Cl),
     },
     FlagSpec {
+        matcher: Matcher::Prefix("--rtlib="),
+        class: FlagClass::RawKeyed,
+        source: "runtime selection and compile diagnostics",
+        dialect: None,
+    },
+    FlagSpec {
+        matcher: Matcher::Prefix("--unwindlib="),
+        class: FlagClass::RawKeyed,
+        source: "unwind runtime selection and compile diagnostics",
+        dialect: None,
+    },
+    FlagSpec {
         // No linker runs for `-c` or `-E`, but an unused-argument warning
         // can fail under `-Werror`. Key the spelling so a successful entry
         // without it cannot hide that failure. cargo-xwin puts

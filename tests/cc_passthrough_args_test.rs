@@ -1314,3 +1314,37 @@ fn identical_sources_at_different_paths_get_their_own_entries() {
         );
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn clang_runtime_driver_flags_cache_without_hiding_warning_errors() {
+    let dir = FixtureDir::new();
+    let root = dir.path().canonicalize().unwrap();
+    fs::write(root.join("kache.toml"), "").unwrap();
+    fs::write(root.join("unit.c"), "#include \"value.h\"\nint value(void) { return VALUE; }\n").unwrap();
+    fs::write(root.join("value.h"), "#define VALUE 42\n").unwrap();
+    let compile = |extra: &[&str]| {
+        let _ = fs::remove_file(root.join("unit.o"));
+        cacheable_cc_command(&root)
+            .args(["clang", "-c", "-MD", "-fuse-ld=lld", "--rtlib=compiler-rt", "--unwindlib=libunwind"])
+            .args(extra)
+            .args(["unit.c", "-o", "unit.o"])
+            .env("KACHE_MIN_STORE_COMPILE_MS", "0")
+            .output()
+            .unwrap()
+    };
+    for expected in ["miss", "local_hit"] {
+        let output = compile(&[]);
+        assert!(output.status.success(), "{expected}: {}", String::from_utf8_lossy(&output.stderr));
+        let event = last_cc_event(&root);
+        assert_eq!(event["result"], expected, "{event:?}");
+    }
+    let previous = fs::read(root.join("unit.o")).unwrap();
+    fs::write(root.join("value.h"), "#define VALUE 43\n").unwrap();
+    let output = compile(&[]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_ne!(previous, fs::read(root.join("unit.o")).unwrap());
+    assert_eq!(last_cc_event(&root)["result"], "miss");
+    let output = compile(&["-Werror=unused-command-line-argument"]);
+    assert!(!output.status.success());
+}
