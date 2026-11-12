@@ -23,7 +23,7 @@ kache-core = { version = "2.0.0-rc.2", path = "../kache-core" }
 kache-format = { version = "2.0.0-rc.2", path = "../kache-format" }
 kache-fs = { version = "2.0.0-rc.2", path = "../kache-fs", features = ["staging"] }
 anyhow = "1"
-rusqlite = { version = "0.41", features = ["bundled"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
 deser = { version = "0.10.2", features = ["derive"] }
 deser-json = "0.10.2"
 blake3 = "1"
