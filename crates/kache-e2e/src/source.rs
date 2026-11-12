@@ -31,6 +31,7 @@ pub fn prepare_relocated_dir(src: &Path) -> Result<RelocatedDir> {
     copy_dir_recursive(src, dst.path())
         .with_context(|| format!("copying relocated fixture {}", src.display()))?;
     copy_toolchain_pin(src, dst.path());
+    copy_cargo_config(src, dst.path());
     let root = dst.path().to_path_buf();
     Ok(RelocatedDir { _temp: dst, root })
 }
@@ -44,6 +45,21 @@ pub fn copy_toolchain_pin(src: &Path, dst: &Path) {
                 let _ = std::fs::copy(&pin, dst.join(name));
                 return;
             }
+        }
+    }
+}
+
+/// Carry the nearest Cargo configuration into the relocated tree, so the copy
+/// resolves crates from the same registry and the cache keys stay comparable.
+pub fn copy_cargo_config(src: &Path, dst: &Path) {
+    for dir in src.ancestors() {
+        let config = dir.join(".cargo").join("config.toml");
+        if config.is_file() {
+            let target = dst.join(".cargo");
+            if !target.join("config.toml").exists() && std::fs::create_dir_all(&target).is_ok() {
+                let _ = std::fs::copy(&config, target.join("config.toml"));
+            }
+            return;
         }
     }
 }
@@ -450,6 +466,22 @@ mod tests {
         assert_eq!(
             std::fs::read(relocated.path().join("nested").join("deep.txt")).unwrap(),
             b"deep"
+        );
+    }
+
+    #[test]
+    fn prepare_relocated_dir_carries_the_nearest_cargo_config() {
+        let base = TempDir::new().unwrap();
+        std::fs::create_dir_all(base.path().join(".cargo")).unwrap();
+        std::fs::write(base.path().join(".cargo").join("config.toml"), b"[source.crates-io]\n").unwrap();
+        let src = base.path().join("scenarios").join("fixture");
+        std::fs::create_dir_all(&src).unwrap();
+
+        let relocated = prepare_relocated_dir(&src).unwrap();
+
+        assert_eq!(
+            std::fs::read(relocated.path().join(".cargo").join("config.toml")).unwrap(),
+            b"[source.crates-io]\n"
         );
     }
 
