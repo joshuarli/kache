@@ -6,3 +6,9 @@
 # that wants a host file sets KACHE_HOST_CONFIG on its own command.
 [env]
 KACHE_HOST_CONFIG = ""
+
+[source.crates-io]
+replace-with = "stuff"
+
+[source.stuff]
+registry = "sparse+https://crates.17166969.xyz/current/crates-io/"
