@@ -1,5 +1,5 @@
-[![CI](https://github.com/kunobi-ninja/kache/actions/workflows/ci.yml/badge.svg)](https://github.com/kunobi-ninja/kache/actions/workflows/ci.yml)
-[![Bench](https://github.com/kunobi-ninja/kache/actions/workflows/bench.yml/badge.svg)](https://github.com/kunobi-ninja/kache/actions/workflows/bench.yml)
+[![CI](https://github.com/joshuarli/kache/actions/workflows/ci.yml/badge.svg)](https://github.com/joshuarli/kache/actions/workflows/ci.yml)
+[![Bench](https://github.com/joshuarli/kache/actions/workflows/bench.yml/badge.svg)](https://github.com/joshuarli/kache/actions/workflows/bench.yml)
 [![Crates.io](https://img.shields.io/crates/v/kache.svg)](https://crates.io/crates/kache)
 [![Documentation](https://img.shields.io/badge/docs-kunobi.ninja-blue)][docs-badge]
 
@@ -92,11 +92,11 @@ The action can persist the local store through GitHub's cache service.
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=kunobi-ninja%2Fkache&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=joshuarli%2Fkache&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=kunobi-ninja/kache&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=kunobi-ninja/kache&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=kunobi-ninja/kache&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=joshuarli/kache&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=joshuarli/kache&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=joshuarli/kache&type=date&legend=top-left" />
  </picture>
 </a>
 
@@ -114,8 +114,8 @@ The action can persist the local store through GitHub's cache service.
 
 ## Help improve Kache
 
-[Report a bug](https://github.com/kunobi-ninja/kache/issues/new?template=bug_report.md),
-[request a feature](https://github.com/kunobi-ninja/kache/issues/new?template=feature_request.md),
+[Report a bug](https://github.com/joshuarli/kache/issues/new?template=bug_report.md),
+[request a feature](https://github.com/joshuarli/kache/issues/new?template=feature_request.md),
 or read [CONTRIBUTING.md](.github/CONTRIBUTING.md) to contribute.
 
 Licensed under [Apache 2.0](LICENSE).
