@@ -4848,7 +4848,7 @@ fn compile_count(event_log: &EventLogStats) -> u64 {
 /// when nothing but probes ran.
 fn passthrough_pct(event_log: &EventLogStats) -> Option<f64> {
     let compiles = compile_count(event_log);
-    (compiles > 0).then(|| event_log.passed_through as f64 / compiles as f64 * 100.0)
+    (compiles > 0).then_some(event_log.passed_through as f64 / compiles as f64 * 100.0)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
