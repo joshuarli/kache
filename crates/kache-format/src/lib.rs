@@ -180,6 +180,15 @@ pub fn is_safe_stored_artifact_name(name: &str) -> bool {
     }
 }
 
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct BlobStats {
+    pub total_blobs: usize,
+    pub total_blob_size: u64,
+    pub total_logical_size: u64,
+    pub savings: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,12 +350,4 @@ mod tests {
         // A requested kind the gate can't map to a file is ignored, not rejected.
         assert!(mk(&["link"]).covers_requested_emit(&req(&["link", "future-exotic"])));
     }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct BlobStats {
-    pub total_blobs: usize,
-    pub total_blob_size: u64,
-    pub total_logical_size: u64,
-    pub savings: u64,
 }
