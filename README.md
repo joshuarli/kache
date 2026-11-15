@@ -1,5 +1,5 @@
-[![CI](https://github.com/kunobi-ninja/kache/actions/workflows/ci.yml/badge.svg)](https://github.com/kunobi-ninja/kache/actions/workflows/ci.yml)
-[![Bench](https://github.com/kunobi-ninja/kache/actions/workflows/bench.yml/badge.svg)](https://github.com/kunobi-ninja/kache/actions/workflows/bench.yml)
+[![CI](https://github.com/joshuarli/kache/actions/workflows/ci.yml/badge.svg)](https://github.com/joshuarli/kache/actions/workflows/ci.yml)
+[![Bench](https://github.com/joshuarli/kache/actions/workflows/bench.yml/badge.svg)](https://github.com/joshuarli/kache/actions/workflows/bench.yml)
 [![Crates.io](https://img.shields.io/crates/v/kache.svg)](https://crates.io/crates/kache)
 [![Documentation](https://img.shields.io/badge/docs-kunobi.ninja-blue)][docs-badge]
 
@@ -17,8 +17,26 @@ Built by [Kunobi][kunobi-brand].
 
 ## Install
 
+This repository, [joshuarli/kache](https://github.com/joshuarli/kache), is a maintained fork of
+Kunobi's Kache. Install this fork's builds, not the crates.io or upstream packages, which are
+Kunobi's distribution.
+
+Each release is a `release-<sha>` prerelease of this repository. It ships `kache-<target>.zip` and
+`kache-engine-<target>.zip` for `aarch64-apple-darwin`, `aarch64-unknown-linux-musl-static`, and
+`x86_64-unknown-linux-musl-static`, plus `SHA256SUMS`. Install both binaries from the same release
+into `~/.cargo/bin` after checking both archives against `SHA256SUMS`, then run:
+
 ```bash
-cargo install kache --locked
+kache init
+```
+
+On machines managed by [joshuarli/usr](https://github.com/joshuarli/usr), `setup-kache` performs
+those steps and records the installed binaries' digests in `~/.cargo/bin/.kache-release`.
+
+To build from source instead, install both binaries from this fork's checkout (Rust 1.95 or newer):
+
+```bash
+cargo install --path . --locked --bins
 kache init
 ```
 
@@ -28,9 +46,6 @@ shims. Run `kache init --check` for a preview.
 
 Then use Cargo as usual in your project. Kache caches eligible compiler work
 automatically.
-
-Cargo installation needs Rust 1.95 or newer. Prefer a prebuilt package?
-[Homebrew, APT, AUR, mise, and Nix →](https://kunobi.ninja/docs/kache/getting-started/installation)
 
 ## See it reuse a build
 
@@ -92,11 +107,11 @@ The action can persist the local store through GitHub's cache service.
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=kunobi-ninja%2Fkache&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=joshuarli%2Fkache&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=kunobi-ninja/kache&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=kunobi-ninja/kache&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=kunobi-ninja/kache&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=joshuarli/kache&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=joshuarli/kache&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=joshuarli/kache&type=date&legend=top-left" />
  </picture>
 </a>
 
@@ -114,8 +129,8 @@ The action can persist the local store through GitHub's cache service.
 
 ## Help improve Kache
 
-[Report a bug](https://github.com/kunobi-ninja/kache/issues/new?template=bug_report.md),
-[request a feature](https://github.com/kunobi-ninja/kache/issues/new?template=feature_request.md),
+[Report a bug](https://github.com/joshuarli/kache/issues/new?template=bug_report.md),
+[request a feature](https://github.com/joshuarli/kache/issues/new?template=feature_request.md),
 or read [CONTRIBUTING.md](.github/CONTRIBUTING.md) to contribute.
 
 Licensed under [Apache 2.0](LICENSE).

@@ -1,5 +1,5 @@
 Prefix: KACH
-Next: 24
+Next: 26
 
 ### KACH-21 · P2 · Linux fixture scenarios run in no gate
 
@@ -19,6 +19,25 @@ Next: 24
 - **Fix with:** none
 - **Effort:** S
 
+### KACH-24 · P3 · Make release-tag advice match the dispatch-only release workflow
+
+- **Area:** release
+- **Where:** Makefile:279-281, .github/workflows/release.yml:4,38
+- **Problem:** make release-tag pushes a tag and says that starts the release pipeline, but release.yml declares only workflow_dispatch and requires the default branch, so following the Makefile publishes nothing and leaves an unused tag.
+- **Recommendation:** Replace the release-tag target and its message with the actual procedure: gh workflow run release.yml on the default branch, then verify the run's head SHA and the release-<sha> prerelease it creates; remove the tag push.
+- **Fix with:** make -n release-tag no longer pushes a tag, and its text names gh workflow run release.yml; the release workflow is unchanged.
+- **Effort:** S
+
+### KACH-25 · P3 · Point the documentation install pages at this fork's releases
+
+- **Area:** docs
+- **Where:** docs/index.mdx, docs/getting-started/installation.mdx
+- **Problem:** The README now installs joshuarli/kache release-<sha> builds, but docs/index.mdx and docs/getting-started/installation.mdx still lead with cargo install kache --locked and cargo-binstall, which install Kunobi's crates.io distribution rather than this fork, along with Homebrew, APT, AUR, mise, and Nix packages that are also upstream.
+- **Recommendation:** Lead those pages with this fork's release archives and source install (both kache and kache-engine), and keep the upstream channels only as attributed alternatives, or drop them.
+- **Fix with:** rg -n "cargo install kache --locked|cargo-binstall" docs/ finds no primary install instruction that selects the upstream distribution.
+- **Effort:** S
+
+
 ### KACH-23 · P4 · Fixture sources track build outputs every e2e run deletes
 
 - **Area:** Tests
@@ -27,3 +46,4 @@ Next: 24
 - **Recommendation:** Remove the tracked outputs and ignore those directories.
 - **Fix with:** none
 - **Effort:** S
+
