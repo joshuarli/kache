@@ -2358,28 +2358,14 @@ mod tests {
     }
 
     #[test]
-    fn help_lists_commands_by_task_and_leaves_out_plumbing() {
+    fn help_includes_script_and_nested_commands() {
         let help = cli_args::top_help_text();
-        let listed: Vec<&str> = help
-            .lines()
-            .skip_while(|line| *line != "Commands:")
-            .skip(1)
-            .take_while(|line| !line.is_empty())
-            .filter_map(|line| line.split_whitespace().next())
-            .collect();
-        assert_eq!(
-            listed,
-            [
-                "init",
-                "doctor",
-                "config",
-                "stats",
-                "clean",
-                "explain",
-                "list",
-                "daemon",
-            ]
-        );
+        for usage in ["kache gc [OPTIONS]", "kache report [OPTIONS]", "kache telemetry write [OPTIONS] <DIR>", "kache config set [OPTIONS] <KEY> <VALUE>", "kache daemon restart"] {
+            assert!(help.contains(usage), "missing {usage}");
+        }
+        for option in ["--stale <DURATION>", "--stale-schema", "--crate <NAME>", "--all"] {
+            assert!(help.contains(option), "missing {option}");
+        }
     }
 
     #[cfg(unix)]
