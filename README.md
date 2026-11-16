@@ -145,3 +145,5 @@ Licensed under [Apache 2.0](LICENSE).
 [benchmark-guide]: https://kunobi.ninja/docs/kache/benchmarks?utm_source=github&utm_medium=readme&utm_campaign=kache&utm_content=benchmark_guide
 [first-reuse]: https://kunobi.ninja/docs/kache/getting-started/quick-start?utm_source=github&utm_medium=readme&utm_campaign=kache&utm_content=first_reuse
 [kunobi-desktop]: https://kunobi.ninja/product/desktop?utm_source=github&utm_medium=readme&utm_campaign=kache&utm_content=desktop
+
+Run `kache --help` for the complete command reference and examples, including script-oriented and nested commands. Use `kache help <command>` for a focused page.

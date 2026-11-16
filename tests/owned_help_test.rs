@@ -18,7 +18,14 @@ fn built_help_identifies_the_maintainer_without_changing_other_output() {
     let kache = env!("CARGO_BIN_EXE_kache");
     let engine = env!("CARGO_BIN_EXE_kache-engine");
     for binary in [kache, engine] {
-        assert!(output(binary, &["--help"]).trim_end().ends_with(FOOTER));
+        let help = output(binary, &["--help"]);
+        assert_eq!(help, output(binary, &["-h"]));
+        assert!(help.trim_end().ends_with(FOOTER));
+        assert_eq!(help.matches(FOOTER).count(), 1);
+        assert!(help.contains("Examples:\n"));
+        for usage in ["kache cargo [ARGS]...", "kache gc [OPTIONS]", "kache purge [OPTIONS]", "kache report [OPTIONS]", "kache telemetry write [OPTIONS] <DIR>", "kache config set [OPTIONS] <KEY> <VALUE>", "kache daemon restart", "kache install-shims [OPTIONS] [DIR]"] {
+            assert!(help.contains(usage), "missing {usage}");
+        }
         for args in [&["--version"][..], &["--json", "--help"], &["--json", "--version"], &["doctor", "--help"]] {
             assert!(!output(binary, args).contains("Maintained by Joshua Li:"));
         }

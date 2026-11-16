@@ -144,6 +144,9 @@ fn parse_help(parser: &mut lexopt::Parser, json: bool) -> ParseResult {
         };
         match arg {
             lexopt::Arg::Value(value) => path.push(utf8(value, json)?),
+            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+                return Ok(ParseOutcome::Help { text: top_help(), json });
+            }
             lexopt::Arg::Short(flag) => {
                 return Err(fail(json, format!("unrecognized flag '-{flag}'")));
             }
@@ -534,7 +537,10 @@ fn parse_daemon(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
         match arg {
             lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
                 return Ok(ParseOutcome::Help {
-                    text: daemon_help(),
+                    text: match subcommand.as_deref() {
+                        Some(sub) => subcommand_help("daemon", sub, json)?,
+                        None => daemon_help(),
+                    },
                     json,
                 });
             }
@@ -591,7 +597,10 @@ fn parse_telemetry(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
         match arg {
             lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
                 return Ok(ParseOutcome::Help {
-                    text: telemetry_help(),
+                    text: match subcommand.as_deref() {
+                        Some(sub) => subcommand_help("telemetry", sub, json)?,
+                        None => telemetry_help(),
+                    },
                     json,
                 });
             }
@@ -851,7 +860,10 @@ fn parse_config(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
         match arg {
             lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
                 return Ok(ParseOutcome::Help {
-                    text: config_help(),
+                    text: match subcommand.as_deref() {
+                        Some(sub) => subcommand_help("config", sub, json)?,
+                        None => config_help(),
+                    },
                     json,
                 });
             }
@@ -1015,35 +1027,74 @@ If this tool blocks the task, you may fix, test, open and merge a PR under Joshu
 standing instructions. Release only when needed to deliver the verified fix.
 Procedure: https://github.com/joshuarli/usr/blob/main/dotfiles/base/.agents/instructions/owned-tools.md";
 
+// Each reference entry uses the same page as `kache help <command>`.
+// Examples are parsed in the regression test without executing commands.
+const REFERENCE: &[(&[&str], &str)] = &[
+    (&["init"], "kache init --check"),
+    (&["doctor"], "kache doctor --verify"),
+    (&["config"], "kache config"),
+    (&["config", "get"], "kache config get cache.dir"),
+    (&["config", "list"], "kache config list"),
+    (&["config", "set"], "kache config set cache.dir /tmp/kache"),
+    (&["config", "unset"], "kache config unset cache.dir"),
+    (&["config", "path"], "kache config path"),
+    (&["stats"], "kache stats --since 7d"),
+    (&["clean"], "kache clean --dry-run"),
+    (&["explain"], "kache explain serde"),
+    (&["list"], "kache list --sort size"),
+    (&["daemon"], "kache daemon"),
+    (&["daemon", "status"], "kache daemon status"),
+    (&["daemon", "run"], "kache daemon run"),
+    (&["daemon", "start"], "kache daemon start"),
+    (&["daemon", "stop"], "kache daemon stop"),
+    (&["daemon", "restart"], "kache daemon restart"),
+    (&["daemon", "install"], "kache daemon install"),
+    (&["daemon", "uninstall"], "kache daemon uninstall"),
+    (&["daemon", "log"], "kache daemon log"),
+    (&["cargo"], "kache cargo -- build"),
+    (&["gc"], "kache gc --max-age 7d"),
+    (&["purge"], "kache purge --crate-name serde"),
+    (&["telemetry"], "kache telemetry write /tmp/kache-metrics"),
+    (&["telemetry", "write"], "kache telemetry write /tmp/kache-metrics"),
+    (&["report"], "kache report --format json"),
+    (&["install-shims"], "kache install-shims /tmp/kache-shims"),
+    (&["help"], "kache help list"),
+];
+
 fn top_help() -> String {
-    format!("\
-Compiler cache for Rust and C/C++.
-
-kache runs in front of rustc and the C/C++ compilers, so builds use the cache without changing how you run them.
-
-Usage: kache [OPTIONS] [COMMAND]
-
-Commands:
-  init         Set up caching for Cargo and C/C++ builds
-  doctor       Diagnose setup issues and verify cache integrity
-  config       Inspect or change configuration values
-  stats        Show hit rate, time saved and cache size [alias: status]
-  clean        Remove cache entries
-  explain      Explain why a crate missed the cache
-  list         List cache entries, or one crate's entries in detail
-  daemon       Show the background daemon's status, or start, stop or install it
-
-Options:
-  --json       Machine-readable JSON on stdout, on commands that support it
-  -h, --help   Print help
-  -V, --version
-               Print version
-
-Start with `kache init`. Keep using cargo as usual.
-Use `kache stats` for a summary.
-
-{OWNED_TOOL_FOOTER}
-")
+    let mut text = String::from("Compiler cache for Rust and C/C++.\n\nUsage: kache [OPTIONS] [COMMAND]\n\nCommon options:\n  --json       Machine-readable JSON on commands that support it\n  -h, --help   Print help\n  -V, --version  Print version\n\nCommand reference:\n");
+    for &(path, _) in REFERENCE {
+        if path == ["help"] {
+            text.push_str("\nUsage: kache help [COMMAND] [SUBCOMMAND]\n\nShow command help.\n");
+            continue;
+        }
+        let page = if path.len() == 1 {
+            command_help(path[0], false).unwrap_or_else(|_| panic!("invalid reference command"))
+        } else {
+            subcommand_help(path[0], path[1], false).unwrap_or_else(|_| panic!("invalid reference subcommand"))
+        };
+        text.push('\n');
+        // Common flags are shown once above. The page is the source of all
+        // command-specific usage, arguments, and descriptions.
+        for line in page.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("-h, --help") || trimmed.starts_with("--json ") {
+                continue;
+            }
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+    text.push_str("\nExamples:\n");
+    for &(_, example) in REFERENCE {
+        text.push_str("  ");
+        text.push_str(example);
+        text.push('\n');
+    }
+    text.push('\n');
+    text.push_str(OWNED_TOOL_FOOTER);
+    text.push('\n');
+    text
 }
 
 fn cargo_help() -> String {
@@ -1116,6 +1167,10 @@ Options:
   -n, --dry-run        Show what would be removed and what kache keeps, and remove nothing
   -y, --yes            Remove without asking. For scripts and cron; preview first with --dry-run
   --cache              Empty the cache instead. Asks first. The daemon already keeps it under its size limit
+  --all                Remove all cache entries (requires --cache)
+  --stale <DURATION>   Remove old entries (requires --cache; conflicts with --all and --stale-schema)
+  --stale-schema       Remove old schema entries (requires --cache; conflicts with --all)
+  --crate <NAME>       Remove one crate (conflicts with --cache)
   --json               Machine-readable JSON on stdout
   -h, --help           Print help
 "
@@ -1238,7 +1293,7 @@ Options:
 }
 
 fn explain_help() -> String {
-    "Explain why a crate missed the cache [alias: why-miss]\n\nUsage: kache explain [OPTIONS] <CRATE>\n\nOptions:\n  --json        Machine-readable JSON on stdout\n  -h, --help    Print help\n".to_owned()
+    "Explain why a crate missed the cache [alias: why-miss]\n\nUsage: kache explain [OPTIONS] <CRATE>\n\nArguments:\n  <CRATE>       Crate name to explain\n\nOptions:\n  --json        Machine-readable JSON on stdout\n  -h, --help    Print help\n".to_owned()
 }
 
 fn report_help() -> String {
@@ -1297,6 +1352,10 @@ fn config_sub_help(subcommand: &str) -> String {
 {about}
 
 Usage: {usage}
+
+Arguments:
+  <KEY>          Configuration key (where required)
+  <VALUE>        TOML value or unquoted string (set only)
 
 Options:
   --project      Use the nearest project config, or create .kache.toml in this directory
@@ -1917,5 +1976,18 @@ fn parse_phase(value: &str, json: bool) -> Result<BenchPhase, ParseFail> {
             json,
             "invalid value for '--phase': expected one of cold, warm-same-tree, warm, pull",
         )),
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+
+    #[test]
+    fn reference_examples_parse_without_execution() {
+        for &(path, example) in REFERENCE {
+            let args: Vec<OsString> = example.split_whitespace().skip(1).map(OsString::from).collect();
+            assert!(parse_cli(&args).is_ok(), "invalid example for {path:?}: {example}");
+        }
     }
 }
