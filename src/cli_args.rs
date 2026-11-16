@@ -11,6 +11,97 @@ use crate::{BenchPhase, Commands, DaemonCommands, ListSort, TelemetryCommands};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+macro_rules! declare_cli_names {
+    ($table:ident, $kind:ty; $($name:ident => $spelling:literal),* $(,)?) => {
+        $(macro_rules! $name { () => { $spelling }; })*
+        #[cfg(test)]
+        const $table: &[$kind] = &[$($spelling),*];
+    };
+}
+
+declare_cli_names!(COMMAND_NAMES, &str;
+    cli_command_cargo => "cargo",
+    cli_command_clean => "clean",
+    cli_command_config => "config",
+    cli_command_daemon => "daemon",
+    cli_command_doctor => "doctor",
+    cli_command_explain => "explain",
+    cli_command_gc => "gc",
+    cli_command_help => "help",
+    cli_command_init => "init",
+    cli_command_install_shims => "install-shims",
+    cli_command_list => "list",
+    cli_command_purge => "purge",
+    cli_command_report => "report",
+    cli_command_stats => "stats",
+    cli_command_status => "status",
+    cli_command_telemetry => "telemetry",
+    cli_command_why_miss => "why-miss",
+    cli_command_get => "get",
+    cli_command_set => "set",
+    cli_command_unset => "unset",
+    cli_command_path => "path",
+    cli_command_run => "run",
+    cli_command_start => "start",
+    cli_command_stop => "stop",
+    cli_command_restart => "restart",
+    cli_command_install => "install",
+    cli_command_uninstall => "uninstall",
+    cli_command_log => "log",
+    cli_command_write => "write",
+);
+
+declare_cli_names!(LONG_FLAGS, &str;
+    cli_flag_all => "all",
+    cli_flag_cache => "cache",
+    cli_flag_canonical_only => "canonical-only",
+    cli_flag_check => "check",
+    cli_flag_checksums => "checksums",
+    cli_flag_crate => "crate",
+    cli_flag_crate_name => "crate-name",
+    cli_flag_dry_run => "dry-run",
+    cli_flag_file => "file",
+    cli_flag_fix => "fix",
+    cli_flag_force => "force",
+    cli_flag_format => "format",
+    cli_flag_from_path => "from-path",
+    cli_flag_full => "full",
+    cli_flag_global => "global",
+    cli_flag_help => "help",
+    cli_flag_json => "json",
+    cli_flag_max_age => "max-age",
+    cli_flag_no_pager => "no-pager",
+    cli_flag_no_service => "no-service",
+    cli_flag_no_shell => "no-shell",
+    cli_flag_output => "output",
+    cli_flag_phase => "phase",
+    cli_flag_probe => "probe",
+    cli_flag_project => "project",
+    cli_flag_purge_sccache => "purge-sccache",
+    cli_flag_record => "record",
+    cli_flag_redact => "redact",
+    cli_flag_repair => "repair",
+    cli_flag_root => "root",
+    cli_flag_scenario => "scenario",
+    cli_flag_shims => "shims",
+    cli_flag_since => "since",
+    cli_flag_sort => "sort",
+    cli_flag_stale => "stale",
+    cli_flag_stale_schema => "stale-schema",
+    cli_flag_top => "top",
+    cli_flag_verify => "verify",
+    cli_flag_version => "version",
+    cli_flag_yes => "yes",
+);
+
+declare_cli_names!(SHORT_FLAGS, char;
+    cli_short_V => 'V',
+    cli_short_h => 'h',
+    cli_short_n => 'n',
+    cli_short_o => 'o',
+    cli_short_y => 'y',
+);
+
 /// A parsed invocation: the global `--json` flag and the subcommand.
 pub(crate) struct Cli {
     pub json: bool,
@@ -24,48 +115,48 @@ impl Cli {
         let mut names = Vec::new();
         match &self.command {
             None => {}
-            Some(Commands::Cargo { .. }) => names.push("cargo"),
-            Some(Commands::List { .. }) => names.push("list"),
-            Some(Commands::Gc { .. }) => names.push("gc"),
-            Some(Commands::Purge { .. }) => names.push("purge"),
-            Some(Commands::Clean { .. }) => names.push("clean"),
-            Some(Commands::Init { .. }) => names.push("init"),
-            Some(Commands::Doctor { .. }) => names.push("doctor"),
+            Some(Commands::Cargo { .. }) => names.push(cli_command_cargo!()),
+            Some(Commands::List { .. }) => names.push(cli_command_list!()),
+            Some(Commands::Gc { .. }) => names.push(cli_command_gc!()),
+            Some(Commands::Purge { .. }) => names.push(cli_command_purge!()),
+            Some(Commands::Clean { .. }) => names.push(cli_command_clean!()),
+            Some(Commands::Init { .. }) => names.push(cli_command_init!()),
+            Some(Commands::Doctor { .. }) => names.push(cli_command_doctor!()),
             Some(Commands::Daemon { command }) => {
-                names.push("daemon");
+                names.push(cli_command_daemon!());
                 match command {
                     None => {}
-                    Some(DaemonCommands::Status) => names.push("status"),
-                    Some(DaemonCommands::Run) => names.push("run"),
-                    Some(DaemonCommands::Start) => names.push("start"),
-                    Some(DaemonCommands::Stop) => names.push("stop"),
-                    Some(DaemonCommands::Restart) => names.push("restart"),
-                    Some(DaemonCommands::Install) => names.push("install"),
-                    Some(DaemonCommands::Uninstall) => names.push("uninstall"),
-                    Some(DaemonCommands::Log) => names.push("log"),
+                    Some(DaemonCommands::Status) => names.push(cli_command_status!()),
+                    Some(DaemonCommands::Run) => names.push(cli_command_run!()),
+                    Some(DaemonCommands::Start) => names.push(cli_command_start!()),
+                    Some(DaemonCommands::Stop) => names.push(cli_command_stop!()),
+                    Some(DaemonCommands::Restart) => names.push(cli_command_restart!()),
+                    Some(DaemonCommands::Install) => names.push(cli_command_install!()),
+                    Some(DaemonCommands::Uninstall) => names.push(cli_command_uninstall!()),
+                    Some(DaemonCommands::Log) => names.push(cli_command_log!()),
                 }
             }
-            Some(Commands::Stats { .. }) => names.push("stats"),
+            Some(Commands::Stats { .. }) => names.push(cli_command_stats!()),
             Some(Commands::Telemetry { command }) => {
-                names.push("telemetry");
+                names.push(cli_command_telemetry!());
                 if matches!(command, TelemetryCommands::Write { .. }) {
-                    names.push("write");
+                    names.push(cli_command_write!());
                 }
             }
-            Some(Commands::Explain { .. }) => names.push("explain"),
-            Some(Commands::Report { .. }) => names.push("report"),
+            Some(Commands::Explain { .. }) => names.push(cli_command_explain!()),
+            Some(Commands::Report { .. }) => names.push(cli_command_report!()),
             Some(Commands::Config { command }) => {
-                names.push("config");
+                names.push(cli_command_config!());
                 match command {
                     None => {}
-                    Some(config_cli::Command::Get { .. }) => names.push("get"),
-                    Some(config_cli::Command::List { .. }) => names.push("list"),
-                    Some(config_cli::Command::Set { .. }) => names.push("set"),
-                    Some(config_cli::Command::Unset { .. }) => names.push("unset"),
-                    Some(config_cli::Command::Path { .. }) => names.push("path"),
+                    Some(config_cli::Command::Get { .. }) => names.push(cli_command_get!()),
+                    Some(config_cli::Command::List { .. }) => names.push(cli_command_list!()),
+                    Some(config_cli::Command::Set { .. }) => names.push(cli_command_set!()),
+                    Some(config_cli::Command::Unset { .. }) => names.push(cli_command_unset!()),
+                    Some(config_cli::Command::Path { .. }) => names.push(cli_command_path!()),
                 }
             }
-            Some(Commands::InstallShims { .. }) => names.push("install-shims"),
+            Some(Commands::InstallShims { .. }) => names.push(cli_command_install_shims!()),
         }
         if names.is_empty() {
             "cli".to_owned()
@@ -88,23 +179,23 @@ type ParseResult = Result<ParseOutcome, ParseFail>;
 
 fn dispatch(name: &str, parser: &mut lexopt::Parser, json: bool) -> ParseResult {
     match name {
-        "cargo" => parse_cargo(parser, json),
-        "help" => parse_help(parser, json),
-        "status" => parse_stats(parser, json),
-        "stats" => parse_stats(parser, json),
-        "list" => parse_list(parser, json),
-        "gc" => parse_gc(parser, json),
-        "purge" => parse_purge(parser, json),
-        "clean" => parse_clean(parser, json),
-        "init" => parse_init(parser, json),
-        "doctor" => parse_doctor(parser, json),
-        "daemon" => parse_daemon(parser, json),
-        "telemetry" => parse_telemetry(parser, json),
-        "why-miss" => parse_explain(parser, json),
-        "explain" => parse_explain(parser, json),
-        "report" => parse_report(parser, json),
-        "config" => parse_config(parser, json),
-        "install-shims" => parse_install_shims(parser, json),
+        cli_command_cargo!() => parse_cargo(parser, json),
+        cli_command_help!() => parse_help(parser, json),
+        cli_command_status!() => parse_stats(parser, json),
+        cli_command_stats!() => parse_stats(parser, json),
+        cli_command_list!() => parse_list(parser, json),
+        cli_command_gc!() => parse_gc(parser, json),
+        cli_command_purge!() => parse_purge(parser, json),
+        cli_command_clean!() => parse_clean(parser, json),
+        cli_command_init!() => parse_init(parser, json),
+        cli_command_doctor!() => parse_doctor(parser, json),
+        cli_command_daemon!() => parse_daemon(parser, json),
+        cli_command_telemetry!() => parse_telemetry(parser, json),
+        cli_command_why_miss!() => parse_explain(parser, json),
+        cli_command_explain!() => parse_explain(parser, json),
+        cli_command_report!() => parse_report(parser, json),
+        cli_command_config!() => parse_config(parser, json),
+        cli_command_install_shims!() => parse_install_shims(parser, json),
         _ => Err(fail(
             json,
             format!("unrecognized subcommand '{name}'\n\nFor more information, try '--help'."),
@@ -144,7 +235,7 @@ fn parse_help(parser: &mut lexopt::Parser, json: bool) -> ParseResult {
         };
         match arg {
             lexopt::Arg::Value(value) => path.push(utf8(value, json)?),
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help { text: top_help(), json });
             }
             lexopt::Arg::Short(flag) => {
@@ -173,21 +264,21 @@ fn parse_list(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             break;
         };
         match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help {
                     text: list_help(),
                     json,
                 });
             }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+            lexopt::Arg::Short(cli_short_V!()) | lexopt::Arg::Long(cli_flag_version!()) => {
                 return Ok(ParseOutcome::Version { json });
             }
-            lexopt::Arg::Long("json") => {
+            lexopt::Arg::Long(cli_flag_json!()) => {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
-            lexopt::Arg::Long("sort") => sort = parse_sort(&next_string(&mut *parser, "sort", json)?, json)?,
-            lexopt::Arg::Long("no-pager") => {
+            lexopt::Arg::Long(cli_flag_sort!()) => sort = parse_sort(&next_string(&mut *parser, "sort", json)?, json)?,
+            lexopt::Arg::Long(cli_flag_no_pager!()) => {
                 no_value(&mut *parser, "no-pager", json)?;
                 no_pager = true;
             }
@@ -223,23 +314,23 @@ fn parse_gc(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             break;
         };
         match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help {
                     text: gc_help(),
                     json,
                 });
             }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+            lexopt::Arg::Short(cli_short_V!()) | lexopt::Arg::Long(cli_flag_version!()) => {
                 return Ok(ParseOutcome::Version { json });
             }
-            lexopt::Arg::Long("json") => {
+            lexopt::Arg::Long(cli_flag_json!()) => {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
-            lexopt::Arg::Long("max-age") => {
+            lexopt::Arg::Long(cli_flag_max_age!()) => {
                 max_age = Some(next_string(&mut *parser, "max-age", json)?);
             }
-            lexopt::Arg::Long("stale-schema") => {
+            lexopt::Arg::Long(cli_flag_stale_schema!()) => {
                 no_value(&mut *parser, "stale-schema", json)?;
                 stale_schema = true;
             }
@@ -270,20 +361,20 @@ fn parse_purge(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             break;
         };
         match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help {
                     text: purge_help(),
                     json,
                 });
             }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+            lexopt::Arg::Short(cli_short_V!()) | lexopt::Arg::Long(cli_flag_version!()) => {
                 return Ok(ParseOutcome::Version { json });
             }
-            lexopt::Arg::Long("json") => {
+            lexopt::Arg::Long(cli_flag_json!()) => {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
-            lexopt::Arg::Long("crate-name") => {
+            lexopt::Arg::Long(cli_flag_crate_name!()) => {
                 crate_name = Some(next_string(&mut *parser, "crate-name", json)?);
             }
             lexopt::Arg::Value(value) => {
@@ -316,40 +407,40 @@ fn parse_clean(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             break;
         };
         match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help {
                     text: clean_help(),
                     json,
                 });
             }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+            lexopt::Arg::Short(cli_short_V!()) | lexopt::Arg::Long(cli_flag_version!()) => {
                 return Ok(ParseOutcome::Version { json });
             }
-            lexopt::Arg::Long("json") => {
+            lexopt::Arg::Long(cli_flag_json!()) => {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
-            lexopt::Arg::Short('n') | lexopt::Arg::Long("dry-run") => {
+            lexopt::Arg::Short(cli_short_n!()) | lexopt::Arg::Long(cli_flag_dry_run!()) => {
                 no_value(&mut *parser, "dry-run", json)?;
                 dry_run = true;
             }
-            lexopt::Arg::Short('y') | lexopt::Arg::Long("yes") => {
+            lexopt::Arg::Short(cli_short_y!()) | lexopt::Arg::Long(cli_flag_yes!()) => {
                 no_value(&mut *parser, "yes", json)?;
                 yes = true;
             }
-            lexopt::Arg::Long("stale") => stale = Some(next_string(&mut *parser, "stale", json)?),
-            lexopt::Arg::Long("cache") => {
+            lexopt::Arg::Long(cli_flag_stale!()) => stale = Some(next_string(&mut *parser, "stale", json)?),
+            lexopt::Arg::Long(cli_flag_cache!()) => {
                 no_value(&mut *parser, "cache", json)?;
                 cache = true;
             }
-            lexopt::Arg::Long("all") => {
+            lexopt::Arg::Long(cli_flag_all!()) => {
                 no_value(&mut *parser, "all", json)?;
                 all = true;
             }
-            lexopt::Arg::Long("crate") => {
+            lexopt::Arg::Long(cli_flag_crate!()) => {
                 crate_name = Some(next_string(&mut *parser, "crate", json)?);
             }
-            lexopt::Arg::Long("stale-schema") => {
+            lexopt::Arg::Long(cli_flag_stale_schema!()) => {
                 no_value(&mut *parser, "stale-schema", json)?;
                 stale_schema = true;
             }
@@ -413,47 +504,47 @@ fn parse_init(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             break;
         };
         match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help {
                     text: init_help(),
                     json,
                 });
             }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+            lexopt::Arg::Short(cli_short_V!()) | lexopt::Arg::Long(cli_flag_version!()) => {
                 return Ok(ParseOutcome::Version { json });
             }
-            lexopt::Arg::Long("json") => {
+            lexopt::Arg::Long(cli_flag_json!()) => {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
-            lexopt::Arg::Short('y') | lexopt::Arg::Long("yes") => {
+            lexopt::Arg::Short(cli_short_y!()) | lexopt::Arg::Long(cli_flag_yes!()) => {
                 no_value(&mut *parser, "yes", json)?;
                 yes = true;
             }
-            lexopt::Arg::Long("no-service") => {
+            lexopt::Arg::Long(cli_flag_no_service!()) => {
                 no_value(&mut *parser, "no-service", json)?;
                 no_service = true;
             }
-            lexopt::Arg::Long("no-shell") => {
+            lexopt::Arg::Long(cli_flag_no_shell!()) => {
                 no_value(&mut *parser, "no-shell", json)?;
                 no_shell = true;
             }
-            lexopt::Arg::Short('n') | lexopt::Arg::Long("check") | lexopt::Arg::Long("dry-run") => {
+            lexopt::Arg::Short(cli_short_n!()) | lexopt::Arg::Long(cli_flag_check!()) | lexopt::Arg::Long(cli_flag_dry_run!()) => {
                 no_value(&mut *parser, "check", json)?;
                 check = true;
             }
-            lexopt::Arg::Long("shims") => {
+            lexopt::Arg::Long(cli_flag_shims!()) => {
                 shims = Some(parse_optional_dir(&mut *parser, json)?);
             }
-            lexopt::Arg::Long("from-path") => {
+            lexopt::Arg::Long(cli_flag_from_path!()) => {
                 no_value(&mut *parser, "from-path", json)?;
                 from_path = true;
             }
-            lexopt::Arg::Long("canonical-only") => {
+            lexopt::Arg::Long(cli_flag_canonical_only!()) => {
                 no_value(&mut *parser, "canonical-only", json)?;
                 canonical_only = true;
             }
-            lexopt::Arg::Long("force") => {
+            lexopt::Arg::Long(cli_flag_force!()) => {
                 no_value(&mut *parser, "force", json)?;
                 force = true;
             }
@@ -535,19 +626,19 @@ fn parse_daemon(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             break;
         };
         match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help {
                     text: match subcommand.as_deref() {
-                        Some(sub) => subcommand_help("daemon", sub, json)?,
+                        Some(sub) => subcommand_help(cli_command_daemon!(), sub, json)?,
                         None => daemon_help(),
                     },
                     json,
                 });
             }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+            lexopt::Arg::Short(cli_short_V!()) | lexopt::Arg::Long(cli_flag_version!()) => {
                 return Ok(ParseOutcome::Version { json });
             }
-            lexopt::Arg::Long("json") => {
+            lexopt::Arg::Long(cli_flag_json!()) => {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
@@ -570,14 +661,14 @@ fn parse_daemon(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
     }
     let command = match subcommand.as_deref() {
         None => None,
-        Some("status") => Some(DaemonCommands::Status),
-        Some("run") => Some(DaemonCommands::Run),
-        Some("start") => Some(DaemonCommands::Start),
-        Some("stop") => Some(DaemonCommands::Stop),
-        Some("restart") => Some(DaemonCommands::Restart),
-        Some("install") => Some(DaemonCommands::Install),
-        Some("uninstall") => Some(DaemonCommands::Uninstall),
-        Some("log") => Some(DaemonCommands::Log),
+        Some(cli_command_status!()) => Some(DaemonCommands::Status),
+        Some(cli_command_run!()) => Some(DaemonCommands::Run),
+        Some(cli_command_start!()) => Some(DaemonCommands::Start),
+        Some(cli_command_stop!()) => Some(DaemonCommands::Stop),
+        Some(cli_command_restart!()) => Some(DaemonCommands::Restart),
+        Some(cli_command_install!()) => Some(DaemonCommands::Install),
+        Some(cli_command_uninstall!()) => Some(DaemonCommands::Uninstall),
+        Some(cli_command_log!()) => Some(DaemonCommands::Log),
         Some(other) => {
             return Err(fail(json, format!("unrecognized daemon subcommand '{other}'")));
         }
@@ -595,19 +686,19 @@ fn parse_telemetry(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             break;
         };
         match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help {
                     text: match subcommand.as_deref() {
-                        Some(sub) => subcommand_help("telemetry", sub, json)?,
+                        Some(sub) => subcommand_help(cli_command_telemetry!(), sub, json)?,
                         None => telemetry_help(),
                     },
                     json,
                 });
             }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+            lexopt::Arg::Short(cli_short_V!()) | lexopt::Arg::Long(cli_flag_version!()) => {
                 return Ok(ParseOutcome::Version { json });
             }
-            lexopt::Arg::Long("json") => {
+            lexopt::Arg::Long(cli_flag_json!()) => {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
@@ -623,10 +714,10 @@ fn parse_telemetry(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
                 }
                 dir = Some(PathBuf::from(value));
             }
-            lexopt::Arg::Long("scenario") => {
+            lexopt::Arg::Long(cli_flag_scenario!()) => {
                 scenario = Some(next_string(&mut *parser, "scenario", json)?);
             }
-            lexopt::Arg::Long("phase") => {
+            lexopt::Arg::Long(cli_flag_phase!()) => {
                 phase = Some(parse_phase(&next_string(&mut *parser, "phase", json)?, json)?);
             }
             lexopt::Arg::Short(flag) => {
@@ -639,7 +730,7 @@ fn parse_telemetry(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
     }
     match subcommand.as_deref() {
         None => Err(missing(json, "telemetry subcommand (write)")),
-        Some("write") => {
+        Some(cli_command_write!()) => {
             let Some(dir) = dir else {
                 return Err(missing(json, "<DIR>"));
             };
@@ -668,39 +759,39 @@ fn parse_stats(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             break;
         };
         match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help {
                     text: stats_help(),
                     json,
                 });
             }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+            lexopt::Arg::Short(cli_short_V!()) | lexopt::Arg::Long(cli_flag_version!()) => {
                 return Ok(ParseOutcome::Version { json });
             }
-            lexopt::Arg::Long("json") => {
+            lexopt::Arg::Long(cli_flag_json!()) => {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
-            lexopt::Arg::Long("since") => {
+            lexopt::Arg::Long(cli_flag_since!()) => {
                 since = next_string(&mut *parser, "since", json)?;
             },
-            lexopt::Arg::Long("root") => root = Some(next_path(&mut *parser, "root", json)?),
-            lexopt::Arg::Long("full") => {
+            lexopt::Arg::Long(cli_flag_root!()) => root = Some(next_path(&mut *parser, "root", json)?),
+            lexopt::Arg::Long(cli_flag_full!()) => {
                 no_value(&mut *parser, "full", json)?;
                 full = true;
             }
-            lexopt::Arg::Long("format") => {
+            lexopt::Arg::Long(cli_flag_format!()) => {
                 format = Some(parse_format(&next_string(&mut *parser, "format", json)?, json)?);
             }
-            lexopt::Arg::Short('o') | lexopt::Arg::Long("output") => {
+            lexopt::Arg::Short(cli_short_o!()) | lexopt::Arg::Long(cli_flag_output!()) => {
                 output = Some(next_path(&mut *parser, "output", json)?);
             }
-            lexopt::Arg::Long("top") => top = Some(next_usize(&mut *parser, "top", json)?),
-            lexopt::Arg::Long("record") => {
+            lexopt::Arg::Long(cli_flag_top!()) => top = Some(next_usize(&mut *parser, "top", json)?),
+            lexopt::Arg::Long(cli_flag_record!()) => {
                 no_value(&mut *parser, "record", json)?;
                 record = true;
             }
-            lexopt::Arg::Long("redact") => {
+            lexopt::Arg::Long(cli_flag_redact!()) => {
                 no_value(&mut *parser, "redact", json)?;
                 redact = true;
             }
@@ -740,16 +831,16 @@ fn parse_explain(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             break;
         };
         match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help {
                     text: explain_help(),
                     json,
                 });
             }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+            lexopt::Arg::Short(cli_short_V!()) | lexopt::Arg::Long(cli_flag_version!()) => {
                 return Ok(ParseOutcome::Version { json });
             }
-            lexopt::Arg::Long("json") => {
+            lexopt::Arg::Long(cli_flag_json!()) => {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
@@ -787,35 +878,35 @@ fn parse_report(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             break;
         };
         match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help {
                     text: report_help(),
                     json,
                 });
             }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+            lexopt::Arg::Short(cli_short_V!()) | lexopt::Arg::Long(cli_flag_version!()) => {
                 return Ok(ParseOutcome::Version { json });
             }
-            lexopt::Arg::Long("json") => {
+            lexopt::Arg::Long(cli_flag_json!()) => {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
-            lexopt::Arg::Long("format") => {
+            lexopt::Arg::Long(cli_flag_format!()) => {
                 format = parse_format(&next_string(&mut *parser, "format", json)?, json)?;
             }
-            lexopt::Arg::Long("since") => {
+            lexopt::Arg::Long(cli_flag_since!()) => {
                 since = next_string(&mut *parser, "since", json)?;
             },
-            lexopt::Arg::Long("root") => root = Some(next_path(&mut *parser, "root", json)?),
-            lexopt::Arg::Short('o') | lexopt::Arg::Long("output") => {
+            lexopt::Arg::Long(cli_flag_root!()) => root = Some(next_path(&mut *parser, "root", json)?),
+            lexopt::Arg::Short(cli_short_o!()) | lexopt::Arg::Long(cli_flag_output!()) => {
                 output = Some(next_path(&mut *parser, "output", json)?);
             }
-            lexopt::Arg::Long("top") => top = next_usize(&mut *parser, "top", json)?,
-            lexopt::Arg::Long("record") => {
+            lexopt::Arg::Long(cli_flag_top!()) => top = next_usize(&mut *parser, "top", json)?,
+            lexopt::Arg::Long(cli_flag_record!()) => {
                 no_value(&mut *parser, "record", json)?;
                 record = true;
             }
-            lexopt::Arg::Long("redact") => {
+            lexopt::Arg::Long(cli_flag_redact!()) => {
                 no_value(&mut *parser, "redact", json)?;
                 redact = true;
             }
@@ -858,31 +949,31 @@ fn parse_config(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             break;
         };
         match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help {
                     text: match subcommand.as_deref() {
-                        Some(sub) => subcommand_help("config", sub, json)?,
+                        Some(sub) => subcommand_help(cli_command_config!(), sub, json)?,
                         None => config_help(),
                     },
                     json,
                 });
             }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+            lexopt::Arg::Short(cli_short_V!()) | lexopt::Arg::Long(cli_flag_version!()) => {
                 return Ok(ParseOutcome::Version { json });
             }
-            lexopt::Arg::Long("json") => {
+            lexopt::Arg::Long(cli_flag_json!()) => {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
-            lexopt::Arg::Long("project") => {
+            lexopt::Arg::Long(cli_flag_project!()) => {
                 no_value(&mut *parser, "project", json)?;
                 project = true;
             }
-            lexopt::Arg::Long("global") => {
+            lexopt::Arg::Long(cli_flag_global!()) => {
                 no_value(&mut *parser, "global", json)?;
                 global = true;
             }
-            lexopt::Arg::Long("file") => file = Some(next_path(&mut *parser, "file", json)?),
+            lexopt::Arg::Long(cli_flag_file!()) => file = Some(next_path(&mut *parser, "file", json)?),
             lexopt::Arg::Value(value) if subcommand.is_none() => {
                 subcommand = Some(utf8(value, json)?);
             }
@@ -917,28 +1008,28 @@ fn parse_config(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
                 format!("unexpected argument '{other}': expected a config subcommand"),
             ));
         }
-        (Some("get"), [key]) => Some(config_cli::Command::Get {
+        (Some(cli_command_get!()), [key]) => Some(config_cli::Command::Get {
             scope,
             key: key.clone(),
         }),
-        (Some("get"), _) => return Err(missing(json, "<KEY>")),
-        (Some("set"), [key, value]) => Some(config_cli::Command::Set {
+        (Some(cli_command_get!()), _) => return Err(missing(json, "<KEY>")),
+        (Some(cli_command_set!()), [key, value]) => Some(config_cli::Command::Set {
             scope,
             key: key.clone(),
             value: value.clone(),
         }),
-        (Some("set"), _) => return Err(missing(json, "<KEY> <VALUE>")),
-        (Some("unset"), [key]) => Some(config_cli::Command::Unset {
+        (Some(cli_command_set!()), _) => return Err(missing(json, "<KEY> <VALUE>")),
+        (Some(cli_command_unset!()), [key]) => Some(config_cli::Command::Unset {
             scope,
             key: key.clone(),
         }),
-        (Some("unset"), _) => return Err(missing(json, "<KEY>")),
-        (Some("list"), []) => Some(config_cli::Command::List { scope }),
-        (Some("list"), [other, ..]) => {
+        (Some(cli_command_unset!()), _) => return Err(missing(json, "<KEY>")),
+        (Some(cli_command_list!()), []) => Some(config_cli::Command::List { scope }),
+        (Some(cli_command_list!()), [other, ..]) => {
             return Err(fail(json, format!("unexpected argument '{other}'")));
         }
-        (Some("path"), []) => Some(config_cli::Command::Path { scope }),
-        (Some("path"), [other, ..]) => {
+        (Some(cli_command_path!()), []) => Some(config_cli::Command::Path { scope }),
+        (Some(cli_command_path!()), [other, ..]) => {
             return Err(fail(json, format!("unexpected argument '{other}'")));
         }
         (Some(other), _) => {
@@ -958,28 +1049,28 @@ fn parse_install_shims(parser: &mut lexopt::Parser, mut json: bool) -> ParseResu
             break;
         };
         match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help {
                     text: install_shims_help(),
                     json,
                 });
             }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+            lexopt::Arg::Short(cli_short_V!()) | lexopt::Arg::Long(cli_flag_version!()) => {
                 return Ok(ParseOutcome::Version { json });
             }
-            lexopt::Arg::Long("json") => {
+            lexopt::Arg::Long(cli_flag_json!()) => {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
-            lexopt::Arg::Long("force") => {
+            lexopt::Arg::Long(cli_flag_force!()) => {
                 no_value(&mut *parser, "force", json)?;
                 force = true;
             }
-            lexopt::Arg::Long("from-path") => {
+            lexopt::Arg::Long(cli_flag_from_path!()) => {
                 no_value(&mut *parser, "from-path", json)?;
                 from_path = true;
             }
-            lexopt::Arg::Long("canonical-only") => {
+            lexopt::Arg::Long(cli_flag_canonical_only!()) => {
                 no_value(&mut *parser, "canonical-only", json)?;
                 canonical_only = true;
             }
@@ -1027,45 +1118,43 @@ If this tool blocks the task, you may fix, test, open and merge a PR under Joshu
 standing instructions. Release only when needed to deliver the verified fix.
 Procedure: https://github.com/joshuarli/usr/blob/main/dotfiles/base/.agents/instructions/owned-tools.md";
 
-// Each reference entry uses the same page as `kache help <command>`.
-// Examples are parsed in the regression test without executing commands.
 const REFERENCE: &[(&[&str], &str)] = &[
-    (&["init"], "kache init --check"),
-    (&["doctor"], "kache doctor --verify"),
-    (&["config"], "kache config"),
-    (&["config", "get"], "kache config get cache.dir"),
-    (&["config", "list"], "kache config list"),
-    (&["config", "set"], "kache config set cache.dir /tmp/kache"),
-    (&["config", "unset"], "kache config unset cache.dir"),
-    (&["config", "path"], "kache config path"),
-    (&["stats"], "kache stats --since 7d"),
-    (&["clean"], "kache clean --dry-run"),
-    (&["explain"], "kache explain serde"),
-    (&["list"], "kache list --sort size"),
-    (&["daemon"], "kache daemon"),
-    (&["daemon", "status"], "kache daemon status"),
-    (&["daemon", "run"], "kache daemon run"),
-    (&["daemon", "start"], "kache daemon start"),
-    (&["daemon", "stop"], "kache daemon stop"),
-    (&["daemon", "restart"], "kache daemon restart"),
-    (&["daemon", "install"], "kache daemon install"),
-    (&["daemon", "uninstall"], "kache daemon uninstall"),
-    (&["daemon", "log"], "kache daemon log"),
-    (&["cargo"], "kache cargo -- build"),
-    (&["gc"], "kache gc --max-age 7d"),
-    (&["purge"], "kache purge --crate-name serde"),
-    (&["telemetry"], "kache telemetry write /tmp/kache-metrics"),
-    (&["telemetry", "write"], "kache telemetry write /tmp/kache-metrics"),
-    (&["report"], "kache report --format json"),
-    (&["install-shims"], "kache install-shims /tmp/kache-shims"),
-    (&["help"], "kache help list"),
+    (&[cli_command_init!()], concat!("kache ", cli_command_init!(), " ", "--", cli_flag_check!())),
+    (&[cli_command_doctor!()], concat!("kache ", cli_command_doctor!(), " ", "--", cli_flag_verify!())),
+    (&[cli_command_config!()], concat!("kache ", cli_command_config!())),
+    (&[cli_command_config!(), cli_command_get!()], concat!("kache ", cli_command_config!(), " ", cli_command_get!(), " cache.local_store")),
+    (&[cli_command_config!(), cli_command_list!()], concat!("kache ", cli_command_config!(), " ", cli_command_list!())),
+    (&[cli_command_config!(), cli_command_set!()], concat!("kache ", cli_command_config!(), " ", cli_command_set!(), " cache.local_store .work/tmp/kache")),
+    (&[cli_command_config!(), cli_command_unset!()], concat!("kache ", cli_command_config!(), " ", cli_command_unset!(), " cache.local_store")),
+    (&[cli_command_config!(), cli_command_path!()], concat!("kache ", cli_command_config!(), " ", cli_command_path!())),
+    (&[cli_command_stats!()], concat!("kache ", cli_command_stats!(), " ", "--", cli_flag_since!(), " 7d")),
+    (&[cli_command_clean!()], concat!("kache ", cli_command_clean!(), " ", "--", cli_flag_dry_run!())),
+    (&[cli_command_explain!()], concat!("kache ", cli_command_explain!(), " serde")),
+    (&[cli_command_list!()], concat!("kache ", cli_command_list!(), " ", "--", cli_flag_sort!(), " size")),
+    (&[cli_command_daemon!()], concat!("kache ", cli_command_daemon!())),
+    (&[cli_command_daemon!(), cli_command_status!()], concat!("kache ", cli_command_daemon!(), " ", cli_command_status!())),
+    (&[cli_command_daemon!(), cli_command_run!()], concat!("kache ", cli_command_daemon!(), " ", cli_command_run!())),
+    (&[cli_command_daemon!(), cli_command_start!()], concat!("kache ", cli_command_daemon!(), " ", cli_command_start!())),
+    (&[cli_command_daemon!(), cli_command_stop!()], concat!("kache ", cli_command_daemon!(), " ", cli_command_stop!())),
+    (&[cli_command_daemon!(), cli_command_restart!()], concat!("kache ", cli_command_daemon!(), " ", cli_command_restart!())),
+    (&[cli_command_daemon!(), cli_command_install!()], concat!("kache ", cli_command_daemon!(), " ", cli_command_install!())),
+    (&[cli_command_daemon!(), cli_command_uninstall!()], concat!("kache ", cli_command_daemon!(), " ", cli_command_uninstall!())),
+    (&[cli_command_daemon!(), cli_command_log!()], concat!("kache ", cli_command_daemon!(), " ", cli_command_log!())),
+    (&[cli_command_cargo!()], concat!("kache ", cli_command_cargo!(), " -- build")),
+    (&[cli_command_gc!()], concat!("kache ", cli_command_gc!(), " ", "--", cli_flag_max_age!(), " 7d")),
+    (&[cli_command_purge!()], concat!("kache ", cli_command_purge!(), " ", "--", cli_flag_crate_name!(), " serde")),
+    (&[cli_command_telemetry!()], concat!("kache ", cli_command_telemetry!(), " ", cli_command_write!(), " /tmp/kache-metrics")),
+    (&[cli_command_telemetry!(), cli_command_write!()], concat!("kache ", cli_command_telemetry!(), " ", cli_command_write!(), " /tmp/kache-metrics")),
+    (&[cli_command_report!()], concat!("kache ", cli_command_report!(), " ", "--", cli_flag_format!(), " json")),
+    (&[cli_command_install_shims!()], concat!("kache ", cli_command_install_shims!(), " /tmp/kache-shims")),
+    (&[cli_command_help!()], concat!("kache ", cli_command_help!(), " ", cli_command_list!())),
 ];
 
 fn top_help() -> String {
-    let mut text = String::from("Compiler cache for Rust and C/C++.\n\nUsage: kache [OPTIONS] [COMMAND]\n\nCommon options:\n  --json       Machine-readable JSON on commands that support it\n  -h, --help   Print help\n  -V, --version  Print version\n\nCommand reference:\n");
+    let mut text = String::from(concat!("Compiler cache for Rust and C/C++.\n\nUsage: kache [OPTIONS] [COMMAND]\n\nCommon options:\n  ", "--", cli_flag_json!(), "       Machine-readable JSON on commands that support it\n  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "   Print ", cli_command_help!(), "\n  ", "-", cli_short_V!(), ", ", "--", cli_flag_version!(), "  Print version\n\nCommand reference:\n"));
     for &(path, _) in REFERENCE {
-        if path == ["help"] {
-            text.push_str("\nUsage: kache help [COMMAND] [SUBCOMMAND]\n\nShow command help.\n");
+        if path == [cli_command_help!()] {
+            text.push_str(concat!("\nUsage: kache ", cli_command_help!(), " [COMMAND] [SUBCOMMAND]\n\nShow command ", cli_command_help!(), ".\n"));
             continue;
         }
         let page = if path.len() == 1 {
@@ -1074,18 +1163,20 @@ fn top_help() -> String {
             subcommand_help(path[0], path[1], false).unwrap_or_else(|_| panic!("invalid reference subcommand"))
         };
         text.push('\n');
-        // Common flags are shown once above. The page is the source of all
-        // command-specific usage, arguments, and descriptions.
         for line in page.lines() {
             let trimmed = line.trim_start();
-            if trimmed.starts_with("-h, --help") || trimmed.starts_with("--json ") {
+            if trimmed.starts_with(concat!("-", cli_short_h!(), ", ", "--", cli_flag_help!())) || trimmed.starts_with(concat!("--", cli_flag_json!(), " ")) {
                 continue;
             }
             text.push_str(line);
             text.push('\n');
         }
     }
-    text.push_str("\nExamples:\n");
+    text.push_str("\nEnvironment:\n  Unset overrides use file/default configuration. File-backed overrides:\n");
+    for (variable, key) in crate::config::file_environment_overrides() {
+        text.push_str(&format!("  {variable}  Override {key}\n"));
+    }
+    text.push_str("  KACHE_CONFIG, KACHE_HOST_CONFIG  Select configuration files\n  KACHE_DISABLED  Disable caching\n  KACHE_SOCKET_PATH, KACHE_TRUST_DOMAIN  Select daemon socket and trust domain\n  KACHE_LOG, KACHE_LOG_FILE, KACHE_PROGRESS  Logging and progress controls\n  KACHE_NAMESPACE, KACHE_BASE_DIR  Cache namespace and relocation base\n\nExamples:\n");
     for &(_, example) in REFERENCE {
         text.push_str("  ");
         text.push_str(example);
@@ -1098,341 +1189,350 @@ fn top_help() -> String {
 }
 
 fn cargo_help() -> String {
-    "\
+    concat!("\
 Run Cargo with Kache as its Rust compiler wrapper
 
-Usage: kache cargo [ARGS]...
+Usage: kache ", cli_command_cargo!(), " [ARGS]...
 
 Arguments:
   [ARGS]...  Arguments passed verbatim to Cargo (use `--` first)
-"
+")
     .to_owned()
 }
 
 fn list_help() -> String {
-    "\
+    concat!("\
 List cache entries, or one crate's entries in detail
 
-Usage: kache list [OPTIONS] [CRATE]
+Usage: kache ", cli_command_list!(), " [OPTIONS] [CRATE]
 
 Arguments:
-  [CRATE]  Crate name to show details for (omit to list all)
+  [CRATE]  Crate name to show details for (omit to ", cli_command_list!(), " all)
 
 Options:
-  --sort <name|size|hits|age>  Sort by name, size, hits or age [default: name]
-  --no-pager                   Print directly instead of using a pager
-  --json                       Machine-readable JSON on stdout
-  -h, --help                   Print help
-"
+  ", "--", cli_flag_sort!(), " <name|size|hits|age>  Sort by name, size, hits or age [default: name]
+  ", "--", cli_flag_no_pager!(), "                   Print directly instead of using a pager
+  ", "--", cli_flag_json!(), "                       Machine-readable JSON on stdout
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "                   Print ", cli_command_help!(), "
+")
     .to_owned()
 }
 
 fn gc_help() -> String {
-    "\
-Evict cache entries by the size and age limits, as the daemon does.
+    concat!("\
+Evict cache entries by the size and age limits, as the ", cli_command_daemon!(), " does.
 Kept for scripts
 
-Usage: kache gc [OPTIONS]
+Usage: kache ", cli_command_gc!(), " [OPTIONS]
 
 Options:
-  --max-age <DURATION>  Evict entries older than this duration (e.g. 7d, 24h)
-  --stale-schema        Remove entries from old or unrecorded cache-key schemas
-  --json                Machine-readable JSON on stdout
-  -h, --help            Print help
-"
+  ", "--", cli_flag_max_age!(), " <DURATION>  Evict entries older than this duration (e.g. 7d, 24h)
+  ", "--", cli_flag_stale_schema!(), "        Remove entries from old or unrecorded cache-key schemas
+  ", "--", cli_flag_json!(), "                Machine-readable JSON on stdout
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "            Print ", cli_command_help!(), "
+")
     .to_owned()
 }
 
 fn purge_help() -> String {
-    "\
+    concat!("\
 Remove the whole cache or one crate's entries. Kept for scripts;
-`kache clean --cache` empties the cache too
+`kache ", cli_command_clean!(), " ", "--", cli_flag_cache!(), "` empties the cache too
 
-Usage: kache purge [OPTIONS]
+Usage: kache ", cli_command_purge!(), " [OPTIONS]
 
 Options:
-  --crate-name <NAME>  Only purge entries for this crate
-  -h, --help           Print help
-"
+  ", "--", cli_flag_crate_name!(), " <NAME>  Only ", cli_command_purge!(), " entries for this crate
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "           Print ", cli_command_help!(), "
+")
     .to_owned()
 }
 
 fn clean_help() -> String {
-    "\
+    concat!("\
 Remove cache entries
 
-Usage: kache clean [OPTIONS]
+Usage: kache ", cli_command_clean!(), " [OPTIONS]
 
 Options:
-  -n, --dry-run        Show what would be removed and what kache keeps, and remove nothing
-  -y, --yes            Remove without asking. For scripts and cron; preview first with --dry-run
-  --cache              Empty the cache instead. Asks first. The daemon already keeps it under its size limit
-  --all                Remove all cache entries (requires --cache)
-  --stale <DURATION>   Remove old entries (requires --cache; conflicts with --all and --stale-schema)
-  --stale-schema       Remove old schema entries (requires --cache; conflicts with --all)
-  --crate <NAME>       Remove one crate (conflicts with --cache)
-  --json               Machine-readable JSON on stdout
-  -h, --help           Print help
-"
+  ", "-", cli_short_n!(), ", ", "--", cli_flag_dry_run!(), "        Show what would be removed and what kache keeps, and remove nothing
+  ", "-", cli_short_y!(), ", ", "--", cli_flag_yes!(), "            Remove without asking. For scripts and cron; preview first with ", "--", cli_flag_dry_run!(), "
+  ", "--", cli_flag_cache!(), "              Empty the cache instead. Asks first. The ", cli_command_daemon!(), " already keeps it under its size limit
+  ", "--", cli_flag_all!(), "                Remove all cache entries (requires ", "--", cli_flag_cache!(), ")
+  ", "--", cli_flag_stale!(), " <DURATION>   Remove old entries (requires ", "--", cli_flag_cache!(), "; conflicts with ", "--", cli_flag_all!(), " and ", "--", cli_flag_stale_schema!(), ")
+  ", "--", cli_flag_stale_schema!(), "       Remove old schema entries (requires ", "--", cli_flag_cache!(), "; conflicts with ", "--", cli_flag_all!(), ")
+  ", "--", cli_flag_crate!(), " <NAME>       Remove one crate (conflicts with ", "--", cli_flag_cache!(), ")
+  ", "--", cli_flag_json!(), "               Machine-readable JSON on stdout
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "           Print ", cli_command_help!(), "
+")
     .to_owned()
 }
 
 fn init_help() -> String {
-    "\
+    concat!("\
 Set up caching for Cargo and C/C++ builds
 
-Usage: kache init [OPTIONS]
+Usage: kache ", cli_command_init!(), " [OPTIONS]
 
 Options:
-  -y, --yes            Accept all default answers (non-interactive)
-  --no-service         Do not install the daemon as a login service
-  --no-shell           Leave shell setup alone: no C/C++ shims on PATH
-  -n, --check          Print what would change without modifying anything [alias: --dry-run]
-  --shims [<DIR>]      Only create the compiler-name links to kache (Unix), in DIR or ~/.local/lib/kache/shims
-  --from-path          With --shims, also link every other compiler name on PATH (target triplets)
-  --canonical-only     With --shims, link only the unversioned names, not the versioned compilers on PATH
-  --force              With --shims, replace existing entries instead of refusing
-  -h, --help           Print help
-"
+  ", "-", cli_short_y!(), ", ", "--", cli_flag_yes!(), "            Accept all default answers (non-interactive)
+  ", "--", cli_flag_no_service!(), "         Do not ", cli_command_install!(), " the ", cli_command_daemon!(), " as a login service
+  ", "--", cli_flag_no_shell!(), "           Leave shell setup alone: no C/C++ shims on PATH
+  ", "-", cli_short_n!(), ", ", "--", cli_flag_check!(), "          Print what would change without modifying anything [alias: ", "--", cli_flag_dry_run!(), "]
+  ", "--", cli_flag_shims!(), " [<DIR>]      Only create the compiler-name links to kache (Unix), in DIR or ~/.local/lib/kache/shims
+  ", "--", cli_flag_from_path!(), "          With ", "--", cli_flag_shims!(), ", also link every other compiler name on PATH (target triplets)
+  ", "--", cli_flag_canonical_only!(), "     With ", "--", cli_flag_shims!(), ", link only the unversioned names, not the versioned compilers on PATH
+  ", "--", cli_flag_force!(), "              With ", "--", cli_flag_shims!(), ", replace existing entries instead of refusing
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "           Print ", cli_command_help!(), "
+")
     .to_owned()
 }
 
 fn doctor_help() -> String {
-    "\
+    concat!("\
 Diagnose setup issues and verify cache integrity
 
-Usage: kache doctor [OPTIONS]
+Usage: kache ", cli_command_doctor!(), " [OPTIONS]
 
 Options:
-  --fix              Migrate from sccache (Cargo wrapper, running server) and restart a daemon older than this binary
-  --purge-sccache    Also remove sccache cache and binary (requires --fix)
-  --verify           Verify cache integrity (entries, blobs, metadata)
-  --checksums        Also verify blob checksums (slower, implies --verify)
-  --repair           Remove corrupted entries (implies --verify)
-  --probe            Compile a temporary Rust library and verify a local cache hit
-  --json             Machine-readable JSON on stdout
-  -h, --help         Print help
-"
+  ", "--", cli_flag_fix!(), "              Migrate from sccache (Cargo wrapper, running server) and ", cli_command_restart!(), " a ", cli_command_daemon!(), " older than this binary
+  ", "--", cli_flag_purge_sccache!(), "    Also remove sccache cache and binary (requires ", "--", cli_flag_fix!(), ")
+  ", "--", cli_flag_verify!(), "           Verify cache integrity (entries, blobs, metadata)
+  ", "--", cli_flag_checksums!(), "        Also verify blob checksums (slower, implies ", "--", cli_flag_verify!(), ")
+  ", "--", cli_flag_repair!(), "           Remove corrupted entries (implies ", "--", cli_flag_verify!(), ")
+  ", "--", cli_flag_probe!(), "            Compile a temporary Rust library and verify a local cache hit
+  ", "--", cli_flag_json!(), "             Machine-readable JSON on stdout
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "         Print ", cli_command_help!(), "
+")
     .to_owned()
 }
 
 fn daemon_help() -> String {
-    "\
-Show the background daemon's status, or start, stop or install it
+    concat!("\
+Show the background ", cli_command_daemon!(), "'s ", cli_command_status!(), ", or ", cli_command_start!(), ", ", cli_command_stop!(), " or ", cli_command_install!(), " it
 
-Usage: kache daemon [COMMAND]
+Usage: kache ", cli_command_daemon!(), " [COMMAND]
 
 Commands:
-  status     Show daemon status (also bare `kache daemon`)
-  run        Run the daemon server in the foreground
-  start      Start the daemon in the background and wait until it is ready
-  stop       Stop a running daemon
-  restart    Restart the daemon, through its login service when one is installed
-  install    Install the daemon as a per-user login service
-  uninstall  Remove the daemon service
-  log        Stream daemon logs
+  ", cli_command_status!(), "     Show ", cli_command_daemon!(), " ", cli_command_status!(), " (also bare `kache ", cli_command_daemon!(), "`)
+  ", cli_command_run!(), "        Run the ", cli_command_daemon!(), " server in the foreground
+  ", cli_command_start!(), "      Start the ", cli_command_daemon!(), " in the background and wait until it is ready
+  ", cli_command_stop!(), "       Stop a running ", cli_command_daemon!(), "
+  ", cli_command_restart!(), "    Restart the ", cli_command_daemon!(), ", through its login service when one is installed
+  ", cli_command_install!(), "    Install the ", cli_command_daemon!(), " as a per-user login service
+  ", cli_command_uninstall!(), "  Remove the ", cli_command_daemon!(), " service
+  ", cli_command_log!(), "        Stream ", cli_command_daemon!(), " logs
 
 Options:
-  -h, --help  Print help
-"
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "  Print ", cli_command_help!(), "
+")
     .to_owned()
 }
 
 fn stats_help() -> String {
-    "\
-Show hit rate, time saved and cache size; --full for the whole report [alias: status]
+    concat!("\
+Show hit rate, time saved and cache size; ", "--", cli_flag_full!(), " for the whole ", cli_command_report!(), " [alias: ", cli_command_status!(), "]
 
-Usage: kache stats [OPTIONS]
+Usage: kache ", cli_command_stats!(), " [OPTIONS]
 
 Options:
-  --since <SINCE>    Event window (e.g. 15m, 2h, 7d; a bare number is hours) [default: 24h]
-  --root <PATH>      Only this build tree/root
-  --full             The full build report instead of the summary
-  --format <FORMAT>  Write the full report as json, markdown, github, or trace (Perfetto / Chrome trace)
-  -o, --output <PATH>
-                     Write the full report to a file instead of stdout
-  --top <N>          Entries in each top list of the full report
-  --record           Also append the full report's summary and timing, with the host's load, to telemetry
-  --redact           Replace cache keys, roots, and object paths with `redacted`
-  --json             Machine-readable JSON on stdout
-  -h, --help         Print help
-"
+  ", "--", cli_flag_since!(), " <SINCE>    Event window (e.g. 15m, 2h, 7d; a bare number is hours) [default: 24h]
+  ", "--", cli_flag_root!(), " <PATH>      Only this build tree/root
+  ", "--", cli_flag_full!(), "             The full build ", cli_command_report!(), " instead of the summary
+  ", "--", cli_flag_format!(), " <FORMAT>  Write the full ", cli_command_report!(), " as json, markdown, github, or trace (Perfetto / Chrome trace)
+  ", "-", cli_short_o!(), ", ", "--", cli_flag_output!(), " <PATH>
+                     Write the full ", cli_command_report!(), " to a file instead of stdout
+  ", "--", cli_flag_top!(), " <N>          Entries in each top ", cli_command_list!(), " of the full ", cli_command_report!(), "
+  ", "--", cli_flag_record!(), "           Also append the full ", cli_command_report!(), "'s summary and timing, with the host's load, to ", cli_command_telemetry!(), "
+  ", "--", cli_flag_redact!(), "           Replace cache keys, roots, and object paths with `redacted`
+  ", "--", cli_flag_json!(), "             Machine-readable JSON on stdout
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "         Print ", cli_command_help!(), "
+")
     .to_owned()
 }
 
 fn telemetry_help() -> String {
-    "\
+    concat!("\
 Write cache counters as OTLP JSON
 
-Usage: kache telemetry <COMMAND>
+Usage: kache ", cli_command_telemetry!(), " <COMMAND>
 
 Commands:
-  write  Snapshot live cache counters into `metrics.otlp.json` + `schema_version`
+  ", cli_command_write!(), "  Snapshot live cache counters into `metrics.otlp.json` + `schema_version`
 
 Options:
-  -h, --help  Print help
-"
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "  Print ", cli_command_help!(), "
+")
     .to_owned()
 }
 
 fn telemetry_write_help() -> String {
-    "\
+    concat!("\
 Snapshot live cache counters into `metrics.otlp.json` + `schema_version`
 
-Usage: kache telemetry write [OPTIONS] <DIR>
+Usage: kache ", cli_command_telemetry!(), " ", cli_command_write!(), " [OPTIONS] <DIR>
 
 Arguments:
-  <DIR>  Directory to write. Created if missing
+  <DIR>  Directory to ", cli_command_write!(), ". Created if missing
 
 Options:
-  --scenario <NAME>   Bench scenario this dump belongs to
-  --phase <PHASE>     Bench phase this dump belongs to (cold, warm-same-tree, warm, pull)
-  -h, --help          Print help
-"
+  ", "--", cli_flag_scenario!(), " <NAME>   Bench scenario this dump belongs to
+  ", "--", cli_flag_phase!(), " <PHASE>     Bench phase this dump belongs to (cold, warm-same-tree, warm, pull)
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "          Print ", cli_command_help!(), "
+")
     .to_owned()
 }
 
 fn explain_help() -> String {
-    "Explain why a crate missed the cache [alias: why-miss]\n\nUsage: kache explain [OPTIONS] <CRATE>\n\nArguments:\n  <CRATE>       Crate name to explain\n\nOptions:\n  --json        Machine-readable JSON on stdout\n  -h, --help    Print help\n".to_owned()
+    concat!(
+        "Explain why a crate missed the cache [alias: ", cli_command_why_miss!(), "]\n\n",
+        "Usage: kache ", cli_command_explain!(), " [OPTIONS] <CRATE>\n\n",
+        "Arguments:\n  <CRATE>       Crate name to explain\n\nOptions:\n  --",
+        cli_flag_json!(), "        Machine-readable JSON on stdout\n  -",
+        cli_short_h!(), ", --", cli_flag_help!(), "    Print help\n",
+    ).to_owned()
 }
 
 fn report_help() -> String {
-    "\
-The full build report. Kept for scripts; `kache stats --full` is the
-same report
+    concat!("\
+The full build ", cli_command_report!(), ". Kept for scripts; `kache ", cli_command_stats!(), " ", "--", cli_flag_full!(), "` is the
+same ", cli_command_report!(), "
 
-Usage: kache report [OPTIONS]
+Usage: kache ", cli_command_report!(), " [OPTIONS]
 
 Options:
-  --format <FORMAT>  Output format: json, trace (also perfetto, chrome-trace), markdown, github, text [default: text]
-  --since <SINCE>    Event window (e.g. 15m, 2h, 7d; a bare number is hours) [default: 24h]
-  --root <PATH>      Only include compiler events from this build tree/root
-  -o, --output <PATH>
+  ", "--", cli_flag_format!(), " <FORMAT>  Output format: json, trace (also perfetto, chrome-trace), markdown, github, text [default: text]
+  ", "--", cli_flag_since!(), " <SINCE>    Event window (e.g. 15m, 2h, 7d; a bare number is hours) [default: 24h]
+  ", "--", cli_flag_root!(), " <PATH>      Only include compiler events from this build tree/root
+  ", "-", cli_short_o!(), ", ", "--", cli_flag_output!(), " <PATH>
                      Write output to a file instead of stdout
-  --top <N>          Number of top entries to show [default: 10]
-  --record           Also append this report's summary and timing, with the host's load, to telemetry
-  --redact           Replace cache keys, roots, and object paths with `redacted`
-  --json             Machine-readable JSON on stdout
-  -h, --help         Print help
-"
+  ", "--", cli_flag_top!(), " <N>          Number of top entries to show [default: 10]
+  ", "--", cli_flag_record!(), "           Also append this ", cli_command_report!(), "'s summary and timing, with the host's load, to ", cli_command_telemetry!(), "
+  ", "--", cli_flag_redact!(), "           Replace cache keys, roots, and object paths with `redacted`
+  ", "--", cli_flag_json!(), "             Machine-readable JSON on stdout
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "         Print ", cli_command_help!(), "
+")
     .to_owned()
 }
 
 fn config_help() -> String {
-    "\
+    concat!("\
 Inspect or change configuration values (lists values without a subcommand)
 
-Usage: kache config [COMMAND]
+Usage: kache ", cli_command_config!(), " [COMMAND]
 
 Commands:
-  get    Read a value explicitly set in the selected file
-  list   List values explicitly set in the selected file
-  set    Set a known configuration key; accepts TOML values or an unquoted string
-  unset  Remove a value from the selected file
-  path   Print the selected file's path, even if it does not exist
+  ", cli_command_get!(), "    Read a value explicitly ", cli_command_set!(), " in the selected file
+  ", cli_command_list!(), "   List values explicitly ", cli_command_set!(), " in the selected file
+  ", cli_command_set!(), "    Set a known configuration key; accepts TOML values or an unquoted string
+  ", cli_command_unset!(), "  Remove a value from the selected file
+  ", cli_command_path!(), "   Print the selected file's ", cli_command_path!(), ", even if it does not exist
 
 Options:
-  --json      Machine-readable JSON on stdout
-  -h, --help  Print help
-"
+  ", "--", cli_flag_json!(), "      Machine-readable JSON on stdout
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "  Print ", cli_command_help!(), "
+")
     .to_owned()
 }
 
 fn config_sub_help(subcommand: &str) -> String {
     let (usage, about) = match subcommand {
-        "get" => ("kache config get [OPTIONS] <KEY>", "Read a value explicitly set in the selected file"),
-        "set" => ("kache config set [OPTIONS] <KEY> <VALUE>", "Set a known configuration key"),
-        "unset" => ("kache config unset [OPTIONS] <KEY>", "Remove a value from the selected file"),
-        "list" => ("kache config list [OPTIONS]", "List values explicitly set in the selected file"),
-        "path" => ("kache config path [OPTIONS]", "Print the selected file's path"),
+        cli_command_get!() => (concat!("kache ", cli_command_config!(), " ", cli_command_get!(), " [OPTIONS] <KEY>"), "Read a value explicitly set in the selected file"),
+        cli_command_set!() => (concat!("kache ", cli_command_config!(), " ", cli_command_set!(), " [OPTIONS] <KEY> <VALUE>"), "Set a known configuration key"),
+        cli_command_unset!() => (concat!("kache ", cli_command_config!(), " ", cli_command_unset!(), " [OPTIONS] <KEY>"), "Remove a value from the selected file"),
+        cli_command_list!() => (concat!("kache ", cli_command_config!(), " ", cli_command_list!(), " [OPTIONS]"), "List values explicitly set in the selected file"),
+        cli_command_path!() => (concat!("kache ", cli_command_config!(), " ", cli_command_path!(), " [OPTIONS]"), "Print the selected file's path"),
         _ => unreachable!("config subcommand checked before this call"),
     };
     format!(
-        "\
+        concat!("\
 {about}
 
 Usage: {usage}
 
 Arguments:
   <KEY>          Configuration key (where required)
-  <VALUE>        TOML value or unquoted string (set only)
+  <VALUE>        TOML value or unquoted string (", cli_command_set!(), " only)
 
 Options:
-  --project      Use the nearest project config, or create .kache.toml in this directory
-  --global       Use the user config, ignoring KACHE_CONFIG and project files
-  --file <PATH>  Use this configuration file
-  --json         Machine-readable JSON on stdout
-  -h, --help     Print help
-"
+  ", "--", cli_flag_project!(), "      Use the nearest project ", cli_command_config!(), ", or create .kache.toml in this directory
+  ", "--", cli_flag_global!(), "       Use the user ", cli_command_config!(), ", ignoring KACHE_CONFIG and project files
+  ", "--", cli_flag_file!(), " <PATH>  Use this configuration file
+  ", "--", cli_flag_json!(), "         Machine-readable JSON on stdout
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "     Print ", cli_command_help!(), "
+"),
+        about = about,
+        usage = usage,
     )
 }
 
 fn install_shims_help() -> String {
-    "\
+    concat!("\
 Create compiler-name links to kache in a directory you put first on
-PATH. Kept for scripts and packages; `kache init --shims` does the
+PATH. Kept for scripts and packages; `kache ", cli_command_init!(), " ", "--", cli_flag_shims!(), "` does the
 same in the default directory
 
-Usage: kache install-shims [OPTIONS] [DIR]
+Usage: kache ", cli_command_install_shims!(), " [OPTIONS] [DIR]
 
 Arguments:
   [DIR]  Directory to populate. Defaults to ~/.local/lib/kache/shims
 
 Options:
-  --force           Replace existing entries instead of refusing
-  --from-path       Also wrap every other compiler name on PATH (target triplets)
-  --canonical-only  Link only the unversioned names, not the versioned compilers on PATH
-  -h, --help        Print help
-"
+  ", "--", cli_flag_force!(), "           Replace existing entries instead of refusing
+  ", "--", cli_flag_from_path!(), "       Also wrap every other compiler name on PATH (target triplets)
+  ", "--", cli_flag_canonical_only!(), "  Link only the unversioned names, not the versioned compilers on PATH
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "        Print ", cli_command_help!(), "
+")
     .to_owned()
 }
 
 fn command_help(name: &str, json: bool) -> Result<String, ParseFail> {
     match name {
-        "cargo" => Ok(cargo_help()),
-        "help" => Ok(top_help()),
-        "status" | "stats" => Ok(stats_help()),
-        "list" => Ok(list_help()),
-        "gc" => Ok(gc_help()),
-        "purge" => Ok(purge_help()),
-        "clean" => Ok(clean_help()),
-        "init" => Ok(init_help()),
-        "doctor" => Ok(doctor_help()),
-        "daemon" => Ok(daemon_help()),
-        "telemetry" => Ok(telemetry_help()),
-        "why-miss" | "explain" => Ok(explain_help()),
-        "report" => Ok(report_help()),
-        "config" => Ok(config_help()),
-        "install-shims" => Ok(install_shims_help()),
+        cli_command_cargo!() => Ok(cargo_help()),
+        cli_command_help!() => Ok(top_help()),
+        cli_command_status!() | cli_command_stats!() => Ok(stats_help()),
+        cli_command_list!() => Ok(list_help()),
+        cli_command_gc!() => Ok(gc_help()),
+        cli_command_purge!() => Ok(purge_help()),
+        cli_command_clean!() => Ok(clean_help()),
+        cli_command_init!() => Ok(init_help()),
+        cli_command_doctor!() => Ok(doctor_help()),
+        cli_command_daemon!() => Ok(daemon_help()),
+        cli_command_telemetry!() => Ok(telemetry_help()),
+        cli_command_why_miss!() | cli_command_explain!() => Ok(explain_help()),
+        cli_command_report!() => Ok(report_help()),
+        cli_command_config!() => Ok(config_help()),
+        cli_command_install_shims!() => Ok(install_shims_help()),
         _ => Err(fail(json, format!("unrecognized subcommand '{name}'"))),
     }
 }
 
 fn subcommand_help(command: &str, subcommand: &str, json: bool) -> Result<String, ParseFail> {
     match (command, subcommand) {
-        ("daemon", sub) => Ok(format!(
-            "\
+        (cli_command_daemon!(), sub) => Ok(format!(
+            concat!("\
 {about}
 
-Usage: kache daemon {sub}
+Usage: kache ", cli_command_daemon!(), " {sub}
 
 Options:
-  -h, --help  Print help
-",
+  ", "-", cli_short_h!(), ", ", "--", cli_flag_help!(), "  Print ", cli_command_help!(), "
+"),
             about = match sub {
-                "status" => "Show daemon status (also bare `kache daemon`)",
-                "run" => "Run the daemon server in the foreground",
-                "start" => "Start the daemon in the background and wait until it is ready",
-                "stop" => "Stop a running daemon",
-                "restart" => "Restart the daemon, through its login service when one is installed",
-                "install" => "Install the daemon as a per-user login service",
-                "uninstall" => "Remove the daemon service",
-                "log" => "Stream daemon logs",
+                cli_command_status!() => "Show daemon status (also bare `kache daemon`)",
+                cli_command_run!() => "Run the daemon server in the foreground",
+                cli_command_start!() => "Start the daemon in the background and wait until it is ready",
+                cli_command_stop!() => "Stop a running daemon",
+                cli_command_restart!() => "Restart the daemon, through its login service when one is installed",
+                cli_command_install!() => "Install the daemon as a per-user login service",
+                cli_command_uninstall!() => "Remove the daemon service",
+                cli_command_log!() => "Stream daemon logs",
                 _ => return Err(fail(json, format!("unrecognized daemon subcommand '{sub}'"))),
             },
+            sub = sub,
         )),
-        ("telemetry", "write") => Ok(telemetry_write_help()),
-        ("config", sub @ ("get" | "set" | "unset" | "list" | "path")) => Ok(config_sub_help(sub)),
+        (cli_command_telemetry!(), cli_command_write!()) => Ok(telemetry_write_help()),
+        (cli_command_config!(), sub @ (cli_command_get!() | cli_command_set!() | cli_command_unset!() | cli_command_list!() | cli_command_path!())) => Ok(config_sub_help(sub)),
         _ => Err(fail(
             json,
             format!("'{command} {subcommand}' is not a command; see 'kache {command} --help'"),
@@ -1512,7 +1612,7 @@ pub(crate) fn help_tree() -> HelpCommand {
         arguments: vec![json_arg()],
         subcommands: vec![
             HelpCommand {
-                name: "init",
+                name: cli_command_init!(),
                 description: Some("Set up caching for Cargo and C/C++ builds"),
                 usage: "Usage: kache init [OPTIONS]",
                 arguments: vec![
@@ -1528,7 +1628,7 @@ pub(crate) fn help_tree() -> HelpCommand {
                 subcommands: vec![],
             },
             HelpCommand {
-                name: "doctor",
+                name: cli_command_doctor!(),
                 description: Some("Diagnose setup issues and verify cache integrity"),
                 usage: "Usage: kache doctor [OPTIONS]",
                 arguments: vec![
@@ -1543,13 +1643,13 @@ pub(crate) fn help_tree() -> HelpCommand {
                 subcommands: vec![],
             },
             HelpCommand {
-                name: "config",
+                name: cli_command_config!(),
                 description: Some("Inspect or change configuration values"),
                 usage: "Usage: kache config [COMMAND]",
                 arguments: vec![json_arg()],
                 subcommands: vec![
                     HelpCommand {
-                        name: "get",
+                        name: cli_command_get!(),
                         description: Some("Read a value explicitly set in the selected file"),
                         usage: "Usage: kache config get [OPTIONS] <KEY>",
                         arguments: vec![
@@ -1561,7 +1661,7 @@ pub(crate) fn help_tree() -> HelpCommand {
                         subcommands: vec![],
                     },
                     HelpCommand {
-                        name: "list",
+                        name: cli_command_list!(),
                         description: Some("List values explicitly set in the selected file"),
                         usage: "Usage: kache config list [OPTIONS]",
                         arguments: vec![
@@ -1572,7 +1672,7 @@ pub(crate) fn help_tree() -> HelpCommand {
                         subcommands: vec![],
                     },
                     HelpCommand {
-                        name: "set",
+                        name: cli_command_set!(),
                         description: Some("Set a known configuration key"),
                         usage: "Usage: kache config set [OPTIONS] <KEY> <VALUE>",
                         arguments: vec![
@@ -1585,7 +1685,7 @@ pub(crate) fn help_tree() -> HelpCommand {
                         subcommands: vec![],
                     },
                     HelpCommand {
-                        name: "unset",
+                        name: cli_command_unset!(),
                         description: Some("Remove a value from the selected file"),
                         usage: "Usage: kache config unset [OPTIONS] <KEY>",
                         arguments: vec![
@@ -1597,7 +1697,7 @@ pub(crate) fn help_tree() -> HelpCommand {
                         subcommands: vec![],
                     },
                     HelpCommand {
-                        name: "path",
+                        name: cli_command_path!(),
                         description: Some("Print the selected file's path"),
                         usage: "Usage: kache config path [OPTIONS]",
                         arguments: vec![
@@ -1610,7 +1710,7 @@ pub(crate) fn help_tree() -> HelpCommand {
                 ],
             },
             HelpCommand {
-                name: "stats",
+                name: cli_command_stats!(),
                 description: Some("Show hit rate, time saved and cache size"),
                 usage: "Usage: kache stats [OPTIONS]",
                 arguments: vec![
@@ -1627,7 +1727,7 @@ pub(crate) fn help_tree() -> HelpCommand {
                 subcommands: vec![],
             },
             HelpCommand {
-                name: "clean",
+                name: cli_command_clean!(),
                 description: Some("Remove cache entries"),
                 usage: "Usage: kache clean [OPTIONS]",
                 arguments: vec![
@@ -1639,7 +1739,7 @@ pub(crate) fn help_tree() -> HelpCommand {
                 subcommands: vec![],
             },
             HelpCommand {
-                name: "explain",
+                name: cli_command_explain!(),
                 description: Some("Explain why a crate missed the cache"),
                 usage: "Usage: kache explain [OPTIONS] <CRATE>",
                 arguments: vec![
@@ -1649,7 +1749,7 @@ pub(crate) fn help_tree() -> HelpCommand {
                 subcommands: vec![],
             },
             HelpCommand {
-                name: "list",
+                name: cli_command_list!(),
                 description: Some("List cache entries, or one crate's entries in detail"),
                 usage: "Usage: kache list [OPTIONS] [CRATE]",
                 arguments: vec![
@@ -1661,62 +1761,62 @@ pub(crate) fn help_tree() -> HelpCommand {
                 subcommands: vec![],
             },
             HelpCommand {
-                name: "daemon",
+                name: cli_command_daemon!(),
                 description: Some("Show the background daemon's status, or start, stop or install it"),
                 usage: "Usage: kache daemon [COMMAND]",
                 arguments: vec![],
                 subcommands: vec![
                     HelpCommand {
-                        name: "status",
+                        name: cli_command_status!(),
                         description: Some("Show daemon status (also bare `kache daemon`)"),
                         usage: "Usage: kache daemon status",
                         arguments: vec![],
                         subcommands: vec![],
                     },
                     HelpCommand {
-                        name: "run",
+                        name: cli_command_run!(),
                         description: Some("Run the daemon server in the foreground"),
                         usage: "Usage: kache daemon run",
                         arguments: vec![],
                         subcommands: vec![],
                     },
                     HelpCommand {
-                        name: "start",
+                        name: cli_command_start!(),
                         description: Some("Start the daemon in the background and wait until it is ready"),
                         usage: "Usage: kache daemon start",
                         arguments: vec![],
                         subcommands: vec![],
                     },
                     HelpCommand {
-                        name: "stop",
+                        name: cli_command_stop!(),
                         description: Some("Stop a running daemon"),
                         usage: "Usage: kache daemon stop",
                         arguments: vec![],
                         subcommands: vec![],
                     },
                     HelpCommand {
-                        name: "restart",
+                        name: cli_command_restart!(),
                         description: Some("Restart the daemon"),
                         usage: "Usage: kache daemon restart",
                         arguments: vec![],
                         subcommands: vec![],
                     },
                     HelpCommand {
-                        name: "install",
+                        name: cli_command_install!(),
                         description: Some("Install the daemon as a per-user login service"),
                         usage: "Usage: kache daemon install",
                         arguments: vec![],
                         subcommands: vec![],
                     },
                     HelpCommand {
-                        name: "uninstall",
+                        name: cli_command_uninstall!(),
                         description: Some("Remove the daemon service"),
                         usage: "Usage: kache daemon uninstall",
                         arguments: vec![],
                         subcommands: vec![],
                     },
                     HelpCommand {
-                        name: "log",
+                        name: cli_command_log!(),
                         description: Some("Stream daemon logs"),
                         usage: "Usage: kache daemon log",
                         arguments: vec![],
@@ -1740,40 +1840,40 @@ fn parse_doctor(parser: &mut lexopt::Parser, mut json: bool) -> ParseResult {
             break;
         };
         match arg {
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help {
                     text: doctor_help(),
                     json,
                 });
             }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+            lexopt::Arg::Short(cli_short_V!()) | lexopt::Arg::Long(cli_flag_version!()) => {
                 return Ok(ParseOutcome::Version { json });
             }
-            lexopt::Arg::Long("json") => {
+            lexopt::Arg::Long(cli_flag_json!()) => {
                 no_value(&mut *parser, "json", json)?;
                 json = true;
             },
-            lexopt::Arg::Long("fix") => {
+            lexopt::Arg::Long(cli_flag_fix!()) => {
                 no_value(&mut *parser, "fix", json)?;
                 fix = true;
             }
-            lexopt::Arg::Long("purge-sccache") => {
+            lexopt::Arg::Long(cli_flag_purge_sccache!()) => {
                 no_value(&mut *parser, "purge-sccache", json)?;
                 purge_sccache = true;
             }
-            lexopt::Arg::Long("verify") => {
+            lexopt::Arg::Long(cli_flag_verify!()) => {
                 no_value(&mut *parser, "verify", json)?;
                 verify = true;
             }
-            lexopt::Arg::Long("checksums") => {
+            lexopt::Arg::Long(cli_flag_checksums!()) => {
                 no_value(&mut *parser, "checksums", json)?;
                 checksums = true;
             }
-            lexopt::Arg::Long("repair") => {
+            lexopt::Arg::Long(cli_flag_repair!()) => {
                 no_value(&mut *parser, "repair", json)?;
                 repair = true;
             }
-            lexopt::Arg::Long("probe") => {
+            lexopt::Arg::Long(cli_flag_probe!()) => {
                 no_value(&mut *parser, "probe", json)?;
                 probe = true;
             }
@@ -1835,17 +1935,17 @@ pub(crate) fn parse_cli(args: &[OsString]) -> Result<ParseOutcome, ParseFail> {
             break;
         };
         match arg {
-            lexopt::Arg::Long("json") => {
+            lexopt::Arg::Long(cli_flag_json!()) => {
                 no_value(&mut parser, "json", json)?;
                 json = true;
             }
-            lexopt::Arg::Short('h') | lexopt::Arg::Long("help") => {
+            lexopt::Arg::Short(cli_short_h!()) | lexopt::Arg::Long(cli_flag_help!()) => {
                 return Ok(ParseOutcome::Help {
                     text: top_help(),
                     json,
                 });
             }
-            lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+            lexopt::Arg::Short(cli_short_V!()) | lexopt::Arg::Long(cli_flag_version!()) => {
                 return Ok(ParseOutcome::Version { json });
             }
             lexopt::Arg::Value(name) => {
@@ -1984,10 +2084,42 @@ mod reference_tests {
     use super::*;
 
     #[test]
-    fn reference_examples_parse_without_execution() {
-        for &(path, example) in REFERENCE {
-            let args: Vec<OsString> = example.split_whitespace().skip(1).map(OsString::from).collect();
-            assert!(parse_cli(&args).is_ok(), "invalid example for {path:?}: {example}");
+    fn primary_help_covers_declared_spellings() {
+        let help = top_help();
+        for (index, flag) in LONG_FLAGS.iter().enumerate() {
+            assert!(!LONG_FLAGS[..index].contains(flag));
+            assert!(help.contains(&format!("--{flag}")), "missing --{flag}");
         }
+        for (index, flag) in SHORT_FLAGS.iter().enumerate() {
+            assert!(!SHORT_FLAGS[..index].contains(flag));
+            assert!(help.contains(&format!("-{flag}")), "missing -{flag}");
+        }
+        for name in COMMAND_NAMES { assert!(help.contains(name), "missing {name}"); }
+    }
+
+    #[test]
+    fn reference_examples_parse_without_execution() {
+        let mut paths = std::collections::HashSet::new();
+        for &(path, example) in REFERENCE {
+            assert!(paths.insert(path), "duplicate command path: {path:?}");
+            let args: Vec<OsString> = example.split_whitespace().skip(1).map(OsString::from).collect();
+            match parse_cli(&args) {
+                Ok(ParseOutcome::Run(cli)) => {
+                    let expected = if path == ["telemetry"] { "telemetry-write".to_string() } else { path.join("-") };
+                    assert_eq!(cli.command_path(), expected, "{example}");
+                }
+                Ok(ParseOutcome::Help { .. }) if path == ["help"] => {}
+                _ => panic!("invalid example for {path:?}: {example}"),
+            }
+        }
+    }
+
+    #[test]
+    fn primary_help_describes_configuration_overrides_without_reading_them() {
+        let help = top_help();
+        assert!(help.contains("KACHE_CACHE_DIR  Override cache.local_store"));
+        assert!(help.contains("KACHE_RUNTIME_DIR  Override cache.runtime_dir"));
+        assert!(help.contains("KACHE_CONFIG, KACHE_HOST_CONFIG"));
+        assert!(help.contains("Unset overrides use file/default configuration"));
     }
 }

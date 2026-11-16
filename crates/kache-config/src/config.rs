@@ -451,6 +451,11 @@ const ENV_FILE_KEYS: &[(&str, &str)] = &[
     ),
 ];
 
+/// File-backed environment overrides as `(variable, configuration key)` pairs.
+pub fn file_environment_overrides() -> impl Iterator<Item = (&'static str, &'static str)> {
+    ENV_FILE_KEYS.iter().copied()
+}
+
 /// Read a `KACHE_*` env var, unless the pinned config asked to ignore env
 /// (`[cache] ignore_env = true`). Returns `Err(NotPresent)` when locked, so
 /// every existing env -> file -> default fallback arm transparently skips the
