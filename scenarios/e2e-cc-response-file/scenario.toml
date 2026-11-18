@@ -1,24 +1,14 @@
-# kache-e2e fixture: a response-file compile kache must NOT cache.
+# kache-e2e fixture: a response-file compile kache expands and caches.
 #
-# A sibling of c-passthrough for another refusal class. The compile is
-# `cc @args.rsp`: the real flags (`-c src/main.c -o build/main.o`) live
-# inside the response file. kache classifies the invocation it is given,
-# and it cannot see through `@file` at that point, so `CcArgs::refuse_reasons`
-# refuses response files (src/compiler/cc.rs). The invocation passes
-# through to the real compiler, which expands the file and compiles,
-# caching nothing.
-#
-# Response files are how large Windows / cross builds stay under the OS
-# command-line length limit, so the passthrough contract here is
-# load-bearing: caching a `@file` invocation without expanding it would
-# key on the wrong inputs.
+# The compile is `cc @args.rsp`: the real flags (`-O2 -c src/main.c -o
+# build/main.o`) live inside the response file. The GNU driver path expands
+# the file before parsing (src/compiler/cc.rs, `cc_args_with_response_files`),
+# so the invocation is keyed and cached like the same flags given directly.
+# Response files GCC and Clang read differently still pass through; the
+# differential oracle covers those (campaigns/cpp/oracle/cc-rsp-*).
 
 name = "e2e-cc-response-file"
-tags = ["suite:e2e", "lang:cc", "mode:passthrough"]
-
-# Exempt from `--negative-control` for the same reason as c-passthrough:
-# "kache caches nothing" is indistinguishable from kache being disabled.
-negative_control_exempt = true
+tags = ["suite:e2e", "lang:cc"]
 
 [source]
 kind = "fixture"
@@ -35,19 +25,16 @@ clean = "make clean"
 run = "./build/main"
 expected_stdout_contains = ["response-file ok"]
 
-# Cold: the `@args.rsp` invocation is refused -> passthrough -> nothing cached.
+# Cold: the expanded compile misses and is stored.
 [assertions.cold]
-max_entries_after = 0
+min_entries_after = 1
+max_compiler_runs = 1
 
-# Warm: still passthrough, so a clean rebuild cannot hit -> zero entries.
+# Warm: clean wipes build/, the rebuild restores without compiling.
 [assertions.warm]
-max_entries_after = 0
+min_hits = 1
+max_compiler_runs = 0
 
 # Noop: `make` sees the binary up to date and does nothing.
 [assertions.noop]
 should_not_recompile = false
-
-# Relocate: passthrough just runs the compiler, so a build at a different
-# path also caches nothing.
-[assertions.relocate]
-max_entries_after = 0
