@@ -7,7 +7,7 @@
 //!
 //! What's cached:
 //! - **`-c` object compiles**, exactly one source per invocation.
-//!   The cache key is the preprocessor expansion (`cc -E -P` with
+//!   The cache key is the preprocessor expansion (`cc -E` with
 //!   `SOURCE_DATE_EPOCH` pinned) plus compiler identity, target
 //!   arch, and codegen flags. The preprocessor hash captures the
 //!   source and every transitively-included header. The cold probe also writes
@@ -16,9 +16,10 @@
 //!   otherwise it preprocesses again. The key also digests **names** in
 //!   user include dirs (`-I`, `-iquote`, and the source file's directory)
 //!   so a header that appears in an earlier search dir cannot shadow a
-//!   previously-read one without changing the key. `-E -P` strips line
-//!   markers so header *paths* don't leak — the object key remains portable
-//!   across machines and worktrees, while the optimization itself is
+//!   previously-read one without changing the key. Line markers are
+//!   keyed apart from the text, prefix-mapped, so line positions count
+//!   while header *paths* under a mapped root don't leak — the object key
+//!   remains portable across worktrees, while the optimization itself is
 //!   deliberately local.
 //!
 //! What passes through (refused, see [`CcArgs::refuse_reasons`]):
@@ -82,7 +83,7 @@ pub(crate) fn cc_expansion_is_stdout(parsed: &CcArgs) -> bool {
     parsed.mode == CompileMode::Preprocess && parsed.output.is_none()
 }
 
-/// The `-E -P` / `/EP` key probe sets this so a kache shim does not cache
+/// The `-E` / `/E` key probe sets this so a kache shim does not cache
 /// the probe as a user-facing stdout preprocess.
 #[cfg(test)]
 pub(crate) fn cc_is_internal_key_probe() -> bool {
@@ -1436,31 +1437,32 @@ fn cc_target_arch(parsed: &CcArgs) -> String {
 /// Build the argv for a preprocess-only run, dialect-dependent.
 ///
 /// **Gnu dialect** — the original args with mode/output/dep-info flags
-/// stripped and `-E -P` forced:
+/// stripped and `-E` forced:
 /// - `-c` / `-S` removed — we force `-E` (preprocess only).
 /// - `-o <arg>` removed — preprocessed output must go to stdout, not
 ///   a file (we capture and hash it).
 /// - `-MMD` / `-MD` / `-MF` / `-MT` / `-MQ` / `-MP` / `-MG` removed —
 ///   dep-info generation is irrelevant to preprocessor *content* and
 ///   `-MF` would redirect output.
-/// - `-E -P` prepended. `-P` suppresses line markers
-///   (`# 1 "/abs/path/header.h"`), so the hash captures expanded
-///   *content* without leaking machine-local header paths — that's
-///   what makes the key portable across machines.
+/// - `-E` prepended, and a caller's `-P` dropped. The line markers
+///   (`# 12 "dir/header.h"`) are what place each line, and line positions
+///   reach the object's debug line table and the diagnostics a hit
+///   replays. [`split_line_markers`] keys them apart from the text so
+///   their paths do not bind the key to a checkout.
 ///
-/// **Cl dialect** — `/EP` is the MSVC equivalent (preprocess to stdout,
-/// no line markers; gnu `-E -P` writes nothing to stdout under clang-cl).
+/// **Cl dialect** — `/E` preprocesses to stdout with the same markers
+/// (gnu `-E` writes nothing to stdout under clang-cl).
 /// Only compile-mode (`-c`/`-S`) and output (`-o`, `-Fo`/`/Fo`) flags are
 /// stripped; the `-M*` spellings are CRT-selection codegen in this dialect
 /// (they affect `_MT`/`_DLL` defines), so they are KEPT in the expansion.
 fn build_preprocess_args(parsed: &CcArgs) -> Vec<String> {
     match parsed.family.dialect() {
         Dialect::Gnu => {
-            let mut out = vec!["-E".to_string(), "-P".to_string()];
+            let mut out = vec!["-E".to_string()];
             let mut iter = parsed.rest.iter();
             while let Some(arg) = iter.next() {
                 match arg.as_str() {
-                    "-c" | "-S" => {}
+                    "-c" | "-S" | "-P" => {}
                     "-o" | "-MF" | "-MT" | "-MQ" => {
                         iter.next(); // also drop the flag's value
                     }
@@ -1471,11 +1473,10 @@ fn build_preprocess_args(parsed: &CcArgs) -> Vec<String> {
             out
         }
         Dialect::Cl => {
-            // `/EP` = preprocess to stdout, no line markers (MSVC
-            // equivalent of gnu `-E -P`). Drop compile-mode + output
-            // flags; keep preprocessor-affecting flags so the hash
-            // reflects them.
-            let mut out = vec!["/EP".to_string()];
+            // `/E` = preprocess to stdout with line markers. Drop
+            // compile-mode + output flags; keep preprocessor-affecting
+            // flags so the hash reflects them.
+            let mut out = vec!["/E".to_string()];
             let mut iter = parsed.rest.iter();
             while let Some(arg) = iter.next() {
                 match arg.as_str() {
@@ -1499,7 +1500,7 @@ fn build_preprocess_args(parsed: &CcArgs) -> Vec<String> {
 
 /// Hash the preprocessor expansion of the translation unit.
 ///
-/// Runs `<cc> -E -P …` (gnu) or `<cc> /EP …` (clang-cl) — see
+/// Runs `<cc> -E …` (gnu) or `<cc> /E …` (clang-cl) — see
 /// [`build_preprocess_args`] — with `SOURCE_DATE_EPOCH` pinned so the
 /// `__DATE__` / `__TIME__` macros expand deterministically (without
 /// this the hash would change every second → ~0% hit rate; gcc, clang,
@@ -1697,6 +1698,51 @@ fn hash_cc_expansion(raw: Vec<u8>, prefix_maps: &[CcPrefixMap]) -> CcExpansionHa
         hash: hasher.finalize().to_hex().to_string(),
         path_bound: true,
     }
+}
+
+/// Split a preprocessor expansion into its text and its line layout.
+///
+/// The text is every line that is not a line marker; it is what the
+/// assembler scan and [`hash_cc_expansion`] see. The layout keeps each marker,
+/// prefix-mapped like the compile's debug paths, and one newline for each text
+/// line, so it fixes where every line sits. `None` when the expansion carries
+/// no marker at all.
+fn split_line_markers(expansion: &[u8], prefix_maps: &[CcPrefixMap]) -> (Vec<u8>, Option<Vec<u8>>) {
+    let mut text = Vec::with_capacity(expansion.len());
+    let mut layout = Vec::new();
+    let mut markers = false;
+    for line in expansion.split_inclusive(|&byte| byte == b'\n') {
+        if is_line_marker(line) {
+            markers = true;
+            layout.extend_from_slice(&apply_cc_prefix_maps_to_bytes(line.to_vec(), prefix_maps));
+        } else {
+            text.extend_from_slice(line);
+            layout.push(b'\n');
+        }
+    }
+    (text, markers.then_some(layout))
+}
+
+/// `# 12 "file" 1 3` (GCC, Clang, clang-cl `/E`) or `#line 12 "file"`.
+fn is_line_marker(line: &[u8]) -> bool {
+    line.strip_prefix(b"# ")
+        .or_else(|| line.strip_prefix(b"#line "))
+        .is_some_and(|rest| rest.first().is_some_and(u8::is_ascii_digit))
+}
+
+/// Fold an expansion's line layout into its text hash. Two expansions whose
+/// text matches but whose code sits on other lines compile to objects with
+/// different line tables and replay diagnostics at other locations.
+fn fold_line_layout(hash: String, layout: Option<&[u8]>) -> String {
+    let Some(layout) = layout else {
+        return hash;
+    };
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"kache.cc.expansion-layout.v1\0");
+    hasher.update(hash.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(layout);
+    hasher.finalize().to_hex().to_string()
 }
 
 /// Assembler directives that read another file at assembly time.
@@ -2232,17 +2278,19 @@ fn preprocess_hash(
     }
     if output.stdout.is_empty() {
         // Zero preprocessor output: a mis-detected family ran the wrong
-        // preprocess flags (gnu `-E -P` under clang-cl writes to a file),
+        // preprocess flags (gnu `-E` under clang-cl writes to a file),
         // or a degenerate empty TU. Either way refuse rather than hash
         // nothing → passthrough.
         anyhow::bail!("cc -E key probe produced no output");
     }
-    if let Some(construct) = cc_assembler_hidden_input(&output.stdout) {
+    let (text, layout) = split_line_markers(&output.stdout, prefix_maps);
+    if let Some(construct) = cc_assembler_hidden_input(&text) {
         // Refuse before the memo can record this TU: a memo hit skips the
         // probe, and the file the assembler reads is in no fingerprint.
         return Err(CcHiddenInput { construct }.into());
     }
-    let CcExpansionHash { hash, path_bound } = hash_cc_expansion(output.stdout, prefix_maps);
+    let CcExpansionHash { hash, path_bound } = hash_cc_expansion(text, prefix_maps);
+    let hash = fold_line_layout(hash, layout.as_deref());
     // A path-bound expansion is never memoized. The memo is read from other
     // checkouts through mapped names, and a hit skips the probe that would
     // have noticed the root.
@@ -8058,9 +8106,9 @@ impl CcCompiler {
 
         // Preprocessor expansion — the load-bearing input. Captures
         // the source plus every transitively-included header plus
-        // macro expansion. `-E -P` strips line markers so header
-        // PATHS don't leak (cross-machine portable); SOURCE_DATE_EPOCH
-        // pins __DATE__/__TIME__ (stable across builds).
+        // macro expansion, with line positions keyed apart from the
+        // text (see `split_line_markers`); SOURCE_DATE_EPOCH pins
+        // __DATE__/__TIME__ (stable across builds).
         let trace_memo_key = crate::phase_trace::phase("cc_memo_key");
         let memo_key = ctx
             .file_hasher
