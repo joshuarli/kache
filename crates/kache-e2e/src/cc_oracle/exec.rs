@@ -430,7 +430,11 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
         crate::daemon::stop_and_wait(ctx.kache, &store, Duration::from_secs(60));
     }
     let mut run = result?;
-    if cache_disabled_applies(ctx.control, profile) && arm == Arm::Kache {
+    // Only a required hit can reveal a disabled cache.
+    if cache_disabled_applies(ctx.control, profile)
+        && arm == Arm::Kache
+        && case.steps.iter().any(|step| step.reuse == Reuse::Hit)
+    {
         run.injected = true;
     }
     if ctx.control == Some(Control::ReferenceFailure) && raw_like {
