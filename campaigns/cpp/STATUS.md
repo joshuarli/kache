@@ -357,10 +357,10 @@ KACH-27 fixture `e2e-rust-transitive-native`.
 | #37 | CI: upload musl e2e results when the advisory step fails |
 | #39 | `-fsanitize-ignorelist` keyed by content |
 | #40 | CCP-07 zlib real-project check (`make cc-project-zlib`) |
+| #38 | GNU `@file` response files expanded and cached; `e2e-cc-response-file` now asserts caching |
+| #41 | this ledger section |
 
-Open at hand-off: #38 (GNU response files). Verified on macOS, with
-`make e2e` passing locally. It updates `e2e-cc-response-file` to assert
-caching.
+No PRs open at hand-off.
 
 ## Resume instructions
 
