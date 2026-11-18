@@ -754,8 +754,8 @@ impl CcArgs {
     ///   anything it does not classify is refused with the offending
     ///   flags named in the reason.
     /// - **Output to stdout** (`-o -`): not a cacheable artifact.
-    /// - **Assemble mode**: `-S` is still refused. `-E` to a named file
-    ///   or to stdout is cached.
+    /// - **Assemble mode**: `-S` without `-o`, or under clang-cl, is still
+    ///   refused. `-S -o` and `-E` to a named file or to stdout are cached.
     pub fn refuse_reasons(&self, extra_allowlist_flags: &[String]) -> Vec<RefuseReason> {
         let mut reasons = Vec::new();
 
@@ -783,9 +783,11 @@ impl CcArgs {
             // `-E` to a named file or to stdout is a single-output compile:
             // the expansion is the artifact. `-o -` is still refused below.
             CompileMode::Preprocess => {}
-            CompileMode::Assemble => {
-                reasons.push(RefuseReason::Unsupported("cc assembly mode -S — not yet"))
-            }
+            // `-S` to a named file is a single-output compile like `-c`.
+            CompileMode::Assemble if self.output.is_some() && self.family.dialect() == Dialect::Gnu => {}
+            CompileMode::Assemble => reasons.push(RefuseReason::Unsupported(
+                "cc assembly mode -S without -o — not yet",
+            )),
         }
 
         // Output to stdout — `-o -` is unambiguous; an `-o` followed
@@ -1019,20 +1021,20 @@ impl CcArgs {
     ///
     /// Cacheable invocations have one source, but refused multi-source
     /// invocations still need exact passthrough safety checks for each default
-    /// object and dep-info path. Non-compile modes deliberately return no
-    /// object-shaped paths: `-E foo.c` does not select `foo.o`.
+    /// object and dep-info path. `-S` selects `foo.s`; the other modes
+    /// deliberately return no object-shaped paths: `-E foo.c` does not
+    /// select `foo.o`.
     pub(crate) fn compiler_output_paths(&self) -> Vec<PathBuf> {
-        if self.mode != CompileMode::Compile {
-            return Vec::new();
-        }
+        let ext = match (self.mode, self.family.dialect()) {
+            (CompileMode::Compile, Dialect::Cl) => "obj",
+            (CompileMode::Compile, Dialect::Gnu) => "o",
+            (CompileMode::Assemble, _) => "s",
+            (CompileMode::Preprocess | CompileMode::Link, _) => return Vec::new(),
+        };
 
         let objects = if let Some(output) = &self.output {
             vec![output.clone()]
         } else {
-            let ext = match self.family.dialect() {
-                Dialect::Cl => "obj",
-                Dialect::Gnu => "o",
-            };
             self.sources
                 .iter()
                 .filter_map(|source| {
@@ -2382,6 +2384,25 @@ fn parse_define(s: &str) -> (String, Option<String>) {
 /// the safety signal: a flag kache has never seen could miscache,
 /// so the conservative default is to passthrough.
 pub static CC_FLAGS: &[FlagSpec] = &[
+    FlagSpec { matcher: Matcher::Exact("-fno-delete-null-pointer-checks"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-fno-strict-overflow"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-fno-ident"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-fno-lifetime-dse"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-flto"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-flto=(thin|full)"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-fsplit-lto-unit"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-fwhole-program-vtables"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-fcomplete-member-pointers"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-mno-outline"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-no-canonical-prefixes"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-mmacos-version-min="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-fsanitize="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-fsanitize-trap="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-fsanitize-ignore-for-ubsan-feature="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-fmodule-name="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-fprofile-use="), class: FlagClass::ParserHandled, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("--warning-suppression-mappings="), class: FlagClass::ParserHandled, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-fcrash-diagnostics-dir="), class: FlagClass::NoObjectEffect, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     // ── ModeledInKey: parser extracts into a typed field ──
     FlagSpec {
         // `-O` family: bare, digit (`-O0`..`-O3`), `-Os`/`-Oz`, `-Og`.
@@ -2526,6 +2547,12 @@ pub static CC_FLAGS: &[FlagSpec] = &[
         matcher: Matcher::Exact("-ftrivial-auto-var-init=pattern"),
         class: FlagClass::CapturedByProbe,
         source: "Issue #849 — Firefox automatic-variable pattern initialization; Apple clang forwards the value to -cc1 verbatim (verified -###).",
+        dialect: None,
+    },
+    FlagSpec {
+        matcher: Matcher::Exact("-ftrivial-auto-var-init=zero"),
+        class: FlagClass::CapturedByProbe,
+        source: "Chromium official macOS build; Apple clang forwards the value to -cc1 verbatim (verified -###).",
         dialect: None,
     },
     // ── Codegen knobs: one sorted stem list, BOTH polarities ──
@@ -3376,21 +3403,7 @@ pub static CC_FLAGS: &[FlagSpec] = &[
         source: "PR #94",
         dialect: None,
     },
-    FlagSpec {
-        // `-fno-lto` on a `-c` compile is a no-op: LTO is off by default, so the
-        // object is native code either way — `clang -###` resolves IDENTICAL
-        // `-cc1` tokens with and without it (verified). Firefox passes it
-        // defensively per-TU and the nightly bench passed those TUs through.
-        // `NoObjectEffect` (drop from key) is correct and honest here. The
-        // positive forms — `-flto` / `-flto=thin` / `-ffat-lto-objects` — DO
-        // change the output (LLVM bitcode) and stay unmodeled/refused, so the
-        // dangerous `-flto -fno-lto` combination still passes through (the
-        // unmodeled `-flto` refuses) rather than silently sharing this key.
-        matcher: Matcher::Exact("-fno-lto"),
-        class: FlagClass::NoObjectEffect,
-        source: "Firefox nightly bench — explicit non-LTO `-c` compile; identical -cc1 tokens vs absent (verified clang -###). -flto/-flto=* stay refused.",
-        dialect: None,
-    },
+    FlagSpec { matcher: Matcher::Exact("-fno-lto"), class: FlagClass::RawKeyed, source: "LTO mode", dialect: None },
     FlagSpec {
         matcher: Matcher::Exact("-v"),
         class: FlagClass::NoObjectEffect,
@@ -4034,6 +4047,17 @@ fn classify_and_trace_cc_flags<'a>(
             continue;
         }
 
+        if arg == "-mllvm" {
+            let value = args.next().map(|(_, value)| value.as_str());
+            if value.is_some_and(cc_supported_mllvm_value) {
+                summary.record(Some(FlagClass::RawKeyed));
+            } else {
+                summary.record(None);
+                rejected.push(arg.as_str());
+            }
+            continue;
+        }
+
         let analysis = analyze_cc_arg(arg, dialect);
         summary.record(analysis.class);
         match analysis.class {
@@ -4134,14 +4158,26 @@ const WA_DEBUG_PREFIX_MAP_PREFIX: &str = "-Wa,--debug-prefix-map=";
 /// Preserve argv order and duplicates: assembler option precedence may be
 /// order-sensitive. For GNU as's `--debug-prefix-map=OLD=NEW`, normalize only
 /// the location-dependent `OLD`; `NEW` is object material and stays verbatim.
+fn cc_supported_mllvm_value(value: &str) -> bool {
+    ["-instcombine-lower-dbg-declare=", "-split-threshold-for-reg-with-hint=", "-inlinehint-threshold="]
+        .iter().any(|prefix| value.strip_prefix(prefix).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())))
+}
+
 fn cc_raw_flags_for_key(parsed: &CcArgs, prefix_maps: &[CcPrefixMap]) -> Vec<Vec<u8>> {
     let dialect = parsed.family.dialect();
-    parsed
-        .rest
-        .iter()
-        .filter(|arg| classify_cc_flag(arg, dialect) == Some(FlagClass::RawKeyed))
-        .map(|arg| normalize_raw_keyed_cc_flag(arg, prefix_maps))
-        .collect()
+    let mut flags = Vec::new();
+    let mut args = parsed.rest.iter();
+    while let Some(arg) = args.next() {
+        if arg == "-mllvm" {
+            if let Some(value) = args.next() {
+                flags.push(arg.as_bytes().to_vec());
+                flags.push(value.as_bytes().to_vec());
+            }
+        } else if classify_cc_flag(arg, dialect) == Some(FlagClass::RawKeyed) {
+            flags.push(normalize_raw_keyed_cc_flag(arg, prefix_maps));
+        }
+    }
+    flags
 }
 
 fn normalize_raw_keyed_cc_flag(arg: &str, prefix_maps: &[CcPrefixMap]) -> Vec<u8> {
@@ -7894,7 +7930,21 @@ impl CcCompiler {
                 // the key is path-portable. Mapping only ever merges keys
                 // that differ solely in build path (same object, remapped at
                 // compile time via `-ffile-prefix-map`) — never a miscache.
-                let mapped = apply_cc_prefix_maps_to_bytes(tok.clone().into_bytes(), &prefix_maps);
+                if tok.starts_with("-crash-diagnostics-dir=") {
+                    continue;
+                }
+                let mut token = tok.clone();
+                for (flag, resolved_prefix) in [
+                    ("-fprofile-use=", "-fprofile-instrument-use-path="),
+                    ("--warning-suppression-mappings=", "--warning-suppression-mappings="),
+                ] {
+                    if parsed.rest.iter().filter_map(|arg| arg.strip_prefix(flag))
+                        .any(|path| !path.is_empty() && token.strip_prefix(resolved_prefix) == Some(path))
+                    {
+                        token = format!("{resolved_prefix}<cc-file-input>");
+                    }
+                }
+                let mapped = apply_cc_prefix_maps_to_bytes(token.into_bytes(), &prefix_maps);
                 hasher.update(&mapped);
                 hasher.update(b"\x1f");
                 log::trace!(
@@ -7997,12 +8047,37 @@ impl CcCompiler {
         hasher.update(b"pic:");
         hasher.update(&[parsed.pic as u8]);
         hasher.update(b"\n");
+        // `-S` writes the assembly `-c` would assemble; the expansion and
+        // flags are otherwise the same, so the mode must separate the keys.
+        if parsed.mode == CompileMode::Assemble {
+            hasher.update(b"mode:assemble\n");
+        }
         log::trace!(
             target: "kache::cache_key",
             "[key:{}] pic={}",
             trace_name,
             parsed.pic
         );
+
+        for arg in &parsed.rest {
+            for prefix in ["-fprofile-use=", "--warning-suppression-mappings="] {
+                if let Some(path) = arg.strip_prefix(prefix) {
+                    // GCC reads `<path>/<mangled object>.gcda`, not `path` itself.
+                    anyhow::ensure!(
+                        !(prefix == "-fprofile-use=" && parsed.family == ToolFamily::Gnu),
+                        "gcc -fprofile-use= names a profile directory whose per-object files the key cannot see"
+                    );
+                    let resolved = parsed.invocation_env.resolve(Path::new(path))
+                        .context("resolving cc flag input")?;
+                    let digest = ctx.file_hasher.hash(&resolved)
+                        .with_context(|| format!("hashing cc flag input {}", resolved.display()))?;
+                    hasher.update(b"cc_flag_input:");
+                    hasher.update(prefix.as_bytes());
+                    hasher.update(digest.as_bytes());
+                    hasher.update(b"\n");
+                }
+            }
+        }
 
         // Built-in raw-keyed flags have object effects the resolved compiler
         // probe does not expose (notably GNU assembler-only `-Wa` options).
@@ -8546,7 +8621,8 @@ impl CcCompiler {
         // takes its real destination from the current invocation
         // (kunobi-ninja/kache#655).
         let discovers_outputs = matches!(parsed.mode, CompileMode::Compile)
-            || (parsed.mode == CompileMode::Preprocess && parsed.output.is_some());
+            || (matches!(parsed.mode, CompileMode::Preprocess | CompileMode::Assemble)
+                && parsed.output.is_some());
         let mut keepalive = Vec::new();
         let mut artifacts = if exit_code == 0 && discovers_outputs {
             discover_cc_output_artifacts(parsed)

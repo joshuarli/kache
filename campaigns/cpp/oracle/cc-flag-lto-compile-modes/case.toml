@@ -1,0 +1,23 @@
+summary = "ThinLTO compile modes (-flto=thin -fsplit-lto-unit -fwhole-program-vtables) cache bitcode objects"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cxx}", "-flto=thin", "-fsplit-lto-unit", "-fwhole-program-vtables", "-c", "u.cpp", "-o", "u.o"]
+source = "u.cpp"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit"
+reuse = "miss"
+action = [{ op = "write", path = "u.cpp", content = "struct B { virtual int f(); };\nint B::f() { return 2; }\nint use(B *b) { return b->f(); }\n" }, { op = "delete-outputs" }]

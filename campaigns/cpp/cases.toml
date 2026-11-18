@@ -402,6 +402,15 @@ ccache.suite = "kache-original"
 status = "oracle"
 
 [[case]]
+id = "cc-rsp-basic"
+package = "CCP-03"
+summary = "a compile whose arguments come from an @response file caches like ccache, and editing the file invalidates"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-rsp-quoted"
 package = "CCP-03"
 summary = "quoted paths with spaces parse correctly in response files"
@@ -597,7 +606,7 @@ summary = "-fsanitize family is keyed (modeled per Chromium's observed flag set,
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "base.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-lto-compile-modes"
@@ -606,7 +615,7 @@ summary = "-flto=thin, -fsplit-lto-unit, -fwhole-program-vtables are keyed as co
 profiles = ["both"]
 compilers = ["clang", "apple-clang"]
 ccache.suite = "direct.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-mllvm-pairs"
@@ -615,7 +624,7 @@ summary = "-mllvm option pairs are keyed as groups (order-dependent)"
 profiles = ["both"]
 compilers = ["clang", "apple-clang"]
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-module-name"
@@ -633,7 +642,7 @@ summary = "-mmacos-version-min / -miphoneos-version-min etc. are keyed"
 profiles = ["both"]
 compilers = ["apple-clang", "clang"]
 ccache.suite = "base.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-warning-suppression-mappings"
@@ -661,6 +670,15 @@ profiles = ["both"]
 compilers = ["clang"]
 ccache.suite = "kache-observed (Chromium flag set)"
 status = "planned"
+
+[[case]]
+id = "cc-flag-chromium-codegen"
+package = "CCP-03"
+summary = "Chromium's official codegen flags (null-check, overflow, ident, member pointers, auto-var-init, module name) cache"
+profiles = ["both"]
+compilers = "clang"
+ccache.suite = "kache-original"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-s-named-output"
@@ -768,7 +786,7 @@ summary = ".gcno coverage files restored on hit; absent sidecar (coverage off) h
 profiles = ["both"]
 compilers = ["gcc", "clang"]
 ccache.suite = "coverage_compilation_dir.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-out-split-dwarf"
@@ -777,7 +795,7 @@ summary = ".dwo split DWARF restored on hit"
 profiles = ["both"]
 compilers = ["gcc", "clang"]
 ccache.suite = "split_dwarf.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-out-serialized-diagnostics"
@@ -786,7 +804,7 @@ summary = "-fdiagnostics-format=serialized and -fdiagnostics-add-output restored
 profiles = ["both"]
 compilers = ["clang", "apple-clang"]
 ccache.suite = "serialize_diagnostics.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-out-diagnostics-format"
@@ -841,6 +859,15 @@ profiles = ["both"]
 compilers = "all"
 ccache.suite = "kache-original"
 status = "planned"
+
+[[case]]
+id = "cc-pch-clang-use"
+package = "CCP-06"
+summary = "conditional PCH profile: with ccache sloppiness pch_defines,time_macros a clang -include-pch consumer is reused; a rebuilt PCH must invalidate"
+profiles = ["both"]
+compilers = "clang"
+ccache.suite = "pch.bash"
+status = "oracle"
 
 [[case]]
 id = "cc-pch-create"
@@ -945,7 +972,7 @@ summary = "arm64+x86_64 universal Mach-O produced via -arch flags; every restore
 profiles = ["both"]
 compilers = ["apple-clang"]
 ccache.suite = "multi_arch.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-host-xarch"
@@ -981,7 +1008,7 @@ summary = "Objective-C mode cached where supported"
 profiles = ["both"]
 compilers = ["apple-clang", "clang"]
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-host-objcxx"
@@ -990,7 +1017,7 @@ summary = "Objective-C++ mode cached where supported"
 profiles = ["both"]
 compilers = ["apple-clang", "clang"]
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-host-musl-native"
@@ -1072,6 +1099,51 @@ profiles = ["both"]
 compilers = "all"
 ccache.suite = "masquerading.bash"
 status = "planned"
+
+[[case]]
+id = "cc-rel-store-truncate-blobs"
+package = "CCP-08"
+summary = "truncated blobs are detected; the compile recovers and the repaired entry is reused"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-rel-store-delete-blobs"
+package = "CCP-08"
+summary = "deleted blobs are detected; the compile recovers and the repaired entry is reused"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-rel-store-corrupt-meta"
+package = "CCP-08"
+summary = "unparseable entry metadata is detected; the compile recovers and the repaired entry is reused"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-rel-store-corrupt-blobs"
+package = "CCP-08"
+summary = "a same-length bit flip in a blob is restored as a hit under the default KACHE_VERIFY_RESTORES=off (open; decision recorded)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-rel-store-corrupt-blobs-verified"
+package = "CCP-08"
+summary = "with KACHE_VERIFY_RESTORES=always a bit-flipped blob is evicted and recompiled"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
 
 [[case]]
 id = "cc-rel-corrupt-entry"

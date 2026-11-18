@@ -1,0 +1,29 @@
+summary = "Objective-C++ objects cache, restore and invalidate on a header edit"
+cohort = "blocking"
+families = ["clang"]
+os = ["macos"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cxx}", "-c", "u.mm", "-o", "u.o"]
+source = "u.mm"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit"
+reuse = "miss"
+action = [{ op = "write", path = "v.h", content = "#define V 2\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "revert"
+reuse = "hit"
+action = [{ op = "write", path = "v.h", content = "#define V 1\n" }, { op = "delete-outputs" }]

@@ -15,15 +15,17 @@ configuration file:
 | Arm | Command |
 |---|---|
 | `raw`, `raw-repeat` | the compiler, twice, to prove the outputs are stable |
+| `raw-passthrough` | reproducible profile only: the case's own arguments and environment, which is what a kache passthrough runs |
 | `ccache` | pinned ccache, normal configuration (direct, then preprocessor) |
 | `ccache-preprocessor` | pinned ccache with `CCACHE_NODIRECT=1` |
 | `kache` | `kache <compiler> ...` with its own daemon and store |
 
 The compiler each arm runs is an observation shim: a shell script that logs
 its working directory and arguments, then execs the real driver. All arms run
-identical shim bytes. A logged execution that names the case's `source` with
-`-c` or `-S` is code generation; with `-E` it is preprocessing; anything else
-is a probe.
+identical shim bytes. A logged execution in the fixture that names the
+case's `source` is preprocessing with `-E`, `-M` or `-MM`, a probe with
+`-###`, `--version` or `-fsyntax-only`, and code generation otherwise (`-c`,
+`-S`, a precompiled header). Every execution elsewhere is a probe.
 
 After every compile the runner records exit status, stdout, stderr, and the
 whole fixture tree (path, kind, mode, blake3). Kache must match `raw` exactly.
@@ -56,7 +58,9 @@ Each compile in each step gets one verdict. Checks run in this order:
 
 1. `HARNESS_ERROR`: `raw` exited differently from the step's `status`.
 2. `COMPILER_NONDETERMINISM`: `raw` and `raw-repeat` differ.
-3. `KACHE_WRONG_OUTPUT`: kache's status, streams, or tree differ from `raw`.
+3. `KACHE_WRONG_OUTPUT`: kache's status, streams, or tree differ from `raw`,
+   or from `raw-passthrough` when every code generation kache ran used the
+   case's own arguments.
 4. Reuse, from the step's `reuse`:
    - `miss`: kache ran no code generation, so it served a stale entry
      (`KACHE_WRONG_OUTPUT`).
@@ -100,10 +104,12 @@ families = ["clang"]           # optional; empty means every compiler family
 profiles = ["transparent", "reproducible"]
 outputs = ["unit.o", "unit.d"] # removed by delete-outputs; checked by omit-sidecar
 env = { CPATH = "{fixture}/inc" }  # every arm; may not set harness, KACHE_* or CCACHE_* variables
+ccache_config = { sloppiness = "pch_defines,time_macros" }  # ccache arms only: a conditional profile
 
 [[compile]]
 argv = ["{cc}", "-c", "unit.c", "-o", "unit.o"]   # {cc} or {cxx}
 source = "unit.c"
+also_names = []                # other tokens naming the unit, e.g. "@args.rsp"
 
 [[step]]
 name = "populate"

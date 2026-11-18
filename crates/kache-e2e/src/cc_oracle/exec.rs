@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 
-use super::case::{Action, Case, Profile, Reuse};
+use super::case::{Action, Case, Profile, Reuse, StoreFault};
 use super::judge::{Entry, EntryKind, Executions, Inventory, Observation};
 
 /// The deterministic modification time given to fixture files, so tools that
@@ -70,6 +70,9 @@ pub const KACHE_CC_ROOT: &str = "/kache/cc-root";
 pub enum Arm {
     Raw,
     RawRepeat,
+    /// Reproducible profile only: the case's own command, which is what a
+    /// kache passthrough runs and so what it must match.
+    RawPassthrough,
     Ccache,
     CcachePreprocessor,
     Kache,
@@ -78,10 +81,19 @@ pub enum Arm {
 impl Arm {
     pub const ALL: [Arm; 5] = [Arm::Raw, Arm::RawRepeat, Arm::Ccache, Arm::CcachePreprocessor, Arm::Kache];
 
+    pub fn for_profile(profile: Profile) -> Vec<Arm> {
+        let mut arms = Arm::ALL.to_vec();
+        if profile == Profile::Reproducible {
+            arms.insert(2, Arm::RawPassthrough);
+        }
+        arms
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Arm::Raw => "raw",
             Arm::RawRepeat => "raw-repeat",
+            Arm::RawPassthrough => "raw-passthrough",
             Arm::Ccache => "ccache",
             Arm::CcachePreprocessor => "ccache-preprocessor",
             Arm::Kache => "kache",
@@ -213,7 +225,7 @@ pub fn write_shims(dir: &Path, toolchain: &Toolchain, real_override: Option<&Pat
 }
 
 /// Classify the shim log records one invocation produced.
-pub fn classify(log: &str, fixture: &Path, source: &str) -> Executions {
+pub fn classify(log: &str, fixture: &Path, unit_names: &[String]) -> Executions {
     let mut out = Executions::default();
     let fixture = fixture.to_string_lossy();
     for line in log.lines().filter(|l| !l.is_empty()) {
@@ -222,17 +234,15 @@ pub fn classify(log: &str, fixture: &Path, source: &str) -> Executions {
             fields.pop();
         }
         let Some((cwd, args)) = fields.split_first() else { continue };
-        let names_unit = *cwd == fixture && args.contains(&source);
+        let names_unit = *cwd == fixture && args.iter().any(|a| unit_names.iter().any(|n| n == a));
         let has = |flag: &str| args.contains(&flag);
-        if !names_unit || has("-###") || has("--version") {
+        if !names_unit || has("-###") || has("--version") || has("-fsyntax-only") {
             out.probe += 1;
-        } else if has("-E") {
+        } else if has("-E") || has("-M") || has("-MM") {
             out.preprocess += 1;
-        } else if has("-c") || has("-S") {
+        } else {
             out.codegen += 1;
             out.codegen_argv.push(args.iter().map(|a| a.to_string()).collect());
-        } else {
-            out.probe += 1;
         }
     }
     out
@@ -346,6 +356,11 @@ pub fn expand(value: &str, fixture: &Path) -> String {
     value.replace("{fixture}", &fixture.to_string_lossy())
 }
 
+/// ccache's configuration file syntax: one `key = value` per line.
+fn ccache_config_text(settings: &std::collections::BTreeMap<String, String>) -> String {
+    settings.iter().map(|(key, value)| format!("{key} = {value}\n")).collect()
+}
+
 pub fn effective_args(case_argv: &[String], profile: Profile, fixture: &Path) -> Vec<String> {
     let mut args: Vec<String> = case_argv[1..].iter().map(|a| expand(a, fixture)).collect();
     if profile == Profile::Reproducible {
@@ -363,7 +378,12 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
         std::fs::create_dir_all(state.join(sub))?;
     }
     let config = state.join("config");
-    std::fs::write(&config, "")?;
+    let ccache_settings = if matches!(arm, Arm::Ccache | Arm::CcachePreprocessor) {
+        ccache_config_text(&case.ccache_config)
+    } else {
+        String::new()
+    };
+    std::fs::write(&config, ccache_settings)?;
     let log = state.join("exec.log");
     if ctx.fixture.exists() {
         std::fs::remove_dir_all(ctx.fixture)?;
@@ -371,7 +391,7 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
     copy_tree(&case.source_dir, ctx.fixture).with_context(|| format!("preparing {}", case.id))?;
     wait_until_settled(ctx.fixture)?;
 
-    let raw_like = matches!(arm, Arm::Raw | Arm::RawRepeat);
+    let raw_like = matches!(arm, Arm::Raw | Arm::RawRepeat | Arm::RawPassthrough);
     let shims = if raw_like && ctx.control == Some(Control::ReferenceFailure) {
         ctx.failing_shims
     } else {
@@ -391,7 +411,7 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
     ];
     let store = state.join("store");
     match arm {
-        Arm::Raw | Arm::RawRepeat => {}
+        Arm::Raw | Arm::RawRepeat | Arm::RawPassthrough => {}
         Arm::Ccache | Arm::CcachePreprocessor => {
             env.push(("CCACHE_DIR", store.clone().into()));
             env.push(("CCACHE_CONFIGPATH", config.clone().into()));
@@ -409,13 +429,19 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
             if cache_disabled_applies(ctx.control, profile) {
                 env.push(("KACHE_DISABLED", "1".into()));
             }
+            for (key, value) in &case.kache_env {
+                env.push((key.as_str(), value.into()));
+            }
         }
     }
     let case_env: Vec<(String, String)> = case.env.iter().map(|(k, v)| (k.clone(), expand(v, ctx.fixture))).collect();
     for (k, v) in &case_env {
         env.push((k.as_str(), v.into()));
     }
-    if profile == Profile::Reproducible && arm != Arm::Kache && !case.env.contains_key("SOURCE_DATE_EPOCH") {
+    if profile == Profile::Reproducible
+        && !matches!(arm, Arm::Kache | Arm::RawPassthrough)
+        && !case.env.contains_key("SOURCE_DATE_EPOCH")
+    {
         env.push(("SOURCE_DATE_EPOCH", "0".into()));
     }
 
@@ -481,7 +507,7 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                 _ => shims.join(&ctx.toolchain.cxx_name),
             };
             let mut command = match arm {
-                Arm::Raw | Arm::RawRepeat => Command::new(&driver),
+                Arm::Raw | Arm::RawRepeat | Arm::RawPassthrough => Command::new(&driver),
                 Arm::Ccache | Arm::CcachePreprocessor => {
                     let mut c = Command::new(ctx.ccache);
                     c.arg(&driver);
@@ -493,10 +519,10 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                     c
                 }
             };
-            let args = if arm == Arm::Kache {
-                compile.argv[1..].iter().map(|a| expand(a, ctx.fixture)).collect()
-            } else {
-                effective_args(&compile.argv, profile, ctx.fixture)
+            let args = match arm {
+                Arm::Kache => compile.argv[1..].iter().map(|a| expand(a, ctx.fixture)).collect(),
+                Arm::RawPassthrough => effective_args(&compile.argv, Profile::Transparent, ctx.fixture),
+                _ => effective_args(&compile.argv, profile, ctx.fixture),
             };
             command.args(&args).current_dir(ctx.fixture).env_clear();
             for (k, v) in env {
@@ -508,7 +534,11 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                 .with_context(|| format!("{} arm: spawning {}", arm.as_str(), driver.display()))?;
             step_ms.push(started.elapsed().as_millis() as u64);
             let log_text = std::fs::read_to_string(log).unwrap_or_default();
-            let mut executions = classify(&log_text, ctx.fixture, &expand(&compile.source, ctx.fixture));
+            let unit_names: Vec<String> = std::iter::once(&compile.source)
+                .chain(&compile.also_names)
+                .map(|name| expand(name, ctx.fixture))
+                .collect();
+            let mut executions = classify(&log_text, ctx.fixture, &unit_names);
             let kache_result = if arm == Arm::Kache {
                 let events = kache_events_since(ctx.kache, store, &mut kache_events)?;
                 events.last().cloned()
@@ -621,7 +651,69 @@ fn apply(action: &Action, case: &Case, arm: Arm, ctx: &ArmContext<'_>, store: &P
                 );
             }
         }
+        Action::KacheStoreFault { fault } => {
+            if arm == Arm::Kache {
+                anyhow::ensure!(
+                    crate::daemon::stop_and_wait(ctx.kache, store, Duration::from_secs(60)),
+                    "kache daemon did not stop"
+                );
+                let damaged = damage_store(&store.join("store"), *fault)?;
+                anyhow::ensure!(damaged > 0, "case {}: {fault:?} found nothing to damage", case.id);
+            }
+        }
     }
+    Ok(())
+}
+
+/// Apply `fault` to a kache store directory; returns how many files it hit.
+pub fn damage_store(store: &Path, fault: StoreFault) -> Result<usize> {
+    let mut damaged = 0;
+    match fault {
+        StoreFault::CorruptMeta => {
+            for entry in std::fs::read_dir(store)? {
+                let meta = entry?.path().join("meta.json");
+                if meta.is_file() {
+                    make_writable(&meta)?;
+                    std::fs::write(&meta, b"{ not json")?;
+                    damaged += 1;
+                }
+            }
+        }
+        StoreFault::TruncateBlobs | StoreFault::CorruptBlobs | StoreFault::DeleteBlobs => {
+            let blobs = store.join("blobs");
+            if !blobs.is_dir() {
+                return Ok(0);
+            }
+            for shard in std::fs::read_dir(&blobs)? {
+                for blob in std::fs::read_dir(shard?.path())? {
+                    let blob = blob?.path();
+                    if fault == StoreFault::DeleteBlobs {
+                        std::fs::remove_file(&blob)?;
+                    } else {
+                        make_writable(&blob)?;
+                        let mut bytes = std::fs::read(&blob)?;
+                        if fault == StoreFault::TruncateBlobs {
+                            bytes.truncate(bytes.len() / 2);
+                        } else {
+                            let middle = bytes.len() / 2;
+                            if let Some(byte) = bytes.get_mut(middle) {
+                                *byte ^= 0xff;
+                            }
+                        }
+                        std::fs::write(&blob, bytes)?;
+                    }
+                    damaged += 1;
+                }
+            }
+        }
+    }
+    Ok(damaged)
+}
+
+fn make_writable(path: &Path) -> Result<()> {
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    permissions.set_mode(permissions.mode() | 0o200);
+    std::fs::set_permissions(path, permissions)?;
     Ok(())
 }
 
@@ -696,18 +788,23 @@ mod tests {
             record("/fx", &["-c", "a.c", "-o", "a.o"]),
             record("/fx", &["-S", "a.c"]),
             record("/fx", &["-fsyntax-only", "a.c"]),
+            record("/fx", &["-MM", "a.c"]),
+            record("/fx", &["-x", "c-header", "a.c", "-o", "a.pch"]),
             String::new(),
         ]
         .concat();
-        let e = classify(&log, fx, "a.c");
-        assert_eq!((e.codegen, e.preprocess, e.probe), (2, 1, 5));
+        let e = classify(&log, fx, &["a.c".to_string()]);
+        assert_eq!((e.codegen, e.preprocess, e.probe), (3, 2, 5));
+        let rsp = record("/fx", &["@args.rsp"]);
+        assert_eq!(classify(&rsp, fx, &["a.c".to_string()]).probe, 1);
+        assert_eq!(classify(&rsp, fx, &["a.c".to_string(), "@args.rsp".to_string()]).codegen, 1);
         assert_eq!(e.codegen_argv[0], ["-c", "a.c", "-o", "a.o"]);
     }
 
     #[test]
     fn arguments_with_spaces_survive_the_log() {
         let log = record("/f x", &["-c", "my file.c", "-DA=1 2"]);
-        let e = classify(&log, Path::new("/f x"), "my file.c");
+        let e = classify(&log, Path::new("/f x"), &["my file.c".to_string()]);
         assert_eq!(e.codegen_argv, vec![vec!["-c", "my file.c", "-DA=1 2"]]);
     }
 
@@ -748,6 +845,53 @@ mod tests {
             ["-I/w/fx/inc", "-c", "a.c"]
         );
         assert_eq!(expand("{fixture}:{fixture}", Path::new("/r")), "/r:/r");
+    }
+
+    #[test]
+    fn the_passthrough_reference_runs_only_in_the_reproducible_profile() {
+        assert!(!Arm::for_profile(Profile::Transparent).contains(&Arm::RawPassthrough));
+        let reproducible = Arm::for_profile(Profile::Reproducible);
+        assert!(reproducible.contains(&Arm::RawPassthrough));
+        assert_eq!(reproducible.last(), Some(&Arm::Kache));
+    }
+
+    #[test]
+    fn ccache_settings_render_as_config_lines() {
+        let mut settings = std::collections::BTreeMap::new();
+        assert_eq!(ccache_config_text(&settings), "");
+        settings.insert("sloppiness".to_string(), "pch_defines,time_macros".to_string());
+        settings.insert("depend_mode".to_string(), "true".to_string());
+        assert_eq!(ccache_config_text(&settings), "depend_mode = true\nsloppiness = pch_defines,time_macros\n");
+    }
+
+    #[test]
+    fn store_faults_damage_every_blob_or_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let store = root.path();
+        std::fs::create_dir_all(store.join("blobs/ab")).unwrap();
+        std::fs::create_dir_all(store.join("key1")).unwrap();
+        let blob = store.join("blobs/ab/abcd");
+        let meta = store.join("key1/meta.json");
+        let reset = || {
+            std::fs::write(&blob, b"0123456789").unwrap();
+            std::fs::set_permissions(&blob, std::fs::Permissions::from_mode(0o444)).unwrap();
+            std::fs::write(&meta, b"{}").unwrap();
+        };
+        reset();
+        assert_eq!(damage_store(store, StoreFault::TruncateBlobs).unwrap(), 1);
+        assert_eq!(std::fs::read(&blob).unwrap(), b"01234");
+        reset();
+        assert_eq!(damage_store(store, StoreFault::CorruptBlobs).unwrap(), 1);
+        let corrupted = std::fs::read(&blob).unwrap();
+        assert_eq!(corrupted.len(), 10);
+        assert_ne!(corrupted, b"0123456789");
+        reset();
+        assert_eq!(damage_store(store, StoreFault::CorruptMeta).unwrap(), 1);
+        assert_eq!(std::fs::read(&meta).unwrap(), b"{ not json");
+        assert_eq!(damage_store(store, StoreFault::DeleteBlobs).unwrap(), 1);
+        assert!(!blob.exists());
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(damage_store(empty.path(), StoreFault::DeleteBlobs).unwrap(), 0);
     }
 
     #[test]
@@ -828,7 +972,7 @@ mod tests {
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout), "-c a b.c\n");
         let cwd = std::fs::canonicalize(root.path()).unwrap();
-        let e = classify(&std::fs::read_to_string(&log).unwrap(), &cwd, "a b.c");
+        let e = classify(&std::fs::read_to_string(&log).unwrap(), &cwd, &["a b.c".to_string()]);
         assert_eq!(e.codegen_argv, vec![vec!["-c", "a b.c"]]);
 
         write_shims(&dir, &tc, Some(Path::new("/usr/bin/false"))).unwrap();

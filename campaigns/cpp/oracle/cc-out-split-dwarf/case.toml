@@ -1,0 +1,23 @@
+summary = "-gsplit-dwarf writes a .dwo beside the object; a hit must restore both (CCP-05)"
+cohort = "open"
+os = ["linux"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o", "u.dwo"]
+
+[[compile]]
+argv = ["{cc}", "-g", "-gsplit-dwarf", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "like-ccache"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit"
+reuse = "miss"
+action = [{ op = "write", path = "u.c", content = "int u(int x) { return x * 9; }\n" }, { op = "delete-outputs" }]

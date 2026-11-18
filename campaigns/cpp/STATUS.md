@@ -142,12 +142,12 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | CCP-00 | DONE (bootstrap) | — | Bootstrap exit met: pins, initial inventory, Linux gates assigned (advisory under KACH-27). Remaining inventory enumeration is carried by CCP-01..08 as the plan allows. Go-ahead for CCP-01: user, 2026-11-18 ("complete the campaign unattended"). |
 | CCP-01 | DONE | CCP-00 bootstrap | Merged in PR #31 (a2ea56fd). CI evidence: run 44306769765 (logs and on-failure report artifacts retained 90 days, so until about 2027-02-16). `cc-oracle` and negative controls passed in `e2e (macOS)` (Apple clang), `cc-oracle (Linux x86_64/ARM64 glibc)` (apt GCC + clang) and `test (Linux x86_64/ARM64 musl)` (image GCC 15 + clang 23). Exit criteria met: minimal transitions pass on macOS and Linux, each control fails as intended, and the deliberate `-S` gap reports `KACHE_MISSED_REUSE`. `make cc-bench` moves to CCP-09. |
 | CCP-02 | RUNNING | CCP-01 | Branch `feat/ccp02-input-identity`: 20 input-identity cases; see "CCP-02 input identity" below. Not yet covered: same-path compiler replacement, wrapper/driver-mode selection, VFS overlays, PGO profiles, -march=native, user key config, diagnostic locale, profile switches against a populated cache, hash/compile/publish race barriers. |
-| CCP-03 | TODO | CCP-01, CCP-02 | Includes rebasing/verifying `feat/cc-chromium-official-flags` (exists on origin, unverified by `make check`). |
-| CCP-04 | TODO | CCP-02 | Equivalent-preprocessing reuse. |
-| CCP-05 | TODO | CCP-02, CCP-03 | Complete output sets (.gcno/.dwo/serialized diagnostics). |
-| CCP-06 | TODO | CCP-02, CCP-03, CCP-05 | PCH + explicit module consumers; conditional implicit-modules profile. |
-| CCP-07 | TODO | CCP-03..CCP-06 | Host integration; zlib/LLVM/Chromium pins in lock.toml. Universal objects. |
-| CCP-08 | TODO | CCP-01 | Reliability, diagnosis, CI; KACH-22 mutation coverage; gate assignments. |
+| CCP-03 | RUNNING | CCP-01, CCP-02 | Branch `feat/ccp03-chromium-flags`: Chromium official flags verified and landed from the WIP branch; `-S -o` cached. Open: response files (`@file`), clang `--config`, GCC `-specs`, `-fsanitize-ignorelist`, `-x` and `-Wp,`/`-Xpreprocessor` audits. See "CCP-03..CCP-08 progress" below. |
+| CCP-04 | TODO | CCP-02 | Equivalent-preprocessing reuse; design below. `cc-eqp-comment-only` is the open gap (reproducible profile). |
+| CCP-05 | RUNNING | CCP-02, CCP-03 | Open cases: `cc-out-gcno` (clang), `cc-out-split-dwarf` (Linux), `cc-out-serialized-diagnostics` (clang). |
+| CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | Open conditional case `cc-pch-clang-use` (ccache sloppiness `pch_defines,time_macros`). Module consumers not yet. |
+| CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`; open `cc-host-universal-objects`. Real-project builds not started. |
+| CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`) and the broker exit race fix (PR #32). Decision needed on `KACHE_VERIFY_RESTORES` (see below). |
 | CCP-09 | TODO | CCP-02..CCP-08 | Performance protocol; estimator locked in lock.toml (seed 20261117). |
 
 ## CCP-01 differential runner
@@ -235,6 +235,81 @@ Findings:
   Owner: CCP-07 (SDK selection).
 - Apple clang ignores `--sysroot` for headers and the musl LLVM clang
   ignores `-isysroot`, so the sysroot case passes both.
+
+## CCP-03..CCP-08 progress
+
+**Wrong-output findings and their disposition:**
+
+1. **Stale object after a line-shifting edit (fixed, PR #33).** The key
+   probe ran `cc -E -P`, which drops line markers and collapses long blank
+   runs. Where the expansion hash alone was the key (no captured read set,
+   for example `KACHE_CC_SOURCE_DATE_EPOCH=passthrough`), a comment block
+   growing from 20 to 21 lines restored the old object: stale DWARF line
+   table and warnings at the old line (`lines.c:24` vs raw `lines.c:25`).
+   Reproduced on Apple clang 21, GCC 15 and clang 23. The fix keys
+   prefix-mapped line markers apart from the text. Regression:
+   `cc-eqp-line-number-significance` (blocking).
+2. **Bit-flipped blobs are restored as hits (decision needed).** A
+   same-length corruption of a stored blob is served as a hit, because
+   kache content-verifies restores only when `KACHE_VERIFY_RESTORES` is
+   `sampled` or `always`, and the default is `off` (kunobi-ninja/kache#332).
+   ccache checksums every read. `cc-rel-store-corrupt-blobs` (open) shows
+   the default's exposure. `cc-rel-store-corrupt-blobs-verified`
+   (blocking, `always`) shows eviction and recovery work. Truncated or
+   deleted blobs and corrupt metadata already recover. Changing the
+   default changes restore cost for Rust entries too, so it is left to
+   the owner.
+3. **Daemon spawn failed on an instant compiler exit (fixed, PR #32).**
+   macOS identity pinning retried without re-checking for exit, failing
+   the compile with "cannot read compiler process identity".
+4. The first `-S` implementation reported a hit with no `.s` restored. The
+   oracle caught it before landing. Entries lacking the invocation's
+   named output are now rejected as a miss.
+
+**Coverage gained (blocking, matching raw on macOS and Linux GCC/clang):**
+the Chromium flag set (LTO compile modes, `-mllvm` pairs, `-fsanitize=`,
+`-mmacos-version-min=`, codegen hardening flags, `-fprofile-use=` and
+`--warning-suppression-mappings=` keyed by content, GCC `-fprofile-use=`
+refused because it names a profile directory), `-S -o`, Objective-C,
+Objective-C++, and recovery from damaged stores.
+
+**Open gaps (`KACHE_MISSED_REUSE`, correct fallback):** `@rsp` response
+files (no case yet), clang `--config`, GCC `-specs`, explicit sanitizer
+ignorelists, `.gcno`/`.dwo`/`.dia` sidecars, universal objects, PCH
+consumers (conditional), and the token-pasted header probe and
+comment-only edits in the default (reproducible) profile.
+
+**Harness changes that judged better:**
+
+- A `raw-passthrough` arm. A reproducible-profile passthrough runs the
+  case's own command, so it is judged against that, not the
+  prefix-mapped reference.
+- Code generation is any execution naming the unit except
+  preprocessing, dependency listing, syntax checks or queries (PCH
+  builds have no `-c`).
+- Per-case `ccache_config` and `kache_env` for conditional profiles.
+- The cache-disabled control runs in the transparent profile only.
+- Store-fault actions.
+
+GCC's `.gcno` and the object carry a compile-time stamp even under
+`-frandom-seed` and `SOURCE_DATE_EPOCH`, so GCC coverage needs a
+stamp-aware comparator before it can be judged; the case is clang-only
+until then.
+
+**CCP-04 design (not implemented).** In the default profile, kache keys
+compiles by read-set digest. Any content edit therefore misses, while
+ccache's preprocessor mode reuses line-preserving comment edits. The
+plan: publish each compiled entry under a second key derived from the
+line-aware expansion hash (#33), and look that key up after a digest
+miss on the stale-memo path, which already runs the preprocessor. Blobs
+are content-addressed, so the second publication costs only metadata.
+
+To reuse on the first equivalent edit, as ccache does, populate would
+also need the expansion. That is one extra `-E` per cold miss, or a
+daemon-side `-E` after publication to stay off the critical path. The
+publish path also goes through the daemon handoff (`CcHandoff` carries
+one key), memo commits and admission, so this is the next large change,
+not a local edit.
 
 ## Open gaps and blockers
 

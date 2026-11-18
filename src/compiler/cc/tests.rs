@@ -1801,6 +1801,11 @@ fn ubsan_strip_path_components_other_spellings_still_refuse_issue_840() {
 /// accepted as probe-keyed rather than passed through.
 #[test]
 fn caches_trivial_auto_var_init_pattern_issue_849() {
+    assert_eq!(
+        classify_cc_flag("-ftrivial-auto-var-init=zero", Dialect::Gnu),
+        Some(FlagClass::CapturedByProbe),
+        "Chromium's zero-initialization mode keys through the resolved invocation too"
+    );
     let flag = "-ftrivial-auto-var-init=pattern";
     assert_eq!(
         classify_cc_flag(flag, Dialect::Gnu),
@@ -1823,7 +1828,6 @@ fn caches_trivial_auto_var_init_pattern_issue_849() {
 fn trivial_auto_var_init_other_spellings_still_refuse_issue_849() {
     for flag in [
         "-ftrivial-auto-var-init",
-        "-ftrivial-auto-var-init=zero",
         "-ftrivial-auto-var-init=uninitialized",
         "-ftrivial-auto-var-init=patterns",
     ] {
@@ -1886,7 +1890,7 @@ fn refuses_flags_unclassified_in_cc_flags_table() {
         // unmodeled -f… / -m… codegen flags. (-ffast-math / -fno-finite-math-only
         // / -mrecip= are now CapturedByProbe — modeled from the Firefox bench — so
         // they are deliberately NOT here; these remain genuinely unmodeled.)
-        "-fsanitize=address",
+        "-fsanitize-coverage=trace-pc",
         "-fno-pic",
         "-mtune=skylake",
         // unmodeled optimization / debug variants
@@ -3313,11 +3317,6 @@ fn classifier_accepts_realistic_firefox_cpp_compile() {
 #[test]
 fn classifier_does_not_overreach_116_additions() {
     for flag in &[
-        // Sanitizers aren't on #116's list — they remained refused
-        // before and must stay refused. (Visibility flags moved to
-        // their own cluster, post-#146 — see
-        // `classifier_does_not_overreach_visibility_additions`.)
-        "-fsanitize=undefined",
         // Lookalikes and non-boolean spellings still refuse.
         "-faligned-new=32",
         "-fsized-deallocation",
@@ -3531,7 +3530,7 @@ fn refuse_reason_names_the_rejected_flags() {
         "-o",
         "foo.o",
         "-mtune=skylake",
-        "-fsanitize=address",
+        "-fsanitize-coverage=trace-pc",
     ]);
     let detail = descs
         .iter()
@@ -3542,7 +3541,7 @@ fn refuse_reason_names_the_rejected_flags() {
         "reason should name the flag: {detail}"
     );
     assert!(
-        detail.contains("-fsanitize=address"),
+        detail.contains("-fsanitize-coverage=trace-pc"),
         "reason should name every rejected flag: {detail}"
     );
 }
@@ -3889,8 +3888,42 @@ fn refuses_preprocess_and_assemble_modes() {
     let assemble = refuse_descriptions(&["cc", "-S", "foo.c"]);
     assert!(
         assemble.iter().any(|d| d.contains("assembly")),
-        "expected assembly-mode refuse, got: {assemble:?}"
+        "expected assembly-mode refuse without -o, got: {assemble:?}"
     );
+    let named = refuse_descriptions(&["cc", "-S", "foo.c", "-o", "foo.s"]);
+    assert!(named.is_empty(), "-S -o must cache, got: {named:?}");
+    let cl = refuse_descriptions(&["clang-cl", "-S", "foo.c", "-o", "foo.s"]);
+    assert!(
+        cl.iter().any(|d| d.contains("assembly")),
+        "clang-cl -S stays refused, got: {cl:?}"
+    );
+}
+
+#[test]
+fn assembly_output_is_a_compiler_output_and_its_own_key() {
+    let named = CcArgs::parse(&s(&["cc", "-S", "foo.c", "-o", "out/foo.s", "-MD"])).unwrap();
+    assert_eq!(
+        named.compiler_output_paths(),
+        [PathBuf::from("out/foo.s"), PathBuf::from("out/foo.d")]
+    );
+    let default = CcArgs::parse(&s(&["cc", "-S", "src/foo.c"])).unwrap();
+    assert_eq!(default.compiler_output_paths(), [PathBuf::from("foo.s")]);
+
+    let temp = tempfile::tempdir().unwrap();
+    let fake_cc = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_cc_constant_output.sh");
+    let source = temp.path().join("unit.c");
+    std::fs::write(&source, "int x;\n").unwrap();
+    let compiler = CcCompiler::new();
+    let file_hasher = crate::cache_key::FileHasher::new();
+    let normalizer = crate::path_normalizer::PathNormalizer::empty();
+    let env = crate::invocation::InvocationEnv::capture();
+    let cache = temp.path().join("cache");
+    let ctx = KeyCtx { invocation_env: &env, file_hasher: &file_hasher, path_normalizer: &normalizer, cache_dir: &cache, key_salt: None, key_env_vars: &[], extra_inputs_digest: None, build_script_inputs_digest: None };
+    let key = |mode: &str, out: &str| {
+        let args = [fake_cc.to_string_lossy().into_owned(), mode.into(), source.to_string_lossy().into_owned(), "-o".into(), out.into()];
+        compiler.key_for_test(&compiler.parse(&args).unwrap(), &ctx)
+    };
+    assert_ne!(key("-S", "unit.o"), key("-c", "unit.o"), "-S and -c never share an entry");
 }
 
 /// Non-`-c` mode refusals (preprocessor, assembly, link,
@@ -9663,4 +9696,69 @@ fn clang_runtime_driver_flags_are_cacheable_and_keyed() {
         let changed_args = CcArgs::parse(&s(&["clang++", "-c", "unit.cc", "-Werror", &changed])).unwrap();
         assert_ne!(cc_raw_flags_for_key(&args, &[]), cc_raw_flags_for_key(&changed_args, &[]));
     }
+}
+
+#[test]
+fn chromium_codegen_flags_are_classified_and_keyed() {
+    let flags = [
+        "-fprofile-use=profile.profdata", "-fno-delete-null-pointer-checks",
+        "-fno-strict-overflow", "-fno-ident", "-fno-lifetime-dse",
+        "-fcrash-diagnostics-dir=crashes", "-mllvm", "-instcombine-lower-dbg-declare=0",
+        "-mllvm", "-split-threshold-for-reg-with-hint=0", "-mllvm", "-inlinehint-threshold=360",
+        "-flto=thin", "-fsplit-lto-unit", "-fwhole-program-vtables",
+        "-fcomplete-member-pointers", "-mno-outline", "-no-canonical-prefixes",
+        "--warning-suppression-mappings=warnings.txt", "-ftrivial-auto-var-init=zero",
+        "-mmacos-version-min=13.0", "-fsanitize=array-bounds", "-fsanitize=return",
+        "-fsanitize-trap=array-bounds", "-fsanitize-ignore-for-ubsan-feature=return",
+        "-fmodule-name=//base:base_Private",
+    ];
+    let mut args = vec!["clang++", "-c", "unit.cc"];
+    args.extend(flags);
+    let parsed = CcArgs::parse(&s(&args)).unwrap();
+    assert!(classify_and_trace_cc_flags(&parsed, &[]).is_empty());
+    let raw = |flags: &[&str]| {
+        let mut args = vec!["clang++", "-c", "unit.cc"];
+        args.extend_from_slice(flags);
+        cc_raw_flags_for_key(&CcArgs::parse(&s(&args)).unwrap(), &[])
+    };
+    assert_ne!(raw(&["-mllvm", "-inlinehint-threshold=360"]), raw(&["-mllvm", "-inlinehint-threshold=361"]));
+    assert_ne!(raw(&["-flto=thin"]), raw(&["-flto=full"]));
+    assert_eq!(raw(&["-fcrash-diagnostics-dir=one"]), raw(&["-fcrash-diagnostics-dir=two"]));
+}
+
+#[cfg(unix)]
+#[test]
+fn chromium_file_flags_change_cache_key_with_contents() {
+    let temp = tempfile::tempdir().unwrap();
+    let fake_cc = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_cc_constant_output.sh");
+    let source = temp.path().join("unit.c");
+    std::fs::write(&source, "int x;\n").unwrap();
+    let compiler = CcCompiler::new();
+    let file_hasher = crate::cache_key::FileHasher::new();
+    let normalizer = crate::path_normalizer::PathNormalizer::empty();
+    let env = crate::invocation::InvocationEnv::capture();
+    let cache = temp.path().join("cache");
+    let ctx = KeyCtx { invocation_env: &env, file_hasher: &file_hasher, path_normalizer: &normalizer, cache_dir: &cache, key_salt: None, key_env_vars: &[], extra_inputs_digest: None, build_script_inputs_digest: None };
+    let key = |flags: &[&str]| {
+        let mut args = vec![fake_cc.to_string_lossy().into_owned(), "-c".into(), source.to_string_lossy().into_owned()];
+        args.extend(flags.iter().map(|flag| flag.to_string()));
+        compiler.key_for_test(&compiler.parse(&args).unwrap(), &ctx)
+    };
+    assert_ne!(key(&["-mllvm", "-inlinehint-threshold=360"]), key(&["-mllvm", "-inlinehint-threshold=361"]));
+    assert_ne!(key(&["-flto=thin"]), key(&["-flto=full"]));
+    assert_eq!(key(&["-fcrash-diagnostics-dir=one"]), key(&["-fcrash-diagnostics-dir=two"]));
+    let fake_clang = temp.path().join("clang");
+    std::os::unix::fs::symlink(&fake_cc, &fake_clang).unwrap();
+    for (driver, prefix) in [(&fake_clang, "-fprofile-use="), (&fake_cc, "--warning-suppression-mappings=")] {
+        let input = temp.path().join("input");
+        std::fs::write(&input, "first").unwrap();
+        let parsed = compiler.parse(&[driver.to_string_lossy().into_owned(), "-c".into(), source.to_string_lossy().into_owned(), format!("{prefix}{}", input.display())]).unwrap();
+        let first = compiler.key_for_test(&parsed, &ctx);
+        std::fs::write(&input, "second content").unwrap();
+        assert_ne!(first, compiler.key_for_test(&parsed, &ctx), "{prefix}");
+    }
+    let input = temp.path().join("input");
+    let gcc_profile = compiler.parse(&[fake_cc.to_string_lossy().into_owned(), "-c".into(), source.to_string_lossy().into_owned(), format!("-fprofile-use={}", input.display())]).unwrap();
+    let refused = compiler.cache_key_with(&gcc_profile, &ctx, CcKeyDiscovery::Expansion);
+    assert!(refused.is_err_and(|e| e.to_string().contains("profile directory")), "gcc reads per-object profiles the key cannot see");
 }

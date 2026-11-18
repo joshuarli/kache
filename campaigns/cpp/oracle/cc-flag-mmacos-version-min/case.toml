@@ -1,0 +1,23 @@
+summary = "-mmacos-version-min is keyed and cached"
+cohort = "blocking"
+families = ["clang"]
+os = ["macos"]
+profiles = ["transparent", "reproducible"]
+outputs = ["a.o", "b.o"]
+
+[[compile]]
+argv = ["{cc}", "-mmacos-version-min=13.0", "-c", "u.c", "-o", "a.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-mmacos-version-min=14.0", "-c", "u.c", "-o", "b.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

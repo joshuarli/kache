@@ -1941,11 +1941,16 @@ fn cc_cache_entry_satisfies_invocation(
 /// any other mode, and for an entry naming a different file: restoring one of
 /// those would report a hit and leave the build with the wrong bytes, or with
 /// none at all.
-fn cc_preprocess_restore_target(
+/// Where a `-E -o` expansion or `-S -o` assembly artifact lands: the path
+/// `-o` named, when the cached name is that path's.
+fn cc_named_output_restore_target(
     parsed: &crate::compiler::cc::CcArgs,
     cached_name: &str,
 ) -> Option<std::path::PathBuf> {
-    if parsed.mode != crate::compiler::cc::CompileMode::Preprocess {
+    if !matches!(
+        parsed.mode,
+        crate::compiler::cc::CompileMode::Preprocess | crate::compiler::cc::CompileMode::Assemble
+    ) {
         return None;
     }
     let target = parsed.object_output_path()?;
@@ -1956,7 +1961,10 @@ fn cc_preprocess_restore_target(
 }
 
 fn cc_store_revalidates_include_dirs(mode: crate::compiler::cc::CompileMode) -> bool {
-    mode == crate::compiler::cc::CompileMode::Compile
+    matches!(
+        mode,
+        crate::compiler::cc::CompileMode::Compile | crate::compiler::cc::CompileMode::Assemble
+    )
 }
 
 /// Whether the include dirs still resolve every name the way the key saw
@@ -1984,7 +1992,7 @@ fn cc_cache_entry_rejection_reason(
     let has_named_output = meta
         .files
         .iter()
-        .any(|file| cc_preprocess_restore_target(parsed, &file.name).is_some());
+        .any(|file| cc_named_output_restore_target(parsed, &file.name).is_some());
     let has_stdout = meta
         .files
         .iter()
@@ -2005,6 +2013,9 @@ fn cc_cache_entry_rejection_reason(
             if parsed.output.is_some() && !has_named_output =>
         {
             Some("matching entry lacks the preprocessed output required by this invocation")
+        }
+        crate::compiler::cc::CompileMode::Assemble if !has_named_output => {
+            Some("matching entry lacks the assembly output required by this invocation")
         }
         crate::compiler::cc::CompileMode::Link if meta.files.is_empty() => {
             Some("matching entry lacks the link artifact required by this invocation")
@@ -2449,7 +2460,7 @@ fn restore_cc_from_cache(
             // Anything else is this invocation's own preprocessor output or
             // nothing we can place. Asking once keeps the answer and the
             // decision to use it from ever disagreeing.
-            _ => match cc_preprocess_restore_target(parsed, &cached.name) {
+            _ => match cc_named_output_restore_target(parsed, &cached.name) {
                 Some(target) => target,
                 None => {
                     log::debug!(

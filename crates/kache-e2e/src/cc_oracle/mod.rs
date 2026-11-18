@@ -218,7 +218,7 @@ fn run_case(case: &Case, profile: Profile, ctx: &ArmContext<'_>, run: &mut CaseR
         ..*ctx
     };
     let mut arms = BTreeMap::new();
-    for arm in Arm::ALL {
+    for arm in Arm::for_profile(profile) {
         let result = exec::run_arm(case, profile, arm, &ctx).with_context(|| format!("{} arm", arm.as_str()))?;
         run.injected |= result.injected;
         arms.insert(arm, result);
@@ -233,6 +233,7 @@ fn run_case(case: &Case, profile: Profile, ctx: &ArmContext<'_>, run: &mut CaseR
                 expected_status: step.status,
                 raw: obs(Arm::Raw),
                 raw_repeat: obs(Arm::RawRepeat),
+                raw_passthrough: arms.get(&Arm::RawPassthrough).map(|run| &run.observations[s][c]),
                 ccache: obs(Arm::Ccache),
                 ccache_preprocessor: obs(Arm::CcachePreprocessor),
                 kache: obs(Arm::Kache),
@@ -244,9 +245,9 @@ fn run_case(case: &Case, profile: Profile, ctx: &ArmContext<'_>, run: &mut CaseR
                 compile: c,
                 reuse: step.reuse,
                 judgement,
-                arms: Arm::ALL
+                arms: arms
                     .iter()
-                    .map(|&a| (a, (obs(a).clone(), arms[&a].durations_ms[s][c])))
+                    .map(|(&a, run)| (a, (run.observations[s][c].clone(), run.durations_ms[s][c])))
                     .collect(),
             });
         }

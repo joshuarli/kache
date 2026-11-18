@@ -1,0 +1,18 @@
+summary = "Chromium's official codegen flags (null-check, overflow, ident, member pointers, auto-var-init, module name) cache"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cxx}", "-fno-delete-null-pointer-checks", "-fno-strict-overflow", "-fno-ident", "-fcomplete-member-pointers", "-no-canonical-prefixes", "-ftrivial-auto-var-init=zero", "-fmodule-name=//base:base_Private", "-c", "u.cpp", "-o", "u.o"]
+source = "u.cpp"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
