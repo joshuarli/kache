@@ -1,0 +1,31 @@
+summary = "a caller's -MD -MF depfile is a restored sidecar with raw-identical bytes"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["dep.o", "dep.d"]
+
+[[compile]]
+argv = ["{cc}", "-MD", "-MF", "dep.d", "-c", "dep.c", "-o", "dep.o"]
+source = "dep.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "new-header-dependency"
+reuse = "miss"
+action = [
+  { op = "write", path = "extra.h", content = "#define EXTRA 1\n" },
+  { op = "write", path = "dep.h", content = "#include \"extra.h\"\n#define DEP_VALUE (5 + EXTRA)\n" },
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "restore-new-dependency"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

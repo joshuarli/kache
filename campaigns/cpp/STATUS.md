@@ -139,8 +139,8 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 
 | Package | State | Depends on | Evidence / next |
 |---|---|---|---|
-| CCP-00 | RUNNING | — | This ledger + lock.toml + cases.toml; Linux gate wiring landed; exit needs: KACH-27 triage plan recorded (tracked in TODO.md), PR CI green or explicitly advisory lanes, `make check` green. |
-| CCP-01 | TODO | CCP-00 bootstrap | Differential/transition runner; `make cc-oracle*` targets do not exist yet. |
+| CCP-00 | DONE (bootstrap) | — | Bootstrap exit met: pins, initial inventory, Linux gates assigned (advisory under KACH-27). Remaining inventory enumeration is carried by CCP-01..08 as the plan allows. Go-ahead for CCP-01: user, 2026-11-18 ("complete the campaign unattended"). |
+| CCP-01 | RUNNING | CCP-00 bootstrap | `kache-cc-oracle` + `make cc-oracle{,-full,-negative-control}` on branch `feat/ccp01-cc-oracle`; see "CCP-01 differential runner" below. `make cc-bench` is deferred to CCP-09, which owns the timing protocol. |
 | CCP-02 | TODO | CCP-01 | Input identity & invalidation; token-paste probe refusal is a known gap (see cases.toml). |
 | CCP-03 | TODO | CCP-01, CCP-02 | Includes rebasing/verifying `feat/cc-chromium-official-flags` (exists on origin, unverified by `make check`). |
 | CCP-04 | TODO | CCP-02 | Equivalent-preprocessing reuse. |
@@ -149,6 +149,51 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | CCP-07 | TODO | CCP-03..CCP-06 | Host integration; zlib/LLVM/Chromium pins in lock.toml. Universal objects. |
 | CCP-08 | TODO | CCP-01 | Reliability, diagnosis, CI; KACH-22 mutation coverage; gate assignments. |
 | CCP-09 | TODO | CCP-02..CCP-08 | Performance protocol; estimator locked in lock.toml (seed 20261117). |
+
+## CCP-01 differential runner
+
+Code: `crates/kache-e2e/src/cc_oracle/`, binary `kache-cc-oracle`, cases in
+[oracle/](oracle/README.md) (contract, verdict order, negative controls).
+ccache is the lock.toml release binary for the host lane, fetched and
+digest-checked by `scripts/fetch-ccache.sh`.
+
+Initial cases: blocking `cc-core-c-object`, `cc-core-cxx-object`,
+`cc-core-failed-compile`, `cc-core-user-depfile`, `cc-core-warning-replay`;
+open `cc-flag-s-named-output` (CCP-03) and `cc-eqp-comment-only` (CCP-04).
+
+Local evidence, 2026-11-18, branch `feat/ccp01-cc-oracle` (reports were
+scratch; CI runs below are the durable copies):
+
+| Host | Toolchains | `cc-oracle` | `cc-oracle-full` | negative controls |
+|---|---|---|---|---|
+| M1 workstation, Apple clang 21.0.0 | cc | 10/10 MATCH | open cases fail as expected | 5/5 detected |
+| L4 image (OrbStack, aarch64 musl), GCC 15.2.0 + LLVM clang 23.1.5 | gcc, clang | 20/20 MATCH | open cases fail as expected | 5/5 detected |
+| Debian 13 container (aarch64 glibc), GCC 14.2 + clang 19.1.7, musl-built binaries | gcc, clang | 20/20 MATCH | open cases fail as expected | not run |
+
+Open-case results, identical on every host and toolchain:
+
+- `cc-flag-s-named-output`: `KACHE_MISSED_REUSE` in both profiles. ccache
+  restores `-S -o asm.s` in direct mode; kache passes `-S` through.
+- `cc-eqp-comment-only`: `KACHE_MISSED_REUSE` in the reproducible profile
+  only. In the transparent profile kache preprocesses first and hits on
+  the preprocessed key. In the reproducible profile it compiles first and
+  records `dup`, while ccache reuses the result in preprocessor mode.
+
+Findings for later packages:
+
+- **Diagnostic leak (CCP-08).** With its store on a FUSE filesystem (an
+  OrbStack virtiofs bind mount), kache prints `[kache] the cache directory
+  is on a FUSE filesystem ...` to the compiler's stderr on every compile.
+  The oracle reports it as `KACHE_WRONG_OUTPUT` (stderr differs from raw).
+  Reproduce: run `make cc-oracle` in the L4 image with
+  `CC_ORACLE_OUT` on the bind-mounted checkout. Runs use a container-local
+  `CC_ORACLE_OUT` until this is fixed.
+- On error, clang deletes an existing `-o` object and GCC leaves it in place.
+  Kache matches both: `cc-core-failed-compile` passes for both toolchains.
+
+CI: `make cc-oracle` plus negative controls are blocking steps in
+`e2e (macOS)` and `test (Linux * musl)`, and run in the new
+`cc-oracle (Linux * glibc)` jobs.
 
 ## Open gaps and blockers
 

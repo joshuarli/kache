@@ -1,0 +1,17 @@
+summary = "a comment-only source edit preprocesses identically; ccache reuses it in preprocessor mode (CCP-04)"
+cohort = "open"
+profiles = ["transparent", "reproducible"]
+outputs = ["comment.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "comment.c", "-o", "comment.o"]
+source = "comment.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "comment-edit"
+reuse = "like-ccache"
+action = [{ op = "write", path = "comment.c", content = "/* version two */\nint comment_value(void) { return 11; }\n" }, { op = "delete-outputs" }]

@@ -1,0 +1,358 @@
+//! C/C++ differential oracle: each case runs through the raw compiler, the
+//! pinned ccache in its normal and forced-preprocessor configurations, and
+//! kache, with independent state per arm, then judges kache against raw.
+//! See `C_CPP_PARITY_CAMPAIGN.md` (CCP-01) for the contract.
+
+pub mod case;
+pub mod exec;
+pub mod judge;
+pub mod pin;
+mod report;
+
+use anyhow::{Context, Result, bail};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use case::{Case, Cohort, Profile};
+use exec::{Arm, ArmContext, Control, Toolchain};
+use judge::{Judgement, Observation, Row, Verdict};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Selection {
+    /// Blocking cohort only.
+    Gate,
+    /// Every case, including open gaps.
+    Full,
+}
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub kache: PathBuf,
+    pub ccache: PathBuf,
+    pub cases: PathBuf,
+    pub out: PathBuf,
+    pub toolchains: Vec<String>,
+    pub only: Vec<String>,
+    pub profiles: Vec<Profile>,
+    pub selection: Selection,
+    pub control: Option<Control>,
+}
+
+pub struct RowResult {
+    pub step: String,
+    pub compile: usize,
+    pub reuse: case::Reuse,
+    pub judgement: Judgement,
+    pub arms: BTreeMap<Arm, (Observation, u64)>,
+}
+
+pub struct CaseRun {
+    pub case: String,
+    pub cohort: Cohort,
+    pub profile: Profile,
+    pub toolchain: String,
+    pub verdict: Verdict,
+    /// Set when the run could not execute the case at all.
+    pub blocked: Option<String>,
+    pub rows: Vec<RowResult>,
+    pub expected_rows: usize,
+    pub injected: bool,
+}
+
+pub struct Outcome {
+    pub runs: Vec<CaseRun>,
+    pub report_dir: PathBuf,
+}
+
+impl Outcome {
+    pub fn gate_passed(&self) -> bool {
+        !self.runs.is_empty()
+            && self
+                .runs
+                .iter()
+                .all(|r| !r.verdict.fails_gate() && r.rows.len() == r.expected_rows)
+    }
+
+    /// A control passes when it was injected somewhere, and every run it was
+    /// injected into reports the verdict class the fault must produce.
+    pub fn control_detected(&self, control: Control) -> bool {
+        let want = expected_verdict(control);
+        let injected: Vec<&CaseRun> = self.runs.iter().filter(|r| r.injected).collect();
+        !injected.is_empty() && injected.iter().all(|r| r.rows.iter().any(|row| row.judgement.verdict == want))
+    }
+}
+
+pub fn expected_verdict(control: Control) -> Verdict {
+    match control {
+        Control::StaleOutput | Control::OmitSidecar | Control::DisabledInvalidation => Verdict::KacheWrongOutput,
+        Control::CacheDisabled => Verdict::KacheMissedReuse,
+        Control::ReferenceFailure => Verdict::HarnessError,
+    }
+}
+
+pub fn select<'a>(cases: &'a [Case], config: &Config, os: &str) -> Result<Vec<&'a Case>> {
+    for id in &config.only {
+        if !cases.iter().any(|c| &c.id == id) {
+            bail!("unknown case `{id}`");
+        }
+    }
+    let selected: Vec<&Case> = cases
+        .iter()
+        .filter(|c| config.only.is_empty() || config.only.contains(&c.id))
+        .filter(|c| !config.only.is_empty() || config.selection == Selection::Full || c.cohort == Cohort::Blocking)
+        .filter(|c| c.applies_to_os(os))
+        .collect();
+    if selected.is_empty() {
+        bail!("no cases selected for {os}");
+    }
+    Ok(selected)
+}
+
+pub fn run(config: &Config) -> Result<Outcome> {
+    let kache = std::fs::canonicalize(&config.kache)
+        .with_context(|| format!("kache binary not found at {}", config.kache.display()))?;
+    let ccache = std::fs::canonicalize(&config.ccache)
+        .with_context(|| format!("ccache binary not found at {}", config.ccache.display()))?;
+    let cases = case::discover(&config.cases)?;
+    let selected = select(&cases, config, std::env::consts::OS)?;
+
+    let run_id = format!(
+        "{}-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs(),
+        std::process::id()
+    );
+    std::fs::create_dir_all(&config.out)?;
+    let report_dir = std::fs::canonicalize(&config.out)?.join(&run_id);
+    let work = report_dir.join("work");
+    std::fs::create_dir_all(&work)?;
+    let fixture = work.join("fixture");
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let system_path = exec::clean_path(&inherited);
+
+    let mut toolchains: Vec<Result<Toolchain, String>> = Vec::new();
+    for name in &config.toolchains {
+        toolchains.push(exec::resolve_toolchain(name, &system_path));
+    }
+
+    let mut runs = Vec::new();
+    for tc in &toolchains {
+        let (tc, blocked) = match tc {
+            Ok(tc) => (Some(tc), None),
+            Err(e) => (None, Some(e.clone())),
+        };
+        let tc_name = tc.map_or_else(|| "unresolved".to_string(), |t| t.name.clone());
+        let tc_dir = work.join("toolchains").join(&tc_name);
+        if let Some(tc) = tc {
+            exec::write_shims(&tc_dir.join("shims"), tc, None)?;
+            exec::write_shims(&tc_dir.join("failing-shims"), tc, Some(Path::new("/usr/bin/false")))?;
+        }
+        for case in &selected {
+            for profile in case.profiles.iter().copied().filter(|p| config.profiles.contains(p)) {
+                let expected_rows = case.steps.len() * case.compiles.len();
+                let mut run = CaseRun {
+                    case: case.id.clone(),
+                    cohort: case.cohort,
+                    profile,
+                    toolchain: tc_name.clone(),
+                    verdict: Verdict::Blocked,
+                    blocked: blocked.clone(),
+                    rows: Vec::new(),
+                    expected_rows,
+                    injected: false,
+                };
+                if let Some(tc) = tc {
+                    eprintln!("=> {} [{} {}]", case.id, profile.as_str(), tc.name);
+                    let ctx = ArmContext {
+                        kache: &kache,
+                        ccache: &ccache,
+                        toolchain: tc,
+                        shims: &tc_dir.join("shims"),
+                        failing_shims: &tc_dir.join("failing-shims"),
+                        fixture: &fixture,
+                        state: &work.join("arms").join(&case.id).join(profile.as_str()).join(&tc.name),
+                        system_path: &system_path,
+                        control: config.control,
+                    };
+                    if let Err(e) = run_case(case, profile, &ctx, &mut run) {
+                        run.verdict = Verdict::HarnessError;
+                        run.blocked = Some(format!("{e:#}"));
+                    }
+                    eprintln!("   {}", run.verdict.as_str());
+                }
+                runs.push(run);
+            }
+        }
+    }
+    if fixture.exists() {
+        let _ = std::fs::remove_dir_all(&fixture);
+    }
+    let outcome = Outcome { runs, report_dir };
+    report::write(&outcome, config, &kache, &ccache, &toolchains)?;
+    Ok(outcome)
+}
+
+fn run_case(case: &Case, profile: Profile, ctx: &ArmContext<'_>, run: &mut CaseRun) -> Result<()> {
+    std::fs::create_dir_all(ctx.state)?;
+    let fixture = {
+        std::fs::create_dir_all(ctx.fixture)?;
+        std::fs::canonicalize(ctx.fixture)?
+    };
+    let ctx = ArmContext {
+        fixture: &fixture,
+        ..*ctx
+    };
+    let mut arms = BTreeMap::new();
+    for arm in Arm::ALL {
+        let result = exec::run_arm(case, profile, arm, &ctx).with_context(|| format!("{} arm", arm.as_str()))?;
+        run.injected |= result.injected;
+        arms.insert(arm, result);
+    }
+    for (s, step) in case.steps.iter().enumerate() {
+        for (c, compile) in case.compiles.iter().enumerate() {
+            let obs = |arm: Arm| &arms[&arm].observations[s][c];
+            let effective = exec::effective_args(&compile.argv, profile, &fixture);
+            let judgement = judge::judge(&Row {
+                reuse: step.reuse,
+                expected_status: step.status,
+                raw: obs(Arm::Raw),
+                raw_repeat: obs(Arm::RawRepeat),
+                ccache: obs(Arm::Ccache),
+                ccache_preprocessor: obs(Arm::CcachePreprocessor),
+                kache: obs(Arm::Kache),
+                effective_argv: &effective,
+            });
+            run.rows.push(RowResult {
+                step: step.name.clone(),
+                compile: c,
+                reuse: step.reuse,
+                judgement,
+                arms: Arm::ALL
+                    .iter()
+                    .map(|&a| (a, (obs(a).clone(), arms[&a].durations_ms[s][c])))
+                    .collect(),
+            });
+        }
+    }
+    run.verdict = run
+        .rows
+        .iter()
+        .map(|r| r.judgement.verdict)
+        .filter(|v| v.fails_gate())
+        .min()
+        .unwrap_or(Verdict::Match);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(selection: Selection, only: &[&str]) -> Config {
+        Config {
+            kache: PathBuf::new(),
+            ccache: PathBuf::new(),
+            cases: PathBuf::new(),
+            out: PathBuf::new(),
+            toolchains: vec![],
+            only: only.iter().map(|s| s.to_string()).collect(),
+            profiles: vec![Profile::Transparent],
+            selection,
+            control: None,
+        }
+    }
+
+    fn case(id: &str, cohort: &str, os: &str) -> Case {
+        let text = format!(
+            r#"summary = "s"
+cohort = "{cohort}"
+os = [{os}]
+profiles = ["transparent"]
+[[compile]]
+argv = ["{{cc}}", "-c", "a.c"]
+source = "a.c"
+[[step]]
+name = "populate"
+reuse = "miss"
+"#
+        );
+        case::parse(id, &text, PathBuf::new()).unwrap()
+    }
+
+    #[test]
+    fn gate_selects_the_blocking_cohort_and_full_selects_everything() {
+        let cases = vec![case("a", "blocking", ""), case("b", "open", ""), case("c", "blocking", "\"windows\"")];
+        let ids = |v: Vec<&Case>| v.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(select(&cases, &config(Selection::Gate, &[]), "macos").unwrap()), ["a"]);
+        assert_eq!(ids(select(&cases, &config(Selection::Full, &[]), "macos").unwrap()), ["a", "b"]);
+        assert_eq!(ids(select(&cases, &config(Selection::Gate, &["b"]), "macos").unwrap()), ["b"]);
+        assert!(select(&cases, &config(Selection::Gate, &["c"]), "macos").is_err());
+        assert!(select(&cases, &config(Selection::Gate, &["zzz"]), "macos").is_err());
+    }
+
+    fn row(verdict: Verdict) -> RowResult {
+        RowResult {
+            step: "s".into(),
+            compile: 0,
+            reuse: case::Reuse::Any,
+            judgement: Judgement {
+                verdict,
+                reasons: vec![],
+                ccache: Verdict::Match,
+                ccache_preprocessor: Verdict::Match,
+            },
+            arms: BTreeMap::new(),
+        }
+    }
+
+    fn case_run(verdict: Verdict, rows: Vec<RowResult>, expected_rows: usize, injected: bool) -> CaseRun {
+        CaseRun {
+            case: "c".into(),
+            cohort: Cohort::Blocking,
+            profile: Profile::Transparent,
+            toolchain: "cc".into(),
+            verdict,
+            blocked: None,
+            rows,
+            expected_rows,
+            injected,
+        }
+    }
+
+    fn outcome(runs: Vec<CaseRun>) -> Outcome {
+        Outcome {
+            runs,
+            report_dir: PathBuf::new(),
+        }
+    }
+
+    #[test]
+    fn the_gate_fails_on_no_runs_dropped_rows_or_a_failing_verdict() {
+        assert!(!outcome(vec![]).gate_passed());
+        assert!(outcome(vec![case_run(Verdict::Match, vec![row(Verdict::Match)], 1, false)]).gate_passed());
+        assert!(!outcome(vec![case_run(Verdict::Match, vec![], 1, false)]).gate_passed());
+        assert!(!outcome(vec![case_run(Verdict::Blocked, vec![], 0, false)]).gate_passed());
+        assert!(
+            outcome(vec![case_run(Verdict::CcacheWrongOutput, vec![row(Verdict::Match)], 1, false)]).gate_passed()
+        );
+    }
+
+    #[test]
+    fn a_control_must_be_injected_and_detected_in_every_injected_run() {
+        let detected = || case_run(Verdict::KacheMissedReuse, vec![row(Verdict::KacheMissedReuse)], 1, true);
+        let missed = || case_run(Verdict::Match, vec![row(Verdict::Match)], 1, true);
+        let untouched = || case_run(Verdict::Match, vec![row(Verdict::Match)], 1, false);
+        assert!(outcome(vec![detected(), untouched()]).control_detected(Control::CacheDisabled));
+        assert!(!outcome(vec![detected(), missed()]).control_detected(Control::CacheDisabled));
+        assert!(!outcome(vec![untouched()]).control_detected(Control::CacheDisabled));
+        assert!(!outcome(vec![detected()]).control_detected(Control::StaleOutput));
+    }
+
+    #[test]
+    fn each_control_expects_its_own_verdict_class() {
+        assert_eq!(expected_verdict(Control::StaleOutput), Verdict::KacheWrongOutput);
+        assert_eq!(expected_verdict(Control::OmitSidecar), Verdict::KacheWrongOutput);
+        assert_eq!(expected_verdict(Control::DisabledInvalidation), Verdict::KacheWrongOutput);
+        assert_eq!(expected_verdict(Control::CacheDisabled), Verdict::KacheMissedReuse);
+        assert_eq!(expected_verdict(Control::ReferenceFailure), Verdict::HarnessError);
+    }
+}

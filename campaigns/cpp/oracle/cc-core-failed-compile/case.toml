@@ -1,0 +1,29 @@
+summary = "a failing compile keeps its status and diagnostics, is never served as a hit, and leaves the earlier object as raw does"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["fail.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "fail.c", "-o", "fail.o"]
+source = "fail.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "break-over-existing-output"
+reuse = "miss"
+status = 1
+action = [{ op = "write", path = "fail.c", content = "int fail_value(void) { return undeclared_name; }\n" }]
+
+[[step]]
+name = "still-broken"
+reuse = "miss"
+status = 1
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "fixed"
+reuse = "hit"
+action = [{ op = "write", path = "fail.c", content = "int fail_value(void) { return 1; }\n" }, { op = "delete-outputs" }]

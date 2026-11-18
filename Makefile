@@ -17,7 +17,8 @@ endif
 
 .PHONY: help build test check test-ci release verify-release lint \
   client-crates-check test-resource-guard-check pr mutants-diff \
-  e2e e2e-negative-control bench bench-retry bench-trace bench-sccache bench-mbx bench-pr \
+  e2e e2e-negative-control cc-oracle-tools cc-oracle cc-oracle-full cc-oracle-negative-control \
+  bench bench-retry bench-trace bench-sccache bench-mbx bench-pr \
   bench-short test-bench-short test-bench-edit-loop bench-contention test-bench-contention \
   perf-gate-local trace-phases bump release-tag crates-status \
   crates-bootstrap crates-bootstrap-plan
@@ -65,6 +66,9 @@ help:
 	@echo "pr [BASE=origin/main]    check plus changed-lines mutation testing against BASE"
 	@echo "e2e                      fixture scenarios cold/warm/noop through the e2e harness"
 	@echo "e2e-negative-control     the e2e corpus with the cache disabled; cache-dependent fixtures must fail"
+	@echo "cc-oracle [CASE=] [TOOLCHAINS=cc] [PROFILES=]  C/C++ raw/ccache/kache differential, blocking cohort"
+	@echo "cc-oracle-full           every C/C++ oracle case, including open gaps"
+	@echo "cc-oracle-negative-control  each injected oracle fault must be detected"
 	@echo "bench [PROFILE=] [ARGS=] list bench profiles, or cold/warm a profile (ARGS passes through)"
 	@echo "bench-retry/-trace/-sccache/-mbx  bench variants; PROFILE selects, ARGS passes through"
 	@echo "bench-pr                 one Kache side of hk, eza and aube"
@@ -138,6 +142,36 @@ e2e-negative-control:
 	  --deny-missing-tools \
 	  --negative-control \
 	  --out tmp/e2e/negative-control.json
+
+# C/C++ differential oracle (C_CPP_PARITY_CAMPAIGN.md, CCP-01). Each case
+# runs through the raw compiler, the pinned ccache, and kache; reports land
+# in .work/tmp/cc-oracle/<run-id>/. TOOLCHAINS names C drivers on PATH
+# (cc, gcc, clang, gcc-15, ...); CASE and PROFILES narrow the selection.
+TOOLCHAINS ?= cc
+CASE ?=
+PROFILES ?=
+CC_ORACLE_CCACHE_DIR ?= .work/tmp/ccache
+CC_ORACLE_OUT ?= .work/tmp/cc-oracle
+CC_ORACLE_CONTROLS := stale-output omit-sidecar disabled-invalidation cache-disabled reference-failure
+cc_oracle = ccache="$$(./scripts/fetch-ccache.sh $(CC_ORACLE_CCACHE_DIR) ./target/release/kache-cc-oracle)" && \
+  ./target/release/kache-cc-oracle --kache ./target/release/kache --ccache "$$ccache" --out $(CC_ORACLE_OUT) \
+  $(foreach t,$(TOOLCHAINS),--toolchain $(t)) $(foreach c,$(CASE),--case $(c)) \
+  $(foreach p,$(PROFILES),--profile $(p))
+
+cc-oracle-tools:
+	cargo build --release -p kache
+	cargo build --release -p kache-e2e --bin kache-cc-oracle
+
+cc-oracle: cc-oracle-tools
+	$(cc_oracle)
+
+cc-oracle-full: cc-oracle-tools
+	$(cc_oracle) --full
+
+cc-oracle-negative-control: cc-oracle-tools
+	@for control in $(CC_ORACLE_CONTROLS); do \
+	  $(cc_oracle) --negative-control $$control || exit 1; \
+	done
 
 # Bench a scenario twice against one shared kache cache — cold, then warm —
 # and report wall-clock, speedup, hit rate and a verdict. Omit PROFILE to
