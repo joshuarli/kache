@@ -1,0 +1,27 @@
+summary = "edits that only move code (a comment block grows from 20 to 30 lines) change debug line tables and diagnostic locations, though -E -P output is identical; they must recompile"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["lines.o"]
+
+[[compile]]
+argv = ["{cc}", "-g", "-Wall", "-c", "lines.c", "-o", "lines.o"]
+source = "lines.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "shift-by-one-line"
+reuse = "miss"
+action = [{ op = "write", path = "lines.c", content = "/*\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\n*/\nint lines_value(int x) {\n    int unused = x;\n    return x + 1;\n}\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "shift-by-ten-lines"
+reuse = "miss"
+action = [{ op = "write", path = "lines.c", content = "/*\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\npad\n*/\nint lines_value(int x) {\n    int unused = x;\n    return x + 1;\n}\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-shifted"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

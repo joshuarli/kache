@@ -696,7 +696,7 @@ summary = "edit moving line numbers is NOT a hit (debug line info is observable)
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "debug_prefix_map.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-eqp-dep-refresh"
