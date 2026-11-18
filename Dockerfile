@@ -12,8 +12,13 @@ ARG RUSTUP_AARCH64_SHA256=1ddf36182ac5d1782dbeefcb9bea7f5f9412d88f4a0d5047b1564a
 RUN apk add --no-cache \
     binutils=2.45.1-r1 \
     bash=5.3.9-r1 \
+    cmake=4.2.3-r0 \
     file=5.47-r2 \
+    g++=15.2.0-r5 \
+    gcc=15.2.0-r5 \
     make=4.4.1-r4 \
+    ninja-build=1.13.2-r1 \
+    ninja-is-really-ninja=1.13.2-r1 \
     procps \
     strace=6.19-r1 \
     musl-dev=1.2.6-r3 \
