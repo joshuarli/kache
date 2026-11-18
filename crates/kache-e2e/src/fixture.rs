@@ -134,10 +134,13 @@ pub struct Fixture {
     #[deser(default)]
     pub compiler_shims: bool,
 
-    /// Operating systems this fixture supports, by `std::env::consts::OS`
-    /// value (`"linux"`, `"macos"`, `"windows"`). Empty (default) = all.
-    /// When non-empty and the current OS isn't listed, the harness SKIPS the
-    /// fixture (like a missing `requires` tool) instead of running it — for
+    /// Operating systems this fixture supports. Accepts the
+    /// `std::env::consts::OS` values (`"linux"`, `"macos"`, `"windows"`) and,
+    /// on Linux, the libc tokens `"glibc"` / `"musl"` (matched against the
+    /// libc the harness binary was built for, not the host it runs on).
+    /// Empty (default) = all.
+    /// When non-empty and none match, the harness SKIPS the fixture
+    /// (like a missing `requires` tool) instead of running it — for
     /// fixtures that only make sense on some platforms, e.g. the cc out-of-tree
     /// convergence scenario which exercises the gnu/clang prefix-map path and
     /// not MSVC `cl` (kunobi-ninja/kache#394).
@@ -433,7 +436,7 @@ impl Fixture {
             ));
         }
         for os in &fixture.os {
-            if !matches!(os.as_str(), "linux" | "macos") {
+            if !matches!(os.as_str(), "linux" | "macos" | "windows" | "glibc" | "musl") {
                 return Err(anyhow!(
                     "fixture `{}` declares unsupported operating system `{os}`",
                     fixture.name

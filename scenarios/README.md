@@ -61,8 +61,11 @@ correctness contract. `[checks.measure.<phase>]` is advisory only and never
 fails the run.
 
 Fixtures may declare `requires = ["tool"]` and `os = ["linux", "macos",
-"windows"]`. Missing tools skip by default for local portability; CI passes
-`--deny-missing-tools`, so a supported fixture cannot silently disappear.
+"windows"]`. On Linux, `os` also accepts `"glibc"` and `"musl"`, matched
+against the libc the harness binary itself was built for (the musl CI image
+builds it for musl, so `"glibc"` fixtures skip there). Missing tools skip by
+default for local portability; CI passes `--deny-missing-tools`, so a
+supported fixture cannot silently disappear.
 
 ## Clone Benchmark Scenario
 

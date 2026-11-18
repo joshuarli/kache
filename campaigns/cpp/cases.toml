@@ -1,0 +1,1243 @@
+# C/C++ parity campaign — initial in-scope case inventory (CCP-00).
+#
+# One entry per required behavior family/instance, mapped to kache's own
+# case IDs. ccache's suites and unit tests are cited as provenance hints
+# only; this file enumerates ORIGINAL kache cases — no upstream text is
+# carried here. A "happy path" does not close a family; each entry states
+# what would falsify it (via the transition set in C_CPP_PARITY_CAMPAIGN.md:
+# empty → populate, delete-outputs → restore, semantic edit → miss, revert →
+# reuse earlier, irrelevant edit → reuse, relocate/toolchain/policy switches).
+#
+# This is the CCP-00 BOOTSTRAP inventory. It covers every family the plan
+# requires, but enumeration is not complete: CCP-01's runner and CCP-02..08
+# work expand it. Completion criteria (every required behavior has a case or
+# a documented disposition) live in the plan's final acceptance gate, not
+# here. Status values:
+#   planned        — will be executed; blocked by listed package
+#   conditional    — requires the stated prerequisites; test the violations
+#   out_of_scope   — disposition recorded; revisit only with a plan change
+#
+# profiles: transparent = KACHE_CC_PATH_NORMALIZE=0 + KACHE_CC_SOURCE_DATE_EPOCH=passthrough;
+#           reproducible = documented kache default maps/epoch (raw and ccache
+#           given identical effective flags); both = run in both profiles.
+# compilers: all | gcc | clang | apple-clang | clang-cl
+
+schema_version = 1
+created = "2026-11-17"
+
+[meta]
+inventory_state = "initial (CCP-00 bootstrap); complete enumeration owed by CCP-01/CCP-02..CCP-08"
+provenance_key = "ccache.suite = upstream suite filename at the pinned commit (reference only, not a kache dependency)"
+
+[[case]]
+id = "cc-input-same-size-mtime"
+package = "CCP-02"
+summary = "same-size edit to a source/header with mtime restored; compile MUST miss"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "direct.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-atomic-replace"
+package = "CCP-02"
+summary = "atomic write+rename replacement of source/header invalidates (not just mtime/size)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-symlink-retarget"
+package = "CCP-02"
+summary = "symlink retargeted at a different file invalidates; identical target does not"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-header-added"
+package = "CCP-02"
+summary = "header appears where __has_include would find it; prior hits invalidated"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "depend.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-header-deleted"
+package = "CCP-02"
+summary = "header disappears; dependent compiles must miss, not restore stale output"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "depend.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-header-shadowing"
+package = "CCP-02"
+summary = "same-basename header in two search dirs; first-found wins, change invalidates"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "depend.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-search-order"
+package = "CCP-02"
+summary = "-iquote / -I / -isystem / -idirafter precedence is honored in the key"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "basedir.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-has-include"
+package = "CCP-02"
+summary = "__has_include and __has_include_next resolve per search order and key"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "depend.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-token-paste-probe"
+package = "CCP-02"
+summary = "Chromium-style token-pasted header availability probes hit without losing invalidation (today kache refuses: 'token pasting may construct a header availability probe')"
+profiles = ["both"]
+compilers = ["all"]
+ccache.suite = "kache-observed (src/compiler/cc.rs guard)"
+status = "planned"
+
+[[case]]
+id = "cc-input-forced-include"
+package = "CCP-02"
+summary = "-include forced header content change invalidates"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "direct.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-sysroot-change"
+package = "CCP-02"
+summary = "SDK/sysroot (-isysroot, --sysroot) change invalidates"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "basedir.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-framework-change"
+package = "CCP-02"
+summary = "macOS framework search path / SDK framework change invalidates"
+profiles = ["both"]
+compilers = ["apple-clang", "clang"]
+ccache.suite = "basedir.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-include-env"
+package = "CCP-02"
+summary = "CPATH/C_INCLUDE_PATH/CPLUS_INCLUDE_PATH/OBJC_INCLUDE_PATH/OBJCPLUS_INCLUDE_PATH changes invalidate"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "basedir.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-compiler-replaced"
+package = "CCP-02"
+summary = "same path, different compiler binary content invalidates"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "direct.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-wrapper-selection"
+package = "CCP-02"
+summary = "launcher/shim resolving to a different compiler driver invalidates"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "masquerading.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-driver-mode"
+package = "CCP-02"
+summary = "gcc vs g++ vs clang vs clang++ driver mode changes are keyed"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-specs-file"
+package = "CCP-02"
+summary = "GCC specs/config file change (or -specs= given) invalidates"
+profiles = ["both"]
+compilers = ["gcc"]
+ccache.suite = "kache-original (specs are driver inputs)"
+status = "planned"
+
+[[case]]
+id = "cc-input-sanitizer-ignorelist"
+package = "CCP-02"
+summary = "-fsanitize-ignorelist / -fsanitize-blacklist file content change invalidates"
+profiles = ["both"]
+compilers = ["gcc", "clang"]
+ccache.suite = "sanitize_ignorelist.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-vfs-overlay"
+package = "CCP-02"
+summary = "-ivfsoverlay file change (and absence) invalidates"
+profiles = ["both"]
+compilers = ["clang", "apple-clang"]
+ccache.suite = "ivfsoverlay.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-pgo-profile"
+package = "CCP-02"
+summary = "-fprofile-use / -fauto-profile content change invalidates (keyed by file content, not spelling)"
+profiles = ["both"]
+compilers = ["gcc", "clang"]
+ccache.suite = "profiling_clang.bash"
+status = "planned"
+
+[[case]]
+id = "cc-input-native-cpu"
+package = "CCP-02"
+summary = "-march/-mtune native feature-set differences invalidate where they change codegen"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-input-option-order"
+package = "CCP-02"
+summary = "ordered/overriding options (-I order, -O redefinition, -D redefinition) keep semantics; no unsafe reordering"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-input-user-key-config"
+package = "CCP-02"
+summary = "KACHE key configuration (custom key prefix / user key config) is honored and switched cleanly"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-macro-file"
+package = "CCP-02"
+summary = "__FILE__ expands per relocation; transparent profile preserves, reproducible normalizes"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "debug_compilation_dir.bash"
+status = "planned"
+
+[[case]]
+id = "cc-macro-base-file"
+package = "CCP-02"
+summary = "__BASE_FILE__ expands per relocation; profiles handled separately"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "debug_compilation_dir.bash"
+status = "planned"
+
+[[case]]
+id = "cc-macro-date-time"
+package = "CCP-02"
+summary = "__DATE__/__TIME__/__TIMESTAMP__ behavior documented and profiled (epoch-dependent)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "source_date_epoch.bash"
+status = "planned"
+
+[[case]]
+id = "cc-diagnostic-locale"
+package = "CCP-02"
+summary = "LC_ALL/diagnostic locale affecting diagnostics is accounted for"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "color_diagnostics.bash"
+status = "planned"
+
+[[case]]
+id = "cc-policy-profile-switch"
+package = "CCP-02"
+summary = "switching transparent ↔ reproducible against populated caches rekeys correctly"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-depfile-escape"
+package = "CCP-02"
+summary = "depfiles with spaces/escapes/colons parse with correct escaping and targets"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "depend.bash"
+status = "planned"
+
+[[case]]
+id = "cc-depfile-make-ninja-consumed"
+package = "CCP-02"
+summary = "restored depfiles are consumed correctly by Make and Ninja"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "depend.bash"
+status = "planned"
+
+[[case]]
+id = "cc-race-hash-compile-publish"
+package = "CCP-02"
+summary = "edits injected between hash, compile and publication are handled with deterministic barriers; subsequent quiescent state is verified (not the racing raw compile)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original (barrier pattern)"
+status = "planned"
+
+[[case]]
+id = "cc-input-unmodeled-assembler-read"
+package = "CCP-02"
+summary = "unmodeled assembler reads remain conservative refusals"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-rsp-quoted"
+package = "CCP-03"
+summary = "quoted paths with spaces parse correctly in response files"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-rsp-escaped"
+package = "CCP-03"
+summary = "backslash and quote escapes parse correctly per dialect"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-rsp-nested"
+package = "CCP-03"
+summary = "@file inside @file expands recursively"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-rsp-empty"
+package = "CCP-03"
+summary = "empty response file is accepted and keyed"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-rsp-missing"
+package = "CCP-03"
+summary = "missing response file fails like raw (status and diagnostics preserved, never cached)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-rsp-cycle"
+package = "CCP-03"
+summary = "self-referential/cyclic @file is bounded, not unbounded recursion"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-rsp-depth"
+package = "CCP-03"
+summary = "nesting depth bound is enforced and documented"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-rsp-option-value"
+package = "CCP-03"
+summary = "@foo as an ordinary option value is not mistaken for a response file"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-rsp-relative-paths"
+package = "CCP-03"
+summary = "relative paths inside response files resolve per the driver's dialect rules"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-rsp-encoding"
+package = "CCP-03"
+summary = "response file encoding (UTF-8/BOM/UTF-16 where dialects require) is handled"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-rsp-content-change"
+package = "CCP-03"
+summary = "changed response file content invalidates"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-flag-x"
+package = "CCP-03"
+summary = "-x c / -x c++ / -x none language selection is keyed"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-flag-doubledash"
+package = "CCP-03"
+summary = "'--' end-of-options handling is keyed"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-flag-joined-separate"
+package = "CCP-03"
+summary = "joined (-O2), separate (-O 2), and repeated options are normalized safely"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-flag-wp"
+package = "CCP-03"
+summary = "-Wp, options are parsed and keyed through to the preprocessor"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-flag-xpreprocessor"
+package = "CCP-03"
+summary = "-Xpreprocessor forwarding options are keyed"
+profiles = ["both"]
+compilers = ["gcc", "clang", "apple-clang"]
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-flag-xclang"
+package = "CCP-03"
+summary = "-Xclang forwarded options are keyed, including the -Xclang -include-pth PCH shape"
+profiles = ["both"]
+compilers = ["clang", "apple-clang"]
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-flag-deps"
+package = "CCP-03"
+summary = "dependency options (-M, -MM, -MD, -MMD, -MF, -MT, -MQ, -MP) are modeled"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "depend.bash"
+status = "planned"
+
+[[case]]
+id = "cc-flag-charset"
+package = "CCP-03"
+summary = "input/execution charsets (-finput-charset, -fexec-charset, -fwide-exec-charset, -fshort-wchar) are keyed"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "input_charset.bash"
+status = "planned"
+
+[[case]]
+id = "cc-flag-optimization"
+package = "CCP-03"
+summary = "optimization family (-O0..-O3, -Ofast, -Os, -Oz, -Og) is keyed"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "planned"
+
+[[case]]
+id = "cc-flag-debug"
+package = "CCP-03"
+summary = "debug info family (-g, -g0..-g3, -gline-tables-only, -gmlt, -gno-column-info) is keyed"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "split_dwarf.bash"
+status = "planned"
+
+[[case]]
+id = "cc-flag-sanitize"
+package = "CCP-03"
+summary = "-fsanitize family is keyed (modeled per Chromium's observed flag set, generalized)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "planned"
+
+[[case]]
+id = "cc-flag-lto-compile-modes"
+package = "CCP-03"
+summary = "-flto=thin, -fsplit-lto-unit, -fwhole-program-vtables are keyed as compile modes"
+profiles = ["both"]
+compilers = ["clang", "apple-clang"]
+ccache.suite = "direct.bash"
+status = "planned"
+
+[[case]]
+id = "cc-flag-mllvm-pairs"
+package = "CCP-03"
+summary = "-mllvm option pairs are keyed as groups (order-dependent)"
+profiles = ["both"]
+compilers = ["clang", "apple-clang"]
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "planned"
+
+[[case]]
+id = "cc-flag-module-name"
+package = "CCP-03"
+summary = "-fmodule-name is keyed (single-module production builds)"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "modules.bash"
+status = "planned"
+
+[[case]]
+id = "cc-flag-mmacos-version-min"
+package = "CCP-03"
+summary = "-mmacos-version-min / -miphoneos-version-min etc. are keyed"
+profiles = ["both"]
+compilers = ["apple-clang", "clang"]
+ccache.suite = "base.bash"
+status = "planned"
+
+[[case]]
+id = "cc-flag-warning-suppression-mappings"
+package = "CCP-03"
+summary = "--warning-suppression-mappings content is keyed"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "kache-observed (Chromium flag set)"
+status = "planned"
+
+[[case]]
+id = "cc-flag-profile-use"
+package = "CCP-03"
+summary = "-fprofile-use / --pgo-warn-misexpect content is keyed"
+profiles = ["both"]
+compilers = ["gcc", "clang", "apple-clang"]
+ccache.suite = "profiling_clang.bash"
+status = "planned"
+
+[[case]]
+id = "cc-flag-crash-diagnostics-dir"
+package = "CCP-03"
+summary = "-fcrash-diagnostics-dir accepted; no effect on outputs; never stale-restore material"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "kache-observed (Chromium flag set)"
+status = "planned"
+
+[[case]]
+id = "cc-flag-s-named-output"
+package = "CCP-03"
+summary = "-S with a named output file is cached safely (restored as named)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "planned"
+
+[[case]]
+id = "cc-preprocessed-input"
+package = "CCP-03"
+summary = "preprocessed C/C++ inputs (.i/.ii/-x c++-cpp-output) cached where the reference caches"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "direct.bash"
+status = "planned"
+
+[[case]]
+id = "cc-e-passthrough"
+package = "CCP-03"
+summary = "kache's existing -E behavior preserved even where ccache does not cache it"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-unknown-flag-passthrough"
+package = "CCP-03"
+summary = "unrecognized invocation shapes fall back to raw compile with raw behavior preserved"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "planned"
+
+[[case]]
+id = "cc-eqp-comment-only"
+package = "CCP-04"
+summary = "comment-only change reuses without codegen; debug lines must still be exact or invalidate"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "depend.bash"
+status = "planned"
+
+[[case]]
+id = "cc-eqp-unused-macro"
+package = "CCP-04"
+summary = "unused macro change reuses (complete observable result unchanged)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "direct.bash"
+status = "planned"
+
+[[case]]
+id = "cc-eqp-inactive-conditional"
+package = "CCP-04"
+summary = "inactive #if branch edit reuses (result unchanged)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "direct.bash"
+status = "planned"
+
+[[case]]
+id = "cc-eqp-line-number-significance"
+package = "CCP-04"
+summary = "edit moving line numbers is NOT a hit (debug line info is observable)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "debug_prefix_map.bash"
+status = "planned"
+
+[[case]]
+id = "cc-eqp-dep-refresh"
+package = "CCP-04"
+summary = "dependency manifests refreshed even when object bytes are reused"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "direct.bash"
+status = "planned"
+
+[[case]]
+id = "cc-eqp-memo-fastpath"
+package = "CCP-04"
+summary = "unchanged-input memo fast path preserved (no extra preprocessor work)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-eqp-compile-first-miss"
+package = "CCP-04"
+summary = "compile-first miss path remains valid and measured separately from warm hits"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-out-gcno"
+package = "CCP-05"
+summary = ".gcno coverage files restored on hit; absent sidecar (coverage off) handled"
+profiles = ["both"]
+compilers = ["gcc", "clang"]
+ccache.suite = "coverage_compilation_dir.bash"
+status = "planned"
+
+[[case]]
+id = "cc-out-split-dwarf"
+package = "CCP-05"
+summary = ".dwo split DWARF restored on hit"
+profiles = ["both"]
+compilers = ["gcc", "clang"]
+ccache.suite = "split_dwarf.bash"
+status = "planned"
+
+[[case]]
+id = "cc-out-serialized-diagnostics"
+package = "CCP-05"
+summary = "-fdiagnostics-format=serialized and -fdiagnostics-add-output restored (clang)"
+profiles = ["both"]
+compilers = ["clang", "apple-clang"]
+ccache.suite = "serialize_diagnostics.bash"
+status = "planned"
+
+[[case]]
+id = "cc-out-diagnostics-format"
+package = "CCP-05"
+summary = "-fdiagnostics-format fixed/clang-format output modes restored"
+profiles = ["both"]
+compilers = ["clang", "apple-clang"]
+ccache.suite = "fdiagnostics_format.bash"
+status = "planned"
+
+[[case]]
+id = "cc-out-depinfo-full"
+package = "CCP-05"
+summary = "dependency .d and compilation-database-style sidecars restored where the reference supports them"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "depend.bash"
+status = "planned"
+
+[[case]]
+id = "cc-out-full-inventory-validation"
+package = "CCP-05"
+summary = "full output inventory validated before a hit is reported; partial restore never reports success"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-out-missing-blob"
+package = "CCP-05"
+summary = "one missing blob triggers safe recovery (recompile or miss), never a broken output"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-out-corrupt-blob"
+package = "CCP-05"
+summary = "corrupt blob detected by verification and recovered safely"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-out-writable-no-alias"
+package = "CCP-05"
+summary = "restored outputs are writable copies; cache blobs stay immutable, no aliasing across builds"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-pch-create"
+package = "CCP-06"
+summary = "GCC/Clang PCH creation mode is handled (lookup, contents, options, compiler identity)"
+profiles = ["both"]
+compilers = ["gcc", "clang"]
+ccache.suite = "pch.bash"
+status = "conditional"
+prerequisites = "ccache PCH support requires sloppiness=pch_defines,time_macros; kache must test the declared profile and its violations"
+
+[[case]]
+id = "cc-pch-use"
+package = "CCP-06"
+summary = "PCH consumption keyed on PCH identity/contents; missing PCH falls back safely"
+profiles = ["both"]
+compilers = ["gcc", "clang"]
+ccache.suite = "pch.bash"
+status = "conditional"
+prerequisites = "same PCH profile as cc-pch-create"
+
+[[case]]
+id = "cc-pch-macros-timestamps"
+package = "CCP-06"
+summary = "PCH macro state and timestamp handling ( sloppiness=pch_defines,time_macros violations tested )"
+profiles = ["both"]
+compilers = ["gcc", "clang"]
+ccache.suite = "pch.bash"
+status = "conditional"
+prerequisites = "PCH profile; explicit time_macros behavior"
+
+[[case]]
+id = "cc-module-fmodule-file"
+package = "CCP-06"
+summary = "explicit -fmodule-file= consumers: hits/misses on module content changes"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "fmodule_file.bash"
+status = "conditional"
+prerequisites = "clang modules build tooling available; module file hashing viable"
+
+[[case]]
+id = "cc-module-prebuilt-path"
+package = "CCP-06"
+summary = "-fprebuilt-module-path= directory consumers: directory contents keyed"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "fprebuilt_module_path.bash"
+status = "conditional"
+prerequisites = "prebuilt module toolchain available"
+
+[[case]]
+id = "cc-module-body-edit"
+package = "CCP-06"
+summary = "template-body edit in a consumed module invalidates"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "fmodule_file.bash"
+status = "conditional"
+
+[[case]]
+id = "cc-module-add-remove"
+package = "CCP-06"
+summary = "module file added/renamed/removed under -fprebuilt-module-path invalidates"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "fprebuilt_module_path.bash"
+status = "conditional"
+
+[[case]]
+id = "cc-module-compiler-sdk"
+package = "CCP-06"
+summary = "compiler/SDK change invalidates module consumption"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "modules.bash"
+status = "conditional"
+
+[[case]]
+id = "cc-module-implicit-conditional"
+package = "CCP-06"
+summary = "implicit Clang modules under declared sloppiness=modules profile; violations tested; defaults never relaxed"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "modules.bash"
+status = "conditional"
+prerequisites = "sloppiness=modules explicitly declared; transitive inputs and module-cache state inventoried"
+
+[[case]]
+id = "cc-module-unsupported-refuse"
+package = "CCP-06"
+summary = "general standard C++20 module production is refused with a clear diagnostic"
+profiles = ["both"]
+compilers = ["clang", "gcc"]
+ccache.suite = "modules.bash"
+status = "planned"
+
+[[case]]
+id = "cc-host-universal-objects"
+package = "CCP-07"
+summary = "arm64+x86_64 universal Mach-O produced via -arch flags; every restored slice inspected"
+profiles = ["both"]
+compilers = ["apple-clang"]
+ccache.suite = "multi_arch.bash"
+status = "planned"
+
+[[case]]
+id = "cc-host-xarch"
+package = "CCP-07"
+summary = "-Xarch_* per-slice options keyed per slice"
+profiles = ["both"]
+compilers = ["apple-clang"]
+ccache.suite = "multi_arch.bash"
+status = "planned"
+
+[[case]]
+id = "cc-host-frameworks"
+package = "CCP-07"
+summary = "framework search paths and SDK frameworks keyed"
+profiles = ["both"]
+compilers = ["apple-clang"]
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-host-deployment-target"
+package = "CCP-07"
+summary = "-mmacos-version-min / deployment targets keyed (distinct from cc-flag-mmacos-version-min's flag model)"
+profiles = ["both"]
+compilers = ["apple-clang"]
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-host-objc"
+package = "CCP-07"
+summary = "Objective-C mode cached where supported"
+profiles = ["both"]
+compilers = ["apple-clang", "clang"]
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-host-objcxx"
+package = "CCP-07"
+summary = "Objective-C++ mode cached where supported"
+profiles = ["both"]
+compilers = ["apple-clang", "clang"]
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-host-musl-native"
+package = "CCP-07"
+summary = "kache/engine musl static binary executes natively and caches correctly (L3/L4)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-host-aarch64-linux"
+package = "CCP-07"
+summary = "aarch64 glibc and musl lanes execute natively (L2/L4)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-host-spaces-nonascii"
+package = "CCP-07"
+summary = "paths with spaces and non-ASCII names work on both host families"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "basedir.bash"
+status = "planned"
+
+[[case]]
+id = "cc-host-zlib"
+package = "CCP-07"
+summary = "zlib 1.3.2 builds (cold, warm, edit/revert, relocate) on the matrix"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-host-llvm-subset"
+package = "CCP-07"
+summary = "fixed LLVM/Clang target subset (llvmorg-21.1.8) builds; TableGen-generated headers normalized"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-host-chromium"
+package = "CCP-07"
+summary = "Chromium 157.0.8103.80 //base + one Blink target via cc_wrapper (M1 only)"
+profiles = ["both"]
+compilers = ["apple-clang"]
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-host-cc-crate"
+package = "CCP-07"
+summary = "small mixed Rust/C/C++ cc-crate fixture builds through the wrapper"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-host-cmake-ninja"
+package = "CCP-07"
+summary = "CMake + Ninja integration on both families (flagset canary class)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-host-make-autotools-meson"
+package = "CCP-07"
+summary = "Make, Autotools and Meson launcher integration checks"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "masquerading.bash"
+status = "planned"
+
+[[case]]
+id = "cc-rel-corrupt-entry"
+package = "CCP-08"
+summary = "corrupted local cache entry detected and recovered; subsequent healthy reuse works"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "cleanup.bash"
+status = "planned"
+
+[[case]]
+id = "cc-rel-truncated-entry"
+package = "CCP-08"
+summary = "truncated entry detected and recovered"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "cleanup.bash"
+status = "planned"
+
+[[case]]
+id = "cc-rel-missing-entry"
+package = "CCP-08"
+summary = "missing referenced entry handled (skip/recompile), never wrong output"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-rel-size-limit-eviction"
+package = "CCP-08"
+summary = "local size limit/eviction policy works under pressure; GC vs build races safe"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "cache_levels.bash"
+status = "planned"
+
+[[case]]
+id = "cc-rel-readonly-disabled"
+package = "CCP-08"
+summary = "read-only and disabled modes behave; store stays consistent"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "readonly.bash"
+status = "planned"
+
+[[case]]
+id = "cc-rel-interrupted-publication"
+package = "CCP-08"
+summary = "crash during publication leaves store recoverable; no partial entry visible"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-rel-output-materialization-failure"
+package = "CCP-08"
+summary = "failed output restore reports failure with compiler-side semantics preserved"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-rel-stale-locks"
+package = "CCP-08"
+summary = "stale locks reclaimed; abandoned publications reaped"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-rel-concurrency-same-key"
+package = "CCP-08"
+summary = "identical-key concurrent builds: single winner, all callers get correct output"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-rel-concurrency-diff-key"
+package = "CCP-08"
+summary = "different-key concurrent builds: no cross-contamination"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-rel-daemon-restart"
+package = "CCP-08"
+summary = "daemon crash/restart between phases: correct fallback, store intact"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-rel-cancellation-signals"
+package = "CCP-08"
+summary = "cancellation/signals mid-compile preserve raw signal semantics; no phantom success"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-rel-stats-reset"
+package = "CCP-08"
+summary = "stats reset works; counters recover after crash"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "stats_log.bash"
+status = "planned"
+
+[[case]]
+id = "cc-diag-named-refusals"
+package = "CCP-08"
+summary = "stable hit/miss/bypass/recovery reason codes in existing diagnostic interfaces; every refusal has a named test"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-rel-mutation-key-restore"
+package = "CCP-08"
+summary = "changed-line mutation testing of key derivation/restore/publication logic (KACH-22)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-perf-cold-miss"
+package = "CCP-09"
+summary = "cold compile misses: kache/ccache <= 1.10 aggregate; cold builds within 15% of raw"
+profiles = ["both"]
+compilers = ["all"]
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-perf-warm-restore"
+package = "CCP-09"
+summary = "warm same-tree aggregate kache/ccache <= 1.15; relocated (reproducible) <= 1.15"
+profiles = ["reproducible"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-perf-unchanged-lookup"
+package = "CCP-09"
+summary = "unchanged-input lookup path cost measured (memo fast path)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-perf-equivalent-preprocessing"
+package = "CCP-09"
+summary = "equivalent-preprocessing reuse aggregate kache/ccache <= 1.15"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-perf-edit-revert"
+package = "CCP-09"
+summary = "edit/revert aggregate kache/ccache <= 1.15"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-perf-tiny-units"
+package = "CCP-09"
+summary = "tiny single C units: absolute milliseconds reported, not only ratios"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-perf-header-heavy"
+package = "CCP-09"
+summary = "header-heavy C++ units do not regress vs ccache"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "planned"
+
+[[case]]
+id = "cc-out-of-scope-cuda-hip"
+package = "CCP-09"
+summary = "CUDA/HIP coverage (nvcc, clang-cu*) is out of scope for this campaign"
+profiles = ["transparent"]
+compilers = ["clang", "gcc"]
+ccache.suite = "clang_cu.bash"
+status = "out_of_scope"
+
+[[case]]
+id = "cc-out-of-scope-remote-storage"
+package = "CCP-08"
+summary = "remote storage backends, credentials and network service tests are out of scope (later roadmap)"
+profiles = ["transparent"]
+compilers = "all"
+ccache.suite = "remote_redis.bash"
+status = "out_of_scope"
+
+[[case]]
+id = "cc-out-of-scope-distributed-thinlto"
+package = "CCP-07"
+summary = "distributed ThinLTO is out of scope"
+profiles = ["transparent"]
+compilers = ["clang"]
+ccache.suite = "distributed_thinlto_clang.bash"
+status = "out_of_scope"
+
+[[case]]
+id = "cc-out-of-scope-cpp20-modules"
+package = "CCP-06"
+summary = "general standard C++20 module production is out of scope; explicit module consumers stay in scope"
+profiles = ["transparent"]
+compilers = "all"
+ccache.suite = "modules.bash"
+status = "out_of_scope"
+
+[[case]]
+id = "cc-out-of-scope-native-windows"
+package = "CCP-03"
+summary = "native Windows/MSVC (cl) is out of scope; clang-cl compiler-only behavior is in scope where available"
+profiles = ["transparent"]
+compilers = ["clang-cl"]
+ccache.suite = "unittest/test_compiler_msvc.cpp"
+status = "conditional"
+prerequisites = "clang-cl with Windows SDK; a missing SDK must not disable GCC/Clang coverage"
+
+[[case]]
+id = "cc-out-of-scope-ccache-defects"
+package = "CCP-01"
+summary = "known ccache defects are recorded; kache must match the raw compiler, not the defect"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "n/a"
+status = "planned"

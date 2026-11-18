@@ -1,0 +1,190 @@
+# C/C++ parity campaign — lock file (CCP-00).
+#
+# Locks the reference toolchain, matrix hosts, project inputs, budgets and
+# the performance estimator for the campaign described in
+# C_CPP_PARITY_CAMPAIGN.md. Updating anything in this file requires an
+# explicit baseline-change commit and a differential rerun of the affected
+# evidence.
+#
+# Digests and versions recorded 2026-11-17.
+
+schema_version = 1
+
+[reference]
+ccache_version = "4.14.3"
+ccache_tag = "v4.14.3"
+ccache_commit = "16464deae5188f8ef333cc693c58b63ee884e43e"
+ccache_release_published = "2026-11-08T20:58:22Z"
+ccache_repo = "https://github.com/ccache/ccache.git"
+ccache_manual_url = "https://ccache.dev/manual/4.14.3.html"
+ccache_source_url = "https://github.com/ccache/ccache/releases/download/v4.14.3/ccache-4.14.3.tar.xz"
+ccache_source_sha256 = "e1999132cf7dbce48de7d946b767f3e26ea09adcb5daa4a7103a8fa09ee0637d"
+ccache_pin_verified = "2026-11-17: git clone + rev-parse HEAD == pinned commit; tag v4.14.3 points at it"
+# The upstream release ships a prebuilt darwin universal binary and static
+# musl binaries. We lock those rather than building from source, so build
+# options remain whatever upstream's release pipeline used; the binary
+# digests are what the campaign verifies at fetch time. A source build is
+# only needed for debugging ccache itself, never for campaign evidence.
+ccache_binaries = [
+  { lane = "M1", url = "https://github.com/ccache/ccache/releases/download/v4.14.3/ccache-4.14.3-darwin.tar.gz", sha256 = "764dd2a8100ff83e6bbd7b9a1e2016cc401be34bee8a70ea99698186622c34d5", note = "universal x86_64+arm64; fetched and verified 2026-11-17; reports 4.14.3" },
+  { lane = "L1", url = "https://github.com/ccache/ccache/releases/download/v4.14.3/ccache-4.14.3-linux-x86_64-glibc.tar.gz", sha256 = "9ac91421d7372565118cb421e4dc2d03f273a11ab81ab9e051fd1cb4577222d7" },
+  { lane = "L2", url = "https://github.com/ccache/ccache/releases/download/v4.14.3/ccache-4.14.3-linux-aarch64-glibc.tar.gz", sha256 = "5af4c73f9a2c2ed27c17e48cf06868202738fecf8036cfbcdd7eb679930670cb" },
+  { lane = "L3", url = "https://github.com/ccache/ccache/releases/download/v4.14.3/ccache-4.14.3-linux-x86_64-musl-static.tar.gz", sha256 = "e4583fd653b794a480b9915358679a75cdd7a7010dd865eaf4cbdc61e665a3f0" },
+  { lane = "L4", url = "https://github.com/ccache/ccache/releases/download/v4.14.3/ccache-4.14.3-linux-aarch64-musl-static.tar.gz", sha256 = "4b0ecece7929cbaf548ff1ab9a24074b240132ab8176bc3865a27d88c457a0d8" },
+]
+
+[host_snapshot_m1]
+# Recorded on the Apple Silicon host used for the 2026-11-17 baseline
+# (Josh's workstation). This host qualifies as an M1 lane host for
+# correctness work; see STATUS.md for the standalone-LLVM gap.
+platform = "macOS 27.2.1 (26B131), Darwin 27.2.0"
+xcode = "Xcode 27.0 (27A266a)"
+apple_clang = "Apple clang 21.0.0 (clang-2100.3.34.2)"
+clt_sdk = "MacOSX.sdk under /Library/Developer/CommandLineTools/SDKs (-target-sdk-version=27.2)"
+xcode_sdk = "MacOSX27.0.sdk under /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs"
+host_cc_digest_note = "/usr/bin/cc is the CommandLineTools shim (identical bytes for cc/clang++, sha256 ed6f5284033aa2aae6a58427c25ba3ab119947b40365627b24e5d51a4b70a1cd); e2e-cmake-ninja-flagset fails on this host only because of the gluon ninja shadow (see ninja_host_path_shadow)"
+make = "GNU Make 3.81"
+cmake = "4.4.2 (Homebrew)"
+ninja = "1.13.2 (Homebrew, /opt/homebrew/bin/ninja)"
+ninja_host_path_shadow = "~/.local/bin/ninja is a gluon-managed Mach-O that reports 1.13.2 but strips trailing variable whitespace, breaking CMAKE_CXX_COMPILER_LAUNCHER emission; e2e-cmake-ninja-flagset fails with it and passes with Homebrew ninja. CMake C/C++ fixture work on this host must use Homebrew ninja (PATH=/opt/homebrew/bin:$PATH)."
+standalone_llvm = "NOT provisioned on this host (no /opt/homebrew/opt/llvm); M1 requires Apple Clang AND standalone LLVM Clang — see STATUS.md"
+
+[matrix]
+# Native execution is required for host correctness/performance claims.
+# A container on a host of the same architecture counts as native;
+# cross-compilation/emulation is additional evidence only.
+# GitHub-hosted runner images and Homebrew/apt moving targets are not
+# digest-pinnable; each CI run records the resolved tool versions in its
+# logs, and an image/toolchain change is a baseline change.
+
+[matrix.M1]
+lane = "M1"
+host = "xcode-27 GitHub runner, or any Apple Silicon Mac with Xcode 27"
+reference_host = "this workstation, 2026-11-17 (see host_snapshot_m1)"
+os = "macOS arm64"
+compilers = ["Apple Clang 21.0.0 (Xcode 27.0)", "standalone LLVM Clang (version per CI job once provisioned; none on this host)"]
+sdk = "MacOSX27.sdk family; CLT MacOSX.sdk also present on the reference host"
+workloads = "full applicable corpus; SDK/frameworks; native and arm64+x86_64 universal objects"
+status = "PARTIAL — Apple Clang verified locally; standalone LLVM Clang not provisioned anywhere yet; xcode-27 CI runner referenced by existing e2e-macos job"
+
+[matrix.L1]
+lane = "L1"
+host = "ubuntu-26.04 GitHub runner"
+os = "Linux x86_64, glibc"
+compilers = ["GCC (distro, apt)", "Clang (distro, apt)"]
+workloads = "full applicable corpus and real-build integration"
+status = "ASSIGNED — e2e-linux-glibc CI job added by this groundwork; runs make e2e + make e2e-negative-control with --deny-missing-tools (fixture tools installed via apt)"
+
+[matrix.L2]
+lane = "L2"
+host = "ubuntu-26.04-arm GitHub runner"
+os = "Linux aarch64, glibc"
+compilers = ["GCC (distro, apt)", "Clang (distro, apt)"]
+workloads = "full applicable corpus and real-build integration"
+status = "ASSIGNED — e2e-linux-glibc CI job added by this groundwork; runs make e2e + make e2e-negative-control with --deny-missing-tools (fixture tools installed via apt)"
+
+[matrix.L3]
+lane = "L3"
+host = "Alpine container on ubuntu-26.04, or any x86_64 Alpine host"
+os = "Alpine 3.24.2 (musl libc), x86_64"
+compilers = ["prebuilt LLVM Clang 23.1.5 at /opt/llvm-musl (musl-linked, in-image)", "GCC/G++ 15.2.0-r5 (apk, added by this groundwork)"]
+image = "Dockerfile, FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
+workloads = "native kache/engine execution, deterministic core, fixtures, release/runtime checks"
+status = "ASSIGNED — linux-musl CI job now runs make e2e + make e2e-negative-control in image; local docker daemon (OrbStack) not running, Linux lanes verified via CI only"
+
+[matrix.L4]
+lane = "L4"
+host = "Alpine container on ubuntu-26.04-arm, or any aarch64 Alpine host"
+os = "Alpine 3.24.2 (musl libc), aarch64"
+compilers = ["prebuilt LLVM Clang 23.1.5 at /opt/llvm-musl (musl-linked, in-image)", "GCC/G++ 15.2.0-r5 (apk, added by this groundwork)"]
+image = "Dockerfile, FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
+workloads = "same contract as L3"
+status = "ASSIGNED — linux-musl CI job now runs make e2e + make e2e-negative-control in image; local docker daemon (OrbStack) not running, Linux lanes verified via CI only"
+
+[matrix.intel_macos]
+lane = "not required"
+status = "OUT OF SCOPE — intel macOS is not a kache release target; add only with an x86_64-apple-darwin release and a native runner"
+
+[projects]
+# Pinned project inputs for CCP-07 real-build integration. The campaign's
+# fixture (small cc-crate mixed Rust/C/C++ project) is created in CCP-07
+# and pinned there.
+
+[projects.zlib]
+repo = "https://github.com/madler/zlib"
+ref = "v1.3.2"
+url = "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz"
+sha256 = "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"
+purpose = "small C build; autotools-style and direct builds"
+verified = "2026-11-17: downloaded; sha256 matches the release asset digest"
+
+[projects.llvm]
+repo = "https://github.com/llvm/llvm-project"
+ref = "llvmorg-21.1.8"
+purpose = "fixed LLVM/Clang target subset (C++); reuses scenarios/bench-llvm's pin and build shape (X86 target, Release, assertions off)"
+note = "bump only with an explicit baseline-change commit"
+
+[projects.chromium]
+version = "157.0.8103.80"
+stability = "Chrome stable 2026-11"
+source_url = "https://commondatastorage.googleapis.com/chromium-browser-official/chromium-157.0.8103.80.tar.xz"
+# The archive is ~1.6 GB; its SHA-256 is recorded here at first fetch in
+# CCP-07 (download once, verify, commit the digest). Until then the pin is
+# the URL + version + the Chromium source tag of the same version.
+source_sha256 = "RECORD-AT-FETCH (CCP-07)"
+targets = ["//base", "one Blink target (selected and frozen in CCP-07)"]
+gn_args = [
+  'target_os = "mac"',
+  'target_cpu = "arm64"',
+  'is_official_build = true',
+  'use_lld = true',
+  'use_thin_lto = true',
+  'chrome_pgo_phase = 2',
+]
+gn_notes = "chrome_pgo_phase=2 consumes the pinned mac-arm PGO profile that the build fetches itself; freeze the profile digest at first fetch (CCP-07). Built through cc_wrapper. Frozen args and targets must not be widened without a baseline-change commit."
+purpose = "large official macOS arm64 C++/C build pinned for the M1 lane"
+
+[budgets]
+exploration_primary_lanes = ["M1", "L1"]
+exploration_seeded_sequences_per_lane = 200
+exploration_max_minutes_per_lane_per_revision = 30
+exploration_minimize_cap_minutes = 10
+per_case_timeout_seconds = 600
+per_transition_sequence_max_cases = 200
+parallel_jobs = "at most half the lane cores, at least 1; CI runners are unmetered so jobs may saturate them, but timed comparisons never share a host with unrelated heavy work"
+case_scratch_ceiling_gb = 2
+campaign_scratch_ceiling_gb = 20
+log_artifact_retention = "CI artifacts + campaign scratch; ledger records IDs/digests; scratch evidence is provisional until the report is committed"
+
+[perf_estimator]
+# Locked before implementation measurements exist. Thresholds are from the
+# plan; changing them requires a justified plan-change commit.
+paired_arms = ["kache", "ccache", "raw"]
+min_valid_pairs = 5
+max_valid_pairs = 10
+pair_escalation_rule = "increase from 5 to at most 10 only to resolve a concrete uncertainty"
+seed = 20261117
+order = "randomized interleaved invocation order per pair, seeded with `seed`"
+estimator = "paired per-pair ratios kache/ccache (and kache/raw where the plan says raw); report the geomean ratio per workload plus per-pair spread"
+uncertainty = "two-sided 95% t-interval on the paired ratios (df = n - 1)"
+admission = "a run is admitted only if (a) the untimed instrumented replay validated compiler activity/reuse for the same commands, (b) input/configuration digests match the timed run, (c) instrumentation was disabled for timing, (d) cache counters retained. Workload mismatch invalidates the sample."
+sample_retention = "retain all admitted samples; exclude only documented preparation/measurement failures, ruled identically for all arms"
+reporting = "wall, CPU, peak memory, cache/artifact bytes, compiler executions, time-weighted reuse; per named project/corpus and per primary lane, not just a global average; tiny single units additionally in absolute milliseconds"
+verdict_rule = { pass = "95% CI upper bound <= target", fail = "95% CI lower bound > target", inconclusive = "interval crosses the target at the sample cap" }
+host_load = "recorded with every performance result; never time on a host running unrelated heavy work"
+
+[perf_targets]
+# Blocking engineering targets, frozen before implementation measurements.
+# Per named project/corpus and primary performance lane (M1, L1, L2), not
+# a pooled average.
+warm_same_tree_ratio = 1.15
+warm_relocated_ratio_reproducible_profile = 1.15
+cold_ratio = 1.10
+cold_build_vs_raw_ratio = 1.15
+edit_revert_and_equivalent_preprocessing_ratio = 1.15
+required_safe_hit_cases = "correct complete restoration and independently verified avoided code generation"
+
+[gates]
+frequent = ["M1 (Apple Clang)", "L1 (GCC, Clang)", "affected critical key/restore cases in other lanes"]
+full_matrix = "scheduled/manual jobs and final acceptance cover M1, L1, L2, L3, L4"
+kache21_arch_note = "every gate fixture now runs on macOS arm64 (e2e-macos), Linux x86_64/aarch64 glibc (e2e-linux-glibc), and Linux x86_64/aarch64 musl (linux-musl image); e2e-cc-cross-gcc is glibc-only by declaration (os = [\"glibc\"])"

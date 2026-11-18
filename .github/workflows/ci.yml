@@ -72,7 +72,7 @@ jobs:
   linux-musl:
     name: test (Linux ${{ matrix.arch }} musl)
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     strategy:
@@ -115,3 +115,91 @@ jobs:
             sh -ec '
               make test TARGET=${{ matrix.target }}
             '
+      # Advisory until KACH-27 closes (see TODO.md): the full gate corpus
+      # runs with --deny-missing-tools and results upload on failure, but
+      # known Linux/musl divergences currently fail assertions. Not
+      # required for merge while KACH-27 is open. `make test in image`
+      # above stays required.
+      - name: e2e in image
+        continue-on-error: true
+        run: |
+          docker run --rm --init \
+            --platform "${{ matrix.platform }}" \
+            -e CI \
+            -e TMPDIR=/kache/tmp \
+            -e KACHE_E2E_SKIP_HARDLINK_CHECK=1 \
+            -v "$GITHUB_WORKSPACE:/kache" \
+            -w /kache \
+            kache-builder:${{ matrix.target }} \
+            sh -ec '
+              mkdir -p /kache/tmp && make e2e && make e2e-negative-control
+            '
+      - name: Upload fixture results on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-results-musl-${{ matrix.arch }}-${{ github.run_id }}
+          path: tmp/e2e/
+          if-no-files-found: warn
+
+  # Advisory until KACH-27 closes: the gate runs the full corpus with
+  # --deny-missing-tools and uploads results on failure, but known Linux
+  # divergences (see TODO.md KACH-27) currently fail assertions. Not
+  # required for merge while KACH-27 is open.
+  e2e-linux-glibc:
+    name: e2e (Linux ${{ matrix.arch }} glibc)
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    continue-on-error: true
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-26.04
+          - arch: ARM64
+            runner: ubuntu-26.04-arm
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: e2e-linux-glibc-${{ matrix.arch }}
+      - name: Install fixture tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            gcc-riscv64-linux-gnu \
+            gcc-arm-linux-gnueabihf
+      - name: Prepare shared-filesystem scratch
+        run: mkdir -p "$GITHUB_WORKSPACE/tmp"
+      - name: Fixture scenarios
+        run: make e2e
+        env:
+          TMPDIR: ${{ github.workspace }}/tmp
+          # The fixture contracts on the restore hardlinking the rlib into
+          # the target; this substrate clones instead, so the carrier never
+          # exists. The fixture documents this escape hatch for such hosts.
+          KACHE_E2E_SKIP_HARDLINK_CHECK: "1"
+      - name: Fixture scenarios with the cache disabled
+        run: make e2e-negative-control
+        env:
+          TMPDIR: ${{ github.workspace }}/tmp
+      - name: Upload fixture results on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-results-glibc-${{ matrix.arch }}-${{ github.run_id }}
+          path: tmp/e2e/
+          if-no-files-found: warn

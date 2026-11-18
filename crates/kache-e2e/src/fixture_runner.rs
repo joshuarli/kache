@@ -95,7 +95,7 @@ pub fn run(config: FixtureRunConfig) -> Result<()> {
     let mut any_failed = false;
     let mut denied_missing_tools = false;
     for fixture in fixtures.values() {
-        if !fixture.os.is_empty() && !fixture.os.iter().any(|o| o == std::env::consts::OS) {
+        if !fixture.os.is_empty() && !os_supported(&fixture.os) {
             eprintln!(
                 "=> {}: skipped — not supported on {} (os = {:?})",
                 fixture.name,
@@ -236,6 +236,25 @@ impl SelectionCounts {
     }
 }
 
+fn os_supported(tokens: &[String]) -> bool {
+    let linux_libc = if cfg!(target_os = "linux") {
+        Some(if cfg!(target_env = "musl") { "musl" } else { "gnu" })
+    } else {
+        None
+    };
+    tokens
+        .iter()
+        .any(|token| os_token_matches(token, std::env::consts::OS, linux_libc))
+}
+
+fn os_token_matches(token: &str, os: &str, linux_libc: Option<&str>) -> bool {
+    match token {
+        "glibc" => linux_libc == Some("gnu"),
+        "musl" => linux_libc == Some("musl"),
+        _ => token == os,
+    }
+}
+
 fn missing_tools(tools: &[String]) -> Vec<String> {
     tools
         .iter()
@@ -246,8 +265,21 @@ fn missing_tools(tools: &[String]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SelectionCounts, missing_tools};
+    use super::{SelectionCounts, missing_tools, os_token_matches};
     use crate::result::FixtureResult;
+
+    #[test]
+    fn os_tokens_match_host_and_linux_libc() {
+        assert!(os_token_matches("linux", "linux", Some("musl")));
+        assert!(os_token_matches("macos", "macos", None));
+        assert!(os_token_matches("glibc", "linux", Some("gnu")));
+        assert!(os_token_matches("musl", "linux", Some("musl")));
+        assert!(!os_token_matches("glibc", "linux", Some("musl")));
+        assert!(!os_token_matches("musl", "linux", Some("gnu")));
+        assert!(!os_token_matches("glibc", "macos", None));
+        assert!(!os_token_matches("musl", "macos", None));
+        assert!(!os_token_matches("windows", "linux", Some("gnu")));
+    }
 
     fn result(status: &str) -> FixtureResult {
         FixtureResult {

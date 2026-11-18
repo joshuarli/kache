@@ -12,13 +12,18 @@ ARG RUSTUP_AARCH64_SHA256=1ddf36182ac5d1782dbeefcb9bea7f5f9412d88f4a0d5047b1564a
 RUN apk add --no-cache \
     binutils=2.45.1-r1 \
     bash=5.3.9-r1 \
+    cmake=4.2.3-r0 \
     file=5.47-r2 \
+    g++=15.2.0-r5 \
+    gcc=15.2.0-r5 \
     make=4.4.1-r4 \
+    ninja-build=1.13.2-r1 \
+    ninja-is-really-ninja=1.13.2-r1 \
     procps \
     strace=6.19-r1 \
     musl-dev=1.2.6-r3 \
     libgcc=15.2.0-r5 \
-    git=2.54.0-r0 \
+    git=2.54.1-r0 \
     tzdata=2026f-r0
 
 # rustix requests libutil for Unix PTY support; musl provides those symbols in
@@ -45,10 +50,12 @@ RUN case "$TARGETARCH" in \
 # the prebuilt LLVM tree only ships `clang` under its own name. Without the
 # conventional names, native links and the tests that exercise them fail with
 # "linker `cc` not found".
+# Alpine's gcc/g++ ship /usr/bin/cc and /usr/bin/c++; use -sfn so the LLVM
+# symlinks win and cc keeps resolving to LLVM clang.
 RUN ln -s /opt/llvm-musl/bin/clang /usr/local/bin/cc \
     && ln -s /opt/llvm-musl/bin/clang++ /usr/local/bin/c++ \
-    && ln -s /opt/llvm-musl/bin/clang /usr/bin/cc \
-    && ln -s /opt/llvm-musl/bin/clang++ /usr/bin/c++ \
+    && ln -sfn /opt/llvm-musl/bin/clang /usr/bin/cc \
+    && ln -sfn /opt/llvm-musl/bin/clang++ /usr/bin/c++ \
     && cc --version
 
 RUN for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do \
