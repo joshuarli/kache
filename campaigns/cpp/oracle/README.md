@@ -29,7 +29,11 @@ After every compile the runner records exit status, stdout, stderr, and the
 whole fixture tree (path, kind, mode, blake3). Kache must match `raw` exactly.
 Timestamps are not compared. Source files get a fixed modification time, and
 each written file gets a later fixed time, so neither cache sees a file
-modified moments before the compile.
+modified moments before the compile. Change times cannot be set, so after
+preparing the tree and after any step that edits it, the runner waits until
+every change time is outside kache's racing-write window. The window is 1 ms
+plus a coarse-clock tick, widened when a stamp looks truncated: 10 ms on a
+centisecond, 2 s on a whole second. Each step then compiles a quiescent tree.
 
 ## Profiles
 

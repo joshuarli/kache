@@ -69,6 +69,12 @@ pub enum Action {
     RestartDaemon {},
 }
 
+impl Action {
+    pub fn edits_files(&self) -> bool {
+        !matches!(self, Action::RestartDaemon {})
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[deser(deny_unknown_fields)]
 pub struct Compile {
@@ -221,6 +227,8 @@ action = [{ op = "delete-outputs" }, { op = "write", path = "a.h", content = "x"
         assert_eq!(case.steps[0].status, 0);
         assert_eq!(case.steps[1].reuse, Reuse::Hit);
         assert!(matches!(case.steps[1].action[0], Action::DeleteOutputs {}));
+        assert!(case.steps[1].action.iter().all(Action::edits_files));
+        assert!(!Action::RestartDaemon {}.edits_files());
         assert!(matches!(
             &case.steps[1].action[1],
             Action::Write { path, keep_mtime: true, .. } if path == "a.h"

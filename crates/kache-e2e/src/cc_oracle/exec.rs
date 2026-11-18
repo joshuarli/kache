@@ -15,6 +15,54 @@ use super::judge::{Entry, EntryKind, Executions, Inventory, Observation};
 /// in every arm. Later writes advance from here a minute per step.
 const FIXTURE_EPOCH: u64 = 1_767_225_600;
 
+/// A step's edits must be settled before it compiles: an edit inside the
+/// stamp window both caches use to detect a racing write is not the
+/// quiescent state the step describes. The window follows kache's
+/// (`kache_store::file_hash::stamp_window_ns`): 1 ms for fine stamps, plus
+/// 10 ms when a stamp sits on a centisecond and 2 s when it sits on a whole
+/// second, since such a stamp may have been truncated. Linux's coarse file
+/// clock trails the wall clock by up to a tick, so add 10 ms more.
+pub fn settled_after_ns(stamps: impl IntoIterator<Item = i64>) -> i64 {
+    stamps
+        .into_iter()
+        .map(|stamp| {
+            let grain = if stamp.rem_euclid(1_000_000_000) == 0 {
+                2_000_000_000
+            } else if stamp.rem_euclid(10_000_000) == 0 {
+                10_000_000
+            } else {
+                0
+            };
+            stamp + grain + 1_000_000 + 10_000_000
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+fn wait_until_settled(root: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let mut stamps = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let meta = std::fs::symlink_metadata(&path)?;
+        stamps.push(meta.mtime() * 1_000_000_000 + meta.mtime_nsec());
+        stamps.push(meta.ctime() * 1_000_000_000 + meta.ctime_nsec());
+        if meta.is_dir() {
+            for entry in std::fs::read_dir(&path)? {
+                pending.push(entry?.path());
+            }
+        }
+    }
+    let deadline = settled_after_ns(stamps);
+    loop {
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_nanos() as i64;
+        if now > deadline {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_nanos((deadline - now) as u64 + 1));
+    }
+}
+
 /// The prefix map kache documents adding to GCC/Clang misses.
 pub const KACHE_CC_ROOT: &str = "/kache/cc-root";
 
@@ -300,6 +348,7 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
         std::fs::remove_dir_all(ctx.fixture)?;
     }
     copy_tree(&case.source_dir, ctx.fixture).with_context(|| format!("preparing {}", case.id))?;
+    wait_until_settled(ctx.fixture)?;
 
     let raw_like = matches!(arm, Arm::Raw | Arm::RawRepeat);
     let shims = if raw_like && ctx.control == Some(Control::ReferenceFailure) {
@@ -389,6 +438,9 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
     for (index, step) in case.steps.iter().enumerate() {
         for action in &step.action {
             apply(action, case, arm, ctx, store, index)?;
+        }
+        if step.action.iter().any(Action::edits_files) {
+            wait_until_settled(ctx.fixture)?;
         }
         let fault_here = arm == Arm::Kache && !run.injected && index > 0;
         let mut step_obs = Vec::new();
@@ -623,6 +675,16 @@ mod tests {
             effective_args(&argv, Profile::Reproducible, fx),
             ["-c", "a.c", "-ffile-prefix-map=/w/fixture=/kache/cc-root"]
         );
+    }
+
+    #[test]
+    fn settling_widens_for_truncated_looking_stamps() {
+        let ms = 1_000_000;
+        assert_eq!(settled_after_ns([5 * 1_000_000_000 + 3 * ms]), 5 * 1_000_000_000 + 14 * ms);
+        assert_eq!(settled_after_ns([5 * 1_000_000_000 + 20 * ms]), 5 * 1_000_000_000 + 41 * ms);
+        assert_eq!(settled_after_ns([5 * 1_000_000_000]), 7 * 1_000_000_000 + 11 * ms);
+        assert_eq!(settled_after_ns([3 * ms, 5 * 1_000_000_000 + 3 * ms]), 5 * 1_000_000_000 + 14 * ms);
+        assert_eq!(settled_after_ns([]), 0);
     }
 
     #[test]
