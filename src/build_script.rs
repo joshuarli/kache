@@ -1037,7 +1037,11 @@ impl Environment {
             let contents = std::fs::read(&path)?;
             let spelled = self.spelled_roots(&contents);
             if spelled.is_empty() {
-                if has_unmapped_absolute_path(&contents) {
+                let unmapped = match crate::native_archive::member_data(&contents) {
+                    Some(members) => members.iter().any(|data| has_unmapped_absolute_path(data)),
+                    None => has_unmapped_absolute_path(&contents),
+                };
+                if unmapped {
                     embedded.insert(MANIFEST_DIR_PLACEHOLDER);
                 }
                 stored.push((path, name));
@@ -1333,6 +1337,44 @@ fn has_unmapped_absolute_path(text: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// `text` with each whole-word occurrence of an absolute value of the
+/// variables in `env` blanked. The key folds those values, so a script that
+/// prints a tool path it was given, as the `cc` crate prints `CC`, prints the
+/// same bytes wherever the key matches.
+fn without_keyed_env_values(text: &[u8], env: &[String]) -> Vec<u8> {
+    let mut text = text.to_vec();
+    for name in env {
+        let Some(value) = std::env::var_os(name) else {
+            continue;
+        };
+        text = without_word(&text, value.as_encoded_bytes());
+    }
+    text
+}
+
+/// `text` with every occurrence of the absolute path `word` that ends at a
+/// word boundary replaced by `${KACHE_ENV}`.
+fn without_word(text: &[u8], word: &[u8]) -> Vec<u8> {
+    if word.len() < 2 || word[0] != b'/' {
+        return text.to_vec();
+    }
+    let mut out = Vec::with_capacity(text.len());
+    let mut index = 0;
+    while index < text.len() {
+        let rest = &text[index..];
+        let bounded = rest.starts_with(word)
+            && rest.get(word.len()).is_none_or(|&byte| ends_word(byte));
+        if bounded {
+            out.extend_from_slice(b"${KACHE_ENV}");
+            index += word.len();
+        } else {
+            out.push(text[index]);
+            index += 1;
+        }
+    }
+    out
 }
 
 /// A byte that ends a word of a path list or a pkg-config line.
@@ -1935,8 +1977,8 @@ impl Run {
             rewritten,
             mut embedded,
         } = self.environment.classify_outputs(files, staging.path())?;
-        let normalized_stdout = self.environment.normalize(stdout);
-        let normalized_stderr = self.environment.normalize(stderr);
+        let normalized_stdout = without_keyed_env_values(&self.environment.normalize(stdout), &env);
+        let normalized_stderr = without_keyed_env_values(&self.environment.normalize(stderr), &env);
         if (has_unmapped_absolute_path(&normalized_stdout)
             || has_unmapped_absolute_path(&normalized_stderr))
             && !embedded.iter().any(|root| root == MANIFEST_DIR_PLACEHOLDER)
@@ -3545,6 +3587,31 @@ mod tests {
         let (roots, _) = classify_one(&env, "manifest.txt", b"at /src/pkg/src");
         assert_eq!(roots.rewritten, vec!["manifest.txt".to_string()]);
 
+        // A GNU archive's header names (`/`, `//`, `/0`) are not paths; a path
+        // in a member still binds the result.
+        let header = |name: &str, data: &[u8]| {
+            let mut bytes = format!("{name:<16}0           0     0     100644  {:<10}`\n", data.len())
+                .into_bytes();
+            bytes.extend_from_slice(data);
+            if data.len() % 2 == 1 {
+                bytes.push(b'\n');
+            }
+            bytes
+        };
+        let archive = |object: &[u8]| {
+            [
+                b"!<arch>\n".to_vec(),
+                header("/", b"\0\0\0\x01\0\0\0\x68value\0"),
+                header("//", b"1d1ea73a2512983e-value.o/\n"),
+                header("/0", object),
+            ]
+            .concat()
+        };
+        let (roots, _) = classify_one(&env, "libvalue.a", &archive(b"\x7fELF\0value\0"));
+        assert!(roots.embedded.is_empty(), "{:?}", roots.embedded);
+        let (roots, _) = classify_one(&env, "libvalue.a", &archive(b"\x7fELF\0 /opt/x.c\0"));
+        assert_eq!(roots.embedded, vec!["${KACHE_MANIFEST_DIR}".to_string()]);
+
         // An object names its roots in binary: kept, and bound to each root.
         let object = [b"\x7fELF\0".as_slice(), b"/src/pkg/src/a.c\0"].concat();
         let (roots, stored) = classify_one(&env, "a.o", &object);
@@ -4611,6 +4678,30 @@ mod tests {
             b.environment.manifest_dir.display()
         );
         assert_eq!(denormalized_b, expected_b);
+    }
+
+    #[test]
+    fn keyed_tool_paths_are_blanked_as_whole_words() {
+        let blank = |text: &str, word: &str| {
+            String::from_utf8(without_word(text.as_bytes(), word.as_bytes())).unwrap()
+        };
+        assert_eq!(
+            blank("CC = Some(/opt/bin/clang)\n", "/opt/bin/clang"),
+            "CC = Some(${KACHE_ENV})\n"
+        );
+        assert_eq!(blank("/opt/bin/clang", "/opt/bin/clang"), "${KACHE_ENV}");
+        assert_eq!(
+            blank("x /opt/bin/clang-19 y", "/opt/bin/clang"),
+            "x /opt/bin/clang-19 y",
+            "a longer path keeps its own bytes"
+        );
+        assert_eq!(blank("x /opt/bin/clang/y", "/opt/bin/clang"), "x /opt/bin/clang/y");
+        assert_eq!(blank("clang x", "clang"), "clang x", "only absolute values");
+        assert_eq!(blank("a / b", "/"), "a / b");
+        assert!(!has_unmapped_absolute_path(&without_word(
+            b"CC = Some(/opt/bin/clang)",
+            b"/opt/bin/clang"
+        )));
     }
 
     #[test]
