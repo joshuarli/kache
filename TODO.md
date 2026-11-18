@@ -1,6 +1,16 @@
 Prefix: KACH
 Next: 27
 
+### KACH-26 · P1 · Reach ccache-level local C/C++ compatibility
+
+- **Area:** Compiler compatibility, correctness, tests
+- **Plan:** [C_CPP_PARITY_CAMPAIGN.md](C_CPP_PARITY_CAMPAIGN.md)
+- **Status:** Planned; implementation and differential baseline have not started.
+- **Goal:** Execute the unattended campaign using pinned ccache as the compatibility/reuse oracle and raw compilers as correctness ground truth, with native macOS and Linux coverage.
+- **Scope:** Response files and flags, invalidation, equivalent-preprocessing reuse, complete output sets, conditional PCH/module support, host integration, local reliability, and measured performance. Remote storage stays on the later roadmap.
+- **Coordination:** CCP-00/CCP-08 cover the relevant KACH-21/KACH-22 work; retain those entries until their gates actually run. Start at CCP-00 and persist evidence in the campaign ledger specified by the plan.
+- **Done when:** Every final acceptance criterion in the plan passes on the same integrated revision; safe passthrough, missing tools, and unexecuted lanes do not count as cached parity.
+
 ### KACH-21 · P2 · Linux fixture scenarios run in no gate
 
 - **Area:** Tests
@@ -36,16 +46,6 @@ Next: 27
 - **Recommendation:** Lead those pages with this fork's release archives and source install (both kache and kache-engine), and keep the upstream channels only as attributed alternatives, or drop them.
 - **Fix with:** rg -n "cargo install kache --locked|cargo-binstall" docs/ finds no primary install instruction that selects the upstream distribution.
 - **Effort:** S
-
-
-### KACH-26 · P3 · Chromium official builds never hit the C/C++ cache
-
-- **Area:** C/C++ caching
-- **Where:** src/compiler/cc.rs flag classifier (`flag classify`) and the header-probe guard near `cc: token pasting may construct a header availability probe`; WIP on branch feat/cc-chromium-official-flags
-- **Problem:** Every object compile of an official Chromium 156 macOS arm64 build (clang 24, ThinLTO, PGO) passes through uncached. On the base revision, 28 flags are unmodeled (-flto=thin, -fsplit-lto-unit, -fwhole-program-vtables, -fprofile-use=<300 MiB profdata>, -mllvm pairs, -fsanitize* family, --warning-suppression-mappings=<file>, -fmodule-name, -mmacos-version-min, assorted -f/-m codegen flags). The WIP branch models them: content-keyed profile and suppression files, -fcrash-diagnostics-dir as no-effect, and tests that fail on base. Every compile still refuses to store, because the header-probe guard reports `token pasting may construct a header availability probe` for Chromium's headers.
-- **Recommendation:** Finish the flag model on the WIP branch and run `make check`. Then design how the shadowing guard can accept the token-pasted `__has_include` probes Chromium's headers use without losing negative-include correctness: resolve the pasted names against the read set, or key the probe results. Acceptance: a real Chromium values.cc compile run twice through kache hits locally on the second run, and the restored object is byte-identical to an uncached compile.
-- **Fix with:** none
-- **Effort:** M
 
 
 ### KACH-23 · P4 · Fixture sources track build outputs every e2e run deletes
