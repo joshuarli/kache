@@ -1,5 +1,5 @@
 summary = "a GCC -specs file's contents are compile inputs"
-cohort = "blocking"
+cohort = "open"
 families = ["gcc"]
 profiles = ["transparent", "reproducible"]
 outputs = ["u.o"]
