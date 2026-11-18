@@ -1,0 +1,20 @@
+summary = "__DATE__/__TIME__/__TIMESTAMP__ under a caller SOURCE_DATE_EPOCH match raw and reuse"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+env = { SOURCE_DATE_EPOCH = "1700000000" }
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [
+  { op = "delete-outputs" },
+]

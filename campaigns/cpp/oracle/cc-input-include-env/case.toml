@@ -1,0 +1,43 @@
+summary = "headers found through CPATH and C_INCLUDE_PATH invalidate and restore"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+env = { CPATH = "{fixture}/cpath", C_INCLUDE_PATH = "{fixture}/cinc" }
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "edit-cpath-header"
+reuse = "miss"
+action = [
+  { op = "write", path = "cpath/envh.h", content = "#define ENVH 2\n" },
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "edit-c-include-path-header"
+reuse = "miss"
+action = [
+  { op = "write", path = "cinc/cenv.h", content = "#define CENV 20\n" },
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "restore-edited"
+reuse = "hit"
+action = [
+  { op = "delete-outputs" },
+]

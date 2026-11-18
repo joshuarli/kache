@@ -1,0 +1,27 @@
+summary = "same-size header edit with the old mtime restored must recompile"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "same-size-edit-keep-mtime"
+reuse = "miss"
+action = [
+  { op = "write", path = "v.h", content = "#define V 2\n", keep_mtime = true },
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [
+  { op = "delete-outputs" },
+]

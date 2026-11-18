@@ -140,8 +140,8 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | Package | State | Depends on | Evidence / next |
 |---|---|---|---|
 | CCP-00 | DONE (bootstrap) | — | Bootstrap exit met: pins, initial inventory, Linux gates assigned (advisory under KACH-27). Remaining inventory enumeration is carried by CCP-01..08 as the plan allows. Go-ahead for CCP-01: user, 2026-11-18 ("complete the campaign unattended"). |
-| CCP-01 | RUNNING | CCP-00 bootstrap | `kache-cc-oracle` + `make cc-oracle{,-full,-negative-control}` on branch `feat/ccp01-cc-oracle`; see "CCP-01 differential runner" below. `make cc-bench` is deferred to CCP-09, which owns the timing protocol. |
-| CCP-02 | TODO | CCP-01 | Input identity & invalidation; token-paste probe refusal is a known gap (see cases.toml). |
+| CCP-01 | DONE | CCP-00 bootstrap | Merged in PR #31 (a2ea56fd). CI evidence: run 44306769765 (logs and on-failure report artifacts retained 90 days, so until about 2027-02-16). `cc-oracle` and negative controls passed in `e2e (macOS)` (Apple clang), `cc-oracle (Linux x86_64/ARM64 glibc)` (apt GCC + clang) and `test (Linux x86_64/ARM64 musl)` (image GCC 15 + clang 23). Exit criteria met: minimal transitions pass on macOS and Linux, each control fails as intended, and the deliberate `-S` gap reports `KACHE_MISSED_REUSE`. `make cc-bench` moves to CCP-09. |
+| CCP-02 | RUNNING | CCP-01 | Branch `feat/ccp02-input-identity`: 20 input-identity cases; see "CCP-02 input identity" below. Not yet covered: same-path compiler replacement, wrapper/driver-mode selection, VFS overlays, PGO profiles, -march=native, user key config, diagnostic locale, profile switches against a populated cache, hash/compile/publish race barriers. |
 | CCP-03 | TODO | CCP-01, CCP-02 | Includes rebasing/verifying `feat/cc-chromium-official-flags` (exists on origin, unverified by `make check`). |
 | CCP-04 | TODO | CCP-02 | Equivalent-preprocessing reuse. |
 | CCP-05 | TODO | CCP-02, CCP-03 | Complete output sets (.gcno/.dwo/serialized diagnostics). |
@@ -192,8 +192,49 @@ Findings for later packages:
   Kache matches both: `cc-core-failed-compile` passes for both toolchains.
 
 CI: `make cc-oracle` plus negative controls are blocking steps in
-`e2e (macOS)` and `test (Linux * musl)`, and run in the new
-`cc-oracle (Linux * glibc)` jobs.
+`e2e (macOS)` and `test (Linux * musl)`, and run in the
+`cc-oracle (Linux * glibc)` jobs. The first push showed reproducible-profile
+misses on musl CI that came from editing inside kache's racing-write window.
+The runner now waits for edits to settle; see the oracle README.
+
+## CCP-02 input identity
+
+Cases (all in [oracle/](oracle/)): `cc-input-same-size-mtime`,
+`-atomic-replace`, `-symlink-retarget`, `-header-shadowing`,
+`-has-include`, `-forced-include`, `-include-env`, `-search-order`,
+`-option-order`, `-touch`, `-header-deleted`, `-sysroot-symlink`
+(transparent only, see below), `-unmodeled-assembler-read`,
+`cc-macro-file`, `cc-macro-date-time`, `cc-depfile-escape` (blocking), and
+`cc-input-token-paste-probe`, `-clang-config-file`, `-gcc-specs`,
+`-sanitizer-ignorelist` (open).
+
+Local results, 2026-11-18, macOS Apple clang 21 and the L4 image (GCC 15,
+clang 23): no wrong output anywhere. Every blocking case matches. The open
+cases are `KACHE_MISSED_REUSE`: kache passes through clang `--config`
+files, GCC `-specs` files, and `-fsanitize` with an explicit ignorelist,
+where ccache caches them and invalidates correctly. Kache invalidates
+correctly too; it just never caches. The token-pasted
+`__has_include` probe misses only in the reproducible (compile-first)
+profile; the transparent profile reuses it.
+
+Findings:
+
+- **Whole-second change times block caching for 2 s.** Kache's
+  racing-write guard widens its window to 2 s when a stamp sits on a whole
+  second, since such a stamp may have been truncated. Linux change times
+  come from the coarse clock, so about one edit in 250 (HZ=250) lands on
+  a whole second, and a compile within 2 s of that edit runs but is not
+  cached. The oracle waits these windows out (see the oracle README). This
+  costs reuse, not correctness. Revisit under CCP-04/CCP-09 if real
+  edit-compile loops show it.
+- **Undocumented SDK-root maps.** With `-isysroot`/`--sysroot`, kache's
+  default profile also adds `-ffile-prefix-map=<sysroot>=/kache/sdkroot`
+  for both the spelled and the symlink-resolved sysroot. The C/C++ docs
+  list only `/kache/cc-root`. The reproducible profile cannot model these
+  per step yet, so `cc-input-sysroot-symlink` runs transparent only.
+  Owner: CCP-07 (SDK selection).
+- Apple clang ignores `--sysroot` for headers and the musl LLVM clang
+  ignores `-isysroot`, so the sysroot case passes both.
 
 ## Open gaps and blockers
 

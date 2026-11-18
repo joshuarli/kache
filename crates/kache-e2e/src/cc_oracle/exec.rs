@@ -133,6 +133,8 @@ impl Control {
 #[derive(Debug, Clone)]
 pub struct Toolchain {
     pub name: String,
+    /// From `cc --version`; `None` when the banner names neither family.
+    pub family: Option<super::case::Family>,
     pub cc_name: String,
     pub cxx_name: String,
     pub cc: PathBuf,
@@ -177,8 +179,14 @@ pub fn resolve_toolchain(name: &str, path: &std::ffi::OsStr) -> Result<Toolchain
     let cxx_name = cxx_driver_name(name);
     let cc = find_compiler(name, path).ok_or_else(|| format!("`{name}` not found on PATH"))?;
     let cxx = find_compiler(&cxx_name, path).ok_or_else(|| format!("`{cxx_name}` not found on PATH"))?;
+    let banner = Command::new(&cc)
+        .arg("--version")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
     Ok(Toolchain {
         name: name.to_string(),
+        family: super::case::Family::from_version(&banner),
         cc_name: name.to_string(),
         cxx_name,
         cc,
@@ -333,8 +341,13 @@ fn cache_disabled_applies(control: Option<Control>, profile: Profile) -> bool {
     control == Some(Control::CacheDisabled) && profile == Profile::Transparent
 }
 
+/// Expand `{fixture}` in a case-supplied argument or environment value.
+pub fn expand(value: &str, fixture: &Path) -> String {
+    value.replace("{fixture}", &fixture.to_string_lossy())
+}
+
 pub fn effective_args(case_argv: &[String], profile: Profile, fixture: &Path) -> Vec<String> {
-    let mut args = case_argv[1..].to_vec();
+    let mut args: Vec<String> = case_argv[1..].iter().map(|a| expand(a, fixture)).collect();
     if profile == Profile::Reproducible {
         args.push(format!("-ffile-prefix-map={}={KACHE_CC_ROOT}", fixture.display()));
     }
@@ -398,7 +411,11 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
             }
         }
     }
-    if profile == Profile::Reproducible && arm != Arm::Kache {
+    let case_env: Vec<(String, String)> = case.env.iter().map(|(k, v)| (k.clone(), expand(v, ctx.fixture))).collect();
+    for (k, v) in &case_env {
+        env.push((k.as_str(), v.into()));
+    }
+    if profile == Profile::Reproducible && arm != Arm::Kache && !case.env.contains_key("SOURCE_DATE_EPOCH") {
         env.push(("SOURCE_DATE_EPOCH", "0".into()));
     }
 
@@ -413,7 +430,11 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
         crate::daemon::stop_and_wait(ctx.kache, &store, Duration::from_secs(60));
     }
     let mut run = result?;
-    if cache_disabled_applies(ctx.control, profile) && arm == Arm::Kache {
+    // Only a required hit can reveal a disabled cache.
+    if cache_disabled_applies(ctx.control, profile)
+        && arm == Arm::Kache
+        && case.steps.iter().any(|step| step.reuse == Reuse::Hit)
+    {
         run.injected = true;
     }
     if ctx.control == Some(Control::ReferenceFailure) && raw_like {
@@ -473,7 +494,7 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                 }
             };
             let args = if arm == Arm::Kache {
-                compile.argv[1..].to_vec()
+                compile.argv[1..].iter().map(|a| expand(a, ctx.fixture)).collect()
             } else {
                 effective_args(&compile.argv, profile, ctx.fixture)
             };
@@ -487,7 +508,7 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                 .with_context(|| format!("{} arm: spawning {}", arm.as_str(), driver.display()))?;
             step_ms.push(started.elapsed().as_millis() as u64);
             let log_text = std::fs::read_to_string(log).unwrap_or_default();
-            let mut executions = classify(&log_text, ctx.fixture, &compile.source);
+            let mut executions = classify(&log_text, ctx.fixture, &expand(&compile.source, ctx.fixture));
             let kache_result = if arm == Arm::Kache {
                 let events = kache_events_since(ctx.kache, store, &mut kache_events)?;
                 events.last().cloned()
@@ -570,6 +591,22 @@ fn apply(action: &Action, case: &Case, arm: Arm, ctx: &ArmContext<'_>, store: &P
                 (false, _) => set_mtime(&target, FIXTURE_EPOCH + 60 * (step as u64 + 1))?,
             }
         }
+        Action::Replace { path, content } => {
+            let target = root.join(path);
+            let staged = target.with_file_name(format!(
+                ".{}.oracle-tmp",
+                target.file_name().and_then(|n| n.to_str()).unwrap_or("file")
+            ));
+            std::fs::write(&staged, content)?;
+            set_mtime(&staged, FIXTURE_EPOCH + 60 * (step as u64 + 1))?;
+            std::fs::rename(&staged, &target)?;
+        }
+        Action::Symlink { path, target } => {
+            let link = root.join(path);
+            remove_if_present(&link)?;
+            symlink(target, &link)?;
+        }
+        Action::Touch { path } => set_mtime(&root.join(path), FIXTURE_EPOCH + 60 * (step as u64 + 1))?,
         Action::Remove { path } => remove_if_present(&root.join(path))?,
         Action::DeleteOutputs {} => {
             for output in &case.outputs {
@@ -704,6 +741,16 @@ mod tests {
     }
 
     #[test]
+    fn fixture_placeholders_expand_in_arguments() {
+        let argv: Vec<String> = ["{cc}", "-I{fixture}/inc", "-c", "a.c"].map(String::from).to_vec();
+        assert_eq!(
+            effective_args(&argv, Profile::Transparent, Path::new("/w/fx")),
+            ["-I/w/fx/inc", "-c", "a.c"]
+        );
+        assert_eq!(expand("{fixture}:{fixture}", Path::new("/r")), "/r:/r");
+    }
+
+    #[test]
     fn controls_round_trip_their_names() {
         for c in Control::ALL {
             assert_eq!(Control::parse(c.as_str()), Some(c));
@@ -764,6 +811,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let tc = Toolchain {
             name: "cc".into(),
+            family: None,
             cc_name: "cc".into(),
             cxx_name: "c++".into(),
             cc: PathBuf::from("/bin/echo"),

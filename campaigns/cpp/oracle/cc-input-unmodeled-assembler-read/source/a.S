@@ -1,0 +1,2 @@
+.data
+.incbin "blob.bin"

@@ -84,7 +84,7 @@ summary = "same-size edit to a source/header with mtime restored; compile MUST m
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "direct.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-atomic-replace"
@@ -93,7 +93,7 @@ summary = "atomic write+rename replacement of source/header invalidates (not jus
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "base.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-symlink-retarget"
@@ -102,7 +102,7 @@ summary = "symlink retargeted at a different file invalidates; identical target 
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "base.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-header-added"
@@ -120,7 +120,7 @@ summary = "header disappears; dependent compiles must miss, not restore stale ou
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "depend.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-header-shadowing"
@@ -129,7 +129,7 @@ summary = "same-basename header in two search dirs; first-found wins, change inv
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "depend.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-search-order"
@@ -138,7 +138,7 @@ summary = "-iquote / -I / -isystem / -idirafter precedence is honored in the key
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "basedir.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-has-include"
@@ -147,7 +147,7 @@ summary = "__has_include and __has_include_next resolve per search order and key
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "depend.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-token-paste-probe"
@@ -156,7 +156,7 @@ summary = "Chromium-style token-pasted header availability probes hit without lo
 profiles = ["both"]
 compilers = ["all"]
 ccache.suite = "kache-observed (src/compiler/cc.rs guard)"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-forced-include"
@@ -165,7 +165,7 @@ summary = "-include forced header content change invalidates"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "direct.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-sysroot-change"
@@ -192,7 +192,7 @@ summary = "CPATH/C_INCLUDE_PATH/CPLUS_INCLUDE_PATH/OBJC_INCLUDE_PATH/OBJCPLUS_IN
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "basedir.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-compiler-replaced"
@@ -237,7 +237,7 @@ summary = "-fsanitize-ignorelist / -fsanitize-blacklist file content change inva
 profiles = ["both"]
 compilers = ["gcc", "clang"]
 ccache.suite = "sanitize_ignorelist.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-vfs-overlay"
@@ -273,7 +273,7 @@ summary = "ordered/overriding options (-I order, -O redefinition, -D redefinitio
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-user-key-config"
@@ -291,7 +291,7 @@ summary = "__FILE__ expands per relocation; transparent profile preserves, repro
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "debug_compilation_dir.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-macro-base-file"
@@ -309,7 +309,7 @@ summary = "__DATE__/__TIME__/__TIMESTAMP__ behavior documented and profiled (epo
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "source_date_epoch.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-diagnostic-locale"
@@ -336,7 +336,7 @@ summary = "depfiles with spaces/escapes/colons parse with correct escaping and t
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "depend.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-depfile-make-ninja-consumed"
@@ -363,7 +363,43 @@ summary = "unmodeled assembler reads remain conservative refusals"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
+
+[[case]]
+id = "cc-input-clang-config-file"
+package = "CCP-02"
+summary = "a clang --config file's contents are compile inputs"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-input-gcc-specs"
+package = "CCP-02"
+summary = "a GCC -specs file's contents are compile inputs"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-input-sysroot-symlink"
+package = "CCP-02"
+summary = "retargeting a sysroot directory symlink (--sysroot and -isysroot, since drivers honor different ones for headers) invalidates; pointing it back reuses"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-input-touch"
+package = "CCP-02"
+summary = "an mtime-only change to a header reuses the entry"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
 
 [[case]]
 id = "cc-rsp-quoted"

@@ -1,0 +1,35 @@
+summary = "__has_include result changes when the probed header appears or disappears"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "probe-appears"
+reuse = "miss"
+action = [
+  { op = "write", path = "opt.h", content = "#define OPT 7\n" },
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "restore-present"
+reuse = "hit"
+action = [
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "probe-disappears"
+reuse = "hit"
+action = [
+  { op = "remove", path = "opt.h" },
+  { op = "delete-outputs" },
+]

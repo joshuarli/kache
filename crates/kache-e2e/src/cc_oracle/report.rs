@@ -47,6 +47,7 @@ struct RunReport {
     profile: &'static str,
     toolchain: String,
     verdict: &'static str,
+    fails_gate: bool,
     #[deser(skip_serializing_if = Option::is_none)]
     blocked: Option<String>,
     expected_rows: usize,
@@ -167,6 +168,7 @@ fn run_report(run: &super::CaseRun) -> RunReport {
         profile: run.profile.as_str(),
         toolchain: run.toolchain.clone(),
         verdict: run.verdict.as_str(),
+        fails_gate: run.verdict.fails_gate(),
         blocked: run.blocked.clone(),
         expected_rows: run.expected_rows,
         injected: run.injected,
@@ -241,7 +243,7 @@ fn markdown(report: &Report) -> String {
     let failing: std::collections::BTreeSet<String> = report
         .runs
         .iter()
-        .filter(|r| r.verdict != "MATCH")
+        .filter(|r| r.fails_gate)
         .map(|r| format!("- `make cc-oracle CASE={} TOOLCHAINS={} PROFILES={}`", r.case, r.toolchain, r.profile))
         .collect();
     if !failing.is_empty() {

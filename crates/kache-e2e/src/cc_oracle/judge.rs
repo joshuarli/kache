@@ -97,6 +97,9 @@ pub struct Row<'a> {
     /// Arguments after the driver that the raw arm ran. Kache's code
     /// generation must run exactly these, apart from its dependency capture.
     pub effective_argv: &'a [String],
+    /// The case's own arguments. Kache may also run these unchanged when it
+    /// passes the compile through.
+    pub passthrough_argv: &'a [String],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -187,12 +190,12 @@ fn kache_verdict(row: &Row<'_>, ccache: Verdict) -> (Verdict, Vec<String>) {
     }
     for argv in &row.kache.executions.codegen_argv {
         let effective = without_dependency_capture(argv);
-        if effective != row.effective_argv {
+        if effective != row.effective_argv && argv.as_slice() != row.passthrough_argv {
             return (
                 Verdict::HarnessError,
                 vec![format!(
                     "kache's code generation ran {:?}, the profile's effective command is {:?}",
-                    effective, row.effective_argv
+                    argv, row.effective_argv
                 )],
             );
         }
@@ -319,6 +322,7 @@ mod tests {
             ccache_preprocessor: ccache,
             kache,
             effective_argv: &effective,
+            passthrough_argv: &effective,
         })
     }
 
@@ -363,6 +367,7 @@ mod tests {
             ccache_preprocessor: &raw,
             kache: &raw,
             effective_argv: &effective,
+            passthrough_argv: &effective,
         });
         assert_eq!(judgement.verdict, Verdict::CompilerNondeterminism);
     }
@@ -460,6 +465,32 @@ mod tests {
         captured.executions.codegen_argv[0]
             .extend(["-MD", "-MF", "/t/inputs.d", "-MT", "__kache_direct_capture"].map(String::from));
         assert_eq!(run(Reuse::Miss, &raw, &raw, &captured).verdict, Verdict::Match);
+    }
+
+    #[test]
+    fn an_unchanged_passthrough_satisfies_the_reproducible_profile() {
+        let raw = obs(1);
+        let reproducible: Vec<String> = argv().into_iter().chain(["-ffile-prefix-map=/f=/kache/cc-root".to_string()]).collect();
+        let case_args = argv();
+        let row = |kache: &Observation| {
+            judge(&Row {
+                reuse: Reuse::Miss,
+                expected_status: 0,
+                raw: &raw,
+                raw_repeat: &raw,
+                ccache: &raw,
+                ccache_preprocessor: &raw,
+                kache,
+                effective_argv: &reproducible,
+                passthrough_argv: &case_args,
+            })
+            .verdict
+        };
+        assert_eq!(row(&obs(1)), Verdict::Match);
+        let mut captured_passthrough = obs(1);
+        captured_passthrough.executions.codegen_argv[0]
+            .extend(["-MD", "-MF", "/t/inputs.d", "-MT", "__kache_direct_capture"].map(String::from));
+        assert_eq!(row(&captured_passthrough), Verdict::HarnessError);
     }
 
     #[test]

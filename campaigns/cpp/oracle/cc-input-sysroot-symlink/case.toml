@@ -1,0 +1,27 @@
+summary = "retargeting a sysroot directory symlink (--sysroot and -isysroot, since drivers honor different ones for headers) invalidates; pointing it back reuses"
+cohort = "blocking"
+profiles = ["transparent"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "--sysroot=sysroot", "-isysroot", "sysroot", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "like-ccache"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "retarget-sysroot"
+reuse = "miss"
+action = [{ op = "symlink", path = "sysroot", target = "sysB" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "retarget-back"
+reuse = "like-ccache"
+action = [{ op = "symlink", path = "sysroot", target = "sysA" }, { op = "delete-outputs" }]

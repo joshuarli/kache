@@ -1,0 +1,28 @@
+summary = "rename-over replacement of a header invalidates; replacing back restores the first entry"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "replace"
+reuse = "miss"
+action = [
+  { op = "replace", path = "v.h", content = "#define V 3\n" },
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "replace-back"
+reuse = "hit"
+action = [
+  { op = "replace", path = "v.h", content = "#define V 1\n" },
+  { op = "delete-outputs" },
+]

@@ -1,0 +1,22 @@
+summary = "depfile paths with spaces and dollar signs are escaped as raw writes them, on populate and restore"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o", "u.d"]
+
+[[compile]]
+argv = ["{cc}", "-Isp ace", "-MD", "-MF", "u.d", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-spaced-header"
+reuse = "miss"
+action = [{ op = "write", path = "sp ace/h h.h", content = "#define H 3\n" }, { op = "delete-outputs" }]

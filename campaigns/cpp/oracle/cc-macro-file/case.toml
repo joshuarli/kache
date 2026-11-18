@@ -1,0 +1,19 @@
+summary = "__FILE__ and __BASE_FILE__ strings match raw under each profile's path policy"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "{fixture}/u.c", "-o", "u.o"]
+source = "{fixture}/u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [
+  { op = "delete-outputs" },
+]
