@@ -184,12 +184,10 @@ impl Broker {
             return Err(io::Error::other("invalid native compiler spawn response"));
         };
         #[cfg(target_os = "macos")]
-        let identity = match macos::Identity::capture(pid) {
-            Ok(identity) => Some(identity),
-            Err(error) => {
-                // An instant compiler may already be a zombie before its task
-                // port can be pinned. Its status remains owned by the client.
-                if matches!(
+        let identity = match pin_unless_exited(
+            || macos::Identity::capture(pid),
+            || {
+                matches!(
                     self.call(Command::TryWait { id }, 0),
                     Ok((
                         Reply::Waited {
@@ -198,34 +196,14 @@ impl Broker {
                         },
                         _
                     ))
-                ) {
-                    None
-                } else {
-                    // The probe is still running, so pinning failed transiently
-                    // (e.g. task_name_for_pid during fork/exec). Retry before
-                    // giving up compilation for a cleanup optimization.
-                    let mut last_error = error;
-                    let mut pinned = None;
-                    for _ in 0..3 {
-                        std::thread::sleep(std::time::Duration::from_millis(20));
-                        match macos::Identity::capture(pid) {
-                            Ok(identity) => {
-                                pinned = Some(identity);
-                                break;
-                            }
-                            Err(retry_error) => {
-                                last_error = retry_error;
-                            }
-                        }
-                    }
-                    match pinned {
-                        Some(identity) => Some(identity),
-                        None => {
-                            let _ = self.done(Command::Release { id });
-                            return Err(last_error);
-                        }
-                    }
-                }
+                )
+            },
+            || std::thread::sleep(std::time::Duration::from_millis(20)),
+        ) {
+            Ok(identity) => identity,
+            Err(error) => {
+                let _ = self.done(Command::Release { id });
+                return Err(error);
             }
         };
         let mut files = files.into_iter();
@@ -281,6 +259,34 @@ impl kache_store::workspace::Workspace for Broker {
                 _ => Err(io::Error::other("invalid workspace operation response")),
             }
         })
+    }
+}
+
+/// Pin a spawned compiler's identity, or learn that it already exited.
+///
+/// An instant compiler can exit before its identity is read, and pinning can
+/// also fail transiently during fork/exec. An exited compiler needs no pin:
+/// its status remains owned by the client. So every failed attempt asks
+/// whether the compiler exited before retrying, and only a compiler that is
+/// still running after the last attempt fails the spawn.
+#[cfg(any(test, target_os = "macos"))]
+fn pin_unless_exited<T>(
+    mut capture: impl FnMut() -> io::Result<T>,
+    mut exited: impl FnMut() -> bool,
+    mut pause: impl FnMut(),
+) -> io::Result<Option<T>> {
+    const RETRIES: usize = 3;
+    let mut attempt = 0;
+    loop {
+        match capture() {
+            Ok(identity) => return Ok(Some(identity)),
+            Err(_) if exited() => return Ok(None),
+            Err(error) if attempt == RETRIES => return Err(error),
+            Err(_) => {
+                attempt += 1;
+                pause();
+            }
+        }
     }
 }
 
@@ -403,6 +409,53 @@ mod tests {
         let command = command(units);
         assert_eq!(deser_json::to_string(&command).map(String::into_bytes).unwrap().len() + 1, bytes);
         command
+    }
+
+    #[test]
+    fn a_compiler_that_exits_while_pinning_is_retried_is_not_an_error() {
+        let mut exit_checks = 0;
+        let mut pauses = 0;
+        let pinned = pin_unless_exited(
+            || Err::<(), _>(io::Error::other("cannot read compiler process identity")),
+            || {
+                exit_checks += 1;
+                exit_checks == 3
+            },
+            || pauses += 1,
+        );
+        assert!(pinned.unwrap().is_none());
+        assert_eq!((exit_checks, pauses), (3, 2));
+    }
+
+    #[test]
+    fn pinning_retries_a_running_compiler_then_reports_the_last_error() {
+        let mut captures = 0;
+        let mut pauses = 0;
+        let error = pin_unless_exited(
+            || {
+                captures += 1;
+                Err::<(), _>(io::Error::other(format!("attempt {captures}")))
+            },
+            || false,
+            || pauses += 1,
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "attempt 4");
+        assert_eq!((captures, pauses), (4, 3));
+    }
+
+    #[test]
+    fn a_retry_that_pins_returns_the_identity() {
+        let mut captures = 0;
+        let pinned = pin_unless_exited(
+            || {
+                captures += 1;
+                if captures < 3 { Err(io::Error::other("transient")) } else { Ok(captures) }
+            },
+            || false,
+            || {},
+        );
+        assert_eq!(pinned.unwrap(), Some(3));
     }
 
     #[test]
