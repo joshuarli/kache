@@ -1,5 +1,20 @@
 Prefix: KACH
-Next: 27
+Next: 28
+
+### KACH-27 · P2 · Linux e2e diverges on cache reuse for relocated and probe invocations
+
+- **Area:** Compiler compatibility, correctness, tests
+- **Status:** Open; discovered by the Linux e2e gates added for KACH-21 (PR #26).
+- **Found by:** `make e2e` on the new `e2e-linux-glibc` and musl `linux-musl` jobs; both fail identically. Reference artifacts: CI run 44241684053 (artifacts `e2e-results-glibc-{x86_64,ARM64}`, `e2e-results-musl-{x86_64,ARM64}`).
+- **Findings (macOS passes every one of these):**
+  1. **Relocation adds one wrap miss per relocation on Linux.** `e2e-rust-transitive-native` fails `assertions.relocate.max_misses` (`<= 0`, actual 1) on both Linux lanes: the `native` crate's `build_script_run` at the relocated `OUT_DIR` misses with a fresh key while its outputs are byte-identical (store duplicates), so the portable-`OUT_DIR` check classifies the same bytes differently on Linux than on macOS. Supplements the cc-crate `#1182` contract — treat as a missed-reuse finding, not wrong output.
+  2. **The prebuilt musl LLVM clang (23.1.5) does not hit probe-keyed work across cmake's random `TryCompile` directories.** The `CMakeCXXCompilerABI.cpp` probe key changes per configure (`e2e-cmake-ninja-flagset`, `e2e-cmake-out-of-tree`, `e2e-cmake-file-macro-oot` relocate phase: `max_misses` `<= 0`, actual 1), which trips the cmake fixtures on the musl image. The gcc probe on glibc hits. Likely probe-resolution/key interaction with that clang build; needs instrumented evidence on a Linux host.
+  3. **The same musl clang stores nothing on the shim-masquerade path.** `e2e-c-shims` (`CC` unset, kache shim as `cc`) records zero cold entries (`min_entries_after` actual 0), while `e2e-c-hello` (`CC="$KACHE cc"`) passes on the same image. `e2e-cc-cl-xclang-deps` (`clang --driver-mode=cl`) fails on musl x86_64 for the same signature; it passes on musl aarch64.
+  4. `e2e-rust-cross-tree` requires a hardlink carrier rlib; the Linux runners clone instead (verified with the store on the checkout filesystem), so the fixture documents `KACHE_E2E_SKIP_HARDLINK_CHECK=1` for this substrate — the FD-stability contract stays armed wherever a hardlink carrier exists.
+- **Impact:** The new Linux gates are advisory (`continue-on-error`) until this closes; `make e2e` exits nonzero on both Linux lanes. No observed wrong output — all failing assertions are reuse accounting.
+- **Unblock:** Root-cause each divergence on a Linux host (or in a Linux container) with instrumented kache builds; fix kache keying/portability detection or the probe path as root cause demands; then the four fixtures pass on both Linux lanes without `KACHE_E2E_SKIP_HARDLINK_CHECK=1`, the advisory flags are removed, and the gates become required.
+- **Fix with:** campaign scope (CCP-02/CCP-03 territory); do not paper over by weakening assertions.
+- **Effort:** M
 
 ### KACH-26 · P1 · Reach ccache-level local C/C++ compatibility
 
@@ -19,6 +34,7 @@ Next: 27
 - **Recommendation:** Add `cmake`, `ninja` and `gcc` to the image, decide whether the cross-gcc fixture belongs in the gate (the Alpine image cannot provide glibc cross compilers), and run both e2e targets inside the image in the `linux-musl` job.
 - **Fix with:** none
 - **Effort:** M
+- **Progress (2026-11-17):** Addressed in PR #26: the musl image gained `cmake`, `gcc`, `g++`, `ninja-build`; `linux-musl` runs both e2e targets in-container; `e2e-cc-cross-gcc` is declared `os = ["glibc"]` and runs in the new `e2e-linux-glibc` jobs with the glibc cross compilers; the harness learned libc os tokens. The lanes execute the gate corpus but are advisory until KACH-27 closes (Linux-specific reuse divergences found by the new gates).
 
 ### KACH-22 · P3 · Changed-line mutation testing runs in no gate
 
