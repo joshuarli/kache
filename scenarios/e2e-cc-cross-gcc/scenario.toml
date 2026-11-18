@@ -1,9 +1,10 @@
 # Cross gcc `cc -###` probe on distro riscv64 and armv7 drivers (#825).
-# Skipped when the cross compilers are not on PATH. Linux e2e CI installs them.
+# glibc-only: the fixture needs Debian/Ubuntu's glibc cross drivers, which the
+# Alpine musl image cannot provide. It runs in the Linux glibc e2e gates.
 
 name = "e2e-cc-cross-gcc"
 tags = ["suite:e2e", "lang:cc"]
-os = ["linux"]
+os = ["glibc"]
 requires = ["riscv64-linux-gnu-gcc", "arm-linux-gnueabihf-gcc"]
 
 [source]
