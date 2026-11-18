@@ -4127,12 +4127,12 @@ fn key_probe_runs_with_the_compile_prefix_maps() {
 }
 
 #[test]
-fn build_preprocess_args_forces_dash_e_dash_p_and_strips_mode() {
-    let parsed = CcArgs::parse(&s(&["cc", "-c", "foo.c", "-o", "foo.o", "-O2", "-Iinc"])).unwrap();
+fn build_preprocess_args_forces_dash_e_keeps_line_markers_and_strips_mode() {
+    let parsed = CcArgs::parse(&s(&["cc", "-c", "foo.c", "-o", "foo.o", "-O2", "-Iinc", "-P"])).unwrap();
     let pp = build_preprocess_args(&parsed);
-    // -E -P prepended.
     assert_eq!(&pp[0], "-E");
-    assert_eq!(&pp[1], "-P");
+    // Line markers place every line; a caller's -P must not drop them.
+    assert!(!pp.iter().any(|a| a == "-P"), "{pp:?}");
     // -c and -o <arg> stripped (no file redirection of pp output).
     assert!(!pp.iter().any(|a| a == "-c"));
     assert!(!pp.iter().any(|a| a == "-o"));
@@ -4161,19 +4161,53 @@ fn build_preprocess_args_strips_dep_info_flags() {
 }
 
 #[test]
-fn build_preprocess_args_uses_ep_for_clang_cl() {
+fn build_preprocess_args_uses_slash_e_for_clang_cl() {
     use crate::compiler::flags::Dialect;
     let cl = CcArgs::parse(&s(&["clang-cl", "-c", "a.c", "-DFOO"])).unwrap();
     assert_eq!(cl.family.dialect(), Dialect::Cl);
     let args = build_preprocess_args(&cl);
-    assert_eq!(args.first().map(String::as_str), Some("/EP"));
+    assert_eq!(args.first().map(String::as_str), Some("/E"));
     assert!(!args.iter().any(|a| a == "-E" || a == "-P"));
     assert!(args.iter().any(|a| a == "-DFOO"));
     assert!(args.iter().any(|a| a == "a.c"));
     assert!(!args.iter().any(|a| a == "-c"));
     let gnu = CcArgs::parse(&s(&["gcc", "-c", "a.c"])).unwrap();
     let g = build_preprocess_args(&gnu);
-    assert_eq!(&g[..2], &["-E".to_string(), "-P".to_string()]);
+    assert_eq!(g, ["-E", "a.c"]);
+}
+
+#[test]
+fn line_markers_are_split_from_the_text_and_prefix_mapped() {
+    let maps = [CcPrefixMap {
+        from: "/w/tree".to_string(),
+        to: "/kache/cc-root".to_string(),
+    }];
+    let expansion = b"# 1 \"/w/tree/a.c\"\nint a;\n\n#line 30 \"/w/tree/b.h\"\nint b;\n# define not_a_marker\n";
+    let (text, layout) = split_line_markers(expansion, &maps);
+    assert_eq!(text, b"int a;\n\nint b;\n# define not_a_marker\n");
+    assert_eq!(
+        layout.unwrap(),
+        b"# 1 \"/kache/cc-root/a.c\"\n\n\n#line 30 \"/kache/cc-root/b.h\"\n\n\n".to_vec()
+    );
+    let (text, layout) = split_line_markers(b"preprocessed unit\n", &maps);
+    assert_eq!(text, b"preprocessed unit\n");
+    assert!(layout.is_none());
+}
+
+#[test]
+fn code_moved_to_another_line_changes_the_expansion_key() {
+    // `-E -P` collapses a long blank run, so a comment block grown from 20 to
+    // 30 lines expanded identically; only the markers place the code.
+    let at = |line: u32| format!("# {line} \"a.c\"\nint f(void) {{ return 1; }}\n").into_bytes();
+    let key = |expansion: &[u8]| {
+        let (text, layout) = split_line_markers(expansion, &[]);
+        fold_line_layout(hash_cc_expansion(text, &[]).hash, layout.as_deref())
+    };
+    assert_eq!(split_line_markers(&at(22), &[]).0, split_line_markers(&at(32), &[]).0);
+    assert_ne!(key(&at(22)), key(&at(32)));
+    assert_eq!(key(&at(22)), key(&at(22)));
+    let unmarked = hash_cc_expansion(b"int x;\n".to_vec(), &[]).hash;
+    assert_eq!(fold_line_layout(unmarked.clone(), None), unmarked);
 }
 
 #[test]

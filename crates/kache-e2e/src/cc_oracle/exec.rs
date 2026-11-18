@@ -325,6 +325,14 @@ pub struct ArmRun {
     pub injected: bool,
 }
 
+/// A disabled kache runs the case's own arguments, so it equals the raw
+/// reference only in the transparent profile; in the reproducible profile
+/// the reference carries kache's prefix map and the control would report
+/// wrong output instead of the missed reuse it exists to prove.
+fn cache_disabled_applies(control: Option<Control>, profile: Profile) -> bool {
+    control == Some(Control::CacheDisabled) && profile == Profile::Transparent
+}
+
 pub fn effective_args(case_argv: &[String], profile: Profile, fixture: &Path) -> Vec<String> {
     let mut args = case_argv[1..].to_vec();
     if profile == Profile::Reproducible {
@@ -385,7 +393,7 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
                 env.push(("KACHE_CC_PATH_NORMALIZE", "0".into()));
                 env.push(("KACHE_CC_SOURCE_DATE_EPOCH", "passthrough".into()));
             }
-            if ctx.control == Some(Control::CacheDisabled) {
+            if cache_disabled_applies(ctx.control, profile) {
                 env.push(("KACHE_DISABLED", "1".into()));
             }
         }
@@ -405,7 +413,7 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
         crate::daemon::stop_and_wait(ctx.kache, &store, Duration::from_secs(60));
     }
     let mut run = result?;
-    if ctx.control == Some(Control::CacheDisabled) && arm == Arm::Kache {
+    if cache_disabled_applies(ctx.control, profile) && arm == Arm::Kache {
         run.injected = true;
     }
     if ctx.control == Some(Control::ReferenceFailure) && raw_like {
@@ -685,6 +693,14 @@ mod tests {
         assert_eq!(settled_after_ns([5 * 1_000_000_000]), 7 * 1_000_000_000 + 11 * ms);
         assert_eq!(settled_after_ns([3 * ms, 5 * 1_000_000_000 + 3 * ms]), 5 * 1_000_000_000 + 14 * ms);
         assert_eq!(settled_after_ns([]), 0);
+    }
+
+    #[test]
+    fn cache_disabled_runs_only_where_disabled_kache_equals_raw() {
+        assert!(cache_disabled_applies(Some(Control::CacheDisabled), Profile::Transparent));
+        assert!(!cache_disabled_applies(Some(Control::CacheDisabled), Profile::Reproducible));
+        assert!(!cache_disabled_applies(Some(Control::StaleOutput), Profile::Transparent));
+        assert!(!cache_disabled_applies(None, Profile::Transparent));
     }
 
     #[test]

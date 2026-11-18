@@ -82,7 +82,7 @@ expected verdict:
 | `stale-output` | after kache's first required recompilation, put back the populate outputs (only where the bytes differ) | `KACHE_WRONG_OUTPUT` |
 | `omit-sidecar` | after kache's first required restore, delete the last declared output | `KACHE_WRONG_OUTPUT` |
 | `disabled-invalidation` | hide kache's first required recompilation from the observer | `KACHE_WRONG_OUTPUT` |
-| `cache-disabled` | `KACHE_DISABLED=1` in the kache arm | `KACHE_MISSED_REUSE` |
+| `cache-disabled` | `KACHE_DISABLED=1` in the kache arm, transparent profile only (a disabled kache runs the case's own arguments, which the reproducible reference does not) | `KACHE_MISSED_REUSE` |
 | `reference-failure` | the raw arms run a compiler that always fails | `HARNESS_ERROR` |
 
 ## case.toml
