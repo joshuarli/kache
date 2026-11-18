@@ -95,10 +95,10 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | Lane | Host | State | Notes |
 |---|---|---|---|
 | M1 | xcode-27 CI runner / Apple Silicon Mac | RUNNING (partial) | This host covers Apple clang 21.0.0/Xcode 27.0. Standalone LLVM Clang missing — see gaps. |
-| L1 | ubuntu-26.04 | RUNNING (advisory) | e2e-linux-glibc job runs; make e2e red on KACH-27 findings; gate assigned, advisory |
-| L2 | ubuntu-26.04-arm | RUNNING (advisory) | Same job matrix; same two KACH-27 failures; advisory |
-| L3 | Alpine 3.24.2 musl x86_64 (container on ubuntu-26.04) | RUNNING (advisory) | linux-musl job; in-image LLVM 23.1.5 + apk GCC 15.2.0; KACH-27 fixture failures; e2e step advisory |
-| L4 | Alpine 3.24.2 musl aarch64 (container on ubuntu-26.04-arm) | RUNNING (advisory) | Same image and matrix; KACH-27 fixture failures; e2e step advisory |
+| L1 | ubuntu-26.04 | RUNNING (advisory) | e2e-linux-glibc job runs; only `e2e-rust-transitive-native` fails (run 44244430288); cross-tree passes with escape hatch; gate assigned, advisory |
+| L2 | ubuntu-26.04-arm | RUNNING (advisory) | Same job matrix; only `e2e-rust-transitive-native` fails; cross-tree passes with escape hatch; advisory |
+| L3 | Alpine 3.24.2 musl x86_64 (container on ubuntu-26.04) | RUNNING (advisory) | linux-musl job; in-image LLVM 23.1.5 + apk GCC 15.2.0; e2e step advisory: `e2e-c-shims`, three `e2e-cmake-*`, `e2e-rust-transitive-native`, `e2e-cc-cl-xclang-deps` (intermittent) |
+| L4 | Alpine 3.24.2 musl aarch64 (container on ubuntu-26.04-arm) | RUNNING (advisory) | Same image and matrix; e2e step advisory: `e2e-c-shims`, three `e2e-cmake-*`, `e2e-rust-transitive-native`, `e2e-cc-cl-same-content-sources` (intermittent) |
 
 ## Package ledger
 
