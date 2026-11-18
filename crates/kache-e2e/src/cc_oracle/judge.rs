@@ -63,7 +63,9 @@ pub type Inventory = BTreeMap<String, Entry>;
 /// observation shim's log.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Executions {
-    /// Code generation for the unit (`-c` / `-S` naming the source).
+    /// Code generation for the unit: an execution naming the source that is
+    /// not preprocessing, dependency listing, syntax checking or a query
+    /// (`-c`, `-S`, a header's PCH).
     pub codegen: u32,
     /// Preprocessing the unit (`-E` naming the source).
     pub preprocess: u32,

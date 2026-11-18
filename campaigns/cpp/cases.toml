@@ -852,6 +852,15 @@ ccache.suite = "kache-original"
 status = "planned"
 
 [[case]]
+id = "cc-pch-clang-use"
+package = "CCP-06"
+summary = "conditional PCH profile: with ccache sloppiness pch_defines,time_macros a clang -include-pch consumer is reused; a rebuilt PCH must invalidate"
+profiles = ["both"]
+compilers = "clang"
+ccache.suite = "pch.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-pch-create"
 package = "CCP-06"
 summary = "GCC/Clang PCH creation mode is handled (lookup, contents, options, compiler identity)"
@@ -954,7 +963,7 @@ summary = "arm64+x86_64 universal Mach-O produced via -arch flags; every restore
 profiles = ["both"]
 compilers = ["apple-clang"]
 ccache.suite = "multi_arch.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-host-xarch"
@@ -990,7 +999,7 @@ summary = "Objective-C mode cached where supported"
 profiles = ["both"]
 compilers = ["apple-clang", "clang"]
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-host-objcxx"
@@ -999,7 +1008,7 @@ summary = "Objective-C++ mode cached where supported"
 profiles = ["both"]
 compilers = ["apple-clang", "clang"]
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-host-musl-native"

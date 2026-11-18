@@ -155,6 +155,8 @@ struct CaseFile {
     outputs: Vec<String>,
     #[deser(default)]
     env: std::collections::BTreeMap<String, String>,
+    #[deser(default)]
+    ccache_config: std::collections::BTreeMap<String, String>,
     compile: Vec<Compile>,
     step: Vec<Step>,
 }
@@ -171,6 +173,10 @@ pub struct Case {
     pub outputs: Vec<String>,
     /// Set in every arm; `{fixture}` expands to the fixture root.
     pub env: std::collections::BTreeMap<String, String>,
+    /// ccache settings for a conditional profile, such as the sloppiness
+    /// ccache needs before it caches PCH consumers. Both ccache arms get
+    /// them; kache and raw never do.
+    pub ccache_config: std::collections::BTreeMap<String, String>,
     pub compiles: Vec<Compile>,
     pub steps: Vec<Step>,
     pub source_dir: PathBuf,
@@ -227,6 +233,7 @@ pub fn parse(id: &str, text: &str, source_dir: PathBuf) -> Result<Case> {
         profiles: file.profiles,
         outputs: file.outputs,
         env: file.env,
+        ccache_config: file.ccache_config,
         compiles: file.compile,
         steps: file.step,
         source_dir,
@@ -346,6 +353,14 @@ action = [{ op = "delete-outputs" }, { op = "write", path = "a.h", content = "x"
         for key in ["PATH", "HOME", "TMPDIR", "LC_ALL", "LANG", "CC_ORACLE_LOG", "KACHE_DISABLED", "CCACHE_DIR"] {
             assert!(parse("c", &with_env(&format!("{key} = \"x\"")), PathBuf::from("s")).is_err(), "{key}");
         }
+    }
+
+    #[test]
+    fn ccache_config_is_parsed_for_conditional_profiles() {
+        let text = MINIMAL.replace("outputs = [\"a.o\"]\n", "outputs = [\"a.o\"]\nccache_config = { sloppiness = \"pch_defines,time_macros\" }\n");
+        let case = parse("c", &text, PathBuf::from("s")).unwrap();
+        assert_eq!(case.ccache_config["sloppiness"], "pch_defines,time_macros");
+        assert!(parse("c", MINIMAL, PathBuf::from("s")).unwrap().ccache_config.is_empty());
     }
 
     #[test]

@@ -236,15 +236,13 @@ pub fn classify(log: &str, fixture: &Path, source: &str) -> Executions {
         let Some((cwd, args)) = fields.split_first() else { continue };
         let names_unit = *cwd == fixture && args.contains(&source);
         let has = |flag: &str| args.contains(&flag);
-        if !names_unit || has("-###") || has("--version") {
+        if !names_unit || has("-###") || has("--version") || has("-fsyntax-only") {
             out.probe += 1;
-        } else if has("-E") {
+        } else if has("-E") || has("-M") || has("-MM") {
             out.preprocess += 1;
-        } else if has("-c") || has("-S") {
+        } else {
             out.codegen += 1;
             out.codegen_argv.push(args.iter().map(|a| a.to_string()).collect());
-        } else {
-            out.probe += 1;
         }
     }
     out
@@ -358,6 +356,11 @@ pub fn expand(value: &str, fixture: &Path) -> String {
     value.replace("{fixture}", &fixture.to_string_lossy())
 }
 
+/// ccache's configuration file syntax: one `key = value` per line.
+fn ccache_config_text(settings: &std::collections::BTreeMap<String, String>) -> String {
+    settings.iter().map(|(key, value)| format!("{key} = {value}\n")).collect()
+}
+
 pub fn effective_args(case_argv: &[String], profile: Profile, fixture: &Path) -> Vec<String> {
     let mut args: Vec<String> = case_argv[1..].iter().map(|a| expand(a, fixture)).collect();
     if profile == Profile::Reproducible {
@@ -375,7 +378,12 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
         std::fs::create_dir_all(state.join(sub))?;
     }
     let config = state.join("config");
-    std::fs::write(&config, "")?;
+    let ccache_settings = if matches!(arm, Arm::Ccache | Arm::CcachePreprocessor) {
+        ccache_config_text(&case.ccache_config)
+    } else {
+        String::new()
+    };
+    std::fs::write(&config, ccache_settings)?;
     let log = state.join("exec.log");
     if ctx.fixture.exists() {
         std::fs::remove_dir_all(ctx.fixture)?;
@@ -711,11 +719,13 @@ mod tests {
             record("/fx", &["-c", "a.c", "-o", "a.o"]),
             record("/fx", &["-S", "a.c"]),
             record("/fx", &["-fsyntax-only", "a.c"]),
+            record("/fx", &["-MM", "a.c"]),
+            record("/fx", &["-x", "c-header", "a.c", "-o", "a.pch"]),
             String::new(),
         ]
         .concat();
         let e = classify(&log, fx, "a.c");
-        assert_eq!((e.codegen, e.preprocess, e.probe), (2, 1, 5));
+        assert_eq!((e.codegen, e.preprocess, e.probe), (3, 2, 5));
         assert_eq!(e.codegen_argv[0], ["-c", "a.c", "-o", "a.o"]);
     }
 
@@ -771,6 +781,15 @@ mod tests {
         let reproducible = Arm::for_profile(Profile::Reproducible);
         assert!(reproducible.contains(&Arm::RawPassthrough));
         assert_eq!(reproducible.last(), Some(&Arm::Kache));
+    }
+
+    #[test]
+    fn ccache_settings_render_as_config_lines() {
+        let mut settings = std::collections::BTreeMap::new();
+        assert_eq!(ccache_config_text(&settings), "");
+        settings.insert("sloppiness".to_string(), "pch_defines,time_macros".to_string());
+        settings.insert("depend_mode".to_string(), "true".to_string());
+        assert_eq!(ccache_config_text(&settings), "depend_mode = true\nsloppiness = pch_defines,time_macros\n");
     }
 
     #[test]
