@@ -1,0 +1,22 @@
+summary = "edits that move code within a line (a comment or the spacing before a statement changes width) change debug column info and diagnostic columns, though the -E text is identical; they must recompile"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["cols.o"]
+
+[[compile]]
+argv = ["{cc}", "-g", "-Wall", "-c", "cols.c", "-o", "cols.o"]
+source = "cols.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "wider-inline-comment"
+reuse = "any"
+action = [{ op = "write", path = "cols.c", content = "int cols_value(int x) { /* a much longer comment */ int unused = x; return x + 1; }\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "wider-spacing"
+reuse = "any"
+action = [{ op = "write", path = "cols.c", content = "int cols_value(int x) {          int unused = x; return x + 1; }\n" }, { op = "delete-outputs" }]

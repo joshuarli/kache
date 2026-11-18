@@ -126,7 +126,7 @@ fi
         assert_eq!(parsed.sources, vec![PathBuf::from("unit.c")]);
         let maps = cc_prefix_maps(&parsed, &[]);
         let expansion =
-            preprocess_hash(&parsed, &maps, &crate::cache_key::FileHasher::new(), true).unwrap();
+            preprocess_hash(&parsed, &maps, &crate::cache_key::FileHasher::new()).unwrap();
         let token = env.var("CLIENT_TOKEN").unwrap();
         let epoch = env.var("SOURCE_DATE_EPOCH").unwrap();
         assert_eq!(
@@ -4779,7 +4779,7 @@ fn preprocess_hash_bails_on_empty_stdout() {
     // it is a safe non-cache, the conservative trade-off.)
     let parsed = CcArgs::parse(&s(&["true", "-c", "a.c"])).unwrap();
     let err =
-        preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new(), false).unwrap_err();
+        preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new()).unwrap_err();
     assert!(err.to_string().contains("no output"), "got: {err}");
 }
 
@@ -4830,7 +4830,7 @@ fn real_probe_separates_file_macro_from_literal_roots() {
         let parsed = CcArgs::parse(&args).unwrap();
         let maps = cc_prefix_maps_for(&parsed, &root);
         let hasher = crate::cache_key::FileHasher::persistent(&root.join("idx.sqlite"));
-        let hashed = preprocess_hash(&parsed, &maps, &hasher, true).unwrap();
+        let hashed = preprocess_hash(&parsed, &maps, &hasher).unwrap();
         (tree, hashed)
     };
 
@@ -5185,7 +5185,7 @@ fn real_probe_refuses_a_directive_behind_a_delimited_escape() {
     )
     .unwrap();
     let parsed = CcArgs::parse(&s(&["cc", "-c", source.to_str().unwrap(), "-o", "out.o"])).unwrap();
-    let refused = preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new(), false)
+    let refused = preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new())
         .unwrap_err()
         .to_string();
     assert!(refused.contains(".incbin"), "{refused}");
@@ -5308,7 +5308,7 @@ fn real_probe_refuses_sources_that_incbin_a_file() {
     std::fs::write(dir.path().join("payload.bin"), "one").unwrap();
     let probe = |source: String| {
         let parsed = CcArgs::parse(&s(&["cc", "-c", source.as_str(), "-o", "out.o"])).unwrap();
-        preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new(), false)
+        preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new())
     };
 
     let asm = write(

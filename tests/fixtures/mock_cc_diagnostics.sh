@@ -14,5 +14,13 @@ case "$1" in
     done
     printf ' "%s"\n' "$source" >&2
     ;;
-  *) printf 'preprocessed unit\n' ;;
+  *)
+    source='' dep='' prev=''
+    for arg do
+      [ "$prev" = -MF ] && dep=$arg
+      case "$arg" in *.c|*.S|*.cc|*.cpp) source=$arg ;; esac
+      prev=$arg
+    done
+    [ -n "$dep" ] && printf 'unit.o: %s\n' "$source" > "$dep"
+    printf 'preprocessed unit\n' ;;
 esac

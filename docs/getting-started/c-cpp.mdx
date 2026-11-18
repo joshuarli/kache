@@ -173,6 +173,7 @@ Kache currently passes through:
 - assembly that uses macros or repetitions (`.macro`, `.irp`, `.irpc`, `.rept`, `.altmacro`) able to generate those directives
 - inline `asm` whose text is a computed expression rather than a string literal
 - header availability probes with macro header names, quoted probes inside macro bodies, wrappers that transform the argument, or trigraph line continuations
+- compiles whose dependency file the preprocessor cannot write, since the preprocessed text alone does not record where each token sits on its line
 - flags it has not classified
 
 With link caching enabled, explicit archive inputs such as `libvalue.a` remain eligible for caching. Links that select libraries by name (`-l`, `--library`) or read response files pass through because the link key cannot track their selected library inputs. Search-directory options such as `-L` and GNU ld's `--library-path` alone do not select a named library.
