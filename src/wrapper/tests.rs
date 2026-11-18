@@ -3891,6 +3891,7 @@ fn cc_generated_source_depinfo_rebases_headers_outside_the_build_directory() {
         let prepared = prepare_cc_store_files_in(
             &artifacts,
             Some(&producer_build),
+            Some("gen.wasm"),
             None,
             &roots,
             producer.as_path(),
@@ -3939,7 +3940,8 @@ fn cc_generated_source_depinfo_rebases_headers_outside_the_build_directory() {
         assert_eq!(
             restored,
             format!(
-                "gen.wasm: gen.c {expected_header} {}\n{expected_header}:\n",
+                "{}: gen.c {expected_header} {}\n{expected_header}:\n",
+                restored_object.display(),
                 external.display()
             )
         );

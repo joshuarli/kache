@@ -1720,9 +1720,11 @@ fn run_cc_with_store(
         let depinfo_anchor = cc_depinfo_rewrite_root(parsed);
         let target = parsed.cache_target_arch();
         let staging_dir = daemon_publish.then(|| crate::daemon_publish::handoff_dir(config));
+        let depinfo_object_target = crate::compiler::cc::cc_depinfo_object_target(parsed);
         match prepare_cc_store_files_in(
             &result.artifacts,
             depinfo_anchor.as_deref(),
+            depinfo_object_target.as_deref(),
             staging_dir.as_deref(),
             &parsed.depinfo_roots,
             parsed.invocation_env.temp_dir(),
@@ -2211,6 +2213,7 @@ fn prepare_cc_cached_artifact(
     target: &Path,
     kind: ArtifactKind,
     depinfo_anchor: &Path,
+    depinfo_object_target: Option<&str>,
     depinfo_roots: &[(PathBuf, String, u8)],
 ) -> Result<link::PreparedWritableTarget> {
     let transforms: Vec<_> = plan_post_restore(kind)
@@ -2242,15 +2245,22 @@ fn prepare_cc_cached_artifact(
         .with_context(|| format!("cc restore: reading blob {}", blob.display()))?;
     if kind == ArtifactKind::DepInfo {
         let text = std::str::from_utf8(&content).context("cc restore: dep-info is not UTF-8")?;
-        content = link::rewrite_rustc_depinfo_content_with_configured_roots(
+        let text = link::rewrite_rustc_depinfo_content_with_configured_roots(
             text,
             depinfo_anchor,
             depinfo_anchor,
             None,
             depinfo_roots,
             link::DepInfoMode::Expand,
-        )
-        .into_bytes();
+        );
+        let text = match depinfo_object_target {
+            Some(object) => text
+                .strip_prefix(crate::compiler::cc::CC_DEPINFO_OBJECT_PLACEHOLDER)
+                .map(|rest| format!("{object}{rest}"))
+                .context("cc restore: dep-info lacks its object target placeholder")?,
+            None => text,
+        };
+        content = text.into_bytes();
     }
     for action in transforms {
         content = action.transform(content, depinfo_anchor);
@@ -2421,6 +2431,7 @@ fn restore_cc_from_cache(
 
     let depinfo_anchor =
         cc_depinfo_rewrite_root(parsed).unwrap_or_else(|| Path::new(".").to_path_buf());
+    let depinfo_object_target = crate::compiler::cc::cc_depinfo_object_target(parsed);
     let mut prepared = Vec::new();
     let mut published_kinds = Vec::new();
     let mut targets = std::collections::HashSet::new();
@@ -2502,6 +2513,7 @@ fn restore_cc_from_cache(
             &target,
             kind,
             &depinfo_anchor,
+            depinfo_object_target.as_deref(),
             &parsed.depinfo_roots,
         )?);
         published_kinds.push((target, kind));
@@ -4219,7 +4231,7 @@ fn prepare_cc_store_files(
     depinfo_anchor: Option<&Path>,
 ) -> Result<PreparedCcStoreFiles> {
     let env = crate::invocation::InvocationEnv::capture();
-    prepare_cc_store_files_in(artifacts, depinfo_anchor, None, &[], env.temp_dir())
+    prepare_cc_store_files_in(artifacts, depinfo_anchor, None, None, &[], env.temp_dir())
 }
 
 /// Tempfiles are created mode `0600`. Publishing only clears write bits, so a
@@ -4245,6 +4257,7 @@ fn set_depinfo_staging_mode(path: &Path) -> Result<()> {
 fn prepare_cc_store_files_in(
     artifacts: &ArtifactSet,
     depinfo_anchor: Option<&Path>,
+    depinfo_object_target: Option<&str>,
     staging_dir: Option<&Path>,
     depinfo_roots: &[(PathBuf, String, u8)],
     temp_dir: &Path,
@@ -4275,6 +4288,15 @@ fn prepare_cc_store_files_in(
                 .with_context(|| {
                     format!("cc store: reading dep-info {}", artifact.path.display())
                 })?;
+            if let Some(object) = depinfo_object_target {
+                content = content
+                    .strip_prefix(object)
+                    .filter(|rest| rest.starts_with(':'))
+                    .map(|rest| format!("{}{rest}", crate::compiler::cc::CC_DEPINFO_OBJECT_PLACEHOLDER))
+                    .with_context(|| {
+                        format!("cc store: dep-info does not start with its target {object}")
+                    })?;
+            }
             let normalized =
                 link::rewrite_depinfo_content(&content, anchor, link::DepInfoMode::Relativize);
             let normalized = link::rewrite_rustc_depinfo_content_with_configured_roots(
