@@ -1,5 +1,5 @@
 Prefix: KACH
-Next: 26
+Next: 27
 
 ### KACH-21 · P2 · Linux fixture scenarios run in no gate
 
@@ -36,6 +36,16 @@ Next: 26
 - **Recommendation:** Lead those pages with this fork's release archives and source install (both kache and kache-engine), and keep the upstream channels only as attributed alternatives, or drop them.
 - **Fix with:** rg -n "cargo install kache --locked|cargo-binstall" docs/ finds no primary install instruction that selects the upstream distribution.
 - **Effort:** S
+
+
+### KACH-26 · P3 · Chromium official builds never hit the C/C++ cache
+
+- **Area:** C/C++ caching
+- **Where:** src/compiler/cc.rs flag classifier (`flag classify`) and the header-probe guard near `cc: token pasting may construct a header availability probe`; WIP on branch feat/cc-chromium-official-flags
+- **Problem:** Every object compile of an official Chromium 156 macOS arm64 build (clang 24, ThinLTO, PGO) passes through uncached. On the base revision, 28 flags are unmodeled (-flto=thin, -fsplit-lto-unit, -fwhole-program-vtables, -fprofile-use=<300 MiB profdata>, -mllvm pairs, -fsanitize* family, --warning-suppression-mappings=<file>, -fmodule-name, -mmacos-version-min, assorted -f/-m codegen flags). The WIP branch models them: content-keyed profile and suppression files, -fcrash-diagnostics-dir as no-effect, and tests that fail on base. Every compile still refuses to store, because the header-probe guard reports `token pasting may construct a header availability probe` for Chromium's headers.
+- **Recommendation:** Finish the flag model on the WIP branch and run `make check`. Then design how the shadowing guard can accept the token-pasted `__has_include` probes Chromium's headers use without losing negative-include correctness: resolve the pasted names against the read set, or key the probe results. Acceptance: a real Chromium values.cc compile run twice through kache hits locally on the second run, and the restored object is byte-identical to an uncached compile.
+- **Fix with:** none
+- **Effort:** M
 
 
 ### KACH-23 · P4 · Fixture sources track build outputs every e2e run deletes

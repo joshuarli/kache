@@ -3313,11 +3313,6 @@ fn classifier_accepts_realistic_firefox_cpp_compile() {
 #[test]
 fn classifier_does_not_overreach_116_additions() {
     for flag in &[
-        // Sanitizers aren't on #116's list — they remained refused
-        // before and must stay refused. (Visibility flags moved to
-        // their own cluster, post-#146 — see
-        // `classifier_does_not_overreach_visibility_additions`.)
-        "-fsanitize=undefined",
         // Lookalikes and non-boolean spellings still refuse.
         "-faligned-new=32",
         "-fsized-deallocation",
@@ -9628,5 +9623,64 @@ fn clang_runtime_driver_flags_are_cacheable_and_keyed() {
         let changed = format!("{flag}-changed");
         let changed_args = CcArgs::parse(&s(&["clang++", "-c", "unit.cc", "-Werror", &changed])).unwrap();
         assert_ne!(cc_raw_flags_for_key(&args, &[]), cc_raw_flags_for_key(&changed_args, &[]));
+    }
+}
+
+#[test]
+fn chromium_codegen_flags_are_classified_and_keyed() {
+    let flags = [
+        "-fprofile-use=profile.profdata", "-fno-delete-null-pointer-checks",
+        "-fno-strict-overflow", "-fno-ident", "-fno-lifetime-dse",
+        "-fcrash-diagnostics-dir=crashes", "-mllvm", "-instcombine-lower-dbg-declare=0",
+        "-mllvm", "-split-threshold-for-reg-with-hint=0", "-mllvm", "-inlinehint-threshold=360",
+        "-flto=thin", "-fsplit-lto-unit", "-fwhole-program-vtables",
+        "-fcomplete-member-pointers", "-mno-outline", "-no-canonical-prefixes",
+        "--warning-suppression-mappings=warnings.txt", "-ftrivial-auto-var-init=zero",
+        "-mmacos-version-min=13.0", "-fsanitize=array-bounds", "-fsanitize=return",
+        "-fsanitize-trap=array-bounds", "-fsanitize-ignore-for-ubsan-feature=return",
+        "-fmodule-name=//base:base_Private",
+    ];
+    let mut args = vec!["clang++", "-c", "unit.cc"];
+    args.extend(flags);
+    let parsed = CcArgs::parse(&s(&args)).unwrap();
+    assert!(classify_and_trace_cc_flags(&parsed, &[]).is_empty());
+    let raw = |flags: &[&str]| {
+        let mut args = vec!["clang++", "-c", "unit.cc"];
+        args.extend_from_slice(flags);
+        cc_raw_flags_for_key(&CcArgs::parse(&s(&args)).unwrap(), &[])
+    };
+    assert_ne!(raw(&["-mllvm", "-inlinehint-threshold=360"]), raw(&["-mllvm", "-inlinehint-threshold=361"]));
+    assert_ne!(raw(&["-flto=thin"]), raw(&["-flto=full"]));
+    assert_eq!(raw(&["-fcrash-diagnostics-dir=one"]), raw(&["-fcrash-diagnostics-dir=two"]));
+}
+
+#[cfg(unix)]
+#[test]
+fn chromium_file_flags_change_cache_key_with_contents() {
+    let temp = tempfile::tempdir().unwrap();
+    let fake_cc = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_cc_constant_output.sh");
+    let source = temp.path().join("unit.c");
+    std::fs::write(&source, "int x;\n").unwrap();
+    let compiler = CcCompiler::new();
+    let file_hasher = crate::cache_key::FileHasher::new();
+    let normalizer = crate::path_normalizer::PathNormalizer::empty();
+    let env = crate::invocation::InvocationEnv::capture();
+    let cache = temp.path().join("cache");
+    let ctx = KeyCtx { invocation_env: &env, file_hasher: &file_hasher, path_normalizer: &normalizer, cache_dir: &cache, key_salt: None, key_env_vars: &[], extra_inputs_digest: None, build_script_inputs_digest: None };
+    let key = |flags: &[&str]| {
+        let mut args = vec![fake_cc.to_string_lossy().into_owned(), "-c".into(), source.to_string_lossy().into_owned()];
+        args.extend(flags.iter().map(|flag| flag.to_string()));
+        compiler.key_for_test(&compiler.parse(&args).unwrap(), &ctx)
+    };
+    assert_ne!(key(&["-mllvm", "-inlinehint-threshold=360"]), key(&["-mllvm", "-inlinehint-threshold=361"]));
+    assert_ne!(key(&["-flto=thin"]), key(&["-flto=full"]));
+    assert_eq!(key(&["-fcrash-diagnostics-dir=one"]), key(&["-fcrash-diagnostics-dir=two"]));
+    for prefix in ["-fprofile-use=", "--warning-suppression-mappings="] {
+        let input = temp.path().join("input");
+        std::fs::write(&input, "first").unwrap();
+        let parsed = compiler.parse(&[fake_cc.to_string_lossy().into_owned(), "-c".into(), source.to_string_lossy().into_owned(), format!("{prefix}{}", input.display())]).unwrap();
+        let first = compiler.key_for_test(&parsed, &ctx);
+        std::fs::write(&input, "second content").unwrap();
+        assert_ne!(first, compiler.key_for_test(&parsed, &ctx), "{prefix}");
     }
 }
