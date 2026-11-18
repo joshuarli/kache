@@ -49,7 +49,8 @@ campaign may extend the harness where the original phases are insufficient.
 | A compile-first miss records its memo when the entry already exists (#1390) | `e2e-cc-memo-after-entry`, `e2e-cc-same-content-sources-parallel` |
 | CMake launcher + Ninja generator | `e2e-cmake-out-of-tree`, `e2e-cmake-file-macro-oot`, `e2e-cmake-ninja-flagset` |
 | Unsupported-flag passthrough | `e2e-c-passthrough` |
-| Refusal by invocation shape (multi-source, response file) | `e2e-cc-multi-source`, `e2e-cc-response-file` |
+| Refusal by invocation shape (multi-source) | `e2e-cc-multi-source` |
+| Response-file compile expanded and cached | `e2e-cc-response-file` |
 | Parallel cache access (`make -j`) race gate | `e2e-cc-parallel` |
 | Restore mtime convergence + cross-tree active-reader isolation (#677/#680/#794) | `e2e-rust-cross-tree` |
 | In-flight coalescing across simultaneous cargo invocations (#646) | `e2e-rust-parallel-coalesce` |
@@ -61,7 +62,7 @@ campaign may extend the harness where the original phases are insufficient.
 |---|---|
 | **Daemon path** | prefetch/warming (shards), hash-files cache |
 | **Config behaviors as toggles** | `key_salt`, `ignore_env`, `path_only_env_vars`, `cc_extra_allowlist_flags`, `local_only`, `modified_input_guard` (#324) — none asserted to flip hit/miss e2e |
-| **Refusal classes** | multi-source and response files now covered (`e2e-cc-multi-source`, `e2e-cc-response-file`); still open: `-E`/`-S`, PCH/modules, multi-arch fat binaries, stdout output |
+| **Refusal classes** | multi-source covered (`e2e-cc-multi-source`); GNU response files are now expanded and cached (`e2e-cc-response-file`); still open: `-E`/`-S`, PCH/modules, multi-arch fat binaries, stdout output |
 | **Platform restore modes** | reflink vs hardlink vs copy; Windows NTFS hardlink / ReFS block-clone (#435); macOS codesign of restored executables — restores happen but the *mode* is never asserted |
 | **Rust edge keys** | custom target JSON, native `-L/-l`, `-Z`/`RUSTC_BOOTSTRAP`, sysroot, double-wrapper detection |
 | Admin CLI around builds (gc/purge/doctor/stats/why-miss/clean) | out of e2e scope — covered by `tests/cli_commands_test.rs` instead (listed for completeness, not a true gap) |
@@ -87,8 +88,8 @@ the originally-listed gaps do **not** fit and should stay where they are:
 
 1. **Platform restore** — Windows hardlink/ReFS (#435) and macOS codesign-after-restore.
 2. **Rust edge-key** — custom target JSON + native search paths, to catch under-keying.
-3. **Remaining refusal classes** — `-E`/`-S`, PCH/modules, multi-arch, stdout output → passthrough, no cache entry (extends `e2e-cc-multi-source` / `e2e-cc-response-file`).
+3. **Remaining refusal classes** — `-E`/`-S`, PCH/modules, multi-arch, stdout output → passthrough, no cache entry (extends `e2e-cc-multi-source`).
 
 ### Done (this branch)
 
-- ✅ **Refusal: multi-source + response file** — `e2e-cc-multi-source`, `e2e-cc-response-file` (verified green via the gate harness).
+- ✅ **Refusal: multi-source** — `e2e-cc-multi-source`; **response files cached** — `e2e-cc-response-file` (verified green via the gate harness).

@@ -7706,7 +7706,8 @@ impl Compiler for CcCompiler {
     }
 
     fn parse(&self, args: &[String]) -> Result<CcArgs> {
-        let mut parsed = CcArgs::parse_for(args, &self.invocation_env)?;
+        let expanded = cc_args_with_response_files(args, &self.invocation_env);
+        let mut parsed = CcArgs::parse_for(expanded.as_deref().unwrap_or(args), &self.invocation_env)?;
         parsed.depinfo_roots =
             crate::path_normalizer::PathNormalizer::from_invocation(None, &self.invocation_env)
                 .with_base_dirs(&self.base_dirs)
@@ -8707,10 +8708,20 @@ fn stage_cc_stdout_artifact(
     ))
 }
 
+/// Replace each `@file` argument with the arguments the file holds.
+///
+/// GCC (libiberty `buildargv`) and Clang (`TokenizeGNUCommandLine`) split a
+/// response file the same way for everything accepted here: whitespace
+/// separates arguments, a backslash takes the next character literally, and
+/// single or double quotes group text. Where they differ the file is refused:
+/// an empty quoted argument (GCC keeps it, Clang drops it), a backslash
+/// before a line break or at the end, carriage returns, and a nested `@file`
+/// (whose path base differs between them). A missing or non-UTF-8 file is
+/// refused too.
 fn expand_cc_response_files(args: &[String], env: &InvocationEnv) -> Result<Vec<String>> {
     let mut expanded = Vec::new();
     for arg in args {
-        let Some(path) = arg.strip_prefix('@') else {
+        let Some(path) = arg.strip_prefix('@').filter(|path| !path.is_empty()) else {
             expanded.push(arg.clone());
             continue;
         };
@@ -8719,9 +8730,63 @@ fn expand_cc_response_files(args: &[String], env: &InvocationEnv) -> Result<Vec<
                 .context("resolving cc response file")?,
         )
         .with_context(|| format!("reading cc response file {path}"))?;
-        expanded.extend(body.split_whitespace().map(str::to_string));
+        let tokens = gnu_response_file_arguments(&body)
+            .with_context(|| format!("cc response file {path}"))?;
+        anyhow::ensure!(
+            !tokens.iter().any(|token| token.starts_with('@')),
+            "cc response file {path} names another response file"
+        );
+        expanded.extend(tokens);
     }
     Ok(expanded)
+}
+
+/// `args` with its response files expanded, when it has any and they can be
+/// expanded safely. GNU drivers only: clang-cl splits them the Windows way.
+/// `None` leaves the `@file` arguments in place, and they refuse.
+fn cc_args_with_response_files(args: &[String], env: &InvocationEnv) -> Option<Vec<String>> {
+    let (program, rest) = args.split_first()?;
+    if !rest.iter().any(|arg| arg.len() > 1 && arg.starts_with('@'))
+        || ToolFamily::detect(program, rest).dialect() != Dialect::Gnu
+    {
+        return None;
+    }
+    match expand_cc_response_files(rest, env) {
+        Ok(expanded) => Some(std::iter::once(program.clone()).chain(expanded).collect()),
+        Err(error) => {
+            log::debug!("cc response file not expanded: {error:#}");
+            None
+        }
+    }
+}
+
+fn gnu_response_file_arguments(body: &str) -> Result<Vec<String>> {
+    anyhow::ensure!(!body.contains('\r'), "carriage returns split differently between GCC and Clang");
+    let mut tokens = Vec::new();
+    let mut chars = body.chars().peekable();
+    loop {
+        while chars.next_if(|c| c.is_ascii_whitespace()).is_some() {}
+        if chars.peek().is_none() {
+            return Ok(tokens);
+        }
+        let mut token = String::new();
+        let mut quote = None;
+        while let Some(c) = chars.next() {
+            match (c, quote) {
+                ('\\', _) => match chars.next() {
+                    Some('\n') | None => anyhow::bail!("a backslash ends a line or the file"),
+                    Some(escaped) => token.push(escaped),
+                },
+                (c, Some(open)) if c == open => quote = None,
+                (c, Some(_)) => token.push(c),
+                ('\'' | '"', None) => quote = Some(c),
+                (c, None) if c.is_ascii_whitespace() => break,
+                (c, None) => token.push(c),
+            }
+        }
+        anyhow::ensure!(!token.is_empty(), "an empty quoted argument is kept by GCC and dropped by Clang");
+        tokens.push(token);
+    }
 }
 
 fn cc_link_file_inputs(args: &[String]) -> Vec<PathBuf> {

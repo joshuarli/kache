@@ -417,7 +417,7 @@ summary = "quoted paths with spaces parse correctly in response files"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-rsp-escaped"
@@ -435,7 +435,7 @@ summary = "@file inside @file expands recursively"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-rsp-empty"
@@ -453,7 +453,7 @@ summary = "missing response file fails like raw (status and diagnostics preserve
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-rsp-cycle"

@@ -1,0 +1,23 @@
+summary = "quoted response-file arguments (a define with a space, an include dir with a space) expand as the compiler reads them"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "@args.rsp"]
+source = "u.c"
+also_names = ["@args.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-header-in-spaced-dir"
+reuse = "miss"
+action = [{ op = "write", path = "inc dir/h.h", content = "#define H 5\n" }, { op = "delete-outputs" }]

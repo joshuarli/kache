@@ -85,6 +85,9 @@ pub struct Observation {
     pub executions: Executions,
     /// Kache's own per-invocation result from its event log; kache arm only.
     pub kache_result: Option<String>,
+    /// The arguments each `@file` in the command held when it ran, split on
+    /// whitespace (the oracle's own response files never quote).
+    pub response_files: BTreeMap<String, Vec<String>>,
 }
 
 /// One invocation in every arm, ready to judge.
@@ -200,9 +203,13 @@ fn kache_verdict(row: &Row<'_>, ccache: Verdict) -> (Verdict, Vec<String>) {
         }
         _ => {}
     }
+    let expand = |args: &[String]| expand_response_files(args, &row.kache.response_files);
+    let (effective_expanded, passthrough_expanded) = (expand(row.effective_argv), expand(row.passthrough_argv));
     for argv in &row.kache.executions.codegen_argv {
         let effective = without_dependency_capture(argv);
-        if effective != row.effective_argv && argv.as_slice() != row.passthrough_argv {
+        let keyed = effective == row.effective_argv || effective == effective_expanded;
+        let passthrough = argv.as_slice() == row.passthrough_argv || *argv == passthrough_expanded;
+        if !keyed && !passthrough {
             return (
                 Verdict::HarnessError,
                 vec![format!(
@@ -213,6 +220,13 @@ fn kache_verdict(row: &Row<'_>, ccache: Verdict) -> (Verdict, Vec<String>) {
         }
     }
     (Verdict::Match, Vec::new())
+}
+
+/// `args` with each `@file` replaced by the arguments it held.
+pub fn expand_response_files(args: &[String], files: &BTreeMap<String, Vec<String>>) -> Vec<String> {
+    args.iter()
+        .flat_map(|arg| files.get(arg).cloned().unwrap_or_else(|| vec![arg.clone()]))
+        .collect()
 }
 
 fn is_hit_result(result: &str) -> bool {
@@ -316,6 +330,7 @@ mod tests {
                 ..Executions::default()
             },
             kache_result: Some(if codegen == 0 { "local_hit" } else { "miss" }.to_string()),
+            response_files: BTreeMap::new(),
         }
     }
 
@@ -535,6 +550,36 @@ mod tests {
         let mut keyed = raw.clone();
         keyed.executions.codegen_argv = vec![reproducible.clone()];
         assert_eq!(verdict(&keyed), Verdict::Match, "a keyed compile is judged against the profile's command");
+    }
+
+    #[test]
+    fn kache_may_run_a_response_file_expanded() {
+        let raw = obs(1);
+        let with_file: Vec<String> = ["@args.rsp"].map(String::from).to_vec();
+        let mut kache = obs(1);
+        kache.response_files.insert("@args.rsp".into(), argv());
+        let verdict = |kache: &Observation| {
+            judge(&Row {
+                reuse: Reuse::Miss,
+                expected_status: 0,
+                raw: &raw,
+                raw_repeat: &raw,
+                raw_passthrough: None,
+                ccache: &raw,
+                ccache_preprocessor: &raw,
+                kache,
+                effective_argv: &with_file,
+                passthrough_argv: &with_file,
+            })
+            .verdict
+        };
+        assert_eq!(verdict(&kache), Verdict::Match);
+        kache.response_files.insert("@args.rsp".into(), vec!["-c".into(), "other.c".into()]);
+        assert_eq!(verdict(&kache), Verdict::HarnessError);
+        assert_eq!(
+            expand_response_files(&["-O2".into(), "@x".into()], &BTreeMap::from([("@x".to_string(), vec!["-c".to_string(), "a.c".to_string()])])),
+            ["-O2", "-c", "a.c"]
+        );
     }
 
     #[test]
