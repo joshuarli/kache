@@ -1,0 +1,17 @@
+summary = "diagnostics on a successful compile are replayed byte-for-byte on restore"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["warn.o"]
+
+[[compile]]
+argv = ["{cc}", "-Wall", "-c", "warn.c", "-o", "warn.o"]
+source = "warn.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

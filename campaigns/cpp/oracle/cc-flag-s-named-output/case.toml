@@ -1,0 +1,17 @@
+summary = "named-file assembly output (-S -o) is cacheable by ccache; kache passes it through (CCP-03)"
+cohort = "open"
+profiles = ["transparent", "reproducible"]
+outputs = ["asm.s"]
+
+[[compile]]
+argv = ["{cc}", "-S", "asm.c", "-o", "asm.s"]
+source = "asm.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "like-ccache"
+action = [{ op = "delete-outputs" }]

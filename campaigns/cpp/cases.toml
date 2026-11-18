@@ -16,6 +16,9 @@
 #   planned        — will be executed; blocked by listed package
 #   conditional    — requires the stated prerequisites; test the violations
 #   out_of_scope   — disposition recorded; revisit only with a plan change
+#   oracle         — executable: campaigns/cpp/oracle/<id>/ runs it through
+#                    `make cc-oracle CASE=<id>`; its case.toml cohort says
+#                    whether it blocks (`blocking`) or tracks a gap (`open`)
 #
 # profiles: transparent = KACHE_CC_PATH_NORMALIZE=0 + KACHE_CC_SOURCE_DATE_EPOCH=passthrough;
 #           reproducible = documented kache default maps/epoch (raw and ccache
@@ -28,6 +31,51 @@ created = "2026-11-17"
 [meta]
 inventory_state = "initial (CCP-00 bootstrap); complete enumeration owed by CCP-01/CCP-02..CCP-08"
 provenance_key = "ccache.suite = upstream suite filename at the pinned commit (reference only, not a kache dependency)"
+
+[[case]]
+id = "cc-core-c-object"
+package = "CCP-01"
+summary = "single C object: populate, restore, header edit over an existing output, revert, daemon restart"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-core-cxx-object"
+package = "CCP-01"
+summary = "single C++ object with a template header: populate, restore, header edit, revert"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-core-failed-compile"
+package = "CCP-01"
+summary = "failing compile keeps status/diagnostics, is never a hit, leaves the earlier object exactly as raw does"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-core-user-depfile"
+package = "CCP-01"
+summary = "caller -MD -MF depfile restored with raw-identical bytes; new header dependency invalidates"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-core-warning-replay"
+package = "CCP-01"
+summary = "diagnostics of a successful compile replayed byte-for-byte on restore"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
 
 [[case]]
 id = "cc-input-same-size-mtime"
@@ -585,7 +633,7 @@ summary = "-S with a named output file is cached safely (restored as named)"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "base.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-preprocessed-input"
@@ -621,7 +669,7 @@ summary = "comment-only change reuses without codegen; debug lines must still be
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "depend.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-eqp-unused-macro"

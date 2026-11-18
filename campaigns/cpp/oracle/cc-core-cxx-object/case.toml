@@ -1,0 +1,27 @@
+summary = "single C++ object with a template header: populate, restore, header edit, revert"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["unit.o"]
+
+[[compile]]
+argv = ["{cxx}", "-c", "unit.cpp", "-o", "unit.o"]
+source = "unit.cpp"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "header-edit"
+reuse = "miss"
+action = [{ op = "write", path = "shape.hpp", content = "template <int N> struct Shape {\n    int area() const { return N * N + 1; }\n};\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "revert"
+reuse = "hit"
+action = [{ op = "write", path = "shape.hpp", content = "template <int N> struct Shape {\n    int area() const { return N * N; }\n};\n" }, { op = "delete-outputs" }]

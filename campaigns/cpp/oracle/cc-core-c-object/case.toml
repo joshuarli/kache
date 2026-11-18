@@ -1,0 +1,37 @@
+summary = "single C object: populate, restore, header edit, revert, daemon restart"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["unit.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "unit.c", "-o", "unit.o"]
+source = "unit.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "header-edit-over-existing-output"
+reuse = "miss"
+action = [{ op = "write", path = "config.h", content = "#define UNIT_VALUE 2\n" }]
+
+[[step]]
+name = "restore-edited"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "revert"
+reuse = "hit"
+action = [{ op = "write", path = "config.h", content = "#define UNIT_VALUE 1\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "daemon-restart"
+reuse = "hit"
+action = [{ op = "restart-daemon" }, { op = "delete-outputs" }]

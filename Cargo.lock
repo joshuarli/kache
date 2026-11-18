@@ -592,6 +592,7 @@ name = "kache-e2e"
 version = "2.0.0-rc.2"
 dependencies = [
  "anyhow",
+ "blake3",
  "deser",
  "deser-json",
  "deser-toml",

@@ -16,6 +16,10 @@ mod bench_host;
 mod bench_otlp;
 pub mod bench_profile;
 pub mod bench_runner;
+#[cfg(unix)]
+pub mod cc_oracle;
+#[cfg(unix)]
+pub mod cc_oracle_cli;
 pub mod daemon;
 mod disk_usage;
 pub mod fixture;
