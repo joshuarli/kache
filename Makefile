@@ -17,7 +17,7 @@ endif
 
 .PHONY: help build test check test-ci release verify-release lint \
   client-crates-check test-resource-guard-check pr mutants-diff \
-  e2e e2e-negative-control cc-oracle-tools cc-oracle cc-oracle-full cc-oracle-negative-control \
+  e2e e2e-negative-control cc-oracle-tools cc-oracle cc-oracle-full cc-oracle-negative-control cc-project-zlib \
   bench bench-retry bench-trace bench-sccache bench-mbx bench-pr \
   bench-short test-bench-short test-bench-edit-loop bench-contention test-bench-contention \
   perf-gate-local trace-phases bump release-tag crates-status \
@@ -69,6 +69,7 @@ help:
 	@echo "cc-oracle [CASE=] [TOOLCHAINS=cc] [PROFILES=]  C/C++ raw/ccache/kache differential, blocking cohort"
 	@echo "cc-oracle-full           every C/C++ oracle case, including open gaps"
 	@echo "cc-oracle-negative-control  each injected oracle fault must be detected"
+	@echo "cc-project-zlib [TOOLCHAINS=cc]  pinned zlib raw vs kache: identical objects, warm compiles nothing"
 	@echo "bench [PROFILE=] [ARGS=] list bench profiles, or cold/warm a profile (ARGS passes through)"
 	@echo "bench-retry/-trace/-sccache/-mbx  bench variants; PROFILE selects, ARGS passes through"
 	@echo "bench-pr                 one Kache side of hk, eza and aube"
@@ -167,6 +168,11 @@ cc-oracle: cc-oracle-tools
 
 cc-oracle-full: cc-oracle-tools
 	$(cc_oracle) --full
+
+# CCP-07: the pinned zlib built raw and through kache (transparent profile);
+# objects must match byte for byte and the warm build must compile nothing.
+cc-project-zlib: cc-oracle-tools
+	./scripts/cc-project-zlib.sh ./target/release/kache .work/tmp/cc-project-zlib $(firstword $(TOOLCHAINS))
 
 cc-oracle-negative-control: cc-oracle-tools
 	@for control in $(CC_ORACLE_CONTROLS); do \

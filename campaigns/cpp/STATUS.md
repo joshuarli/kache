@@ -146,7 +146,7 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | CCP-04 | TODO | CCP-02 | Equivalent-preprocessing reuse; design below. `cc-eqp-comment-only` is the open gap (reproducible profile). |
 | CCP-05 | RUNNING | CCP-02, CCP-03 | Open cases: `cc-out-gcno` (clang), `cc-out-split-dwarf` (Linux), `cc-out-serialized-diagnostics` (clang). |
 | CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | Open conditional case `cc-pch-clang-use` (ccache sloppiness `pch_defines,time_macros`). Module consumers not yet. |
-| CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`; open `cc-host-universal-objects`. Real-project builds not started. |
+| CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`; open `cc-host-universal-objects`. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM subset, cc-crate fixture, Chromium, CMake/Meson/Autotools launchers not started. |
 | CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`) and the broker exit race fix (PR #32). Decision needed on `KACHE_VERIFY_RESTORES` (see below). |
 | CCP-09 | TODO | CCP-02..CCP-08 | Performance protocol; estimator locked in lock.toml (seed 20261117). |
 
