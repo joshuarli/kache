@@ -837,9 +837,12 @@ fn run_phase(
     let build = run_step(&fixture.commands.build, fixture, cwd, cache_dir, &keytrace_env)?;
     let build_wall_s = started.elapsed().as_secs();
     let build_exit_code = build.exit.code().unwrap_or(1);
+    // The report below must see what the wrappers handed off, and a wrapper
+    // hands off to any daemon it finds, including one the build spawned.
     if fixture.daemon {
-        // The report below must see what the wrappers handed off.
         daemon::restart_after_build(kache_path, cache_dir).with_context(|| fixture.name.clone())?;
+    } else {
+        daemon::drain(kache_path, cache_dir).with_context(|| fixture.name.clone())?;
     }
 
     if !build.exit.success() {
