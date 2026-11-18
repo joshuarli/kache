@@ -494,7 +494,11 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
     {
         run.injected = true;
     }
-    if ctx.control == Some(Control::ReferenceFailure) && raw_like {
+    // An always-failing reference is visible only where raw must succeed.
+    if ctx.control == Some(Control::ReferenceFailure)
+        && raw_like
+        && case.steps.iter().any(|step| step.status == 0)
+    {
         run.injected = true;
     }
     Ok(run)
