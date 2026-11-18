@@ -124,6 +124,8 @@ When a record exists but a file in it changed, Kache runs the preprocessor to re
 
 On a miss Kache compiles with `SOURCE_DATE_EPOCH=0` unless the build exports its own value, so objects that use `__DATE__` or `__TIME__` stay identical between rebuilds and show the Unix epoch date. Set `KACHE_CC_SOURCE_DATE_EPOCH=passthrough` to stop Kache from setting it.
 
+A cache directory on a network or virtual file system, which can corrupt Kache's index, is reported by `kache doctor` and in Kache's log. Kache does not add the warning to a compile's standard error, so the compile's messages match the compiler's own.
+
 Kache recognizes GCC, Clang, Apple Clang, clang-cl, versioned names such as `gcc-13`, target-prefixed compiler names, and cargo-zigbuild's `zigcc-*` wrappers. It can probe other wrapper names to identify the underlying compiler family.
 
 ## Preprocessor memos
