@@ -1355,7 +1355,7 @@ mod tests {
     #[test]
     fn shutdown_waits_for_a_slow_but_moving_worker() {
     let progress = Arc::new(PublishProgress::default());
-    for _ in 0..10 {
+    for _ in 0..30 {
         progress.accepted();
     }
     let (done_tx, done) = std::sync::mpsc::channel();
@@ -1363,18 +1363,19 @@ mod tests {
     let worker = Arc::clone(&progress);
     std::thread::spawn(move || {
         let _ = ready_tx.send(());
-        // Ten jobs: the whole queue takes several stall windows, but no
-        // single gap comes near wedging the drain.
-        for _ in 0..10 {
-            std::thread::sleep(Duration::from_millis(60));
+        // Thirty jobs spanning several stall windows: the queue must
+        // outlast the window through progress resets, with each gap far
+        // below it even when the runner is fully subscribed.
+        for _ in 0..30 {
+            std::thread::sleep(Duration::from_millis(40));
             worker.finished();
         }
         let _ = done_tx.send(());
     });
     ready_rx.recv().expect("worker started");
-    let left = drain_publications(done, &progress, Duration::from_millis(300));
+    let left = drain_publications(done, &progress, Duration::from_millis(400));
     assert_eq!(left, 0);
-    assert_eq!(progress.done(), 10);
+    assert_eq!(progress.done(), 30);
     }
 
     /// A worker that finishes nothing for the stall window is given up on,
