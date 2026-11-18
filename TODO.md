@@ -1,5 +1,15 @@
 Prefix: KACH
-Next: 26
+Next: 27
+
+### KACH-26 · P1 · Reach ccache-level local C/C++ compatibility
+
+- **Area:** Compiler compatibility, correctness, tests
+- **Plan:** [C_CPP_PARITY_CAMPAIGN.md](C_CPP_PARITY_CAMPAIGN.md)
+- **Status:** Planned; implementation and differential baseline have not started.
+- **Goal:** Execute the unattended campaign using pinned ccache as the compatibility/reuse oracle and raw compilers as correctness ground truth, with native macOS and Linux coverage.
+- **Scope:** Response files and flags, invalidation, equivalent-preprocessing reuse, complete output sets, conditional PCH/module support, host integration, local reliability, and measured performance. Remote storage stays on the later roadmap.
+- **Coordination:** CCP-00/CCP-08 cover the relevant KACH-21/KACH-22 work; retain those entries until their gates actually run. Start at CCP-00 and persist evidence in the campaign ledger specified by the plan.
+- **Done when:** Every final acceptance criterion in the plan passes on the same integrated revision; safe passthrough, missing tools, and unexecuted lanes do not count as cached parity.
 
 ### KACH-21 · P2 · Linux fixture scenarios run in no gate
 

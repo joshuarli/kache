@@ -2,6 +2,17 @@
 
 `make check` is the pre-PR verification gate.
 
+## C/C++ parity campaign
+
+When executing the C/C++ parity campaign, follow
+[C_CPP_PARITY_CAMPAIGN.md](C_CPP_PARITY_CAMPAIGN.md). It defines the pinned
+ccache reference, raw-compiler correctness oracle, macOS/Linux matrix, ordered
+work packages, evidence requirements, and unattended resume loop.
+
+Remote storage is deferred to that plan's later roadmap. Prioritize local C/C++
+compatibility and correctness; older coverage notes do not override this scope.
+The campaign supplements the verification and PR rules below.
+
 ## Before `gh pr create`
 
 ```sh

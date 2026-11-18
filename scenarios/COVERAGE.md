@@ -5,10 +5,13 @@ and the gaps where a feature has no end-to-end scenario. The functional suite
 (`make e2e`, `suite:e2e`) currently has **44 scenarios** (the `bench-*` cases are
 load benchmarks, not feature tests).
 
-This was produced by a cross-family audit (Claude + codex, independent passes):
-both ranked **remote/S3** the #1 gap and converged on the daemon, restore-mode,
-and `modified_input_guard` gaps; the config-toggle / `sync` / refusal-class gaps
-came from the second pass.
+This is a historical coverage inventory, not the current execution order. The
+active local C/C++ work is defined by
+[the ccache parity campaign](../C_CPP_PARITY_CAMPAIGN.md), including macOS/Linux
+gates and a raw-compiler correctness oracle. Remote/S3 storage is deferred to its
+later roadmap. Recheck the counts and behavior below against current source;
+existing refusal coverage does not establish cached compatibility, and the
+campaign may extend the harness where the original phases are insufficient.
 
 ## Well covered (feature → scenario)
 
