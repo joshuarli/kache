@@ -1,0 +1,22 @@
+summary = "-mllvm option pairs are keyed by value; different thresholds never share an entry"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["a.o", "b.o"]
+
+[[compile]]
+argv = ["{cc}", "-O2", "-mllvm", "-inlinehint-threshold=360", "-c", "u.c", "-o", "a.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-mllvm", "-inlinehint-threshold=0", "-c", "u.c", "-o", "b.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

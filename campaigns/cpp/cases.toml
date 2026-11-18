@@ -597,7 +597,7 @@ summary = "-fsanitize family is keyed (modeled per Chromium's observed flag set,
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "base.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-lto-compile-modes"
@@ -606,7 +606,7 @@ summary = "-flto=thin, -fsplit-lto-unit, -fwhole-program-vtables are keyed as co
 profiles = ["both"]
 compilers = ["clang", "apple-clang"]
 ccache.suite = "direct.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-mllvm-pairs"
@@ -615,7 +615,7 @@ summary = "-mllvm option pairs are keyed as groups (order-dependent)"
 profiles = ["both"]
 compilers = ["clang", "apple-clang"]
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-module-name"
@@ -633,7 +633,7 @@ summary = "-mmacos-version-min / -miphoneos-version-min etc. are keyed"
 profiles = ["both"]
 compilers = ["apple-clang", "clang"]
 ccache.suite = "base.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-warning-suppression-mappings"
@@ -661,6 +661,15 @@ profiles = ["both"]
 compilers = ["clang"]
 ccache.suite = "kache-observed (Chromium flag set)"
 status = "planned"
+
+[[case]]
+id = "cc-flag-chromium-codegen"
+package = "CCP-03"
+summary = "Chromium's official codegen flags (null-check, overflow, ident, member pointers, auto-var-init, module name) cache"
+profiles = ["both"]
+compilers = "clang"
+ccache.suite = "kache-original"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-s-named-output"
