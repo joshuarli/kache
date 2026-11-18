@@ -1,6 +1,7 @@
 # C/C++ parity campaign
 
-Status: **NOT STARTED**. This is an execution plan, not a compatibility claim.
+Progress lives in `campaigns/cpp/STATUS.md` once CCP-00 creates it; until then
+no package has started. This is an execution plan, not a compatibility claim.
 Created 2026-11-17. Kache baseline:
 [4401c7a](https://github.com/joshuarli/kache/commit/4401c7a09498d2225ab22e7d1e74bef20211ca8f).
 Tracking entry: KACH-26 in [TODO.md](TODO.md).
@@ -112,16 +113,27 @@ do not silently copy upstream implementation/test text into this repository.
 
 CCP-00 locks exact OS images, compiler binaries, SDKs, and supported current/prior
 compiler releases. Native execution is required for host correctness/performance
-claims; cross-compilation or emulation supplies additional evidence only.
+claims; cross-compilation or emulation supplies additional evidence only. A
+container on a host of the same architecture counts as native.
 
-| Lane | Host and tools | Required workload |
-|---|---|---|
-| M1 | macOS arm64; Apple Clang and standalone LLVM Clang | Full applicable corpus; SDK/frameworks; native and arm64+x86_64 universal objects. |
-| M2 | macOS x86_64; Apple Clang | Native deterministic core and release/runtime smoke tests. |
-| L1 | Linux x86_64 glibc; GCC and Clang | Full applicable corpus and real-build integration. |
-| L2 | Linux aarch64 glibc; GCC and Clang | Full applicable corpus and real-build integration. |
-| L3 | Alpine/musl x86_64; GCC and Clang | Native kache/engine execution, deterministic core, fixtures, release/runtime checks. |
-| L4 | Alpine/musl aarch64; GCC and Clang | Same contract as L3. |
+The matrix covers the targets kache releases: `aarch64-apple-darwin`,
+`x86_64-unknown-linux-musl`, and `aarch64-unknown-linux-musl` (see
+[release.yml](.github/workflows/release.yml)). Every required lane has a host
+that exists today:
+
+| Lane | Host and tools | Host source | Required workload |
+|---|---|---|---|
+| M1 | macOS arm64; Apple Clang and standalone LLVM Clang | `xcode-27` CI runner; the owner's Apple Silicon Mac for real builds | Full applicable corpus; SDK/frameworks; native and arm64+x86_64 universal objects. |
+| L1 | Linux x86_64 glibc; GCC and Clang | `ubuntu-26.04` CI runner | Full applicable corpus and real-build integration. |
+| L2 | Linux aarch64 glibc; GCC and Clang | `ubuntu-26.04-arm` CI runner | Full applicable corpus and real-build integration. |
+| L3 | Alpine/musl x86_64; GCC and Clang | Alpine container on `ubuntu-26.04`; the owner's Alpine hosts `threadripper` and `lisa` for real builds | Native kache/engine execution, deterministic core, fixtures, release/runtime checks. |
+| L4 | Alpine/musl aarch64; GCC and Clang | Alpine container on `ubuntu-26.04-arm` | Same contract as L3. |
+
+Intel macOS is not a release target, so it is not a required lane. Add it only
+together with an `x86_64-apple-darwin` release and a native runner. Shared
+owner hosts run other work: use them for bounded real builds, never for timed
+comparisons while another heavy job runs, and record their load with each
+result.
 
 Test the newest supported compiler major in primary lanes and one prior major
 per compiler family in pinned extended lanes. Previous Apple Clang means an
@@ -132,8 +144,9 @@ does not prove execution on the older OS.
 Frequent gates: M1 Apple Clang and L1 GCC/Clang, plus affected critical
 key/restore cases elsewhere. Scheduled/manual jobs and final acceptance cover
 the full required matrix. Every named cell runs the core; large projects and
-repeated benchmarks belong on primary lanes. Missing native runners stay
-**BLOCKED**, while independent work continues.
+repeated benchmarks belong on primary lanes. A lane whose host becomes
+unavailable stays **BLOCKED** while independent work continues; dropping a lane
+requires a plan-change commit that also narrows the release claims.
 
 Assign existing cross-GCC fixtures to a glibc job if Alpine lacks their tools.
 Compiling musl objects on glibc does not prove the host binary works on musl.
@@ -281,7 +294,7 @@ Implement these proposed interfaces:
 | `make cc-bench` | Locked raw/ccache/kache performance protocol. |
 
 Write versioned JSON and concise Markdown under ignored
-`tmp/cc-oracle/<run-id>/`: commands, inputs, output digests, per-transition
+`.work/tmp/cc-oracle/<run-id>/`: commands, inputs, output digests, per-transition
 verdicts/reasons, compiler executions, duration, and reproducers. Zero selected
 cases, dropped result rows, and failed reference runs cannot produce success.
 
@@ -296,7 +309,11 @@ Dependencies: CCP-01. Reuse these regressions for every later feature.
 Cover source/header changes, same-size edits with restored mtime, atomic file
 replacement, symlink retargeting, header appearance/deletion/shadowing, include
 search order, `__has_include[_next]`, macro-generated probes, and generated
-headers. Exercise `-I`, `-iquote`, `-isystem`, `-idirafter`, forced includes,
+headers. Macro-generated probes include header names built by token pasting,
+which Chromium's headers use. Today kache refuses every such compile with
+`cc: token pasting may construct a header availability probe`. Resolve those
+probes against the read set, or key their results, so they hit without losing
+correct invalidation when a probed header appears or disappears. Exercise `-I`, `-iquote`, `-isystem`, `-idirafter`, forced includes,
 sysroots/frameworks, and include-path environment variables.
 
 Test same-path compiler replacement, wrappers selecting another compiler, driver
@@ -333,6 +350,19 @@ behavior even where ccache does not cache it.
 
 For each argument family identify input, output, diagnostic, host-dependence,
 and key effects. Never broadly accept unknown flags or sort ordered arguments.
+
+Start from branch `feat/cc-chromium-official-flags`. It models the 28 flags an
+official Chromium macOS arm64 compile uses (clang 24, ThinLTO, PGO) as general
+rules, with unit tests that fail on the baseline:
+
+- the LTO compile modes `-flto=thin`, `-fsplit-lto-unit` and `-fwhole-program-vtables`;
+- `-mllvm` pairs and the `-fsanitize*` family;
+- `-fmodule-name` and `-mmacos-version-min`;
+- `-fprofile-use` and `--warning-suppression-mappings`, keyed by file content;
+- `-fcrash-diagnostics-dir`, which has no effect on outputs.
+
+Its final edit is unverified and it has not passed `make check`. Rebase it,
+verify it, and land it through this package.
 
 Exit: required cases populate/restore; malformed/unsupported invocations match
 raw; response/input changes invalidate correctly.
@@ -413,7 +443,11 @@ symlinks, copy/clone fallbacks, and cross-GCC fixtures. Use paths with spaces an
 non-ASCII names on both host families.
 
 Pin bounded integrations: zlib (C), a fixed LLVM/Clang target subset (C++),
-and a small mixed Rust/C/C++ `cc`-crate fixture. Exercise CMake/Ninja and Make,
+a small mixed Rust/C/C++ `cc`-crate fixture, and a fixed Chromium target subset
+built through `cc_wrapper` on M1. Use `//base` and one Blink target from the
+official macOS arm64 Helium configuration that
+[laputa-systems/chromium-build](https://github.com/laputa-systems/chromium-build)
+pins (`macos-helium-release`). Exercise CMake/Ninja and Make,
 plus small Meson/Autotools launcher checks. Freeze project revisions, target
 lists, and configurations before measuring. Existing Firefox scenarios are
 extended coverage, not the only route to completion.
@@ -593,7 +627,7 @@ All criteria must hold on the same integrated kache revision:
   reported separately for explicitly unsupported/out-of-scope behavior.
 - Conditional PCH/module results state prerequisites and test their violations.
   Known ccache defects are recorded; kache must still match raw.
-- M1–M2 and L1–L4 requirements have execution evidence. Linux fixtures and
+- M1 and L1–L4 requirements have execution evidence. Linux fixtures and
   negative controls run; architecture/runtime claims match actual tested hosts.
 - `make check`, applicable e2e, oracle controls, local fault tests, and required
   mutation checks pass. Existing Rust functionality remains covered.
