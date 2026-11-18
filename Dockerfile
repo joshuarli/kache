@@ -1,10 +1,12 @@
 # Toolchain bump: edit rust-toolchain.toml only; this image reads the channel
-# from it. Bump LLVM_* and RUSTUP_VERSION (plus its checksums) separately.
+# from it. LLVM_RELEASE_TAG tracks the laputa-systems/llvm-prebuilt-musl
+# prereleases; bump it with the matching LLVM_* checksums below.
 FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 ARG TARGETARCH
 ARG LLVM_VERSION=23.1.5
-ARG LLVM_RELEASE_SHA=c4f9b08
+ARG LLVM_RELEASE_TAG=release-b29e4d07a2b9a5e72319b37429cf375149212755
+ARG GLUON_RELEASE_TAG=release-fa8b6aace38683a17ee3f398d8b568341c7192fe
 ARG RUSTUP_VERSION=1.29.1
 ARG RUSTUP_X86_64_SHA256=331228566cc931f32cd684f9bebc5956a5e5d7394c8d5de595f196a658ab98e6
 ARG RUSTUP_AARCH64_SHA256=1ddf36182ac5d1782dbeefcb9bea7f5f9412d88f4a0d5047b1564a223624e8c6
@@ -17,8 +19,6 @@ RUN apk add --no-cache \
     g++=15.2.0-r5 \
     gcc=15.2.0-r5 \
     make=4.4.1-r4 \
-    ninja-build=1.13.2-r1 \
-    ninja-is-really-ninja=1.13.2-r1 \
     procps \
     strace=6.19-r1 \
     musl-dev=1.2.6-r3 \
@@ -33,17 +33,35 @@ RUN ar rcs /usr/lib/libutil.a
 
 # LLVM tools must be musl-linked to run in this Alpine image.
 RUN case "$TARGETARCH" in \
-        amd64) arch=x86_64; sum=8039dfa9e5b2ee53b04c1dcf94d65bd76c27842b0d4128c5a7bc6ba21d345fec ;; \
-        arm64) arch=aarch64; sum=7055513530fc60361e29d01d5c849d356b25e9e38124811a420970941dd32979 ;; \
+        amd64) arch=x86_64; sum=de3f6d0ad089391482147c61648c511c500b25289132fe7f2c446a0905406d2a ;; \
+        arm64) arch=aarch64; sum=4d8b637d65ed0299c8b7852c1e7e1d41f7141346ce31e707f0975ff67460121e ;; \
         *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
     esac \
     && archive=/kache/.work/tmp/llvm.tar.xz \
     && mkdir -p /kache/.work/tmp \
-    && wget -O "$archive" "https://github.com/laputa-systems/llvm-prebuilt-musl/releases/download/llvm-musl-${LLVM_VERSION}-${LLVM_RELEASE_SHA}/clang+llvm-${LLVM_VERSION}-${arch}-linux-musl.tar.xz" \
+    && wget -O "$archive" "https://github.com/laputa-systems/llvm-prebuilt-musl/releases/download/${LLVM_RELEASE_TAG}/clang+llvm-${LLVM_VERSION}-${arch}-linux-musl.tar.xz" \
     && echo "$sum  $archive" | sha256sum -c - \
     && mkdir -p /opt/llvm-musl \
     && tar xf "$archive" -C /opt/llvm-musl --strip-components=1 \
     && test -f /opt/llvm-musl/lib/libclang.so \
+    && rm "$archive"
+
+# Gluon is the canonical ninja/meson executor; pin the musl prerelease
+# like LLVM above. Static binaries, so they run in the musl image as-is.
+RUN case "$TARGETARCH" in \
+        amd64) arch=x86_64; sum=3aacbd8756a4dcfeff9cd139ebcd5a3b4cb2cc433c599b7e21f446c716987ce8 ;; \
+        arm64) arch=aarch64; sum=6b352c03399cf41f45ee5d9ff601ea17cf4768f74aff31a164e145e6e2326e56 ;; \
+        *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && archive=/kache/.work/tmp/gluon.tar.xz \
+    && wget -O "$archive" "https://github.com/laputa-systems/gluon/releases/download/${GLUON_RELEASE_TAG}/gluon-${arch}-unknown-linux-musl.tar.xz" \
+    && echo "$sum  $archive" | sha256sum -c - \
+    && mkdir -p /opt/gluon \
+    && tar -xJf "$archive" -C /opt/gluon \
+    && ln -s /opt/gluon/ninja /usr/local/bin/ninja \
+    && ln -s /opt/gluon/meson /usr/local/bin/meson \
+    && ln -s /opt/gluon/gluon-build /usr/local/bin/gluon-build \
+    && ninja --version \
     && rm "$archive"
 
 # rustc's default linker driver is `cc`, and several tests probe or run it;
