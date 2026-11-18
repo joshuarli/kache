@@ -1092,6 +1092,51 @@ ccache.suite = "masquerading.bash"
 status = "planned"
 
 [[case]]
+id = "cc-rel-store-truncate-blobs"
+package = "CCP-08"
+summary = "truncated blobs are detected; the compile recovers and the repaired entry is reused"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-rel-store-delete-blobs"
+package = "CCP-08"
+summary = "deleted blobs are detected; the compile recovers and the repaired entry is reused"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-rel-store-corrupt-meta"
+package = "CCP-08"
+summary = "unparseable entry metadata is detected; the compile recovers and the repaired entry is reused"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-rel-store-corrupt-blobs"
+package = "CCP-08"
+summary = "a same-length bit flip in a blob is restored as a hit under the default KACHE_VERIFY_RESTORES=off (open; decision recorded)"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-rel-store-corrupt-blobs-verified"
+package = "CCP-08"
+summary = "with KACHE_VERIFY_RESTORES=always a bit-flipped blob is evicted and recompiled"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
 id = "cc-rel-corrupt-entry"
 package = "CCP-08"
 summary = "corrupted local cache entry detected and recovered; subsequent healthy reuse works"

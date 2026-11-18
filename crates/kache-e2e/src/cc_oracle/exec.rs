@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 
-use super::case::{Action, Case, Profile, Reuse};
+use super::case::{Action, Case, Profile, Reuse, StoreFault};
 use super::judge::{Entry, EntryKind, Executions, Inventory, Observation};
 
 /// The deterministic modification time given to fixture files, so tools that
@@ -429,6 +429,9 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
             if cache_disabled_applies(ctx.control, profile) {
                 env.push(("KACHE_DISABLED", "1".into()));
             }
+            for (key, value) in &case.kache_env {
+                env.push((key.as_str(), value.into()));
+            }
         }
     }
     let case_env: Vec<(String, String)> = case.env.iter().map(|(k, v)| (k.clone(), expand(v, ctx.fixture))).collect();
@@ -644,7 +647,69 @@ fn apply(action: &Action, case: &Case, arm: Arm, ctx: &ArmContext<'_>, store: &P
                 );
             }
         }
+        Action::KacheStoreFault { fault } => {
+            if arm == Arm::Kache {
+                anyhow::ensure!(
+                    crate::daemon::stop_and_wait(ctx.kache, store, Duration::from_secs(60)),
+                    "kache daemon did not stop"
+                );
+                let damaged = damage_store(&store.join("store"), *fault)?;
+                anyhow::ensure!(damaged > 0, "case {}: {fault:?} found nothing to damage", case.id);
+            }
+        }
     }
+    Ok(())
+}
+
+/// Apply `fault` to a kache store directory; returns how many files it hit.
+pub fn damage_store(store: &Path, fault: StoreFault) -> Result<usize> {
+    let mut damaged = 0;
+    match fault {
+        StoreFault::CorruptMeta => {
+            for entry in std::fs::read_dir(store)? {
+                let meta = entry?.path().join("meta.json");
+                if meta.is_file() {
+                    make_writable(&meta)?;
+                    std::fs::write(&meta, b"{ not json")?;
+                    damaged += 1;
+                }
+            }
+        }
+        StoreFault::TruncateBlobs | StoreFault::CorruptBlobs | StoreFault::DeleteBlobs => {
+            let blobs = store.join("blobs");
+            if !blobs.is_dir() {
+                return Ok(0);
+            }
+            for shard in std::fs::read_dir(&blobs)? {
+                for blob in std::fs::read_dir(shard?.path())? {
+                    let blob = blob?.path();
+                    if fault == StoreFault::DeleteBlobs {
+                        std::fs::remove_file(&blob)?;
+                    } else {
+                        make_writable(&blob)?;
+                        let mut bytes = std::fs::read(&blob)?;
+                        if fault == StoreFault::TruncateBlobs {
+                            bytes.truncate(bytes.len() / 2);
+                        } else {
+                            let middle = bytes.len() / 2;
+                            if let Some(byte) = bytes.get_mut(middle) {
+                                *byte ^= 0xff;
+                            }
+                        }
+                        std::fs::write(&blob, bytes)?;
+                    }
+                    damaged += 1;
+                }
+            }
+        }
+    }
+    Ok(damaged)
+}
+
+fn make_writable(path: &Path) -> Result<()> {
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    permissions.set_mode(permissions.mode() | 0o200);
+    std::fs::set_permissions(path, permissions)?;
     Ok(())
 }
 
@@ -790,6 +855,36 @@ mod tests {
         settings.insert("sloppiness".to_string(), "pch_defines,time_macros".to_string());
         settings.insert("depend_mode".to_string(), "true".to_string());
         assert_eq!(ccache_config_text(&settings), "depend_mode = true\nsloppiness = pch_defines,time_macros\n");
+    }
+
+    #[test]
+    fn store_faults_damage_every_blob_or_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let store = root.path();
+        std::fs::create_dir_all(store.join("blobs/ab")).unwrap();
+        std::fs::create_dir_all(store.join("key1")).unwrap();
+        let blob = store.join("blobs/ab/abcd");
+        let meta = store.join("key1/meta.json");
+        let reset = || {
+            std::fs::write(&blob, b"0123456789").unwrap();
+            std::fs::set_permissions(&blob, std::fs::Permissions::from_mode(0o444)).unwrap();
+            std::fs::write(&meta, b"{}").unwrap();
+        };
+        reset();
+        assert_eq!(damage_store(store, StoreFault::TruncateBlobs).unwrap(), 1);
+        assert_eq!(std::fs::read(&blob).unwrap(), b"01234");
+        reset();
+        assert_eq!(damage_store(store, StoreFault::CorruptBlobs).unwrap(), 1);
+        let corrupted = std::fs::read(&blob).unwrap();
+        assert_eq!(corrupted.len(), 10);
+        assert_ne!(corrupted, b"0123456789");
+        reset();
+        assert_eq!(damage_store(store, StoreFault::CorruptMeta).unwrap(), 1);
+        assert_eq!(std::fs::read(&meta).unwrap(), b"{ not json");
+        assert_eq!(damage_store(store, StoreFault::DeleteBlobs).unwrap(), 1);
+        assert!(!blob.exists());
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(damage_store(empty.path(), StoreFault::DeleteBlobs).unwrap(), 0);
     }
 
     #[test]

@@ -110,11 +110,30 @@ pub enum Action {
     /// Kache arm only: stop the daemon and wait for its queue to drain, so
     /// the next compile must find entries without the process that wrote them.
     RestartDaemon {},
+    /// Kache arm only: damage every stored entry the way a crash, a full
+    /// disk or bit rot would. The daemon is stopped first so the fault is
+    /// what the next compile reads.
+    KacheStoreFault {
+        fault: StoreFault,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[deser(rename_all = "kebab-case")]
+pub enum StoreFault {
+    /// Cut every blob to half its length.
+    TruncateBlobs,
+    /// Flip one byte in the middle of every blob, keeping its length.
+    CorruptBlobs,
+    /// Remove every blob, leaving the entry metadata.
+    DeleteBlobs,
+    /// Replace every entry's metadata with bytes that do not parse.
+    CorruptMeta,
 }
 
 impl Action {
     pub fn edits_files(&self) -> bool {
-        !matches!(self, Action::RestartDaemon {})
+        !matches!(self, Action::RestartDaemon {} | Action::KacheStoreFault { .. })
     }
 }
 
@@ -157,6 +176,8 @@ struct CaseFile {
     env: std::collections::BTreeMap<String, String>,
     #[deser(default)]
     ccache_config: std::collections::BTreeMap<String, String>,
+    #[deser(default)]
+    kache_env: std::collections::BTreeMap<String, String>,
     compile: Vec<Compile>,
     step: Vec<Step>,
 }
@@ -177,6 +198,10 @@ pub struct Case {
     /// ccache needs before it caches PCH consumers. Both ccache arms get
     /// them; kache and raw never do.
     pub ccache_config: std::collections::BTreeMap<String, String>,
+    /// Kache settings for a conditional profile, such as
+    /// `KACHE_VERIFY_RESTORES`. The kache arm alone gets them; profile
+    /// variables stay the harness's.
+    pub kache_env: std::collections::BTreeMap<String, String>,
     pub compiles: Vec<Compile>,
     pub steps: Vec<Step>,
     pub source_dir: PathBuf,
@@ -191,6 +216,15 @@ impl Case {
 /// Variables each arm sets itself; a case may not override them.
 const RESERVED_ENV: &[&str] = &["PATH", "HOME", "TMPDIR", "LC_ALL", "LANG", "CC_ORACLE_LOG"];
 
+/// Kache variables the harness sets for the profile, its state or a control.
+const PROFILE_KACHE_ENV: &[&str] = &[
+    "KACHE_CC_PATH_NORMALIZE",
+    "KACHE_CC_SOURCE_DATE_EPOCH",
+    "KACHE_CACHE_DIR",
+    "KACHE_CONFIG",
+    "KACHE_DISABLED",
+];
+
 pub fn parse(id: &str, text: &str, source_dir: PathBuf) -> Result<Case> {
     let file: CaseFile = deser_toml::from_str(text).with_context(|| format!("parsing case {id}"))?;
     ensure!(!file.profiles.is_empty(), "case {id}: profiles is empty");
@@ -204,6 +238,12 @@ pub fn parse(id: &str, text: &str, source_dir: PathBuf) -> Result<Case> {
         ensure!(
             !RESERVED_ENV.contains(&key.as_str()) && !key.starts_with("KACHE_") && !key.starts_with("CCACHE_"),
             "case {id}: env {key} is owned by the harness"
+        );
+    }
+    for key in file.kache_env.keys() {
+        ensure!(
+            key.starts_with("KACHE_") && !PROFILE_KACHE_ENV.contains(&key.as_str()),
+            "case {id}: kache_env {key} is not a kache setting the case may choose"
         );
     }
     for compile in &file.compile {
@@ -234,6 +274,7 @@ pub fn parse(id: &str, text: &str, source_dir: PathBuf) -> Result<Case> {
         outputs: file.outputs,
         env: file.env,
         ccache_config: file.ccache_config,
+        kache_env: file.kache_env,
         compiles: file.compile,
         steps: file.step,
         source_dir,
@@ -361,6 +402,30 @@ action = [{ op = "delete-outputs" }, { op = "write", path = "a.h", content = "x"
         let case = parse("c", &text, PathBuf::from("s")).unwrap();
         assert_eq!(case.ccache_config["sloppiness"], "pch_defines,time_macros");
         assert!(parse("c", MINIMAL, PathBuf::from("s")).unwrap().ccache_config.is_empty());
+    }
+
+    #[test]
+    fn kache_env_accepts_only_case_level_kache_settings() {
+        let with = |kv: &str| MINIMAL.replace("outputs = [\"a.o\"]\n", &format!("outputs = [\"a.o\"]\nkache_env = {{ {kv} }}\n"));
+        let case = parse("c", &with("KACHE_VERIFY_RESTORES = \"always\""), PathBuf::from("s")).unwrap();
+        assert_eq!(case.kache_env["KACHE_VERIFY_RESTORES"], "always");
+        for key in ["KACHE_DISABLED", "KACHE_CACHE_DIR", "KACHE_CC_PATH_NORMALIZE", "PATH"] {
+            assert!(parse("c", &with(&format!("{key} = \"1\"")), PathBuf::from("s")).is_err(), "{key}");
+        }
+    }
+
+    #[test]
+    fn parses_store_faults() {
+        let text = MINIMAL.replace(
+            "{ op = \"delete-outputs\" }, ",
+            "{ op = \"kache-store-fault\", fault = \"corrupt-blobs\" }, ",
+        );
+        let case = parse("c", &text, PathBuf::from("s")).unwrap();
+        assert!(matches!(
+            case.steps[1].action[0],
+            Action::KacheStoreFault { fault: StoreFault::CorruptBlobs }
+        ));
+        assert!(!case.steps[1].action[0].edits_files());
     }
 
     #[test]
