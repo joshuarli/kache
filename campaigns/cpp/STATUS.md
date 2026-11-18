@@ -140,7 +140,7 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | Package | State | Depends on | Evidence / next |
 |---|---|---|---|
 | CCP-00 | DONE (bootstrap) | — | Bootstrap exit met: pins, initial inventory, Linux gates assigned (advisory under KACH-27). Remaining inventory enumeration is carried by CCP-01..08 as the plan allows. Go-ahead for CCP-01: user, 2026-11-18 ("complete the campaign unattended"). |
-| CCP-01 | RUNNING | CCP-00 bootstrap | `kache-cc-oracle` + `make cc-oracle{,-full,-negative-control}` on branch `feat/ccp01-cc-oracle`; see "CCP-01 differential runner" below. `make cc-bench` is deferred to CCP-09, which owns the timing protocol. |
+| CCP-01 | DONE | CCP-00 bootstrap | Merged in PR #31 (a2ea56fd). CI evidence: run 44306769765 (logs and on-failure report artifacts retained 90 days, so until about 2027-02-16). `cc-oracle` and negative controls passed in `e2e (macOS)` (Apple clang), `cc-oracle (Linux x86_64/ARM64 glibc)` (apt GCC + clang) and `test (Linux x86_64/ARM64 musl)` (image GCC 15 + clang 23). Exit criteria met: minimal transitions pass on macOS and Linux, each control fails as intended, and the deliberate `-S` gap reports `KACHE_MISSED_REUSE`. `make cc-bench` moves to CCP-09. |
 | CCP-02 | RUNNING | CCP-01 | Branch `feat/ccp02-input-identity`: 20 input-identity cases; see "CCP-02 input identity" below. Not yet covered: same-path compiler replacement, wrapper/driver-mode selection, VFS overlays, PGO profiles, -march=native, user key config, diagnostic locale, profile switches against a populated cache, hash/compile/publish race barriers. |
 | CCP-03 | TODO | CCP-01, CCP-02 | Includes rebasing/verifying `feat/cc-chromium-official-flags` (exists on origin, unverified by `make check`). |
 | CCP-04 | TODO | CCP-02 | Equivalent-preprocessing reuse. |
@@ -192,8 +192,10 @@ Findings for later packages:
   Kache matches both: `cc-core-failed-compile` passes for both toolchains.
 
 CI: `make cc-oracle` plus negative controls are blocking steps in
-`e2e (macOS)` and `test (Linux * musl)`, and run in the new
-`cc-oracle (Linux * glibc)` jobs.
+`e2e (macOS)` and `test (Linux * musl)`, and run in the
+`cc-oracle (Linux * glibc)` jobs. The first push showed reproducible-profile
+misses on musl CI that came from editing inside kache's racing-write window.
+The runner now waits for edits to settle; see the oracle README.
 
 ## CCP-02 input identity
 
