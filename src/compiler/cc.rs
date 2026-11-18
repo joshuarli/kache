@@ -2402,6 +2402,7 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Prefix("-fmodule-name="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fprofile-use="), class: FlagClass::ParserHandled, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("--warning-suppression-mappings="), class: FlagClass::ParserHandled, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-fsanitize-ignorelist="), class: FlagClass::ParserHandled, source: "clang sanitizer ignorelist, keyed by content", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fcrash-diagnostics-dir="), class: FlagClass::NoObjectEffect, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     // ── ModeledInKey: parser extracts into a typed field ──
     FlagSpec {
@@ -7937,6 +7938,7 @@ impl CcCompiler {
                 for (flag, resolved_prefix) in [
                     ("-fprofile-use=", "-fprofile-instrument-use-path="),
                     ("--warning-suppression-mappings=", "--warning-suppression-mappings="),
+                    ("-fsanitize-ignorelist=", "-fsanitize-ignorelist="),
                 ] {
                     if parsed.rest.iter().filter_map(|arg| arg.strip_prefix(flag))
                         .any(|path| !path.is_empty() && token.strip_prefix(resolved_prefix) == Some(path))
@@ -8060,7 +8062,7 @@ impl CcCompiler {
         );
 
         for arg in &parsed.rest {
-            for prefix in ["-fprofile-use=", "--warning-suppression-mappings="] {
+            for prefix in ["-fprofile-use=", "--warning-suppression-mappings=", "-fsanitize-ignorelist="] {
                 if let Some(path) = arg.strip_prefix(prefix) {
                     // GCC reads `<path>/<mangled object>.gcda`, not `path` itself.
                     anyhow::ensure!(

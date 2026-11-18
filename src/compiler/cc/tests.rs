@@ -9749,7 +9749,11 @@ fn chromium_file_flags_change_cache_key_with_contents() {
     assert_eq!(key(&["-fcrash-diagnostics-dir=one"]), key(&["-fcrash-diagnostics-dir=two"]));
     let fake_clang = temp.path().join("clang");
     std::os::unix::fs::symlink(&fake_cc, &fake_clang).unwrap();
-    for (driver, prefix) in [(&fake_clang, "-fprofile-use="), (&fake_cc, "--warning-suppression-mappings=")] {
+    for (driver, prefix) in [
+        (&fake_clang, "-fprofile-use="),
+        (&fake_cc, "--warning-suppression-mappings="),
+        (&fake_clang, "-fsanitize-ignorelist="),
+    ] {
         let input = temp.path().join("input");
         std::fs::write(&input, "first").unwrap();
         let parsed = compiler.parse(&[driver.to_string_lossy().into_owned(), "-c".into(), source.to_string_lossy().into_owned(), format!("{prefix}{}", input.display())]).unwrap();
