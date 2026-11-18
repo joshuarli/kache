@@ -1751,11 +1751,16 @@ mod tests {
     // The final reply can race the disconnect reader after the client dies.
     // Either path must reap the compiler and release its worker below.
     if let Err(error) = &results[0] {
+        // The dead-peer write surfaces as EPIPE/ECONNRESET on Linux but
+        // EINVAL on macOS; which one wins is a race. The contract here is
+        // an io::Error from the raced dead connection, not a specific kind.
         assert!(
             error.downcast_ref::<std::io::Error>().is_some_and(|error| {
                 matches!(
                     error.kind(),
-                    std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                    std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::InvalidInput
                 )
             }),
             "{error:#}"
