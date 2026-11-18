@@ -79,7 +79,10 @@ KACH-21 asked for Linux fixture scenarios in a gate with
   the failing assertion set is the KACH-27 set with no new failures
   (arm64 additionally failed `e2e-cc-cl-xclang-deps`, matching the
   documented probe-resolution race). `make test in image` status is in PR
-  CI.
+  CI. PR #28 CI (run 44255058098): both musl jobs passed `make test` and
+  failed the advisory e2e step on exactly the five deterministic fixtures
+  (`e2e-c-shims`, three `e2e-cmake-*`, `e2e-rust-transitive-native`); the
+  intermittent cl-mode fixtures passed on both architectures.
 
 ## PR and CI status
 
