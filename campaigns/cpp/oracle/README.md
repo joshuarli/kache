@@ -15,6 +15,7 @@ configuration file:
 | Arm | Command |
 |---|---|
 | `raw`, `raw-repeat` | the compiler, twice, to prove the outputs are stable |
+| `raw-passthrough` | reproducible profile only: the case's own arguments and environment, which is what a kache passthrough runs |
 | `ccache` | pinned ccache, normal configuration (direct, then preprocessor) |
 | `ccache-preprocessor` | pinned ccache with `CCACHE_NODIRECT=1` |
 | `kache` | `kache <compiler> ...` with its own daemon and store |
@@ -56,7 +57,9 @@ Each compile in each step gets one verdict. Checks run in this order:
 
 1. `HARNESS_ERROR`: `raw` exited differently from the step's `status`.
 2. `COMPILER_NONDETERMINISM`: `raw` and `raw-repeat` differ.
-3. `KACHE_WRONG_OUTPUT`: kache's status, streams, or tree differ from `raw`.
+3. `KACHE_WRONG_OUTPUT`: kache's status, streams, or tree differ from `raw`,
+   or from `raw-passthrough` when every code generation kache ran used the
+   case's own arguments.
 4. Reuse, from the step's `reuse`:
    - `miss`: kache ran no code generation, so it served a stale entry
      (`KACHE_WRONG_OUTPUT`).

@@ -70,6 +70,9 @@ pub const KACHE_CC_ROOT: &str = "/kache/cc-root";
 pub enum Arm {
     Raw,
     RawRepeat,
+    /// Reproducible profile only: the case's own command, which is what a
+    /// kache passthrough runs and so what it must match.
+    RawPassthrough,
     Ccache,
     CcachePreprocessor,
     Kache,
@@ -78,10 +81,19 @@ pub enum Arm {
 impl Arm {
     pub const ALL: [Arm; 5] = [Arm::Raw, Arm::RawRepeat, Arm::Ccache, Arm::CcachePreprocessor, Arm::Kache];
 
+    pub fn for_profile(profile: Profile) -> Vec<Arm> {
+        let mut arms = Arm::ALL.to_vec();
+        if profile == Profile::Reproducible {
+            arms.insert(2, Arm::RawPassthrough);
+        }
+        arms
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Arm::Raw => "raw",
             Arm::RawRepeat => "raw-repeat",
+            Arm::RawPassthrough => "raw-passthrough",
             Arm::Ccache => "ccache",
             Arm::CcachePreprocessor => "ccache-preprocessor",
             Arm::Kache => "kache",
@@ -371,7 +383,7 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
     copy_tree(&case.source_dir, ctx.fixture).with_context(|| format!("preparing {}", case.id))?;
     wait_until_settled(ctx.fixture)?;
 
-    let raw_like = matches!(arm, Arm::Raw | Arm::RawRepeat);
+    let raw_like = matches!(arm, Arm::Raw | Arm::RawRepeat | Arm::RawPassthrough);
     let shims = if raw_like && ctx.control == Some(Control::ReferenceFailure) {
         ctx.failing_shims
     } else {
@@ -391,7 +403,7 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
     ];
     let store = state.join("store");
     match arm {
-        Arm::Raw | Arm::RawRepeat => {}
+        Arm::Raw | Arm::RawRepeat | Arm::RawPassthrough => {}
         Arm::Ccache | Arm::CcachePreprocessor => {
             env.push(("CCACHE_DIR", store.clone().into()));
             env.push(("CCACHE_CONFIGPATH", config.clone().into()));
@@ -415,7 +427,10 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
     for (k, v) in &case_env {
         env.push((k.as_str(), v.into()));
     }
-    if profile == Profile::Reproducible && arm != Arm::Kache && !case.env.contains_key("SOURCE_DATE_EPOCH") {
+    if profile == Profile::Reproducible
+        && !matches!(arm, Arm::Kache | Arm::RawPassthrough)
+        && !case.env.contains_key("SOURCE_DATE_EPOCH")
+    {
         env.push(("SOURCE_DATE_EPOCH", "0".into()));
     }
 
@@ -481,7 +496,7 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                 _ => shims.join(&ctx.toolchain.cxx_name),
             };
             let mut command = match arm {
-                Arm::Raw | Arm::RawRepeat => Command::new(&driver),
+                Arm::Raw | Arm::RawRepeat | Arm::RawPassthrough => Command::new(&driver),
                 Arm::Ccache | Arm::CcachePreprocessor => {
                     let mut c = Command::new(ctx.ccache);
                     c.arg(&driver);
@@ -493,10 +508,10 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                     c
                 }
             };
-            let args = if arm == Arm::Kache {
-                compile.argv[1..].iter().map(|a| expand(a, ctx.fixture)).collect()
-            } else {
-                effective_args(&compile.argv, profile, ctx.fixture)
+            let args = match arm {
+                Arm::Kache => compile.argv[1..].iter().map(|a| expand(a, ctx.fixture)).collect(),
+                Arm::RawPassthrough => effective_args(&compile.argv, Profile::Transparent, ctx.fixture),
+                _ => effective_args(&compile.argv, profile, ctx.fixture),
             };
             command.args(&args).current_dir(ctx.fixture).env_clear();
             for (k, v) in env {
@@ -748,6 +763,14 @@ mod tests {
             ["-I/w/fx/inc", "-c", "a.c"]
         );
         assert_eq!(expand("{fixture}:{fixture}", Path::new("/r")), "/r:/r");
+    }
+
+    #[test]
+    fn the_passthrough_reference_runs_only_in_the_reproducible_profile() {
+        assert!(!Arm::for_profile(Profile::Transparent).contains(&Arm::RawPassthrough));
+        let reproducible = Arm::for_profile(Profile::Reproducible);
+        assert!(reproducible.contains(&Arm::RawPassthrough));
+        assert_eq!(reproducible.last(), Some(&Arm::Kache));
     }
 
     #[test]

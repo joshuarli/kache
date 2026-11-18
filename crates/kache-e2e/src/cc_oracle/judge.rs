@@ -91,6 +91,8 @@ pub struct Row<'a> {
     pub expected_status: i32,
     pub raw: &'a Observation,
     pub raw_repeat: &'a Observation,
+    /// The case's own command, run unchanged; reproducible profile only.
+    pub raw_passthrough: Option<&'a Observation>,
     pub ccache: &'a Observation,
     pub ccache_preprocessor: &'a Observation,
     pub kache: &'a Observation,
@@ -149,7 +151,15 @@ fn kache_verdict(row: &Row<'_>, ccache: Verdict) -> (Verdict, Vec<String>) {
             unstable.into_iter().map(|d| format!("raw vs raw: {d}")).collect(),
         );
     }
-    let wrong = differences(row.raw, row.kache);
+    // A passthrough runs the case's own command, not the profile's, so
+    // the raw run of that command is what it must match.
+    let ran_passthrough = !row.kache.executions.codegen_argv.is_empty()
+        && row.kache.executions.codegen_argv.iter().all(|argv| argv.as_slice() == row.passthrough_argv);
+    let reference = match row.raw_passthrough {
+        Some(raw) if ran_passthrough => raw,
+        _ => row.raw,
+    };
+    let wrong = differences(reference, row.kache);
     if !wrong.is_empty() {
         return (Verdict::KacheWrongOutput, wrong);
     }
@@ -318,6 +328,7 @@ mod tests {
             expected_status: 0,
             raw,
             raw_repeat: raw,
+            raw_passthrough: None,
             ccache,
             ccache_preprocessor: ccache,
             kache,
@@ -363,6 +374,7 @@ mod tests {
             expected_status: 0,
             raw: &raw,
             raw_repeat: &repeat,
+            raw_passthrough: None,
             ccache: &raw,
             ccache_preprocessor: &raw,
             kache: &raw,
@@ -478,6 +490,7 @@ mod tests {
                 expected_status: 0,
                 raw: &raw,
                 raw_repeat: &raw,
+                raw_passthrough: None,
                 ccache: &raw,
                 ccache_preprocessor: &raw,
                 kache,
@@ -491,6 +504,35 @@ mod tests {
         captured_passthrough.executions.codegen_argv[0]
             .extend(["-MD", "-MF", "/t/inputs.d", "-MT", "__kache_direct_capture"].map(String::from));
         assert_eq!(row(&captured_passthrough), Verdict::HarnessError);
+    }
+
+    #[test]
+    fn a_passthrough_is_judged_against_the_unchanged_command() {
+        let raw = obs(1);
+        let mut unchanged = obs(1);
+        unchanged.tree.get_mut("a.o").unwrap().digest = "no-prefix-map".into();
+        let reproducible: Vec<String> = argv().into_iter().chain(["-ffile-prefix-map=/f=/kache/cc-root".to_string()]).collect();
+        let case_args = argv();
+        let verdict = |kache: &Observation| {
+            judge(&Row {
+                reuse: Reuse::Miss,
+                expected_status: 0,
+                raw: &raw,
+                raw_repeat: &raw,
+                raw_passthrough: Some(&unchanged),
+                ccache: &raw,
+                ccache_preprocessor: &raw,
+                kache,
+                effective_argv: &reproducible,
+                passthrough_argv: &case_args,
+            })
+            .verdict
+        };
+        assert_eq!(verdict(&unchanged), Verdict::Match, "a passthrough matching the unchanged command is correct");
+        assert_eq!(verdict(&raw), Verdict::KacheWrongOutput, "a passthrough that matches only the profile's command is not");
+        let mut keyed = raw.clone();
+        keyed.executions.codegen_argv = vec![reproducible.clone()];
+        assert_eq!(verdict(&keyed), Verdict::Match, "a keyed compile is judged against the profile's command");
     }
 
     #[test]

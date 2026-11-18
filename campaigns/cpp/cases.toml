@@ -777,7 +777,7 @@ summary = ".gcno coverage files restored on hit; absent sidecar (coverage off) h
 profiles = ["both"]
 compilers = ["gcc", "clang"]
 ccache.suite = "coverage_compilation_dir.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-out-split-dwarf"
@@ -786,7 +786,7 @@ summary = ".dwo split DWARF restored on hit"
 profiles = ["both"]
 compilers = ["gcc", "clang"]
 ccache.suite = "split_dwarf.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-out-serialized-diagnostics"
@@ -795,7 +795,7 @@ summary = "-fdiagnostics-format=serialized and -fdiagnostics-add-output restored
 profiles = ["both"]
 compilers = ["clang", "apple-clang"]
 ccache.suite = "serialize_diagnostics.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-out-diagnostics-format"
