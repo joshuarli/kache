@@ -339,16 +339,52 @@ not a local edit.
    (134 entries); full behavioral enumeration against the pinned suites is
    owed by CCP-01/CCP-02 and is tracked there, not here.
 
+## Session 2026-11-18 (unattended run)
+
+Merged to main, in order. Each PR passed `make check`, and `cc-oracle` plus
+the negative controls on macOS and the L4 image, before merge. Required CI
+was green; the only failures were the advisory glibc e2e lanes on the known
+KACH-27 fixture `e2e-rust-transitive-native`.
+
+| PR | What |
+|---|---|
+| #31 | CCP-01 differential runner (`kache-cc-oracle`, `make cc-oracle*`), CI wiring |
+| #32 | daemon: re-check for exit while retrying a compiler identity pin (spawn failed on instant compilers) |
+| #33 | **wrong output fixed:** line positions keyed apart from the `-E -P` text (stale objects after line-shifting edits) |
+| #34 | CCP-02 input-identity cases and runner features |
+| #35 | e2e: shim fixtures ignore an inherited `CC` (KACH-27 finding 3); key tracing records |
+| #36 | CCP-03 Chromium official flags, `-S -o` caching; CCP-05..08 cases |
+| #37 | CI: upload musl e2e results when the advisory step fails |
+| #39 | `-fsanitize-ignorelist` keyed by content |
+| #40 | CCP-07 zlib real-project check (`make cc-project-zlib`) |
+
+Open at hand-off: #38 (GNU response files). Verified on macOS, with
+`make e2e` passing locally. It updates `e2e-cc-response-file` to assert
+caching.
+
 ## Resume instructions
 
-1. Read this ledger, [lock.toml](lock.toml), [cases.toml](cases.toml), and
-   the plan. Refresh `git fetch` and re-check gate status.
-2. CCP-00 exit: KACH-27 triage is filed and the Linux gates are assigned
-   (advisory is an acceptable interim disposition — see the Linux gate
-   section). Closing the lanes to required status is KACH-27's acceptance
-   test, not a prerequisite for starting CCP-01. Start CCP-01 in a fresh
-   worktree once the user accepts the groundwork; do not start it without
-   that go-ahead.
-3. All campaign work runs in isolated worktrees under `.work/wt/` (gitignored
-   via `.git/info/exclude`); evidence needed after the fact lives in CI
-   artifacts or committed manifests.
+1. Read this ledger, [lock.toml](lock.toml), [cases.toml](cases.toml) and
+   the plan. Run `git fetch` and check the open PRs.
+2. Verify every kache change with all of:
+   - `make check`;
+   - `make cc-oracle cc-oracle-negative-control` on macOS;
+   - the same in the L4 image, with `TOOLCHAINS="gcc clang"` and
+     `CC_ORACLE_OUT=/tmp/cc-oracle` (the bind mount is FUSE under
+     OrbStack);
+   - `PATH=/opt/homebrew/bin:$PATH make e2e`.
+
+   `make e2e` deletes tracked fixture build files (KACH-23); restore them
+   with `git checkout -- scenarios/` before committing.
+3. Next work, in priority order:
+   - Owner decision on `KACHE_VERIFY_RESTORES` (bit-flipped blobs restored
+     as hits).
+   - CCP-04 equivalent-preprocessing reuse (design above).
+   - KACH-27 remaining items: the cmake TryCompile `-MT` target, and the
+     intermittent `e2e-cpp-hello` on musl x86_64 (artifacts now upload).
+   - CCP-05 output sets (`.gcno` comparator for GCC, `.dwo`, `.dia`).
+   - Universal objects, PCH consumers, the LLVM subset, the Chromium
+     target, and CCP-09 performance.
+4. All campaign work runs in isolated worktrees under `.work/wt/`
+   (gitignored via `.git/info/exclude`). Evidence needed afterwards lives in
+   CI runs (90-day retention) or in committed cases and scripts.
