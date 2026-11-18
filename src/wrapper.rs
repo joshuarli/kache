@@ -264,20 +264,26 @@ fn warn_store_unavailable_once(config: &Config, err: &anyhow::Error) {
 /// marker `stat` that `warn_once_per_session` already does, and only when the
 /// verdict is actually non-local do we touch the lock.
 pub(crate) fn warn_nonlocal_cache_fs_once(config: &Config) {
-    let probe = crate::cache_fs::probe(&config.cache_dir);
-    // Local, or the probe couldn't tell — either way, say nothing.
-    let Some(message) = crate::cache_fs::advisory_for(&probe, &config.cache_dir) else {
-        return;
-    };
+    if let Some(message) = log_nonlocal_cache_fs(config) {
+        let marker = warn_marker_path("cachefs", &config.cache_dir);
+        warn_once_per_session(&marker, WARN_SESSION_SECS, &message);
+    }
+}
 
+/// Log the non-local cache filesystem advisory and return its user-facing
+/// text, or `None` when the filesystem is local or unclassified.
+///
+/// A C/C++ compile calls this alone: the compiler's stderr is part of the
+/// compile's result, and must match an uncached compile byte for byte.
+fn log_nonlocal_cache_fs(config: &Config) -> Option<String> {
+    let probe = crate::cache_fs::probe(&config.cache_dir);
+    let message = crate::cache_fs::advisory_for(&probe, &config.cache_dir)?;
     log::warn!(
         "cache directory is not on host-local storage; the WAL index can corrupt; cache_dir={} filesystem={:?}",
         config.cache_dir.display(),
         probe.name
     );
-
-    let marker = warn_marker_path("cachefs", &config.cache_dir);
-    warn_once_per_session(&marker, WARN_SESSION_SECS, &message);
+    Some(message)
 }
 
 // ── Opportunistic size-pressure GC (kunobi-ninja/kache#497) ─────────────────
@@ -1188,7 +1194,7 @@ fn run_cc_inner(
 ) -> Result<i32> {
     crate::link::set_layout_advice_to_log(true);
     crate::link::set_cow_warn_marker(warn_marker_path("cow", &config.cache_dir));
-    warn_nonlocal_cache_fs_once(config);
+    log_nonlocal_cache_fs(config);
     let compiler = CcCompiler::for_invocation(config.cc_extra_allowlist_flags.clone(), env)
         .with_base_dirs(config.base_dirs.clone());
     let trace_parse = crate::phase_trace::phase("cc_parse");
