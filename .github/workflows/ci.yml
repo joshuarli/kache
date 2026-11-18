@@ -152,6 +152,7 @@ jobs:
       # required for merge while KACH-27 is open. `make test in image`
       # above stays required.
       - name: e2e in image
+        id: e2e_image
         continue-on-error: true
         run: |
           docker run --rm --init \
@@ -165,8 +166,9 @@ jobs:
             sh -ec '
               mkdir -p /kache/tmp && make e2e && make e2e-negative-control
             '
+      # continue-on-error hides the step's failure from failure().
       - name: Upload fixture results on failure
-        if: failure()
+        if: failure() || steps.e2e_image.outcome == 'failure'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-results-musl-${{ matrix.arch }}-${{ github.run_id }}
