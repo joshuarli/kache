@@ -1,0 +1,1 @@
+#define CFG 1

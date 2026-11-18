@@ -1,0 +1,44 @@
+summary = "-iquote, -isystem and -idirafter order: only the selected header's edits invalidate"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-iquote", "quote", "-isystem", "sys", "-idirafter", "after", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "edit-unselected"
+reuse = "like-ccache"
+action = [
+  { op = "write", path = "after/s.h", content = "#define S 200\n" },
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "edit-selected"
+reuse = "miss"
+action = [
+  { op = "write", path = "sys/s.h", content = "#define S 11\n" },
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "selected-removed"
+reuse = "miss"
+action = [
+  { op = "remove", path = "sys/s.h" },
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "edit-quote"
+reuse = "miss"
+action = [
+  { op = "write", path = "quote/q.h", content = "#define Q 2\n" },
+  { op = "delete-outputs" },
+]

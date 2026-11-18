@@ -33,6 +33,34 @@ impl Profile {
     }
 }
 
+/// Compiler family, for cases that exercise one family's options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[deser(rename_all = "kebab-case")]
+pub enum Family {
+    Gcc,
+    Clang,
+}
+
+impl Family {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Family::Gcc => "gcc",
+            Family::Clang => "clang",
+        }
+    }
+
+    /// The family a driver's `--version` banner names.
+    pub fn from_version(banner: &str) -> Option<Family> {
+        if banner.contains("clang") {
+            Some(Family::Clang)
+        } else if banner.contains("Free Software Foundation") || banner.starts_with("gcc") {
+            Some(Family::Gcc)
+        } else {
+            None
+        }
+    }
+}
+
 /// What a step must show about reuse, judged per compile invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[deser(rename_all = "kebab-case")]
@@ -58,6 +86,21 @@ pub enum Action {
         content: String,
         #[deser(default)]
         keep_mtime: bool,
+    },
+    /// Write a sibling temporary file and rename it over `path`, so the
+    /// file gets a new inode as editors and code generators produce.
+    Replace {
+        path: String,
+        content: String,
+    },
+    /// Create or retarget a symlink.
+    Symlink {
+        path: String,
+        target: String,
+    },
+    /// Advance the modification time without changing content.
+    Touch {
+        path: String,
     },
     Remove {
         path: String,
@@ -105,9 +148,13 @@ struct CaseFile {
     cohort: Cohort,
     #[deser(default)]
     os: Vec<String>,
+    #[deser(default)]
+    families: Vec<Family>,
     profiles: Vec<Profile>,
     #[deser(default)]
     outputs: Vec<String>,
+    #[deser(default)]
+    env: std::collections::BTreeMap<String, String>,
     compile: Vec<Compile>,
     step: Vec<Step>,
 }
@@ -118,8 +165,12 @@ pub struct Case {
     pub summary: String,
     pub cohort: Cohort,
     pub os: Vec<String>,
+    /// Empty means every family.
+    pub families: Vec<Family>,
     pub profiles: Vec<Profile>,
     pub outputs: Vec<String>,
+    /// Set in every arm; `{fixture}` expands to the fixture root.
+    pub env: std::collections::BTreeMap<String, String>,
     pub compiles: Vec<Compile>,
     pub steps: Vec<Step>,
     pub source_dir: PathBuf,
@@ -131,6 +182,9 @@ impl Case {
     }
 }
 
+/// Variables each arm sets itself; a case may not override them.
+const RESERVED_ENV: &[&str] = &["PATH", "HOME", "TMPDIR", "LC_ALL", "LANG", "CC_ORACLE_LOG"];
+
 pub fn parse(id: &str, text: &str, source_dir: PathBuf) -> Result<Case> {
     let file: CaseFile = deser_toml::from_str(text).with_context(|| format!("parsing case {id}"))?;
     ensure!(!file.profiles.is_empty(), "case {id}: profiles is empty");
@@ -140,6 +194,12 @@ pub fn parse(id: &str, text: &str, source_dir: PathBuf) -> Result<Case> {
         file.step[0].reuse == Reuse::Miss,
         "case {id}: the first step runs against an empty cache, so it must declare reuse = \"miss\""
     );
+    for key in file.env.keys() {
+        ensure!(
+            !RESERVED_ENV.contains(&key.as_str()) && !key.starts_with("KACHE_") && !key.starts_with("CCACHE_"),
+            "case {id}: env {key} is owned by the harness"
+        );
+    }
     for compile in &file.compile {
         ensure!(
             compile.argv.first().is_some_and(|a| a == "{cc}" || a == "{cxx}"),
@@ -163,8 +223,10 @@ pub fn parse(id: &str, text: &str, source_dir: PathBuf) -> Result<Case> {
         summary: file.summary,
         cohort: file.cohort,
         os: file.os,
+        families: file.families,
         profiles: file.profiles,
         outputs: file.outputs,
+        env: file.env,
         compiles: file.compile,
         steps: file.step,
         source_dir,
@@ -246,6 +308,18 @@ action = [{ op = "delete-outputs" }, { op = "write", path = "a.h", content = "x"
     }
 
     #[test]
+    fn families_come_from_the_case_and_the_version_banner() {
+        let text = MINIMAL.replace("cohort = \"blocking\"", "cohort = \"blocking\"\nfamilies = [\"clang\"]");
+        assert_eq!(parse("c", &text, PathBuf::from("s")).unwrap().families, [Family::Clang]);
+        assert!(parse("c", MINIMAL, PathBuf::from("s")).unwrap().families.is_empty());
+        assert_eq!(Family::from_version("Apple clang version 21.0.0 (clang-2100.3.34.2)"), Some(Family::Clang));
+        assert_eq!(Family::from_version("Debian clang version 19.1.7 (3+b1)"), Some(Family::Clang));
+        assert_eq!(Family::from_version("gcc (Debian 14.2.0-19) 14.2.0\nCopyright (C) 2024 Free Software Foundation, Inc."), Some(Family::Gcc));
+        assert_eq!(Family::from_version("cc (Alpine 15.2.0) 15.2.0\nCopyright (C) 2025 Free Software Foundation, Inc."), Some(Family::Gcc));
+        assert_eq!(Family::from_version("icx 2025"), None);
+    }
+
+    #[test]
     fn first_step_must_expect_a_miss() {
         let text = MINIMAL.replacen("reuse = \"miss\"", "reuse = \"hit\"", 1);
         let err = parse("c", &text, PathBuf::from("s")).unwrap_err();
@@ -262,6 +336,29 @@ action = [{ op = "delete-outputs" }, { op = "write", path = "a.h", content = "x"
     fn argv_must_name_a_toolchain_driver() {
         let text = MINIMAL.replace("\"{cc}\", \"-c\"", "\"gcc\", \"-c\"");
         assert!(parse("c", &text, PathBuf::from("s")).is_err());
+    }
+
+    #[test]
+    fn case_env_may_not_override_harness_variables() {
+        let with_env = |kv: &str| MINIMAL.replace("outputs = [\"a.o\"]\n", &format!("outputs = [\"a.o\"]\nenv = {{ {kv} }}\n"));
+        let case = parse("c", &with_env("CPATH = \"{fixture}/inc\""), PathBuf::from("s")).unwrap();
+        assert_eq!(case.env["CPATH"], "{fixture}/inc");
+        for key in ["PATH", "HOME", "TMPDIR", "LC_ALL", "LANG", "CC_ORACLE_LOG", "KACHE_DISABLED", "CCACHE_DIR"] {
+            assert!(parse("c", &with_env(&format!("{key} = \"x\"")), PathBuf::from("s")).is_err(), "{key}");
+        }
+    }
+
+    #[test]
+    fn parses_file_identity_actions() {
+        let text = MINIMAL.replace(
+            "{ op = \"delete-outputs\" }, ",
+            "{ op = \"replace\", path = \"a.h\", content = \"y\" }, { op = \"symlink\", path = \"l.h\", target = \"a.h\" }, { op = \"touch\", path = \"a.h\" }, ",
+        );
+        let case = parse("c", &text, PathBuf::from("s")).unwrap();
+        assert!(matches!(&case.steps[1].action[0], Action::Replace { path, .. } if path == "a.h"));
+        assert!(matches!(&case.steps[1].action[1], Action::Symlink { target, .. } if target == "a.h"));
+        assert!(matches!(&case.steps[1].action[2], Action::Touch { path } if path == "a.h"));
+        assert!(case.steps[1].action.iter().all(Action::edits_files));
     }
 
     #[test]

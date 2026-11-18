@@ -1,0 +1,28 @@
+summary = "a sanitizer ignorelist's contents change instrumentation and are compile inputs"
+cohort = "open"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-fsanitize=address", "-fsanitize-ignorelist=ign.txt", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "like-ccache"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "ignore-the-function"
+reuse = "miss"
+action = [{ op = "write", path = "ign.txt", content = "fun:u\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "revert-ignorelist"
+reuse = "like-ccache"
+action = [{ op = "write", path = "ign.txt", content = "fun:other\n" }, { op = "delete-outputs" }]

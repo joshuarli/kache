@@ -1,0 +1,29 @@
+summary = "deleting an included header fails the compile like raw; restoring it reuses"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "header-deleted"
+reuse = "miss"
+status = 1
+action = [
+  { op = "remove", path = "v.h" },
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "header-restored"
+reuse = "hit"
+action = [
+  { op = "write", path = "v.h", content = "#define V 1\n" },
+  { op = "delete-outputs" },
+]

@@ -1,0 +1,23 @@
+summary = "define order changes the result; reordered options must not share an entry"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["a.o", "b.o"]
+
+[[compile]]
+argv = ["{cc}", "-DX=1", "-UX", "-DX=2", "-c", "u.c", "-o", "a.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-DX=2", "-UX", "-DX=1", "-c", "u.c", "-o", "b.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [
+  { op = "delete-outputs" },
+]

@@ -1,0 +1,27 @@
+summary = "an assembler .incbin read the preprocessor cannot see invalidates; kache refuses to cache it"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["a.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "a.S", "-o", "a.o"]
+source = "a.S"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "any"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-blob"
+reuse = "miss"
+action = [{ op = "replace", path = "blob.bin", content = "two\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "revert-blob"
+reuse = "any"
+action = [{ op = "replace", path = "blob.bin", content = "one\n" }, { op = "delete-outputs" }]

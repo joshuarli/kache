@@ -1,0 +1,28 @@
+summary = "a retargeted header symlink invalidates; a target with identical content reuses"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "retarget-different"
+reuse = "miss"
+action = [
+  { op = "symlink", path = "cfg.h", target = "b.h" },
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "retarget-identical-content"
+reuse = "hit"
+action = [
+  { op = "symlink", path = "cfg.h", target = "c.h" },
+  { op = "delete-outputs" },
+]

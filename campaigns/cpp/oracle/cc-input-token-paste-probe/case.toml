@@ -1,0 +1,34 @@
+summary = "header-availability probe whose name is built by token pasting (Chromium style); kache refuses it today"
+cohort = "open"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-Iinc", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "like-ccache"
+action = [
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "probe-appears"
+reuse = "miss"
+action = [
+  { op = "write", path = "inc/feat_x.h", content = "#define FEAT 9\n" },
+  { op = "delete-outputs" },
+]
+
+[[step]]
+name = "restore-present"
+reuse = "like-ccache"
+action = [
+  { op = "delete-outputs" },
+]

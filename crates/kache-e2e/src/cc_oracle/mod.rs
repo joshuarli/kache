@@ -66,7 +66,7 @@ pub struct Outcome {
 
 impl Outcome {
     pub fn gate_passed(&self) -> bool {
-        !self.runs.is_empty()
+        self.runs.iter().any(|r| !r.rows.is_empty())
             && self
                 .runs
                 .iter()
@@ -160,7 +160,12 @@ pub fn run(config: &Config) -> Result<Outcome> {
                     expected_rows,
                     injected: false,
                 };
-                if let Some(tc) = tc {
+                let unsupported = tc.and_then(|tc| unsupported_family(case, tc));
+                if let Some(reason) = unsupported {
+                    run.verdict = Verdict::UnsupportedByCompiler;
+                    run.blocked = Some(reason);
+                    run.expected_rows = 0;
+                } else if let Some(tc) = tc {
                     eprintln!("=> {} [{} {}]", case.id, profile.as_str(), tc.name);
                     let ctx = ArmContext {
                         kache: &kache,
@@ -191,6 +196,17 @@ pub fn run(config: &Config) -> Result<Outcome> {
     Ok(outcome)
 }
 
+/// Why `case` cannot run on `toolchain`, when its family is not one the
+/// case exercises. An unidentified family cannot be ruled out, so it runs.
+fn unsupported_family(case: &Case, toolchain: &Toolchain) -> Option<String> {
+    let family = toolchain.family?;
+    if case.families.is_empty() || case.families.contains(&family) {
+        return None;
+    }
+    let wanted: Vec<&str> = case.families.iter().map(|f| f.as_str()).collect();
+    Some(format!("case exercises {}; {} is {}", wanted.join("/"), toolchain.name, family.as_str()))
+}
+
 fn run_case(case: &Case, profile: Profile, ctx: &ArmContext<'_>, run: &mut CaseRun) -> Result<()> {
     std::fs::create_dir_all(ctx.state)?;
     let fixture = {
@@ -211,6 +227,7 @@ fn run_case(case: &Case, profile: Profile, ctx: &ArmContext<'_>, run: &mut CaseR
         for (c, compile) in case.compiles.iter().enumerate() {
             let obs = |arm: Arm| &arms[&arm].observations[s][c];
             let effective = exec::effective_args(&compile.argv, profile, &fixture);
+            let passthrough = exec::effective_args(&compile.argv, Profile::Transparent, &fixture);
             let judgement = judge::judge(&Row {
                 reuse: step.reuse,
                 expected_status: step.status,
@@ -220,6 +237,7 @@ fn run_case(case: &Case, profile: Profile, ctx: &ArmContext<'_>, run: &mut CaseR
                 ccache_preprocessor: obs(Arm::CcachePreprocessor),
                 kache: obs(Arm::Kache),
                 effective_argv: &effective,
+                passthrough_argv: &passthrough,
             });
             run.rows.push(RowResult {
                 step: step.name.clone(),
@@ -328,6 +346,14 @@ reuse = "miss"
     #[test]
     fn the_gate_fails_on_no_runs_dropped_rows_or_a_failing_verdict() {
         assert!(!outcome(vec![]).gate_passed());
+        assert!(!outcome(vec![case_run(Verdict::UnsupportedByCompiler, vec![], 0, false)]).gate_passed());
+        assert!(
+            outcome(vec![
+                case_run(Verdict::UnsupportedByCompiler, vec![], 0, false),
+                case_run(Verdict::Match, vec![row(Verdict::Match)], 1, false),
+            ])
+            .gate_passed()
+        );
         assert!(outcome(vec![case_run(Verdict::Match, vec![row(Verdict::Match)], 1, false)]).gate_passed());
         assert!(!outcome(vec![case_run(Verdict::Match, vec![], 1, false)]).gate_passed());
         assert!(!outcome(vec![case_run(Verdict::Blocked, vec![], 0, false)]).gate_passed());
@@ -345,6 +371,27 @@ reuse = "miss"
         assert!(!outcome(vec![detected(), missed()]).control_detected(Control::CacheDisabled));
         assert!(!outcome(vec![untouched()]).control_detected(Control::CacheDisabled));
         assert!(!outcome(vec![detected()]).control_detected(Control::StaleOutput));
+    }
+
+    #[test]
+    fn family_specific_cases_skip_other_families_with_a_reason() {
+        let mut clang_only = case("a", "blocking", "");
+        clang_only.families = vec![case::Family::Clang];
+        let tc = |family| Toolchain {
+            name: "gcc".into(),
+            family,
+            cc_name: "gcc".into(),
+            cxx_name: "g++".into(),
+            cc: PathBuf::new(),
+            cxx: PathBuf::new(),
+        };
+        assert_eq!(
+            unsupported_family(&clang_only, &tc(Some(case::Family::Gcc))).as_deref(),
+            Some("case exercises clang; gcc is gcc")
+        );
+        assert_eq!(unsupported_family(&clang_only, &tc(Some(case::Family::Clang))), None);
+        assert_eq!(unsupported_family(&clang_only, &tc(None)), None);
+        assert_eq!(unsupported_family(&case("b", "blocking", ""), &tc(Some(case::Family::Gcc))), None);
     }
 
     #[test]
