@@ -92,6 +92,24 @@ KACH-21 asked for Linux fixture scenarios in a gate with
   (2.54.0-r0 → 2.54.1-r0) was required because the Alpine mirror moved the
   package; `-sfn` keeps `cc` on LLVM clang now that Alpine's gcc owns
   `/usr/bin/cc`.
+- PR #27 (merged 2026-11-18, `fix/daemon-disconnect-error-kind`): accept
+  `InvalidInput` alongside `BrokenPipe`/`ConnectionReset` in the
+  disconnect-reaping fixture; the contract is that the daemon reaps the
+  compiler, not which errno the raced dead-peer write produces.
+- PR #28 (merged 2026-11-18, `feat/musl-image-gluon`): the musl image now
+  pins the llvm-prebuilt-musl prerelease
+  `release-b29e4d07a2b9a5e72319b37429cf375149212755` and gluon musl
+  `release-fa8b6ace38683a17ee3f398d8b568341c7192fe` (merged
+  laputa-systems/gluon PR #18), replacing apk `ninja-build`. In-image
+  `make test` passed on both CI musl jobs (and on this host under
+  OrbStack, native path); the advisory in-image e2e step fails only on
+  the five deterministic KACH-27 fixtures.
+- PR #29 (merged 2026-11-18, `fix/daemon-publish-stall-flake`): the
+  slow-but-moving-worker drain fixture got 10x timing headroom (30 jobs
+  of 40ms against a 400ms window); 30/30 isolated runs pass. Main CI run
+  44252816334 (`test (macOS)`) was the report.
+- `tests/cached_units_regression_test.rs::record_less_misses_key_from_the_emitted_dep_info`
+  remains the only known unexplained flake (passes on rerun; load-suspect).
 
 ## Reference (see [lock.toml](lock.toml))
 
