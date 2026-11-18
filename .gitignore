@@ -60,3 +60,7 @@ docs/**/*.md
 # Working notes live outside the repository.
 /notes/
 /docs/internal/
+
+# e2e fixture build outputs; each fixture's clean step removes them.
+/scenarios/e2e-cc-memo-after-entry/source/build/
+/scenarios/e2e-cc-cl-same-content-sources/source/build/
