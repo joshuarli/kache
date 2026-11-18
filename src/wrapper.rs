@@ -983,17 +983,26 @@ fn volume_cache_dirs_match(routed: &Path, main: &Path) -> bool {
 /// maps to a shard.
 #[cfg(test)]
 fn open_primary_and_fallback(config: &Config, route: &Path) -> Result<(Store, Vec<Store>)> {
-    open_primary_and_fallback_for(config, route, &crate::invocation::InvocationEnv::capture())
+    open_primary_and_fallback_for(
+        config,
+        route,
+        &crate::invocation::InvocationEnv::capture(),
+        crate::store::VerifyRestores::Off,
+    )
 }
 
 fn open_primary_and_fallback_for(
     config: &Config,
     route: &Path,
     env: &crate::invocation::InvocationEnv,
+    verify_default: crate::store::VerifyRestores,
 ) -> Result<(Store, Vec<Store>)> {
     crate::link::set_mapped_target(config.volume_store_for_invocation(route, env).is_some());
     let routed = config.routed_for_path_for(route, env);
-    let options = crate::store::StoreOptions::from_env(|name| env.var(name).ok());
+    let options = crate::store::StoreOptions::from_env_with_verify_default(
+        |name| env.var(name).ok(),
+        verify_default,
+    );
     let primary = Store::open_with_options(&routed, options.clone())?;
     let mut fallbacks = Vec::new();
     if !volume_cache_dirs_match(&routed.cache_dir, &config.cache_dir) {
@@ -1185,6 +1194,12 @@ thread_local! {
     static CC_PRECOMPILED_REBUILT: std::cell::RefCell<RebuiltArtifacts> = std::cell::RefCell::new(RebuiltArtifacts::default());
 }
 
+/// C/C++ hits re-hash their blobs unless `KACHE_VERIFY_RESTORES` says
+/// otherwise: objects are small, and ccache checksums every read, so a
+/// same-length corruption must not reach the build as a hit.
+const CC_VERIFY_RESTORES_DEFAULT: crate::store::VerifyRestores =
+    crate::store::VerifyRestores::Always;
+
 fn run_cc_inner(
     config: &Config,
     wrapper_args: &[String],
@@ -1278,7 +1293,12 @@ fn run_cc_inner(
 
     let trace_store_open = crate::phase_trace::phase("store_open");
     let (store, fallback_stores) =
-        match open_primary_and_fallback_for(config, &volume_route_path_cc(&parsed), env) {
+        match open_primary_and_fallback_for(
+            config,
+            &volume_route_path_cc(&parsed),
+            env,
+            CC_VERIFY_RESTORES_DEFAULT,
+        ) {
             Ok(pair) => {
                 drop(trace_store_open);
                 pair
@@ -2979,7 +2999,12 @@ fn run_parsed_rustc(
     let mut fallback_stores = Vec::new();
     let trace_store_open = crate::phase_trace::phase("store_open");
     let store = if args.is_primary {
-        match open_primary_and_fallback_for(config, &rustc_route, args.invocation_env()) {
+        match open_primary_and_fallback_for(
+            config,
+            &rustc_route,
+            args.invocation_env(),
+            crate::store::VerifyRestores::Off,
+        ) {
             Ok((primary, fallbacks)) => {
                 fallback_stores = fallbacks;
                 Some(primary)
