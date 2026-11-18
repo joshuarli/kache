@@ -600,7 +600,9 @@ dependencies = [
  "indexmap",
  "kache-core",
  "kache-fs",
+ "kache-log",
  "lexopt",
+ "log",
  "rustc-hash",
  "tempfile",
 ]

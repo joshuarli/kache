@@ -1462,7 +1462,7 @@ fn build(
                 // KACHE_LOG still un-mutes stderr (visible if you tail the log),
                 // but the authoritative leak-detector signal goes to the file via
                 // KACHE_LOG_FILE — cargo eats wrapper stderr. With `--trace-keys`
-                // the file gets elevated to `kache::cache_key=trace` so every
+                // the file gets elevated to `trace` so every
                 // input that feeds the key hasher (env vars, codegen, RUSTFLAGS,
                 // remap, …) lands in the log and the post-warm diff helper can
                 // surface which inputs diverged across clones.
@@ -1470,7 +1470,7 @@ fn build(
                 .env(
                     "KACHE_LOG_FILE",
                     if trace_keys {
-                        "kache::cache_key=trace,kache=warn"
+                        crate::KEY_TRACE_LOG_FILE
                     } else {
                         "kache=warn"
                     },
@@ -2549,7 +2549,7 @@ fn scan_leak_warnings(log_path: &Path) -> (u64, Vec<String>) {
 }
 
 /// Parse a wrapper-`<phase>`.log written with
-/// `KACHE_LOG_FILE=kache::cache_key=trace` and extract every per-crate
+/// `KACHE_LOG_FILE=trace` and extract every per-crate
 /// key-input the hasher consumed. Lines look like:
 ///
 /// ```text

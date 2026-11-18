@@ -46,4 +46,6 @@ rustc-hash = "2"
 warnings = "deny"
 
 [dev-dependencies]
+kache-log = { version = "2.0.0-rc.2", path = "../kache-log" }
+log = "0.4"
 kache-fs = { version = "2.0.0-rc.2", path = "../kache-fs", features = ["testing"] }

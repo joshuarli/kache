@@ -817,7 +817,7 @@ fn run_phase(
     let started = Instant::now();
     // Per-phase cache-key trace, consumed by `report_key_divergence` only when
     // the fixture fails. OPT-IN via `KACHE_E2E_KEYTRACE`: enabling it sets
-    // `KACHE_LOG_FILE=kache::cache_key=trace` on the build, which perturbs
+    // `KACHE_LOG_FILE=trace` on the build, which perturbs
     // kache's cc compiler-probe caching (an extra probe trips `max_probe_runs`
     // on the cc fixtures), so it must stay off for normal runs and be flipped
     // on only to diagnose a convergence failure. Written OUTSIDE the cache dir
@@ -829,7 +829,7 @@ fn run_phase(
     });
     let keytrace_env: Vec<(&str, &OsStr)> = match &keytrace {
         Some(path) => vec![
-            ("KACHE_LOG_FILE", OsStr::new("kache::cache_key=trace,kache=warn")),
+            ("KACHE_LOG_FILE", OsStr::new(crate::KEY_TRACE_LOG_FILE)),
             ("KACHE_LOG_FILE_PATH", path.as_os_str()),
         ],
         None => Vec::new(),
