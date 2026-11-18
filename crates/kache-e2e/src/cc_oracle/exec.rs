@@ -225,7 +225,7 @@ pub fn write_shims(dir: &Path, toolchain: &Toolchain, real_override: Option<&Pat
 }
 
 /// Classify the shim log records one invocation produced.
-pub fn classify(log: &str, fixture: &Path, source: &str) -> Executions {
+pub fn classify(log: &str, fixture: &Path, unit_names: &[String]) -> Executions {
     let mut out = Executions::default();
     let fixture = fixture.to_string_lossy();
     for line in log.lines().filter(|l| !l.is_empty()) {
@@ -234,7 +234,7 @@ pub fn classify(log: &str, fixture: &Path, source: &str) -> Executions {
             fields.pop();
         }
         let Some((cwd, args)) = fields.split_first() else { continue };
-        let names_unit = *cwd == fixture && args.contains(&source);
+        let names_unit = *cwd == fixture && args.iter().any(|a| unit_names.iter().any(|n| n == a));
         let has = |flag: &str| args.contains(&flag);
         if !names_unit || has("-###") || has("--version") || has("-fsyntax-only") {
             out.probe += 1;
@@ -534,7 +534,11 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                 .with_context(|| format!("{} arm: spawning {}", arm.as_str(), driver.display()))?;
             step_ms.push(started.elapsed().as_millis() as u64);
             let log_text = std::fs::read_to_string(log).unwrap_or_default();
-            let mut executions = classify(&log_text, ctx.fixture, &expand(&compile.source, ctx.fixture));
+            let unit_names: Vec<String> = std::iter::once(&compile.source)
+                .chain(&compile.also_names)
+                .map(|name| expand(name, ctx.fixture))
+                .collect();
+            let mut executions = classify(&log_text, ctx.fixture, &unit_names);
             let kache_result = if arm == Arm::Kache {
                 let events = kache_events_since(ctx.kache, store, &mut kache_events)?;
                 events.last().cloned()
@@ -789,15 +793,18 @@ mod tests {
             String::new(),
         ]
         .concat();
-        let e = classify(&log, fx, "a.c");
+        let e = classify(&log, fx, &["a.c".to_string()]);
         assert_eq!((e.codegen, e.preprocess, e.probe), (3, 2, 5));
+        let rsp = record("/fx", &["@args.rsp"]);
+        assert_eq!(classify(&rsp, fx, &["a.c".to_string()]).probe, 1);
+        assert_eq!(classify(&rsp, fx, &["a.c".to_string(), "@args.rsp".to_string()]).codegen, 1);
         assert_eq!(e.codegen_argv[0], ["-c", "a.c", "-o", "a.o"]);
     }
 
     #[test]
     fn arguments_with_spaces_survive_the_log() {
         let log = record("/f x", &["-c", "my file.c", "-DA=1 2"]);
-        let e = classify(&log, Path::new("/f x"), "my file.c");
+        let e = classify(&log, Path::new("/f x"), &["my file.c".to_string()]);
         assert_eq!(e.codegen_argv, vec![vec!["-c", "my file.c", "-DA=1 2"]]);
     }
 
@@ -965,7 +972,7 @@ mod tests {
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout), "-c a b.c\n");
         let cwd = std::fs::canonicalize(root.path()).unwrap();
-        let e = classify(&std::fs::read_to_string(&log).unwrap(), &cwd, "a b.c");
+        let e = classify(&std::fs::read_to_string(&log).unwrap(), &cwd, &["a b.c".to_string()]);
         assert_eq!(e.codegen_argv, vec![vec!["-c", "a b.c"]]);
 
         write_shims(&dir, &tc, Some(Path::new("/usr/bin/false"))).unwrap();

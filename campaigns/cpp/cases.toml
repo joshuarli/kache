@@ -402,6 +402,15 @@ ccache.suite = "kache-original"
 status = "oracle"
 
 [[case]]
+id = "cc-rsp-basic"
+package = "CCP-03"
+summary = "a compile whose arguments come from an @response file caches like ccache, and editing the file invalidates"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-rsp-quoted"
 package = "CCP-03"
 summary = "quoted paths with spaces parse correctly in response files"

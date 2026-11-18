@@ -145,6 +145,11 @@ pub struct Compile {
     /// The translation unit's source path as spelled in `argv`. Compiler
     /// executions naming it are the unit's; every other execution is a probe.
     pub source: String,
+    /// Other arguments that name the unit in an execution, such as the
+    /// `@file` a response-file compile passes while a cache that expands
+    /// the file passes `source` instead.
+    #[deser(default)]
+    pub also_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -252,8 +257,10 @@ pub fn parse(id: &str, text: &str, source_dir: PathBuf) -> Result<Case> {
             "case {id}: argv must start with {{cc}} or {{cxx}}"
         );
         ensure!(
-            compile.argv.iter().any(|a| a == &compile.source),
-            "case {id}: source `{}` does not appear in argv",
+            std::iter::once(&compile.source)
+                .chain(&compile.also_names)
+                .any(|name| compile.argv.contains(name)),
+            "case {id}: neither source `{}` nor also_names appears in argv",
             compile.source
         );
     }

@@ -1,0 +1,28 @@
+summary = "a compile whose arguments come from an @response file caches like ccache, and editing the file invalidates (CCP-03)"
+cohort = "open"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "@args.rsp"]
+source = "u.c"
+also_names = ["@args.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "like-ccache"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-response-file"
+reuse = "miss"
+action = [{ op = "write", path = "args.rsp", content = "-DRSP_VALUE=4 -c u.c -o u.o\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "revert-response-file"
+reuse = "like-ccache"
+action = [{ op = "write", path = "args.rsp", content = "-DRSP_VALUE=3 -c u.c -o u.o\n" }, { op = "delete-outputs" }]

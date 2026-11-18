@@ -109,6 +109,7 @@ ccache_config = { sloppiness = "pch_defines,time_macros" }  # ccache arms only: 
 [[compile]]
 argv = ["{cc}", "-c", "unit.c", "-o", "unit.o"]   # {cc} or {cxx}
 source = "unit.c"
+also_names = []                # other tokens naming the unit, e.g. "@args.rsp"
 
 [[step]]
 name = "populate"
