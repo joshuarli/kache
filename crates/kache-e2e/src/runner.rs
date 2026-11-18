@@ -1144,6 +1144,11 @@ fn run_step(
         .env_remove("CARGO_PROFILE_DEV_STRIP")
         .envs(&fixture.env)
         .envs(harness_env.iter().copied());
+    if fixture.compiler_shims {
+        // An inherited CC (the musl image exports an absolute clang) would
+        // bypass the PATH shims the fixture exists to exercise.
+        command.env_remove("CC").env_remove("CXX");
+    }
     let output = command
         .output()
         .with_context(|| format!("spawning `{cmd}` in {}", cwd.display()))?;
@@ -1849,6 +1854,18 @@ mod tests {
             msg.contains("install-shims") || msg.contains("No such") || msg.contains("not found"),
             "{msg}"
         );
+    }
+
+    #[test]
+    fn shim_fixture_builds_never_see_cc_or_cxx() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut fixture = dummy_shim_fixture(true);
+        fixture.env.insert("CXX".into(), "c++".into());
+        let unset = r#"test -z "${CC+x}" && test -z "${CXX+x}""#;
+        let shimmed = super::run_step(unset, &fixture, tmp.path(), tmp.path(), &[]).unwrap();
+        assert!(shimmed.exit.success(), "a shim fixture's build must not see CC or CXX");
+        let prefixed = super::run_step(unset, &dummy_shim_fixture(false), tmp.path(), tmp.path(), &[]).unwrap();
+        assert!(!prefixed.exit.success(), "other fixtures keep their CC");
     }
 
     #[test]
