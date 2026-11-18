@@ -1,0 +1,13 @@
+summary = "a missing response file fails exactly as raw: same status and diagnostics, no output"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "@missing.rsp", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+status = 1

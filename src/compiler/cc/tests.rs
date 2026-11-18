@@ -9766,3 +9766,46 @@ fn chromium_file_flags_change_cache_key_with_contents() {
     let refused = compiler.cache_key_with(&gcc_profile, &ctx, CcKeyDiscovery::Expansion);
     assert!(refused.is_err_and(|e| e.to_string().contains("profile directory")), "gcc reads per-object profiles the key cannot see");
 }
+
+#[test]
+fn gnu_response_files_split_like_gcc_and_clang() {
+    let split = |body: &str| gnu_response_file_arguments(body).unwrap();
+    assert_eq!(split(" -c\tu.c \n -o u.o\n"), ["-c", "u.c", "-o", "u.o"]);
+    assert_eq!(split("-DNAME='a b' \"-I dir/with space\""), ["-DNAME=a b", "-I dir/with space"]);
+    assert_eq!(split(r#"a\ b "c\"d" 'e\'f' g"h i"j"#), ["a b", "c\"d", "e'f", "gh ij"]);
+    assert!(split("  \n").is_empty());
+    for refused in ["a \"\" b", "a ''", "a\\\nb", "a\\", "a\r\nb"] {
+        assert!(gnu_response_file_arguments(refused).is_err(), "{refused:?}");
+    }
+}
+
+#[test]
+fn response_files_expand_for_gnu_drivers_only_and_refuse_when_unsafe() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("args.rsp"), "-DV=1 -c u.c -o u.o\n").unwrap();
+    std::fs::write(temp.path().join("nested.rsp"), "@args.rsp\n").unwrap();
+    std::fs::write(temp.path().join("empty.rsp"), "\"\"\n").unwrap();
+    let env = crate::invocation::InvocationEnv::from_parts(
+        std::iter::empty::<(String, String)>(),
+        Some(temp.path().to_path_buf()),
+        None,
+        temp.path().to_path_buf(),
+    );
+    let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        cc_args_with_response_files(&args(&["gcc", "-O2", "@args.rsp"]), &env),
+        Some(args(&["gcc", "-O2", "-DV=1", "-c", "u.c", "-o", "u.o"]))
+    );
+    assert_eq!(cc_args_with_response_files(&args(&["gcc", "-c", "u.c"]), &env), None);
+    assert_eq!(cc_args_with_response_files(&args(&["clang-cl", "@args.rsp"]), &env), None);
+    for unsafe_file in ["@nested.rsp", "@empty.rsp", "@missing.rsp"] {
+        assert_eq!(cc_args_with_response_files(&args(&["gcc", unsafe_file]), &env), None, "{unsafe_file}");
+    }
+
+    let compiler = CcCompiler::for_invocation(Vec::new(), &env);
+    let parsed = compiler.parse(&args(&["gcc", "@args.rsp"])).unwrap();
+    assert!(parsed.refuse_reasons(&[]).is_empty(), "{:?}", parsed.refuse_reasons(&[]));
+    assert_eq!(parsed.rest, args(&["-DV=1", "-c", "u.c", "-o", "u.o"]));
+    let nested = compiler.parse(&args(&["gcc", "-c", "@nested.rsp"])).unwrap();
+    assert!(format!("{:?}", nested.refuse_reasons(&[])).contains("response file"));
+}

@@ -1,5 +1,5 @@
 summary = "a compile whose arguments come from an @response file caches like ccache, and editing the file invalidates (CCP-03)"
-cohort = "open"
+cohort = "blocking"
 profiles = ["transparent", "reproducible"]
 outputs = ["u.o"]
 

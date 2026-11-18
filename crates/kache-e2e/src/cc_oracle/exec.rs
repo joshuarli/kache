@@ -356,6 +356,37 @@ pub fn expand(value: &str, fixture: &Path) -> String {
     value.replace("{fixture}", &fixture.to_string_lossy())
 }
 
+/// libiberty's `buildargv`, which GCC uses for `@file`: whitespace
+/// separates arguments, a backslash takes the next character, quotes group.
+pub fn split_response_file(body: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut chars = body.chars().peekable();
+    loop {
+        while chars.next_if(char::is_ascii_whitespace).is_some() {}
+        if chars.peek().is_none() {
+            return args;
+        }
+        let (mut arg, mut quote, mut escaped) = (String::new(), None, false);
+        for c in chars.by_ref() {
+            if escaped {
+                arg.push(c);
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if let Some(open) = quote {
+                if c == open { quote = None } else { arg.push(c) }
+            } else if c == '\'' || c == '"' {
+                quote = Some(c);
+            } else if c.is_ascii_whitespace() {
+                break;
+            } else {
+                arg.push(c);
+            }
+        }
+        args.push(arg);
+    }
+}
+
 /// ccache's configuration file syntax: one `key = value` per line.
 fn ccache_config_text(settings: &std::collections::BTreeMap<String, String>) -> String {
     settings.iter().map(|(key, value)| format!("{key} = {value}\n")).collect()
@@ -577,7 +608,16 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                 }
             }
 
+            let response_files = args
+                .iter()
+                .filter_map(|arg| {
+                    let path = arg.strip_prefix('@')?;
+                    let body = std::fs::read_to_string(ctx.fixture.join(path)).ok()?;
+                    Some((arg.clone(), split_response_file(&body)))
+                })
+                .collect();
             step_obs.push(Observation {
+                response_files,
                 status: output.status.code(),
                 stdout: output.stdout,
                 stderr: output.stderr,
@@ -892,6 +932,15 @@ mod tests {
         assert!(!blob.exists());
         let empty = tempfile::tempdir().unwrap();
         assert_eq!(damage_store(empty.path(), StoreFault::DeleteBlobs).unwrap(), 0);
+    }
+
+    #[test]
+    fn response_files_split_like_libiberty() {
+        assert_eq!(
+            split_response_file("'-DMSG=\"hello world\"' \"-Iinc dir\" a\\ b \"\" -c\n"),
+            ["-DMSG=\"hello world\"", "-Iinc dir", "a b", "", "-c"]
+        );
+        assert!(split_response_file(" \n").is_empty());
     }
 
     #[test]

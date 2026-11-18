@@ -1,0 +1,18 @@
+summary = "a response file naming another is refused (GCC and Clang resolve the inner path differently) and runs exactly as raw"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "@outer.rsp"]
+source = "u.c"
+also_names = ["@outer.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "edit-inner"
+reuse = "miss"
+action = [{ op = "write", path = "inner.rsp", content = "-DNESTED=7\n" }, { op = "delete-outputs" }]

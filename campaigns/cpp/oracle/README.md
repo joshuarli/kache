@@ -49,7 +49,8 @@ centisecond, 2 s on a whole second. Each step then compiles a quiescent tree.
 In both profiles every code generation kache runs must use exactly the `raw`
 arguments, apart from its `-MD -MF <tmp> -MT __kache_direct_capture`
 dependency capture, or else the case's own arguments unchanged (a
-passthrough). Anything else is a harness error: the profile no longer
+passthrough). Either form may have its `@file` arguments replaced by the
+arguments the file held, split the way GCC's libiberty splits them. Anything else is a harness error: the profile no longer
 describes what kache does.
 
 ## Verdicts

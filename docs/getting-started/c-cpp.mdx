@@ -112,7 +112,7 @@ cc -E src/foo.c -o build/foo.i
 clang-cl /c foo.c /Fofoo.obj
 ```
 
-The source can be C, C++, Objective-C, Objective-C++, or assembly that goes through the preprocessor (`.S`, `.sx`).
+The source can be C, C++, Objective-C, Objective-C++, or assembly that goes through the preprocessor (`.S`, `.sx`). `cc -S src/foo.c -o build/foo.s` caches the assembly like an object. Arguments in an `@file` response file are expanded and keyed as if they had been passed directly, and the compile runs with the expanded arguments.
 
 The key includes the content of the source and of every header the compile reads, the compiler identity, modeled code-generation options, and normalized paths. Header changes therefore invalidate the entry.
 
@@ -161,10 +161,10 @@ Kache caches the source analysis by content hash. A settled warm memo reuses tha
 Kache currently passes through:
 
 - link and whole-program steps
-- assembly output (`-S`) and output to standard output (`-o -`)
+- assembly output (`-S`) without `-o`, and output to standard output (`-o -`)
 - multi-source or multi-architecture invocations
 - `-x` languages other than C, C++, Objective-C, Objective-C++, and assembly, such as `-x cuda` and `-x hip`, and `.cu` sources given to `cc` or `clang`
-- response files
+- response files under clang-cl, response files that name other response files, and response files whose quoting GCC and Clang read differently (an empty quoted argument, a backslash before a line break, carriage returns)
 - precompiled headers and modules
 - coverage and split-DWARF builds
 - assembly, including inline `asm` in C, that reads another file with `.incbin` or `.include`
