@@ -123,17 +123,18 @@ that exists today:
 
 | Lane | Host and tools | Host source | Required workload |
 |---|---|---|---|
-| M1 | macOS arm64; Apple Clang and standalone LLVM Clang | `xcode-27` CI runner; the owner's Apple Silicon Mac for real builds | Full applicable corpus; SDK/frameworks; native and arm64+x86_64 universal objects. |
+| M1 | macOS arm64; Apple Clang and standalone LLVM Clang | `xcode-27` CI runner, or any Apple Silicon Mac with Xcode 27 | Full applicable corpus; SDK/frameworks; native and arm64+x86_64 universal objects. |
 | L1 | Linux x86_64 glibc; GCC and Clang | `ubuntu-26.04` CI runner | Full applicable corpus and real-build integration. |
 | L2 | Linux aarch64 glibc; GCC and Clang | `ubuntu-26.04-arm` CI runner | Full applicable corpus and real-build integration. |
-| L3 | Alpine/musl x86_64; GCC and Clang | Alpine container on `ubuntu-26.04`; the owner's Alpine hosts `threadripper` and `lisa` for real builds | Native kache/engine execution, deterministic core, fixtures, release/runtime checks. |
+| L3 | Alpine/musl x86_64; GCC and Clang | Alpine container on `ubuntu-26.04`, or any x86_64 Alpine host | Native kache/engine execution, deterministic core, fixtures, release/runtime checks. |
 | L4 | Alpine/musl aarch64; GCC and Clang | Alpine container on `ubuntu-26.04-arm` | Same contract as L3. |
 
 Intel macOS is not a release target, so it is not a required lane. Add it only
-together with an `x86_64-apple-darwin` release and a native runner. Shared
-owner hosts run other work: use them for bounded real builds, never for timed
-comparisons while another heavy job runs, and record their load with each
-result.
+together with an `x86_64-apple-darwin` release and a native runner. Each lane
+runs on a single machine with no access to other hosts or private services. A
+host that also runs unrelated heavy work is fine for correctness cells. Never
+take timed comparisons on such a host, and record host load with every
+performance result.
 
 Test the newest supported compiler major in primary lanes and one prior major
 per compiler family in pinned extended lanes. Previous Apple Clang means an
@@ -444,10 +445,12 @@ non-ASCII names on both host families.
 
 Pin bounded integrations: zlib (C), a fixed LLVM/Clang target subset (C++),
 a small mixed Rust/C/C++ `cc`-crate fixture, and a fixed Chromium target subset
-built through `cc_wrapper` on M1. Use `//base` and one Blink target from the
-official macOS arm64 Helium configuration that
-[laputa-systems/chromium-build](https://github.com/laputa-systems/chromium-build)
-pins (`macos-helium-release`). Exercise CMake/Ninja and Make,
+built through `cc_wrapper` on M1. Use `//base` and one Blink target from
+Google's official source archive for a pinned Chromium release, with frozen GN
+args for an official macOS arm64 build (`is_official_build=true`,
+`use_lld=true`, `use_thin_lto=true`, `chrome_pgo_phase=2` with the pinned
+`mac-arm` profile). Record the archive digest and args in
+`campaigns/cpp/lock.toml`. Exercise CMake/Ninja and Make,
 plus small Meson/Autotools launcher checks. Freeze project revisions, target
 lists, and configurations before measuring. Existing Firefox scenarios are
 extended coverage, not the only route to completion.
