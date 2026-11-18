@@ -3344,6 +3344,22 @@ fn restore_cc_from_cache_writes_the_preprocessed_output() {
         Some("matching entry lacks the preprocessor stdout artifact required by this invocation")
     );
 
+    let assembly = dir.path().join("unit.s");
+    let assembly_str = assembly.to_string_lossy().into_owned();
+    let assemble = CcCompiler::new()
+        .parse(&s(&["cc", "-S", "unit.c", "-o", &assembly_str]))
+        .unwrap();
+    let assembly_meta = entry_meta("cc-assemble-key", vec![cached_file("unit.s", hash)], &[]);
+    assert_eq!(cc_cache_entry_rejection_reason(&assemble, &assembly_meta), None);
+    restore_cc_from_cache(&store, &assemble, &assembly_meta).unwrap();
+    assert!(assembly.exists(), "an -S hit must land the assembly where -o named it");
+    assert_eq!(
+        cc_cache_entry_rejection_reason(&assemble, &meta),
+        Some("matching entry lacks the assembly output required by this invocation"),
+        "an entry without this invocation's .s must miss, not report a hit with no output"
+    );
+    assert!(cc_store_revalidates_include_dirs(crate::compiler::cc::CompileMode::Assemble));
+
     // An entry naming some other file is not this invocation's output, and
     // skipping it must not invent one.
     let other = dir.path().join("other.i");
@@ -3370,17 +3386,17 @@ fn cc_preprocess_restore_target_matches_only_the_named_output() {
 
     let preprocess = parse(&["cc", "-E", "unit.c", "-o", "build/unit.i"]);
     assert_eq!(
-        cc_preprocess_restore_target(&preprocess, "unit.i"),
+        cc_named_output_restore_target(&preprocess, "unit.i"),
         Some(std::path::PathBuf::from("build/unit.i")),
         "the cached name is the file this invocation asked for"
     );
     assert_eq!(
-        cc_preprocess_restore_target(&preprocess, "other.i"),
+        cc_named_output_restore_target(&preprocess, "other.i"),
         None,
         "an entry naming a different file must not be written here"
     );
     assert_eq!(
-        cc_preprocess_restore_target(&preprocess, "unit.o"),
+        cc_named_output_restore_target(&preprocess, "unit.o"),
         None,
         "an object is not this invocation's output"
     );
@@ -3392,7 +3408,7 @@ fn cc_preprocess_restore_target_matches_only_the_named_output() {
     ] {
         let other = parse(args);
         assert_eq!(
-            cc_preprocess_restore_target(&other, "unit.i"),
+            cc_named_output_restore_target(&other, "unit.i"),
             None,
             "{args:?} is not a preprocess and must not take this path"
         );

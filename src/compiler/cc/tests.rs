@@ -1801,6 +1801,11 @@ fn ubsan_strip_path_components_other_spellings_still_refuse_issue_840() {
 /// accepted as probe-keyed rather than passed through.
 #[test]
 fn caches_trivial_auto_var_init_pattern_issue_849() {
+    assert_eq!(
+        classify_cc_flag("-ftrivial-auto-var-init=zero", Dialect::Gnu),
+        Some(FlagClass::CapturedByProbe),
+        "Chromium's zero-initialization mode keys through the resolved invocation too"
+    );
     let flag = "-ftrivial-auto-var-init=pattern";
     assert_eq!(
         classify_cc_flag(flag, Dialect::Gnu),
@@ -1823,7 +1828,6 @@ fn caches_trivial_auto_var_init_pattern_issue_849() {
 fn trivial_auto_var_init_other_spellings_still_refuse_issue_849() {
     for flag in [
         "-ftrivial-auto-var-init",
-        "-ftrivial-auto-var-init=zero",
         "-ftrivial-auto-var-init=uninitialized",
         "-ftrivial-auto-var-init=patterns",
     ] {
@@ -1886,7 +1890,7 @@ fn refuses_flags_unclassified_in_cc_flags_table() {
         // unmodeled -f… / -m… codegen flags. (-ffast-math / -fno-finite-math-only
         // / -mrecip= are now CapturedByProbe — modeled from the Firefox bench — so
         // they are deliberately NOT here; these remain genuinely unmodeled.)
-        "-fsanitize=address",
+        "-fsanitize-coverage=trace-pc",
         "-fno-pic",
         "-mtune=skylake",
         // unmodeled optimization / debug variants
@@ -3526,7 +3530,7 @@ fn refuse_reason_names_the_rejected_flags() {
         "-o",
         "foo.o",
         "-mtune=skylake",
-        "-fsanitize=address",
+        "-fsanitize-coverage=trace-pc",
     ]);
     let detail = descs
         .iter()
@@ -3537,7 +3541,7 @@ fn refuse_reason_names_the_rejected_flags() {
         "reason should name the flag: {detail}"
     );
     assert!(
-        detail.contains("-fsanitize=address"),
+        detail.contains("-fsanitize-coverage=trace-pc"),
         "reason should name every rejected flag: {detail}"
     );
 }
@@ -3884,8 +3888,42 @@ fn refuses_preprocess_and_assemble_modes() {
     let assemble = refuse_descriptions(&["cc", "-S", "foo.c"]);
     assert!(
         assemble.iter().any(|d| d.contains("assembly")),
-        "expected assembly-mode refuse, got: {assemble:?}"
+        "expected assembly-mode refuse without -o, got: {assemble:?}"
     );
+    let named = refuse_descriptions(&["cc", "-S", "foo.c", "-o", "foo.s"]);
+    assert!(named.is_empty(), "-S -o must cache, got: {named:?}");
+    let cl = refuse_descriptions(&["clang-cl", "-S", "foo.c", "-o", "foo.s"]);
+    assert!(
+        cl.iter().any(|d| d.contains("assembly")),
+        "clang-cl -S stays refused, got: {cl:?}"
+    );
+}
+
+#[test]
+fn assembly_output_is_a_compiler_output_and_its_own_key() {
+    let named = CcArgs::parse(&s(&["cc", "-S", "foo.c", "-o", "out/foo.s", "-MD"])).unwrap();
+    assert_eq!(
+        named.compiler_output_paths(),
+        [PathBuf::from("out/foo.s"), PathBuf::from("out/foo.d")]
+    );
+    let default = CcArgs::parse(&s(&["cc", "-S", "src/foo.c"])).unwrap();
+    assert_eq!(default.compiler_output_paths(), [PathBuf::from("foo.s")]);
+
+    let temp = tempfile::tempdir().unwrap();
+    let fake_cc = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_cc_constant_output.sh");
+    let source = temp.path().join("unit.c");
+    std::fs::write(&source, "int x;\n").unwrap();
+    let compiler = CcCompiler::new();
+    let file_hasher = crate::cache_key::FileHasher::new();
+    let normalizer = crate::path_normalizer::PathNormalizer::empty();
+    let env = crate::invocation::InvocationEnv::capture();
+    let cache = temp.path().join("cache");
+    let ctx = KeyCtx { invocation_env: &env, file_hasher: &file_hasher, path_normalizer: &normalizer, cache_dir: &cache, key_salt: None, key_env_vars: &[], extra_inputs_digest: None, build_script_inputs_digest: None };
+    let key = |mode: &str, out: &str| {
+        let args = [fake_cc.to_string_lossy().into_owned(), mode.into(), source.to_string_lossy().into_owned(), "-o".into(), out.into()];
+        compiler.key_for_test(&compiler.parse(&args).unwrap(), &ctx)
+    };
+    assert_ne!(key("-S", "unit.o"), key("-c", "unit.o"), "-S and -c never share an entry");
 }
 
 /// Non-`-c` mode refusals (preprocessor, assembly, link,

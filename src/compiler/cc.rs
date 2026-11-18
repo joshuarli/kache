@@ -754,8 +754,8 @@ impl CcArgs {
     ///   anything it does not classify is refused with the offending
     ///   flags named in the reason.
     /// - **Output to stdout** (`-o -`): not a cacheable artifact.
-    /// - **Assemble mode**: `-S` is still refused. `-E` to a named file
-    ///   or to stdout is cached.
+    /// - **Assemble mode**: `-S` without `-o`, or under clang-cl, is still
+    ///   refused. `-S -o` and `-E` to a named file or to stdout are cached.
     pub fn refuse_reasons(&self, extra_allowlist_flags: &[String]) -> Vec<RefuseReason> {
         let mut reasons = Vec::new();
 
@@ -783,9 +783,11 @@ impl CcArgs {
             // `-E` to a named file or to stdout is a single-output compile:
             // the expansion is the artifact. `-o -` is still refused below.
             CompileMode::Preprocess => {}
-            CompileMode::Assemble => {
-                reasons.push(RefuseReason::Unsupported("cc assembly mode -S — not yet"))
-            }
+            // `-S` to a named file is a single-output compile like `-c`.
+            CompileMode::Assemble if self.output.is_some() && self.family.dialect() == Dialect::Gnu => {}
+            CompileMode::Assemble => reasons.push(RefuseReason::Unsupported(
+                "cc assembly mode -S without -o — not yet",
+            )),
         }
 
         // Output to stdout — `-o -` is unambiguous; an `-o` followed
@@ -1019,20 +1021,20 @@ impl CcArgs {
     ///
     /// Cacheable invocations have one source, but refused multi-source
     /// invocations still need exact passthrough safety checks for each default
-    /// object and dep-info path. Non-compile modes deliberately return no
-    /// object-shaped paths: `-E foo.c` does not select `foo.o`.
+    /// object and dep-info path. `-S` selects `foo.s`; the other modes
+    /// deliberately return no object-shaped paths: `-E foo.c` does not
+    /// select `foo.o`.
     pub(crate) fn compiler_output_paths(&self) -> Vec<PathBuf> {
-        if self.mode != CompileMode::Compile {
-            return Vec::new();
-        }
+        let ext = match (self.mode, self.family.dialect()) {
+            (CompileMode::Compile, Dialect::Cl) => "obj",
+            (CompileMode::Compile, Dialect::Gnu) => "o",
+            (CompileMode::Assemble, _) => "s",
+            (CompileMode::Preprocess | CompileMode::Link, _) => return Vec::new(),
+        };
 
         let objects = if let Some(output) = &self.output {
             vec![output.clone()]
         } else {
-            let ext = match self.family.dialect() {
-                Dialect::Cl => "obj",
-                Dialect::Gnu => "o",
-            };
             self.sources
                 .iter()
                 .filter_map(|source| {
@@ -2393,7 +2395,6 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Exact("-fcomplete-member-pointers"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-mno-outline"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-no-canonical-prefixes"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
-    FlagSpec { matcher: Matcher::Prefix("-ftrivial-auto-var-init="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-mmacos-version-min="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fsanitize="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fsanitize-trap="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
@@ -2546,6 +2547,12 @@ pub static CC_FLAGS: &[FlagSpec] = &[
         matcher: Matcher::Exact("-ftrivial-auto-var-init=pattern"),
         class: FlagClass::CapturedByProbe,
         source: "Issue #849 — Firefox automatic-variable pattern initialization; Apple clang forwards the value to -cc1 verbatim (verified -###).",
+        dialect: None,
+    },
+    FlagSpec {
+        matcher: Matcher::Exact("-ftrivial-auto-var-init=zero"),
+        class: FlagClass::CapturedByProbe,
+        source: "Chromium official macOS build; Apple clang forwards the value to -cc1 verbatim (verified -###).",
         dialect: None,
     },
     // ── Codegen knobs: one sorted stem list, BOTH polarities ──
@@ -8040,6 +8047,11 @@ impl CcCompiler {
         hasher.update(b"pic:");
         hasher.update(&[parsed.pic as u8]);
         hasher.update(b"\n");
+        // `-S` writes the assembly `-c` would assemble; the expansion and
+        // flags are otherwise the same, so the mode must separate the keys.
+        if parsed.mode == CompileMode::Assemble {
+            hasher.update(b"mode:assemble\n");
+        }
         log::trace!(
             target: "kache::cache_key",
             "[key:{}] pic={}",
@@ -8609,7 +8621,8 @@ impl CcCompiler {
         // takes its real destination from the current invocation
         // (kunobi-ninja/kache#655).
         let discovers_outputs = matches!(parsed.mode, CompileMode::Compile)
-            || (parsed.mode == CompileMode::Preprocess && parsed.output.is_some());
+            || (matches!(parsed.mode, CompileMode::Preprocess | CompileMode::Assemble)
+                && parsed.output.is_some());
         let mut keepalive = Vec::new();
         let mut artifacts = if exit_code == 0 && discovers_outputs {
             discover_cc_output_artifacts(parsed)
