@@ -34,6 +34,12 @@ pub mod source;
 
 use std::path::{Path, PathBuf};
 
+/// `KACHE_LOG_FILE` value that records cache-key traces. kache's file sink
+/// takes one level for every `kache` target (the last one named wins), so a
+/// per-target filter such as `kache::cache_key=trace,kache=warn` would
+/// resolve to `warn` and record no trace at all.
+pub const KEY_TRACE_LOG_FILE: &str = "trace";
+
 /// Make a canonicalized path safe to embed in the shell commands the harness
 /// drives (fixture `make` recipes via `/usr/bin/sh`) and to invoke directly
 /// as a program.
@@ -81,6 +87,14 @@ pub fn run_kache_compiler_shim(family: &str) -> ! {
 mod tests {
     use super::portable_path;
     use std::path::Path;
+
+    #[test]
+    fn the_key_trace_filter_enables_trace_records() {
+        assert_eq!(
+            kache_log::parse_level_filter(super::KEY_TRACE_LOG_FILE),
+            Some(log::LevelFilter::Trace)
+        );
+    }
 
     #[test]
     fn leaves_unix_style_paths_untouched() {

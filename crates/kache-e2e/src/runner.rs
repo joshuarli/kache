@@ -817,7 +817,7 @@ fn run_phase(
     let started = Instant::now();
     // Per-phase cache-key trace, consumed by `report_key_divergence` only when
     // the fixture fails. OPT-IN via `KACHE_E2E_KEYTRACE`: enabling it sets
-    // `KACHE_LOG_FILE=kache::cache_key=trace` on the build, which perturbs
+    // `KACHE_LOG_FILE=trace` on the build, which perturbs
     // kache's cc compiler-probe caching (an extra probe trips `max_probe_runs`
     // on the cc fixtures), so it must stay off for normal runs and be flipped
     // on only to diagnose a convergence failure. Written OUTSIDE the cache dir
@@ -829,7 +829,7 @@ fn run_phase(
     });
     let keytrace_env: Vec<(&str, &OsStr)> = match &keytrace {
         Some(path) => vec![
-            ("KACHE_LOG_FILE", OsStr::new("kache::cache_key=trace,kache=warn")),
+            ("KACHE_LOG_FILE", OsStr::new(crate::KEY_TRACE_LOG_FILE)),
             ("KACHE_LOG_FILE_PATH", path.as_os_str()),
         ],
         None => Vec::new(),
@@ -1144,6 +1144,11 @@ fn run_step(
         .env_remove("CARGO_PROFILE_DEV_STRIP")
         .envs(&fixture.env)
         .envs(harness_env.iter().copied());
+    if fixture.compiler_shims {
+        // An inherited CC (the musl image exports an absolute clang) would
+        // bypass the PATH shims the fixture exists to exercise.
+        command.env_remove("CC").env_remove("CXX");
+    }
     let output = command
         .output()
         .with_context(|| format!("spawning `{cmd}` in {}", cwd.display()))?;
@@ -1849,6 +1854,18 @@ mod tests {
             msg.contains("install-shims") || msg.contains("No such") || msg.contains("not found"),
             "{msg}"
         );
+    }
+
+    #[test]
+    fn shim_fixture_builds_never_see_cc_or_cxx() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut fixture = dummy_shim_fixture(true);
+        fixture.env.insert("CXX".into(), "c++".into());
+        let unset = r#"test -z "${CC+x}" && test -z "${CXX+x}""#;
+        let shimmed = super::run_step(unset, &fixture, tmp.path(), tmp.path(), &[]).unwrap();
+        assert!(shimmed.exit.success(), "a shim fixture's build must not see CC or CXX");
+        let prefixed = super::run_step(unset, &dummy_shim_fixture(false), tmp.path(), tmp.path(), &[]).unwrap();
+        assert!(!prefixed.exit.success(), "other fixtures keep their CC");
     }
 
     #[test]
