@@ -87,7 +87,7 @@ status = "ASSIGNED — e2e-linux-glibc CI job added by this groundwork; runs mak
 lane = "L3"
 host = "Alpine container on ubuntu-26.04, or any x86_64 Alpine host"
 os = "Alpine 3.24.2 (musl libc), x86_64"
-compilers = ["prebuilt LLVM Clang 23.1.5 at /opt/llvm-musl (musl-linked, in-image)", "GCC/G++ 15.2.0-r5 (apk, added by this groundwork)"]
+compilers = ["prebuilt LLVM Clang 23.1.5 (laputa-systems/llvm-prebuilt-musl prerelease release-b29e4d07a2b9a5e72319b37429cf375149212755, musl-linked, in-image)", "GCC/G++ 15.2.0-r5 (apk, added by this groundwork)"]
 image = "Dockerfile, FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
 workloads = "native kache/engine execution, deterministic core, fixtures, release/runtime checks"
 status = "ASSIGNED — linux-musl CI job now runs make e2e + make e2e-negative-control in image; local docker daemon (OrbStack) not running, Linux lanes verified via CI only"
@@ -96,7 +96,7 @@ status = "ASSIGNED — linux-musl CI job now runs make e2e + make e2e-negative-c
 lane = "L4"
 host = "Alpine container on ubuntu-26.04-arm, or any aarch64 Alpine host"
 os = "Alpine 3.24.2 (musl libc), aarch64"
-compilers = ["prebuilt LLVM Clang 23.1.5 at /opt/llvm-musl (musl-linked, in-image)", "GCC/G++ 15.2.0-r5 (apk, added by this groundwork)"]
+compilers = ["prebuilt LLVM Clang 23.1.5 (laputa-systems/llvm-prebuilt-musl prerelease release-b29e4d07a2b9a5e72319b37429cf375149212755, musl-linked, in-image)", "GCC/G++ 15.2.0-r5 (apk, added by this groundwork)"]
 image = "Dockerfile, FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
 workloads = "same contract as L3"
 status = "ASSIGNED — linux-musl CI job now runs make e2e + make e2e-negative-control in image; local docker daemon (OrbStack) not running, Linux lanes verified via CI only"
@@ -104,6 +104,31 @@ status = "ASSIGNED — linux-musl CI job now runs make e2e + make e2e-negative-c
 [matrix.intel_macos]
 lane = "not required"
 status = "OUT OF SCOPE — intel macOS is not a kache release target; add only with an x86_64-apple-darwin release and a native runner"
+
+[llvm_prebuilt_musl]
+# The in-image musl LLVM for lanes L3/L4. Pinned to the GitHub
+# prereleases of laputa-systems/llvm-prebuilt-musl (musl-static
+# LLVM/Clang 23.1.5); the Dockerfile downloads these exact assets and
+# verifies the digests in its build.
+repo = "https://github.com/laputa-systems/llvm-prebuilt-musl"
+release_tag = "release-b29e4d07a2b9a5e72319b37429cf375149212755"
+x86_64_asset = "clang+llvm-23.1.5-x86_64-linux-musl.tar.xz"
+x86_64_sha256 = "de3f6d0ad089391482147c61648c511c500b25289132fe7f2c446a0905406d2a"
+aarch64_asset = "clang+llvm-23.1.5-aarch64-linux-musl.tar.xz"
+aarch64_sha256 = "4d8b637d65ed0299c8b7852c1e7e1d41f7141346ce31e707f0975ff67460121e"
+note = "SHA256SUMS from the prerelease verified 2026-11-18 against the release assets API"
+
+[gluon_musl]
+# The in-image ninja/meson executor (replaces apk's ninja-build). Pinned
+# to the GitHub prereleases of laputa-systems/gluon, same mechanism as
+# llvm_prebuilt_musl.
+repo = "https://github.com/laputa-systems/gluon"
+release_tag = "release-fa8b6aace38683a17ee3f398d8b568341c7192fe"
+x86_64_asset = "gluon-x86_64-unknown-linux-musl.tar.xz"
+x86_64_sha256 = "3aacbd8756a4dcfeff9cd139ebcd5a3b4cb2cc433c599b7e21f446c716987ce8"
+aarch64_asset = "gluon-aarch64-unknown-linux-musl.tar.xz"
+aarch64_sha256 = "6b352c03399cf41f45ee5d9ff601ea17cf4768f74aff31a164e145e6e2326e56"
+note = "cut from main @ fa8b6aac (merged laputa-systems/gluon PR #18): trailing whitespace in ninja variable values is preserved, fixing CMake's launcher idiom; musl binaries ran --version and passed verify-static-elf in the release workflow"
 
 [projects]
 # Pinned project inputs for CCP-07 real-build integration. The campaign's

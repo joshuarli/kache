@@ -66,6 +66,23 @@ KACH-21 asked for Linux fixture scenarios in a gate with
   (advisory) until KACH-27 closes; the musl `make test` step stays required.
   Cross-tree passes with the escape hatch.
 - KACH-21 does not close until KACH-27 closes and the gates become required.
+- 2026-11-18: the in-image pins moved. LLVM is now the llvm-prebuilt-musl
+  prerelease `release-b29e4d07a2b9a5e72319b37429cf375149212755` (asset
+  digests verified against the prerelease's SHA256SUMS), and gluon
+  `release-fa8b6ace38683a17ee3f398d8b568341c7192fe` (musl, built from the
+  main merge of laputa-systems/gluon PR #18) provides `ninja`, `meson` and
+  `gluon-build` in place of apk `ninja-build`. Gluon's ninja is required for
+  the kache-as-launcher scenario: CMake's TryCompile writes a `LAUNCHER`
+  binding with a trailing space, and only gluon ≥ fa8b6aac preserves it
+  (upstream ninja always did; gluon trimmed it). Verified by building the
+  image on this host (OrbStack, linux/arm64) and running `make e2e` in it:
+  the failing assertion set is the KACH-27 set with no new failures
+  (arm64 additionally failed `e2e-cc-cl-xclang-deps`, matching the
+  documented probe-resolution race). `make test in image` status is in PR
+  CI. PR #28 CI (run 44255058098): both musl jobs passed `make test` and
+  failed the advisory e2e step on exactly the five deterministic fixtures
+  (`e2e-c-shims`, three `e2e-cmake-*`, `e2e-rust-transitive-native`); the
+  intermittent cl-mode fixtures passed on both architectures.
 
 ## PR and CI status
 
@@ -97,7 +114,7 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | M1 | xcode-27 CI runner / Apple Silicon Mac | RUNNING (partial) | This host covers Apple clang 21.0.0/Xcode 27.0. Standalone LLVM Clang missing — see gaps. |
 | L1 | ubuntu-26.04 | RUNNING (advisory) | e2e-linux-glibc job runs; only `e2e-rust-transitive-native` fails (run 44244430288); cross-tree passes with escape hatch; gate assigned, advisory |
 | L2 | ubuntu-26.04-arm | RUNNING (advisory) | Same job matrix; only `e2e-rust-transitive-native` fails; cross-tree passes with escape hatch; advisory |
-| L3 | Alpine 3.24.2 musl x86_64 (container on ubuntu-26.04) | RUNNING (advisory) | linux-musl job; in-image LLVM 23.1.5 + apk GCC 15.2.0; e2e step advisory: `e2e-c-shims`, three `e2e-cmake-*`, `e2e-rust-transitive-native`, `e2e-cc-cl-xclang-deps` (intermittent) |
+| L3 | Alpine 3.24.2 musl x86_64 (container on ubuntu-26.04) | RUNNING (advisory) | linux-musl job; image LLVM 23.1.5 (prerelease b29e4d0) + gluon ninja 1.13.2 + apk GCC 15.2.0; e2e step advisory: `e2e-c-shims`, three `e2e-cmake-*`, `e2e-rust-transitive-native`, `e2e-cc-cl-xclang-deps` (intermittent) |
 | L4 | Alpine 3.24.2 musl aarch64 (container on ubuntu-26.04-arm) | RUNNING (advisory) | Same image and matrix; e2e step advisory: `e2e-c-shims`, three `e2e-cmake-*`, `e2e-rust-transitive-native`, `e2e-cc-cl-same-content-sources` (intermittent) |
 
 ## Package ledger
