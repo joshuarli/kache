@@ -373,8 +373,8 @@ directory. Dropping the fold fails all four module cases with
 `KACHE_WRONG_OUTPUT`; folding prebuilt entries by name only fails the
 swapped-build and template-edit steps. Apple clang 21 disables C++20 named
 modules, so the cases run on Linux only. Producing a `.pcm` (`--precompile`)
-stays unclassified and passes through; the cases mark those compiles
-`uncached`, which requires code generation in every step.
+stays unclassified and passes through; the cases give those compiles
+`reuse = "miss"`, which requires code generation in every step.
 
 **CCP-04 finding: expansion-equivalent reuse is not sound as ccache does it.**
 ccache's preprocessor mode keys by the `-E` text. That text separates

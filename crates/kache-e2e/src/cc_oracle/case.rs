@@ -150,11 +150,11 @@ pub struct Compile {
     /// the file passes `source` instead.
     #[deser(default)]
     pub also_names: Vec<String>,
-    /// Kache passes this invocation through, so it must generate code in
-    /// every step, whatever the step requires of the others: the module
-    /// interface a consumer case builds first, for example.
+    /// What every step requires of this invocation, in place of the step's
+    /// own requirement: `miss` for a module interface kache passes through,
+    /// `any` for a GCC precompiled header that kache may restore or rebuild.
     #[deser(default)]
-    pub uncached: bool,
+    pub reuse: Option<Reuse>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -172,7 +172,7 @@ pub struct Step {
 
 impl Step {
     pub fn reuse_for(&self, compile: &Compile) -> Reuse {
-        if compile.uncached { Reuse::Miss } else { self.reuse }
+        compile.reuse.unwrap_or(self.reuse)
     }
 }
 
@@ -188,6 +188,8 @@ struct CaseFile {
     profiles: Vec<Profile>,
     #[deser(default)]
     outputs: Vec<String>,
+    #[deser(default)]
+    unstable: Vec<String>,
     #[deser(default)]
     env: std::collections::BTreeMap<String, String>,
     #[deser(default)]
@@ -208,6 +210,11 @@ pub struct Case {
     pub families: Vec<Family>,
     pub profiles: Vec<Profile>,
     pub outputs: Vec<String>,
+    /// Files the compiler writes with different bytes on every run, such as
+    /// a GCC precompiled header, which is a dump of the compiler's memory.
+    /// Every arm must leave them with the same kind and mode; their bytes
+    /// are not compared.
+    pub unstable: Vec<String>,
     /// Set in every arm; `{fixture}` expands to the fixture root.
     pub env: std::collections::BTreeMap<String, String>,
     /// ccache settings for a conditional profile, such as the sloppiness
@@ -290,6 +297,7 @@ pub fn parse(id: &str, text: &str, source_dir: PathBuf) -> Result<Case> {
         families: file.families,
         profiles: file.profiles,
         outputs: file.outputs,
+        unstable: file.unstable,
         env: file.env,
         ccache_config: file.ccache_config,
         kache_env: file.kache_env,
@@ -366,10 +374,12 @@ action = [{ op = "delete-outputs" }, { op = "write", path = "a.h", content = "x"
     }
 
     #[test]
-    fn an_uncached_compile_must_generate_code_in_every_step() {
-        let text = MINIMAL.replace("source = \"a.c\"\n", "source = \"a.c\"\nuncached = true\n");
-        let case = parse("c", &text, PathBuf::from("s")).unwrap();
-        assert_eq!(case.steps[1].reuse_for(&case.compiles[0]), Reuse::Miss);
+    fn a_compile_reuse_overrides_every_step() {
+        for (spelling, reuse) in [("miss", Reuse::Miss), ("any", Reuse::Any)] {
+            let text = MINIMAL.replace("source = \"a.c\"\n", &format!("source = \"a.c\"\nreuse = \"{spelling}\"\n"));
+            let case = parse("c", &text, PathBuf::from("s")).unwrap();
+            assert_eq!(case.steps[1].reuse_for(&case.compiles[0]), reuse);
+        }
     }
 
     #[test]

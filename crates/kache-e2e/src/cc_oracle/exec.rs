@@ -254,6 +254,16 @@ pub fn inventory(root: &Path) -> Result<Inventory> {
     Ok(out)
 }
 
+fn without_unstable_bytes(mut tree: Inventory, unstable: &[String]) -> Inventory {
+    for path in unstable {
+        if let Some(entry) = tree.get_mut(path).filter(|entry| entry.kind == EntryKind::File) {
+            entry.digest = String::from("unstable");
+            entry.size = 0;
+        }
+    }
+    tree
+}
+
 /// The stamp a `.gcno` notes file shares with its object.
 fn gcov_stamp(notes: &[u8]) -> Option<[u8; 4]> {
     if notes.len() < 12 || &notes[..4] != b"oncg" {
@@ -695,7 +705,7 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                 status: output.status.code(),
                 stdout: output.stdout,
                 stderr: output.stderr,
-                tree: inventory(ctx.fixture)?,
+                tree: without_unstable_bytes(inventory(ctx.fixture)?, &case.unstable),
                 executions,
                 kache_result,
             });
@@ -1081,6 +1091,24 @@ mod tests {
         assert_eq!(tc.cc, real.join("gcc"));
         assert_eq!(tc.cxx, real.join("g++"));
         assert!(resolve_toolchain("clang", &path).is_err());
+    }
+
+    #[test]
+    fn unstable_files_compare_by_kind_and_mode_but_not_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("h.gch"), "one build").unwrap();
+        std::fs::write(root.path().join("u.o"), "object").unwrap();
+        let unstable = ["h.gch".to_string()];
+        let first = without_unstable_bytes(inventory(root.path()).unwrap(), &unstable);
+        std::fs::write(root.path().join("h.gch"), "another build").unwrap();
+        let second = without_unstable_bytes(inventory(root.path()).unwrap(), &unstable);
+        assert_eq!(first, second);
+        std::fs::write(root.path().join("u.o"), "other object").unwrap();
+        let third = without_unstable_bytes(inventory(root.path()).unwrap(), &unstable);
+        assert_ne!(second["u.o"], third["u.o"]);
+        std::fs::remove_file(root.path().join("h.gch")).unwrap();
+        let fourth = without_unstable_bytes(inventory(root.path()).unwrap(), &unstable);
+        assert!(!fourth.contains_key("h.gch"));
     }
 
     #[test]
