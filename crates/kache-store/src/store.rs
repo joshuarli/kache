@@ -1485,8 +1485,20 @@ pub struct StoreOptions {
 impl StoreOptions {
     /// Parse the invoking client's selectors without reading process state.
     pub fn from_env(var: impl Fn(&str) -> Option<String>) -> Self {
+        Self::from_env_with_verify_default(var, VerifyRestores::Off)
+    }
+
+    /// [`Self::from_env`], with `verify_default` used when
+    /// `KACHE_VERIFY_RESTORES` is unset or empty.
+    pub fn from_env_with_verify_default(
+        var: impl Fn(&str) -> Option<String>,
+        verify_default: VerifyRestores,
+    ) -> Self {
         Self {
-            verify_restores: parse_verify_restores(var("KACHE_VERIFY_RESTORES").as_deref()),
+            verify_restores: parse_verify_restores_or(
+                var("KACHE_VERIFY_RESTORES").as_deref(),
+                verify_default,
+            ),
             max_diagnostics_bytes: parse_max_diagnostics_bytes(
                 var("KACHE_MAX_DIAGNOSTICS_BYTES").as_deref(),
             ),
@@ -1512,7 +1524,13 @@ pub fn verify_restores_mode() -> VerifyRestores {
 /// Pure mapping from the env value to a mode (split out so it can be unit-tested
 /// without touching process env).
 fn parse_verify_restores(value: Option<&str>) -> VerifyRestores {
+    parse_verify_restores_or(value, VerifyRestores::Off)
+}
+
+/// [`parse_verify_restores`] with `unset` for an absent or empty value.
+fn parse_verify_restores_or(value: Option<&str>, unset: VerifyRestores) -> VerifyRestores {
     match value {
+        None | Some("") => unset,
         Some(v) if v.eq_ignore_ascii_case("sampled") => VerifyRestores::Sampled,
         Some(v)
             if v.eq_ignore_ascii_case("always") || v == "1" || v.eq_ignore_ascii_case("true") =>

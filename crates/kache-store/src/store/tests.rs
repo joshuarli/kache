@@ -11647,6 +11647,22 @@ fn store_options_parse_only_the_supplied_selectors() {
 }
 
 #[test]
+fn verify_default_applies_only_when_the_selector_is_unset() {
+    let with = |value: Option<&str>| {
+        StoreOptions::from_env_with_verify_default(
+            |name| value.filter(|_| name == "KACHE_VERIFY_RESTORES").map(str::to_string),
+            VerifyRestores::Always,
+        )
+        .verify_restores
+    };
+    assert_eq!(with(None), VerifyRestores::Always);
+    assert_eq!(with(Some("")), VerifyRestores::Always);
+    assert_eq!(with(Some("off")), VerifyRestores::Off);
+    assert_eq!(with(Some("0")), VerifyRestores::Off);
+    assert_eq!(with(Some("sampled")), VerifyRestores::Sampled);
+}
+
+#[test]
 fn stores_keep_opposite_diagnostics_caps_after_other_handles_open() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());

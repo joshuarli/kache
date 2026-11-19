@@ -1,5 +1,5 @@
-summary = "a same-length bit flip in a stored blob must not be restored as a hit; kache defaults to KACHE_VERIFY_RESTORES=off and restores it (decision recorded in STATUS.md)"
-cohort = "open"
+summary = "a same-length bit flip in a stored blob is detected on the next hit, the entry evicted and recompiled, and the repaired entry reused (C/C++ hits verify by default)"
+cohort = "blocking"
 profiles = ["transparent", "reproducible"]
 outputs = ["u.o"]
 

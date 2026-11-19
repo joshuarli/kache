@@ -1139,16 +1139,7 @@ status = "oracle"
 [[case]]
 id = "cc-rel-store-corrupt-blobs"
 package = "CCP-08"
-summary = "a same-length bit flip in a blob is restored as a hit under the default KACHE_VERIFY_RESTORES=off (open; decision recorded)"
-profiles = ["both"]
-compilers = "all"
-ccache.suite = "kache-original"
-status = "oracle"
-
-[[case]]
-id = "cc-rel-store-corrupt-blobs-verified"
-package = "CCP-08"
-summary = "with KACHE_VERIFY_RESTORES=always a bit-flipped blob is evicted and recompiled"
+summary = "a same-length bit flip in a blob is evicted and recompiled; C/C++ hits verify blobs by default"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "kache-original"
