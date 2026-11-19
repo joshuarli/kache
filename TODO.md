@@ -5,10 +5,10 @@ Next: 28
 
 - **Area:** Compiler compatibility, correctness, tests
 - **Plan:** [C_CPP_PARITY_CAMPAIGN.md](C_CPP_PARITY_CAMPAIGN.md)
-- **Status:** Planned; implementation and differential baseline have not started.
+- **Status:** Running. Differential oracle, 67 oracle cases (63 blocking), required macOS/Linux gates and the zlib/LLVM project checks have landed; the timed baseline (`make cc-bench`) is next. Progress: [campaigns/cpp/STATUS.md](campaigns/cpp/STATUS.md).
 - **Goal:** Execute the unattended campaign using pinned ccache as the compatibility/reuse oracle and raw compilers as correctness ground truth, with native macOS and Linux coverage.
 - **Scope:** Response files and flags, invalidation, equivalent-preprocessing reuse, complete output sets, conditional PCH/module support, host integration, local reliability, and measured performance. Remote storage stays on the later roadmap.
-- **Coordination:** CCP-00/CCP-08 cover the relevant KACH-21/KACH-22 work; retain those entries until their gates actually run. Start at CCP-00 and persist evidence in the campaign ledger specified by the plan.
+- **Coordination:** KACH-21 and KACH-27 closed when the Linux gates became required (PR #50). KACH-22 (mutants in no gate) stays open. Evidence lives in the campaign ledger.
 - **Done when:** Every final acceptance criterion in the plan passes on the same integrated revision; safe passthrough, missing tools, and unexecuted lanes do not count as cached parity.
 
 ### KACH-22 · P3 · Changed-line mutation testing runs in no gate

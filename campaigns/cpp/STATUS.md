@@ -13,103 +13,48 @@ plan: [C_CPP_PARITY_CAMPAIGN.md](../../C_CPP_PARITY_CAMPAIGN.md); tracking
 entry: KACH-26 in [TODO.md](../../TODO.md). Groundwork branch:
 `feat/ccp00-campaign-groundwork`.
 
-## Groundwork baseline (2026-11-17, this host)
+## Current state (reconciled 2026-11-19 against the code)
 
-Host: Apple Silicon, macOS 27.2.1 (26B131), Xcode 27.0 (27A266a), Apple clang
-21.0.0 (clang-2100.3.34.2), CLT MacOSX.sdk (`-target-sdk-version=27.2`), GNU
-Make 3.81, Homebrew cmake 4.4.2 and ninja 1.13.2. Host load at run time
-(10 cores): 8.2; no timed comparisons were taken.
+Counts are taken from the files, not carried forward:
+`grep '^status = ' campaigns/cpp/cases.toml | sort | uniq -c` and
+`grep -l '^cohort = ' campaigns/cpp/oracle/*/case.toml`.
 
-| Gate | Result | Notes |
-|---|---|---|
-| `make check` | PASS on rerun; first run FAILED one test | First run (fresh worktree, build under load 8.2): `tests/cached_units_regression_test.rs::record_less_misses_key_from_the_emitted_dep_info` failed (`results_for == []`, expected `["local_hit"]`). 4 isolated reruns of the binary pass; `make check` rerun exits 0. Treated as a load flake, not root-caused. Separately, main CI run 44232741312 (2026-11-18) failed `test (macOS)` on `daemon::execution::tests::disconnected_accepted_compiler_is_cancelled_and_reaped` — a different test of the same class; recorded, not fixed here. |
-| `make e2e` | FAILED one fixture | `e2e-cmake-ninja-flagset`: `ninja: failed to spawn: …/target/release/kache/usr/bin/c++: Not a directory`. Root cause is the host-PATH `ninja` at `~/.local/bin/ninja` (gluon-managed reimplementation reporting 1.13.2) strips trailing variable whitespace, breaking CMake's `${LAUNCHER}` idiom in its ninja generator. Reproduced minimally; the fixture passes with Homebrew ninja (`=> e2e-cmake-ninja-flagset: pass`). All other executed fixtures pass (51 pass / 2 Linux-only skips on macOS). NOT a kache defect. |
-| `make e2e-negative-control` | PASS (exit 0) | 52 executed, 2 skipped; every non-exempt fixture falsifiable. |
-| `make e2e` (flagset, brew ninja) | PASS | `PATH=/opt/homebrew/bin:… kache-scenario --select name:e2e-cmake-ninja-flagset --deny-missing-tools` → pass. |
+- Inventory (`cases.toml`): 163 entries, and every oracle directory has
+  one: 67 `oracle`, 86 `planned`, 6 `conditional`, 4 `out_of_scope`.
+- Oracle cases (`oracle/`): 67, of which 63 `blocking` and 4 `open`
+  (`cc-eqp-comment-only`, `cc-input-clang-config-file`,
+  `cc-input-gcc-specs`, `cc-input-token-paste-probe`).
+- Gates: every Linux and macOS CI job is required (PR #50) and green on
+  main; KACH-21 and KACH-27 are closed. `make e2e` on this host needs
+  `PATH=/opt/homebrew/bin:$PATH`, because the gluon `ninja` at
+  `~/.local/bin` stripped trailing spaces from variable values
+  (laputa-systems/gluon GLU-29, fixed in its PR #34, merged 2026-11-19).
 
-Follow-ups not taken here (need explicit authorization or are other items):
-the two `test (macOS)` failures above are not root-caused; `make e2e` leaves
-in-tree `build/` directories behind (KACH-23 class); this host's gluon-ninja
-shadow should not be used for CMake fixtures (PATH with `/opt/homebrew/bin`
-first).
+Engineering work still open (not provisioning):
 
-## Linux gate assignment (this groundwork)
+- CCP-03: `@file` variants beyond the four blocking cases (`cc-rsp-escaped`,
+  `-empty`, `-cycle`, `-depth`, `-option-value`, `-relative-paths`,
+  `-encoding`, `-content-change` are `planned`); clang `--config` and GCC
+  `-specs` (open cases, correct passthrough).
+- CCP-04: comment-only reuse is declined by decision (LIMIT, below); the
+  token-pasted header probe stays an open case.
+- CCP-05: sidecars under `-S` pass through.
+- CCP-06: implicit modules and module production pass through.
+- CCP-07: the cc-crate fixture, Chromium, Meson and Autotools launchers.
+- CCP-08: compiler replacement, wrapper/driver selection, policy changes
+  against populated caches, controlled hash/compile/publication races.
+- CCP-09: the first timed baseline (`make cc-bench`) and the ranked losses.
 
-KACH-21 asked for Linux fixture scenarios in a gate with
-`--deny-missing-tools`, and a decision on the cross-GCC fixture.
+Provisioning, not engineering:
 
-- `Dockerfile`: added `cmake=4.2.3-r0`, `gcc=15.2.0-r5`, `g++=15.2.0-r5`,
-  `ninja-build=1.13.2-r1`, `ninja-is-really-ninja=1.13.2-r1` to the Alpine
-  image (musl lanes L3/L4). Alpine v3.24 has no glibc cross compilers
-  (checked both APKINDEX indexes: only bare-metal `*-none-elf` toolchains),
-  so the cross-GCC fixture cannot run in the image.
-- `e2e-cc-cross-gcc` is now declared `os = ["glibc"]` and assigned to new
-  `e2e-linux-glibc` CI jobs (`ubuntu-26.04` and `ubuntu-26.04-arm`), which
-  install `gcc-riscv64-linux-gnu` / `gcc-arm-linux-gnueabihf` and run
-  `make e2e` + `make e2e-negative-control`. The harness learned libc os
-  tokens: `"glibc"` / `"musl"` match the libc the harness binary was built
-  for (musl CI builds it for musl). Fixture count is unchanged; the fixture
-  runs wherever its tools exist and is not silently dropped elsewhere.
-- `linux-musl` CI job now also runs `make e2e` + `make e2e-negative-control`
-  inside the image (previously only `make test`), with the store/scratch
-  moved onto the checkout filesystem via `TMPDIR=/kache/tmp` and
-  `KACHE_E2E_SKIP_HARDLINK_CHECK=1` (the runner substrate clones instead of
-  hardlinking, so the cross-tree hardlink contract cannot engage there).
-- The glibc jobs do the same with `TMPDIR=<checkout>/tmp`. Both new gates
-  upload `tmp/e2e/` as artifacts on failure.
-- First CI results (run 44241684053, 2026-11-18): the glibc jobs fail on
-  `e2e-rust-cross-tree` and `e2e-rust-transitive-native` (cmake passes on
-  glibc); the musl jobs fail on those two plus `e2e-c-shims`,
-  `e2e-cc-cl-xclang-deps` (x86_64 only) and the three `e2e-cmake-*` relocate
-  assertions. No wrong output — all failures are reuse accounting. Detail:
-  TODO.md **KACH-27** and the PR. The new Linux gates are `continue-on-error`
-  (advisory) until KACH-27 closes; the musl `make test` step stays required.
-  Cross-tree passes with the escape hatch.
-- KACH-21 does not close until KACH-27 closes and the gates become required.
-- 2026-11-18: the in-image pins moved. LLVM is now the llvm-prebuilt-musl
-  prerelease `release-b29e4d07a2b9a5e72319b37429cf375149212755` (asset
-  digests verified against the prerelease's SHA256SUMS), and gluon
-  `release-fa8b6ace38683a17ee3f398d8b568341c7192fe` (musl, built from the
-  main merge of laputa-systems/gluon PR #18) provides `ninja`, `meson` and
-  `gluon-build` in place of apk `ninja-build`. Gluon's ninja is required for
-  the kache-as-launcher scenario: CMake's TryCompile writes a `LAUNCHER`
-  binding with a trailing space, and only gluon ≥ fa8b6aac preserves it
-  (upstream ninja always did; gluon trimmed it). Verified by building the
-  image on this host (OrbStack, linux/arm64) and running `make e2e` in it:
-  the failing assertion set is the KACH-27 set with no new failures
-  (arm64 additionally failed `e2e-cc-cl-xclang-deps`, matching the
-  documented probe-resolution race). `make test in image` status is in PR
-  CI. PR #28 CI (run 44255058098): both musl jobs passed `make test` and
-  failed the advisory e2e step on exactly the five deterministic fixtures
-  (`e2e-c-shims`, three `e2e-cmake-*`, `e2e-rust-transitive-native`); the
-  intermittent cl-mode fixtures passed on both architectures.
-
-## PR and CI status
-
-- PR #26 (`feat/ccp00-campaign-groundwork`): groundwork + KACH-21 wiring.
-  `make check` exits 0. `make e2e` exits 0 on this host with Homebrew ninja.
-  macOS e2e and test jobs green on the PR. Dockerfile pinned-git bump
-  (2.54.0-r0 → 2.54.1-r0) was required because the Alpine mirror moved the
-  package; `-sfn` keeps `cc` on LLVM clang now that Alpine's gcc owns
-  `/usr/bin/cc`.
-- PR #27 (merged 2026-11-18, `fix/daemon-disconnect-error-kind`): accept
-  `InvalidInput` alongside `BrokenPipe`/`ConnectionReset` in the
-  disconnect-reaping fixture; the contract is that the daemon reaps the
-  compiler, not which errno the raced dead-peer write produces.
-- PR #28 (merged 2026-11-18, `feat/musl-image-gluon`): the musl image now
-  pins the llvm-prebuilt-musl prerelease
-  `release-b29e4d07a2b9a5e72319b37429cf375149212755` and gluon musl
-  `release-fa8b6ace38683a17ee3f398d8b568341c7192fe` (merged
-  laputa-systems/gluon PR #18), replacing apk `ninja-build`. In-image
-  `make test` passed on both CI musl jobs (and on this host under
-  OrbStack, native path); the advisory in-image e2e step fails only on
-  the five deterministic KACH-27 fixtures.
-- PR #29 (merged 2026-11-18, `fix/daemon-publish-stall-flake`): the
-  slow-but-moving-worker drain fixture got 10x timing headroom (30 jobs
-  of 40ms against a 400ms window); 30/30 isolated runs pass. Main CI run
-  44252816334 (`test (macOS)`) was the report.
-- `tests/cached_units_regression_test.rs::record_less_misses_key_from_the_emitted_dep_info`
-  remains the only known unexplained flake (passes on rerun; load-suspect).
+- M1 standalone LLVM clang: not installed on this host, and no authorized
+  setup installs it (`brew install llvm` would change the host). Missing
+  cell: M1 × standalone LLVM, every oracle and bench run. Apple clang 21
+  covers the rest of M1.
+- Chromium: the ~1.6 GB archive digest is `RECORD-AT-FETCH` in lock.toml.
+- The earlier history of this ledger (groundwork baseline, Linux gate
+  assignment, bootstrap PR notes) is in git: `git log -p --
+  campaigns/cpp/STATUS.md` before 2026-11-19.
 
 ## Reference (see [lock.toml](lock.toml))
 
@@ -129,20 +74,20 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 
 | Lane | Host | State | Notes |
 |---|---|---|---|
-| M1 | xcode-27 CI runner / Apple Silicon Mac | RUNNING (partial) | This host covers Apple clang 21.0.0/Xcode 27.0. Standalone LLVM Clang missing — see gaps. |
-| L1 | ubuntu-26.04 | RUNNING (required, PR #50) | e2e-linux-glibc job runs; its only failure, `e2e-rust-transitive-native`, is fixed by PR #49; cross-tree passes with escape hatch; gate assigned, advisory |
-| L2 | ubuntu-26.04-arm | RUNNING (required, PR #50) | Same job matrix and fix (PR #49); cross-tree passes with escape hatch; advisory |
-| L3 | Alpine 3.24.2 musl x86_64 (container on ubuntu-26.04) | RUNNING (required, PR #50) | linux-musl job; image LLVM 23.1.5 (prerelease b29e4d0) + gluon ninja 1.13.2 + apk GCC 15.2.0; the e2e failures it showed are fixed by PRs #47–#49 (pending CI on main) |
-| L4 | Alpine 3.24.2 musl aarch64 (container on ubuntu-26.04-arm) | RUNNING (required, PR #50) | Same image and matrix; locally all green with PRs #44–#49 (52 executed, 0 failures) |
+| M1 | xcode-27 CI runner / Apple Silicon Mac | RUNNING (partial) | Apple clang 21.0.0 / Xcode 27.0 covered. Standalone LLVM clang not provisioned (missing cell, see Current state). |
+| L1 | ubuntu-26.04 | RUNNING (required, green) | e2e-linux-glibc and cc-oracle (apt GCC + clang) jobs |
+| L2 | ubuntu-26.04-arm | RUNNING (required, green) | Same jobs on ARM64 |
+| L3 | Alpine 3.24.2 musl x86_64 (container on ubuntu-26.04) | RUNNING (required, green) | linux-musl job: image LLVM 23.1.5 (prerelease b29e4d0), gluon ninja, apk GCC 15.2.0; `make test`, in-image e2e and cc-oracle |
+| L4 | Alpine 3.24.2 musl aarch64 (container on ubuntu-26.04-arm) | RUNNING (required, green) | Same image on ARM64; also this host's local Linux lane under OrbStack |
 
 ## Package ledger
 
 | Package | State | Depends on | Evidence / next |
 |---|---|---|---|
-| CCP-00 | DONE (bootstrap) | — | Bootstrap exit met: pins, initial inventory, Linux gates assigned (advisory under KACH-27). Remaining inventory enumeration is carried by CCP-01..08 as the plan allows. Go-ahead for CCP-01: user, 2026-11-18 ("complete the campaign unattended"). |
+| CCP-00 | DONE (bootstrap) | — | Bootstrap exit met: pins, initial inventory, Linux gates assigned (required since PR #50). Remaining inventory enumeration is carried by CCP-01..08 as the plan allows. Go-ahead for CCP-01: user, 2026-11-18 ("complete the campaign unattended"). |
 | CCP-01 | DONE | CCP-00 bootstrap | Merged in PR #31 (a2ea56fd). CI evidence: run 44306769765 (logs and on-failure report artifacts retained 90 days, so until about 2027-02-16). `cc-oracle` and negative controls passed in `e2e (macOS)` (Apple clang), `cc-oracle (Linux x86_64/ARM64 glibc)` (apt GCC + clang) and `test (Linux x86_64/ARM64 musl)` (image GCC 15 + clang 23). Exit criteria met: minimal transitions pass on macOS and Linux, each control fails as intended, and the deliberate `-S` gap reports `KACHE_MISSED_REUSE`. `make cc-bench` moves to CCP-09. |
 | CCP-02 | RUNNING | CCP-01 | Branch `feat/ccp02-input-identity`: 20 input-identity cases; see "CCP-02 input identity" below. Not yet covered: same-path compiler replacement, wrapper/driver-mode selection, VFS overlays, PGO profiles, -march=native, user key config, diagnostic locale, profile switches against a populated cache, hash/compile/publish race barriers. |
-| CCP-03 | RUNNING | CCP-01, CCP-02 | Branch `feat/ccp03-chromium-flags`: Chromium official flags verified and landed from the WIP branch; `-S -o` cached. Open: response files (`@file`), clang `--config`, GCC `-specs`, `-fsanitize-ignorelist`, `-x` and `-Wp,`/`-Xpreprocessor` audits. See "CCP-03..CCP-08 progress" below. |
+| CCP-03 | RUNNING | CCP-01, CCP-02 | Branch `feat/ccp03-chromium-flags`: Chromium official flags verified and landed from the WIP branch; `-S -o` cached. GNU `@file` response files cached (PR #38; `cc-rsp-basic`, `-quoted`, `-nested`, `-missing` blocking); `-fsanitize-ignorelist` keyed by content (PR #39). Open: further `@file` variants (planned), clang `--config` and GCC `-specs` (open cases), `-x` and `-Wp,`/`-Xpreprocessor` audits. See "CCP-03..CCP-08 progress" below. |
 | CCP-04 | LIMIT | CCP-02 | Comment-only reuse is declined: comment text and width are observable (see "CCP-04 finding"). ccache's reuse is wrong output when a comment changes width before code (`cc-eqp-column-significance`) and when a same-width reword changes GCC's fallthrough warning (`cc-eqp-fallthrough-comment`, blocking, ccache wrong in both modes). `cc-eqp-comment-only` stays open as the recorded gap. |
 | CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (PR #52); `cc-out-gcno` (GCC and clang), `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Diagnostic formatting keyed per entry (`cc-out-diagnostics-format*`). Diagnostics-bearing entries replay only under their own color setting; empty diagnostics serve every setting (`cc-out-diagnostics-color-reuse`, `-color-cross`, `-source-escapes` blocking). GCC `-fdiagnostics-format=json-file` cached as a sidecar (`cc-out-diagnostics-json-file`, blocking); SARIF outputs refused for good (see "CCP-05 GCC diagnostic files"). Open: sidecars under `-S`. |
 | CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | clang PCH builds and `-include-pch` consumers cached by default (`cc-pch-clang-use`, `cc-pch-clang-define-variants` blocking); see "CCP-06 PCH" below. Clang explicit module consumers (`-fmodule-file=`, `-fprebuilt-module-path=`) cached; `cc-module-fmodule-file`, `cc-module-body-edit`, `cc-module-prebuilt-path`, `cc-module-add-remove` blocking on Linux clang 23; see "CCP-06 modules" below. Implicit PCH (GCC `<name>.gch` through `#include`/`-include`, clang's driver `-include` → `.pch`) keyed by every candidate; `cc-pch-gcc-include`, `cc-pch-gcc-leading-include`, `cc-pch-gcc-directory`, `cc-pch-clang-implicit` blocking; see "CCP-06 implicit PCH". Open: implicit modules, module production. |
@@ -268,11 +213,11 @@ the Chromium flag set (LTO compile modes, `-mllvm` pairs, `-fsanitize=`,
 refused because it names a profile directory), `-S -o`, Objective-C,
 Objective-C++, and recovery from damaged stores.
 
-**Open gaps (`KACHE_MISSED_REUSE`, correct fallback):** `@rsp` response
-files (no case yet), clang `--config`, GCC `-specs`, explicit sanitizer
-ignorelists, PCH
-consumers (conditional), and the token-pasted header probe and
-comment-only edits in the default (reproducible) profile.
+**Open gaps at the time (2026-11-18; see Current state for today's):**
+`@rsp` response files, clang `--config`, GCC `-specs`, explicit sanitizer
+ignorelists, PCH consumers, the token-pasted header probe and comment-only
+edits. Response files (PR #38), ignorelists (PR #39) and PCH consumers
+(PR #58 and the implicit PCH work) have since landed.
 
 **Harness changes that judged better:**
 
@@ -465,31 +410,10 @@ gap rather than being counted toward parity.
 
 ## Open gaps and blockers
 
-1. **Standalone LLVM Clang (M1).** Not provisioned on this host; the M1 lane
-   capability requires it. Candidate: `brew install llvm` locally and a CI
-   step in e2e-macos (or a scheduled M1 job). Decision needed before the
-   first M1 full-corpus run; not required to start CCP-01.
-2. **Chromium archive digest.** `chromium-157.0.8103.80.tar.xz` is ~1.6 GB;
-   lock.toml records the URL/version and `RECORD-AT-FETCH (CCP-07)`. First
-   CCP-07 fetch must verify and commit the digest + the mac-arm PGO profile
-   digest.
-3. **New CI jobs have run (run 44241684053).** Both Linux gates
-   exist and execute; both are advisory due to KACH-27. The cross-GCC
-   fixture executes on the glibc lanes (glibc-only by declaration); its
-   x86_64/aarch64 result was PASS (not in the failure lists — the gnu probe
-   resolves).
-4. **`make e2e` exit status is red on this host** (gluon-ninja shadow). The
-   gate is green via CI (Homebrew/brew ninja on xcode-27; apt ninja-build on
-   Linux) and on this host with `PATH=/opt/homebrew/bin:…`.
-5. **Main is red**: CI run 44232741312 `test (macOS)` failed on
-   `disconnected_accepted_compiler_is_cancelled_and_reaped`; this host's
-   first `make check` failed on `record_less_misses_key_from_the_emitted_dep_info`
-   (passes 4/4 isolated). Two unexplained failures; neither is addressed by
-   this groundwork; both are recorded here so the campaign does not inherit
-   a silently unverified baseline.
-6. **Inventory completeness.** cases.toml is the initial CCP-00 inventory
-   (134 entries); full behavioral enumeration against the pinned suites is
-   owed by CCP-01/CCP-02 and is tracked there, not here.
+See "Current state" at the top; this list was folded into it on
+2026-11-19. The bootstrap items it held are resolved: the Linux gates are
+required and green, main is green, and the gluon-ninja shadow is fixed
+upstream.
 
 ## Session 2026-11-18 (unattended run)
 
@@ -575,9 +499,13 @@ host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
      hand-applied mutation keeps the mutated binary (2026-11-19: a stale
      binary failed `cc-module-prebuilt-path` until rebuilt);
    - `PATH=/opt/homebrew/bin:$PATH make e2e`.
-3. Next work, in priority order:
-   - The LLVM subset, the Chromium
-     target, and CCP-09 performance.
+3. Next work, in priority order (owner direction, 2026-11-19): run the
+   first timed `make cc-bench` baseline on a quiet host; rank uncached
+   compiler-seconds, warm overhead, cold overhead and edit/revert misses
+   from it and fix the largest measured losses; close CCP-08's identity and
+   race gaps; then lower-frequency features. A comment-equivalence lexer or
+   more GCC SARIF/JSON support waits for a correctness need or a measured
+   workload.
 4. All campaign work runs in isolated worktrees under `.work/wt/`
    (gitignored via `.git/info/exclude`). Evidence needed afterwards lives in
    CI runs (90-day retention) or in committed cases and scripts.
