@@ -43,10 +43,13 @@ Engineering work still open (not provisioning):
 - CCP-07: the cc-crate fixture, Chromium, Meson and Autotools launchers.
 - CCP-08: compiler replacement, wrapper/driver selection, policy changes
   against populated caches, controlled hash/compile/publication races.
-- CCP-09: the first timed baseline (`make cc-bench`) and the ranked losses.
+- CCP-09: a quiet-host rerun of the baseline; the provisional one (below)
+  ranks losses but was timed under load.
 
 Provisioning, not engineering:
 
+- A quiet benchmark host: the M1 is shared with other builds, so timing
+  verdicts wait for one (the runner itself is done and validated).
 - M1 standalone LLVM clang: not installed on this host, and no authorized
   setup installs it (`brew install llvm` would change the host). Missing
   cell: M1 × standalone LLVM, every oracle and bench run. Apple clang 21
@@ -437,6 +440,63 @@ left no usable read set"): the hidden-assembler-input check refused any
 expansion containing `\()`, and libstdc++'s `<regex>` spells it in a
 string literal. The check now requires a closing `.endm`/`.endr` for that
 backstop (`fix(cc): stop refusing C++ units whose strings spell \()`).
+
+**First timed baseline, 2026-11-19 (macOS, provisional).** M1 Max (10
+cores), Apple clang 21.0.0, ccache 4.14.3, kache 2.0.0-rc.2 at dd428ad3,
+`-j10` (the tiny-C corpus `-j1`), 5 pairs per scenario, every timed replay
+admitted. The host was not quiet: an unrelated build put the 1-minute load
+at 2 to 46 during the timed builds, against the lock's quiet-host rule. The
+pairs are interleaved, so the ratios below are usable for ranking losses,
+but none of them is a parity or performance claim. Rerun on a quiet host
+before recording verdicts.
+
+kache time over ccache time (geomean, 95% log-space CI):
+
+| scenario | tiny C | C++ headers | zlib | LLVM subset |
+|---|---|---|---|---|
+| cold | 1.07 (0.97..1.19) | 1.06 (0.91..1.24) | 1.22 (1.17..1.27) | 1.04 (0.93..1.17) |
+| warm | 2.22 (1.87..2.63) | 2.22 (2.05..2.41) | 4.49 (3.67..5.49) | 5.98 (5.67..6.31) |
+| edit source, settled | 1.08 (0.83..1.39) | 0.95 (0.91..1.00) | 1.24 (1.19..1.29) | 1.13 (1.07..1.20) |
+| revert source, settled | 1.11 (0.68..1.83) | 1.83 (1.52..2.20) | 1.88 (1.81..1.95) | 4.11 (3.92..4.30) |
+| edit header, settled | 1.48 (1.26..1.73) | 1.09 (1.06..1.12) | 1.47 (1.37..1.57) | 1.06 (1.03..1.09) |
+| revert header, settled | 6.65 (5.68..7.80) | 8.88 (7.59..10.38) | 3.03 (2.47..3.72) | 8.69 (7.92..9.54) |
+| relocated | 2.57 (1.97..3.35) | 2.99 (2.67..3.34) | 4.74 (3.74..5.99) | not relocatable |
+
+Immediate edits track the settled ones (tiny C source edit 1.13, revert
+1.33; LLVM 1.15 and 4.11). Over raw, kache's cold build costs 2.24x on the
+`-j1` tiny-C corpus, 1.38x on C++, 1.57x on zlib and 1.30x on LLVM, and its
+warm build is 0.33x raw on LLVM but 1.60x raw on zlib.
+
+**Losses ranked by wall time lost to ccache, with causes from the event
+logs:**
+
+1. LLVM warm, 11.9 s per build (and revert-source, 0.27 s for one unit):
+   387 of 420 hits ran the preprocessor, about 270 ms each. The memo
+   matched every input, then failed its include-resolution check: the
+   digest folded `__has_include` probes in read-set order, and a memo
+   returns its read set in the order its shared rows were first
+   recorded. Fixed by folding probes in a canonical order
+   (`fix(cc): fold header probes in a canonical order`).
+2. Header revert, 1.4 to 1.8 s per build in every workload: the memo kept
+   one read set per unit, so a header edit replaced it and the revert
+   preprocessed every dependent unit again. Fixed by keeping each unit's
+   eight most recent read sets
+   (`perf(cc): keep a unit's recent read sets so a reverted header hits`).
+3. Header edit, 1.2 s on tiny C and 0.16 s on zlib: kache preprocesses
+   and then compiles each dependent unit, as ccache does, but slower.
+   Not yet broken down.
+4. Warm and relocated hits on the small workloads, 0.3 to 0.4 s per
+   build: about 11 ms per hit against ccache's 5 ms on tiny C, and every
+   zlib hit preprocessed. Rerun after fixes 1 and 2 before attributing
+   further.
+5. Cold: within the CI of ccache except zlib (1.22). LLVM pays one
+   preprocessor run per unit before compiling, as ccache does, because a
+   unit whose working directory is the build tree is not portable enough
+   to compile first.
+
+Uncached compiler-seconds by reason: the only refusals in the timed
+workloads are zlib's two link steps per build (`cc link mode`, which
+ccache does not cache either).
 
 ## Open gaps and blockers
 
