@@ -1,0 +1,50 @@
+summary = "h.h.gch is a directory of variants and GCC loads the first one valid for the compile: an -O0 variant an -O1 compile rejects leaves the object textual, an -O1 variant changes it, and emptying the directory again reuses the first object. GCC writes a different .gch on every build, so the steps that rebuild one do not require reuse (CCP-06)"
+cohort = "blocking"
+families = ["gcc"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+unstable = ["built/O0.gch", "built/O1.gch"]
+ccache_config = { sloppiness = "pch_defines,time_macros" }
+
+[[compile]]
+argv = ["{cc}", "-g", "-O0", "-x", "c-header", "h.h", "-o", "built/O0.gch"]
+source = "h.h"
+reuse = "any"
+
+[[compile]]
+argv = ["{cc}", "-g", "-O1", "-x", "c-header", "h.h", "-o", "built/O1.gch"]
+source = "h.h"
+reuse = "any"
+
+[[compile]]
+argv = ["{cc}", "-g", "-O1", "-include", "h.h", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "rejected-variant"
+reuse = "any"
+action = [{ op = "symlink", path = "h.h.gch/O0.gch", target = "../built/O0.gch" }]
+
+[[step]]
+name = "usable-variant"
+reuse = "miss"
+action = [{ op = "symlink", path = "h.h.gch/O1.gch", target = "../built/O1.gch" }]
+
+[[step]]
+name = "usable-variant-removed"
+reuse = "any"
+action = [{ op = "remove", path = "h.h.gch/O1.gch" }]
+
+[[step]]
+name = "directory-emptied"
+reuse = "hit"
+action = [{ op = "remove", path = "h.h.gch/O0.gch" }]

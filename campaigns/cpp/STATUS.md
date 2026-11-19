@@ -145,7 +145,7 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | CCP-03 | RUNNING | CCP-01, CCP-02 | Branch `feat/ccp03-chromium-flags`: Chromium official flags verified and landed from the WIP branch; `-S -o` cached. Open: response files (`@file`), clang `--config`, GCC `-specs`, `-fsanitize-ignorelist`, `-x` and `-Wp,`/`-Xpreprocessor` audits. See "CCP-03..CCP-08 progress" below. |
 | CCP-04 | LIMIT | CCP-02 | Comment-only reuse is declined: comment text and width are observable (see "CCP-04 finding"). ccache's reuse is wrong output when a comment changes width before code (`cc-eqp-column-significance`) and when a same-width reword changes GCC's fallthrough warning (`cc-eqp-fallthrough-comment`, blocking, ccache wrong in both modes). `cc-eqp-comment-only` stays open as the recorded gap. |
 | CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (PR #52); `cc-out-gcno` (GCC and clang), `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Diagnostic formatting keyed per entry (`cc-out-diagnostics-format*`). Colored entries serve colorless builds (PR #56). GCC `-fdiagnostics-format=json-file` cached as a sidecar (`cc-out-diagnostics-json-file`, blocking); SARIF outputs refused for good (see "CCP-05 GCC diagnostic files"). Open: sidecars under `-S`. |
-| CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | clang PCH builds and `-include-pch` consumers cached by default (`cc-pch-clang-use`, `cc-pch-clang-define-variants` blocking); see "CCP-06 PCH" below. Clang explicit module consumers (`-fmodule-file=`, `-fprebuilt-module-path=`) cached; `cc-module-fmodule-file`, `cc-module-body-edit`, `cc-module-prebuilt-path`, `cc-module-add-remove` blocking on Linux clang 23; see "CCP-06 modules" below. Open: GCC implicit `.gch` use through `-include`, implicit modules, module production. |
+| CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | clang PCH builds and `-include-pch` consumers cached by default (`cc-pch-clang-use`, `cc-pch-clang-define-variants` blocking); see "CCP-06 PCH" below. Clang explicit module consumers (`-fmodule-file=`, `-fprebuilt-module-path=`) cached; `cc-module-fmodule-file`, `cc-module-body-edit`, `cc-module-prebuilt-path`, `cc-module-add-remove` blocking on Linux clang 23; see "CCP-06 modules" below. Implicit PCH (GCC `<name>.gch` through `#include`/`-include`, clang's driver `-include` → `.pch`) keyed by every candidate; `cc-pch-gcc-include`, `cc-pch-gcc-leading-include`, `cc-pch-gcc-directory`, `cc-pch-clang-implicit` blocking; see "CCP-06 implicit PCH". Open: implicit modules, module production. |
 | CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`, `cc-host-universal-objects`, `cc-host-universal-slice-headers` (universal objects keyed slice by slice: the driver refuses `-E` with several `-arch`, and a compile's depfile lists only the last slice's headers). `-Xarch_<arch>` operands keyed per slice (`cc-host-xarch`, blocking): each slice is re-parsed with its own operands, and dropping the other slices' operands is what separates them (keeping all fails `edit-x86_64-header` with `KACHE_WRONG_OUTPUT`). `-Xarch_*` outside a universal compile, or naming no built slice, is refused. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM 21.1.8 subset (`make cc-project-llvm`: `llvm-tblgen` and `LLVMCore`, CMake + Ninja, kache as compiler launcher, TableGen-generated headers in the build tree) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23; the image needs `apk add python3` for LLVM's configure), 2026-11-19: 377 objects byte-identical across raw, cold and warm kache, warm build 377 local hits and no compiles, warm `llvm-tblgen` output identical to raw. cc-crate fixture, Chromium, Meson/Autotools launchers not started. |
 | CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`), broker exit race fix (PR #32), C/C++ hits verify blob hashes by default (PR #46), the non-local cache advisory left compiler stderr (PR #44). |
 | CCP-09 | TODO | CCP-02..CCP-08 | Performance protocol; estimator locked in lock.toml (seed 20261117). |
@@ -360,6 +360,39 @@ reject); dropping the bytes fails `cc-pch-clang-define-variants` (a
 retargeted `p.pch` reuses the other PCH's object). PCH builds are bound to
 their checkout, since a PCH records unmapped absolute paths. ccache needs
 `pch_defines,time_macros` sloppiness for the same reuse; kache needs none.
+
+**CCP-06 implicit PCH (distinct from the clang `-include-pch` support
+above).** Observed with GCC 15.2 (L4 image), 2026-11-19: GCC loads
+`<dir>/<name>.gch`, a file or a directory of variants, in place of a header
+included before the main file's first token, by `#include` or `-include`,
+checking each search directory before the header itself. It accepts a
+`.gch` whose flags match, whatever header it was built from and whether that
+header changed since. The plain `-E` output expands the textual header, and
+once GCC loads a `.gch` its dependency file names neither the `.gch` nor the
+header nor anything the header includes (`-fpch-deps` does not change that
+in GCC 15). The objects differ with and without the PCH. So kache could
+return stale output: before this fix `cc-pch-gcc-include` failed
+`gch-appears` with `KACHE_WRONG_OUTPUT` (the object built without the PCH
+was restored after a `.gch` appeared), and `cc-pch-gcc-leading-include` and
+`cc-pch-gcc-directory` failed the same way. clang's driver likewise turns
+`-include X` into `-include-pch X.pch` (or `X.gch`) when that file exists
+(`cc-pch-clang-implicit` fails in the reproducible profile without the fix).
+The key now folds every candidate that exists (`cc_implicit_pch_key`), by
+name and search-directory position: for GCC, `<name>.gch` for each
+`-include` operand and each `#include` before the main file's first token,
+in the working directory and every user and `-isystem` directory; for clang,
+the driver's `X.pch` and `X.gch`. A directory candidate folds each variant's
+name and bytes. A leading `#include` spelled by a macro makes every `.gch`
+in those directories a candidate. A compile with no candidate keys as
+before. Blocking cases (GCC 15, clang 23, L4): `cc-pch-gcc-include`
+(`-include`; absent, present, replaced, removed, and an edited header under
+an older `.gch` GCC still loads), `cc-pch-gcc-leading-include` (`#include`,
+`.gch` in an earlier search directory), `cc-pch-gcc-directory` (rejected
+and accepted variants), `cc-pch-clang-implicit`. GCC writes a different
+`.gch` on every build (a memory image), so a rebuilt PCH misses every
+consumer, as in ccache, and the cases mark such files `unstable`. Limits:
+the compiler's built-in system directories are not searched for `.gch`
+candidates.
 
 **CCP-06 modules.** Observed with clang 23 on Linux: a consumer's `-E`
 output keeps `import M;` as `__preprocessed_import M;`, its `-MD` file

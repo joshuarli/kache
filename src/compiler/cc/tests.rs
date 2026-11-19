@@ -10197,3 +10197,89 @@ fn explicit_module_consumers_key_every_module_file_they_can_load() {
     std::fs::remove_dir_all(&prebuilt).unwrap();
     assert_ne!(empty, dir());
 }
+
+#[test]
+fn leading_include_names_stop_at_the_first_token() {
+    let text = b"/* a\n comment */ #include \"a.h\"\n// x\n#  include_next <b/c.h>\n%:import \"d.h\"\n#define X 1\nint x;\n#include \"late.h\"\n";
+    assert_eq!(cc_leading_include_names(text).unwrap(), ["a.h", "b/c.h", "d.h"]);
+    assert_eq!(cc_leading_include_names(b"#include \\\n \"spliced.h\"\n").unwrap(), ["spliced.h"]);
+    assert!(cc_leading_include_names(b"#include CONFIG\n").is_none());
+    assert!(cc_leading_include_names(b"int x;\n#include CONFIG\n").unwrap().is_empty());
+}
+
+#[test]
+fn implicit_precompiled_headers_key_every_candidate_the_compiler_can_load() {
+    let temp = tempfile::tempdir().unwrap();
+    let mock = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_cc_constant_output.sh");
+    let gcc = temp.path().join("gcc");
+    let clang = temp.path().join("clang");
+    std::os::unix::fs::symlink(&mock, &gcc).unwrap();
+    std::os::unix::fs::symlink(&mock, &clang).unwrap();
+    let (pch, inc) = (temp.path().join("pch"), temp.path().join("inc"));
+    std::fs::create_dir(&pch).unwrap();
+    std::fs::create_dir(&inc).unwrap();
+    let source = temp.path().join("v.c");
+    std::fs::write(&source, "#include \"h.h\"\nint v;\n").unwrap();
+    let compiler = CcCompiler::new();
+    let hasher = crate::cache_key::FileHasher::new();
+    let key = |program: &Path, family: ToolFamily, extra: &[String]| {
+        let mut argv = vec![program.display().to_string(), format!("-I{}", pch.display()), format!("-I{}", inc.display())];
+        argv.extend(extra.iter().cloned());
+        argv.extend(["-c".to_string(), source.display().to_string()]);
+        let parsed = compiler.parse(&argv).unwrap();
+        assert_eq!(parsed.family, family);
+        cc_implicit_pch_key(&parsed, &hasher).unwrap()
+    };
+    let gnu = || key(&gcc, ToolFamily::Gnu, &[]);
+
+    assert_eq!(gnu(), None);
+    std::fs::write(inc.join("h.h.gch"), "one").unwrap();
+    let beside_header = gnu().unwrap();
+    std::fs::write(pch.join("h.h.gch"), "two!").unwrap();
+    let both = gnu().unwrap();
+    assert_ne!(beside_header, both);
+    std::fs::remove_file(inc.join("h.h.gch")).unwrap();
+    let earlier = gnu().unwrap();
+    assert_ne!(both, earlier);
+    std::fs::write(pch.join("h.h.gch"), "three!!").unwrap();
+    assert_ne!(earlier, gnu().unwrap());
+    std::fs::remove_file(pch.join("h.h.gch")).unwrap();
+    std::fs::create_dir(pch.join("h.h.gch")).unwrap();
+    std::fs::write(pch.join("h.h.gch/a"), "variant").unwrap();
+    let variants = gnu().unwrap();
+    std::fs::write(pch.join("h.h.gch/b"), "variant").unwrap();
+    assert_ne!(variants, gnu().unwrap());
+    std::fs::remove_dir_all(pch.join("h.h.gch")).unwrap();
+    assert_eq!(gnu(), None);
+
+    let forced = temp.path().join("f.h");
+    let include = ["-include".to_string(), forced.display().to_string()];
+    assert_eq!(key(&gcc, ToolFamily::Gnu, &include), None);
+    std::fs::write(temp.path().join("f.h.gch"), "forced").unwrap();
+    assert!(key(&gcc, ToolFamily::Gnu, &include).is_some());
+    let long = [format!("--include={}", forced.display())];
+    assert!(key(&gcc, ToolFamily::Gnu, &long).is_some());
+    std::fs::remove_file(temp.path().join("f.h.gch")).unwrap();
+
+    std::fs::write(&source, "#include CONFIG\nint v;\n").unwrap();
+    assert_eq!(gnu(), None);
+    std::fs::write(inc.join("config.h.gch"), "spelled by a macro").unwrap();
+    assert!(gnu().is_some());
+    std::fs::write(&source, "#include \"h.h\"\nint v;\n").unwrap();
+    std::fs::write(inc.join("h.h.gch"), "one").unwrap();
+
+    // A driver named for GCC may be clang (Apple's `cc`), so clang's `.pch`
+    // candidate counts for it too.
+    std::fs::write(temp.path().join("f.h.pch"), "clang pch").unwrap();
+    assert!(key(&gcc, ToolFamily::Gnu, &include).is_some());
+    std::fs::remove_file(temp.path().join("f.h.pch")).unwrap();
+
+    // clang loads only the driver's `-include` candidates.
+    let clang_key = |extra: &[String]| key(&clang, ToolFamily::Clang, extra);
+    assert_eq!(clang_key(&[]), None);
+    assert_eq!(clang_key(&include), None);
+    std::fs::write(temp.path().join("f.h.pch"), "clang pch").unwrap();
+    let pch_only = clang_key(&include).unwrap();
+    std::fs::write(temp.path().join("f.h.gch"), "clang gch").unwrap();
+    assert_ne!(pch_only, clang_key(&include).unwrap());
+}

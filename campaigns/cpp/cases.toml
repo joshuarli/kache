@@ -924,6 +924,42 @@ ccache.suite = "pch.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-pch-gcc-include"
+package = "CCP-06"
+summary = "GCC's implicit h.h.gch for -include h.h: absent/present/replaced/removed and an edited header under an older usable .gch"
+profiles = ["both"]
+compilers = "gcc"
+ccache.suite = "pch.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-pch-gcc-leading-include"
+package = "CCP-06"
+summary = "GCC's implicit .gch for a leading #include, found in an earlier search directory than the header"
+profiles = ["both"]
+compilers = "gcc"
+ccache.suite = "pch.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-pch-gcc-directory"
+package = "CCP-06"
+summary = "a .gch directory: GCC selects the first valid variant; rejected and accepted variants are keyed"
+profiles = ["both"]
+compilers = "gcc"
+ccache.suite = "pch.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-pch-clang-implicit"
+package = "CCP-06"
+summary = "clang's driver compiles -include h.h against h.h.pch when it exists; appear/replace/remove are keyed"
+profiles = ["both"]
+compilers = "clang"
+ccache.suite = "pch.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-pch-create"
 package = "CCP-06"
 summary = "GCC/Clang PCH creation mode is handled (lookup, contents, options, compiler identity)"
