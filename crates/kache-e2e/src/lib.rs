@@ -20,6 +20,10 @@ pub mod bench_runner;
 pub mod cc_oracle;
 #[cfg(unix)]
 pub mod cc_oracle_cli;
+#[cfg(unix)]
+pub mod cc_bench;
+#[cfg(unix)]
+pub mod cc_bench_cli;
 pub mod daemon;
 mod disk_usage;
 pub mod fixture;
