@@ -818,11 +818,29 @@ status = "oracle"
 [[case]]
 id = "cc-out-diagnostics-format"
 package = "CCP-05"
-summary = "-fdiagnostics-format fixed/clang-format output modes restored"
+summary = "a compile with warnings never replays diagnostics printed under other color or display flags"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "color_diagnostics.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-out-diagnostics-color-reuse"
+package = "CCP-05"
+summary = "open: reuse a unit with warnings across color flags, as ccache does by stripping stored color"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "color_diagnostics.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-out-diagnostics-format-msvc"
+package = "CCP-05"
+summary = "-fdiagnostics-format=msvc replays its own location format (clang)"
 profiles = ["both"]
 compilers = ["clang", "apple-clang"]
 ccache.suite = "fdiagnostics_format.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-out-depinfo-full"

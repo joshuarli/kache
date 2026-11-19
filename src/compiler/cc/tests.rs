@@ -378,9 +378,11 @@ fn probe_args_strip_terminal_formatting_and_preserve_operands() {
             "-fansi-escape-codes",
             "-fdiagnostics-color=always",
             "-fdiagnostics-format=msvc",
+            "-fno-diagnostics-show-option",
         ] {
             let parsed = CcArgs::parse(&s(&[driver, "-c", flag, "a.c", "-O2"])).unwrap();
             assert_eq!(parsed.probe_args(), s(&["-c", "a.c", "-O2"]));
+            assert_eq!(parsed.diagnostic_format_args(), s(&[flag]));
             assert_eq!(parsed.config_args(), s(&["-c", "-O2"]));
             assert!(parsed.rest.iter().any(|arg| arg == flag));
         }
@@ -460,6 +462,7 @@ fn terminal_formatting_shares_cc_keys_with_cold_and_warm_probes() {
         "-fno-color-diagnostics",
         "-fdiagnostics-color=always",
         "-fansi-escape-codes",
+        "-fno-diagnostics-show-option",
     ]
     .iter()
     .enumerate()
@@ -470,6 +473,9 @@ fn terminal_formatting_shares_cc_keys_with_cold_and_warm_probes() {
         );
         assert_eq!(key(&[flag], &warm), baseline);
     }
+    let msvc = key(&["-fdiagnostics-format=msvc"], &warm);
+    assert_ne!(msvc, baseline, "an output format can print with nothing to report");
+    assert_eq!(key(&["-fdiagnostics-format=msvc"], &dir.path().join("cold-msvc")), msvc);
     assert_ne!(key(&["-ffp-contract=off"], &warm), baseline);
 }
 
@@ -1679,6 +1685,22 @@ fn refuses_multi_arch() {
         multi.iter().any(|d| d.contains("multi-arch")),
         "expected multi-arch refuse, got: {multi:?}"
     );
+}
+
+#[test]
+fn diagnostics_written_to_files_refuse() {
+    for flag in [
+        "-fdiagnostics-format=sarif-file",
+        "-fdiagnostics-format=json-file",
+        "-fdiagnostics-add-output=sarif",
+        "-fdiagnostics-set-output=sarif:file=u.sarif",
+    ] {
+        let descs = refuse_descriptions(&["gcc", "-c", "u.c", "-o", "u.o", flag]);
+        assert!(descs.iter().any(|d| d.contains("written to a file")), "{flag}: {descs:?}");
+    }
+    for flag in ["-fdiagnostics-format=json", "-fdiagnostics-format=sarif-stderr"] {
+        assert!(refuse_descriptions(&["gcc", "-c", "u.c", "-o", "u.o", flag]).is_empty(), "{flag}");
+    }
 }
 
 #[test]

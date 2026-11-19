@@ -961,6 +961,17 @@ impl CcArgs {
             ));
         }
 
+        // GCC diagnostic outputs that write files a hit would not restore.
+        if self.rest.iter().any(|arg| {
+            matches!(arg.as_str(), "-fdiagnostics-format=sarif-file" | "-fdiagnostics-format=json-file")
+                || arg.starts_with("-fdiagnostics-add-output=")
+                || arg.starts_with("-fdiagnostics-set-output=")
+        }) {
+            reasons.push(RefuseReason::Unsupported(
+                "cc diagnostics written to a file — not yet",
+            ));
+        }
+
         // Precompiled headers.
         for flag in &["-include-pch", "-emit-pch"] {
             if self.rest.iter().any(|a| a == flag) {
@@ -1294,27 +1305,43 @@ impl CcArgs {
     /// Terminal formatting must not enter the resolved cc1 tokens either.
     /// Keep the original argv for preprocessing and compiler execution.
     fn probe_args(&self) -> Vec<String> {
-        let mut out = Vec::new();
+        self.split_diagnostic_format_args().0
+    }
+
+    /// The formatting flags [`Self::probe_args`] leaves out. They shape the
+    /// diagnostics a hit replays.
+    fn diagnostic_format_args(&self) -> Vec<String> {
+        self.split_diagnostic_format_args().1
+    }
+
+    /// The formatting flags in argv order, as stored with an entry's
+    /// diagnostics: a warning-free entry serves any formatting, one with
+    /// diagnostics only the formatting it was printed under.
+    pub(crate) fn diagnostic_format_fingerprint(&self) -> String {
+        self.diagnostic_format_args().join("\x1f")
+    }
+
+    fn split_diagnostic_format_args(&self) -> (Vec<String>, Vec<String>) {
+        let mut kept = Vec::new();
+        let mut formatting = Vec::new();
         let mut rest = self.rest.as_slice();
         while let Some((arg, tail)) = rest.split_first() {
             if arg == "-Xclang"
                 && let Some((inner, remaining)) = tail.split_first()
             {
-                if !cc_terminal_diagnostic_flag(inner) {
-                    out.extend([arg.clone(), inner.clone()]);
-                }
+                let out = if cc_terminal_diagnostic_flag(inner) { &mut formatting } else { &mut kept };
+                out.extend([arg.clone(), inner.clone()]);
                 rest = remaining;
                 continue;
             }
             let consumed =
                 parse_cc_arg_at(rest, 0, self.family.dialect()).map_or(1, |parsed| parsed.consumed);
             let (args, remaining) = rest.split_at(consumed);
-            if !cc_terminal_diagnostic_flag(arg) {
-                out.extend_from_slice(args);
-            }
+            let out = if cc_terminal_diagnostic_flag(arg) { &mut formatting } else { &mut kept };
+            out.extend_from_slice(args);
             rest = remaining;
         }
-        out
+        (kept, formatting)
     }
 }
 
@@ -1323,6 +1350,7 @@ fn cc_terminal_diagnostic_flag(arg: &str) -> bool {
         arg,
         "-fcolor-diagnostics" | "-fno-color-diagnostics" | "-fansi-escape-codes"
     ) || arg.starts_with("-fdiagnostics-")
+        || arg.starts_with("-fno-diagnostics-")
 }
 
 pub(crate) fn output_path_requires_compiler_semantics(path: &Path) -> bool {
@@ -3501,6 +3529,12 @@ pub static CC_FLAGS: &[FlagSpec] = &[
         matcher: Matcher::Prefix("-fdiagnostics-"),
         class: FlagClass::NoObjectEffect,
         source: "PR #94",
+        dialect: None,
+    },
+    FlagSpec {
+        matcher: Matcher::Prefix("-fno-diagnostics-"),
+        class: FlagClass::NoObjectEffect,
+        source: "CCP-05 — negated diagnostic formatting; keyed with the formatting flags",
         dialect: None,
     },
     FlagSpec {
@@ -8286,6 +8320,31 @@ impl CcCompiler {
                 );
             }
             hasher.update(b"\n");
+        }
+
+        // Diagnostic formatting stays out of the probe so the read-set memo
+        // is shared. Color and display flags only change diagnostics, so the
+        // entry records them instead (`diagnostic_format_fingerprint`). An
+        // output format can print even when there is nothing to report
+        // (GCC's JSON prints `[]`), so it keys the entry.
+        let diagnostic_format: Vec<String> = parsed
+            .diagnostic_format_args()
+            .into_iter()
+            .filter(|arg| arg.starts_with("-fdiagnostics-format"))
+            .collect();
+        if !diagnostic_format.is_empty() {
+            hasher.update(b"diagnostic_format.v1:");
+            for arg in &diagnostic_format {
+                hasher.update(&(arg.len() as u64).to_le_bytes());
+                hasher.update(arg.as_bytes());
+            }
+            hasher.update(b"\n");
+            log::trace!(
+                target: "kache::cache_key",
+                "[key:{}] diagnostic_format={}",
+                trace_name,
+                diagnostic_format.join(" ")
+            );
         }
 
         // User-declared cc flags (issue #95). The built-in table doesn't
