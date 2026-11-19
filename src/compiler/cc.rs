@@ -157,6 +157,9 @@ pub enum CompileMode {
     /// `-S`: produce assembly output. Niche; same caching profile
     /// as `Compile` in principle but rarely worth the engineering.
     Assemble,
+    /// `-x <lang>-header`: precompile a header into a PCH. The PCH records
+    /// each input's modification time and size, which a consumer checks.
+    Precompile,
 }
 
 /// `-O0` … `-O3`, plus the size and debug variants. Stored as the
@@ -274,6 +277,8 @@ pub struct CcArgs {
     pub(crate) depinfo_roots: Vec<(PathBuf, String, u8)>,
     /// clang's `--serialize-diagnostics <path>` output.
     pub serialize_diagnostics: Option<PathBuf>,
+    /// clang's `-include-pch <path>` input.
+    pub include_pch: Option<PathBuf>,
 }
 
 /// Source file extensions the parser recognizes as C-family input.
@@ -293,6 +298,10 @@ const SOURCE_EXTENSIONS: &[&str] = &[
 const LANGUAGE_OVERRIDE_ALLOWLIST: &[&str] = &[
     "c",
     "c++",
+    "c-header",
+    "c++-header",
+    "objective-c-header",
+    "objective-c++-header",
     "objective-c",
     "objective-c++",
     "assembler",
@@ -326,6 +335,7 @@ enum CcArgAction {
     DepTarget,
     LanguageOverride,
     SerializeDiagnostics,
+    IncludePch,
     Include,
     /// clang-cl `/imsvc`: a system include directory. Its headers reach the
     /// key through the preprocessor expansion like `-isystem`'s; the
@@ -636,6 +646,14 @@ static CC_ARG_SPECS: &[CcArgSpec] = &[
         dialect: Some(Dialect::Gnu),
     },
     CcArgSpec {
+        matcher: Matcher::Exact("-include-pch"),
+        value_form: CcArgValueForm::Separated,
+        action: CcArgAction::IncludePch,
+        bucket: CcArgBucket::Preprocessor,
+        source: "clang precompiled header input, keyed by content and input stamps",
+        dialect: Some(Dialect::Gnu),
+    },
+    CcArgSpec {
         matcher: Matcher::Exact("--serialize-diagnostics"),
         value_form: CcArgValueForm::Separated,
         action: CcArgAction::SerializeDiagnostics,
@@ -779,11 +797,13 @@ impl CcArgs {
             family,
             depinfo_roots: Vec::new(),
             serialize_diagnostics: None,
+            include_pch: None,
         };
 
         // Walk argv through a table-driven parser so spelling variants
         // like `-x c` / `-xc` and `-I dir` / `-Idir` share one rule.
         let mut depinfo: Option<DepInfoSpec> = None;
+        let mut headers = Vec::new();
         let mut idx = 0;
         while idx < rest.len() {
             if let Some(arg) = parse_cc_arg_at(rest, idx, family.dialect()) {
@@ -795,10 +815,20 @@ impl CcArgs {
             let arg = &rest[idx];
             if !arg.starts_with('-') && looks_like_source(arg) {
                 parsed.sources.push(PathBuf::from(arg));
+            } else if !arg.starts_with('-') && looks_like_header(arg) {
+                headers.push(PathBuf::from(arg));
             }
             idx += 1;
         }
         parsed.depinfo = depinfo;
+        let header_language = parsed
+            .language_override
+            .as_deref()
+            .is_some_and(|language| language.ends_with("-header"));
+        if header_language && matches!(parsed.mode, CompileMode::Link | CompileMode::Compile) {
+            parsed.mode = CompileMode::Precompile;
+            parsed.sources.extend(headers);
+        }
 
         Ok(parsed)
     }
@@ -868,6 +898,13 @@ impl CcArgs {
             CompileMode::Assemble if self.output.is_some() && self.family.dialect() == Dialect::Gnu => {}
             CompileMode::Assemble => reasons.push(RefuseReason::Unsupported(
                 "cc assembly mode -S without -o — not yet",
+            )),
+            CompileMode::Precompile
+                if self.output.is_some()
+                    && self.family.dialect() == Dialect::Gnu
+                    && self.include_pch.is_none() => {}
+            CompileMode::Precompile => reasons.push(RefuseReason::Unsupported(
+                "cc precompiled header without -o, or built from another PCH — not yet",
             )),
         }
 
@@ -975,8 +1012,13 @@ impl CcArgs {
             ));
         }
 
-        // Precompiled headers.
-        for flag in &["-include-pch", "-emit-pch"] {
+        // Precompiled headers. A `-c` consumer of `-include-pch` and a
+        // `-x <lang>-header` build are modeled; the cc1 spelling is not.
+        let unmodeled_pch_use = self.include_pch.is_some() && self.mode != CompileMode::Compile;
+        if unmodeled_pch_use {
+            reasons.push(RefuseReason::Unsupported("cc precompiled headers — not yet"));
+        }
+        for flag in &["-emit-pch"] {
             if self.rest.iter().any(|a| a == flag) {
                 reasons.push(RefuseReason::Unsupported(
                     "cc precompiled headers — not yet",
@@ -1216,6 +1258,16 @@ impl CcArgs {
             (CompileMode::Compile, Dialect::Cl) => "obj",
             (CompileMode::Compile, Dialect::Gnu) => "o",
             (CompileMode::Assemble, _) => "s",
+            (CompileMode::Precompile, _) => {
+                return match &self.output {
+                    Some(output) => vec![output.clone()],
+                    None => self
+                        .sources
+                        .iter()
+                        .map(|source| PathBuf::from(format!("{}.gch", source.to_string_lossy())))
+                        .collect(),
+                };
+            }
             (CompileMode::Preprocess | CompileMode::Link, _) => return Vec::new(),
         };
 
@@ -1602,6 +1654,11 @@ fn apply_cc_arg(parsed: &mut CcArgs, depinfo: &mut Option<DepInfoSpec>, arg: &Pa
         CcArgAction::LanguageOverride => {
             if let Some(value) = &arg.value {
                 parsed.language_override = Some(value.clone());
+            }
+        }
+        CcArgAction::IncludePch => {
+            if let Some(value) = &arg.value {
+                parsed.include_pch = Some(PathBuf::from(value));
             }
         }
         CcArgAction::SerializeDiagnostics => {
@@ -2527,6 +2584,50 @@ fn preprocess_universal_hash(
     })
 }
 
+/// What a precompiled header adds to the key, for a PCH build or a
+/// `-include-pch` consumer.
+///
+/// A PCH records the modification time and size of every input it was built
+/// from, and clang refuses to use it once either changes, even with the same
+/// bytes. Folding them makes a hit mean what a fresh compile would: a PCH
+/// build restores a PCH recording the inputs' current stamps, and a consumer
+/// hits only where clang would accept the PCH. A consumer's dependency file
+/// names the PCH's inputs but not the PCH, so its bytes are folded too.
+fn cc_pch_key(parsed: &CcArgs, read_inputs: Option<&[PathBuf]>) -> Result<Option<String>> {
+    if parsed.mode != CompileMode::Precompile && parsed.include_pch.is_none() {
+        return Ok(None);
+    }
+    let inputs = read_inputs.context("cc: a precompiled header needs the read set to key its input stamps")?;
+    let mut fields = Vec::new();
+    if let Some(pch) = &parsed.include_pch {
+        let path = parsed
+            .invocation_env
+            .resolve(pch)
+            .context("resolving the precompiled header")?;
+        let digest = crate::cache_key::hash_file(&path)
+            .with_context(|| format!("hashing precompiled header {}", path.display()))?;
+        fields.push(format!("pch={digest}"));
+    }
+    let mut stamps = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        let path = match parsed.invocation_env.resolve(input) {
+            Some(path) => path,
+            None => input.clone(),
+        };
+        let meta = std::fs::metadata(&path)
+            .with_context(|| format!("stating precompiled header input {}", path.display()))?;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |since| since.as_nanos());
+        stamps.push(format!("{}@{mtime}:{}", path.display(), meta.len()));
+    }
+    stamps.sort();
+    fields.extend(stamps);
+    Ok(Some(fields.join("\x1f")))
+}
+
 fn preprocess_hash(
     parsed: &CcArgs,
     prefix_maps: &[CcPrefixMap],
@@ -2652,6 +2753,13 @@ fn preprocess_hash(
 /// (matches one of the recognized extensions in [`SOURCE_EXTENSIONS`]).
 /// Conservative: extensionless files or unknown extensions are NOT
 /// treated as sources, even if they happen to be C code in practice.
+fn looks_like_header(arg: &str) -> bool {
+    Path::new(arg)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e, "h" | "hh" | "hpp" | "hxx" | "H" | "h++"))
+}
+
 fn looks_like_source(arg: &str) -> bool {
     Path::new(arg)
         .extension()
@@ -2715,6 +2823,7 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Prefix("--warning-suppression-mappings="), class: FlagClass::ParserHandled, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fsanitize-ignorelist="), class: FlagClass::ParserHandled, source: "clang sanitizer ignorelist, keyed by content", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fcrash-diagnostics-dir="), class: FlagClass::NoObjectEffect, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-include-pch"), class: FlagClass::ParserHandled, source: "CCP-06 — clang PCH consumer; the key folds the PCH bytes and its inputs' stamps", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("--coverage"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov instrumentation and notes; the sidecar key folds the paths the outputs embed", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fprofile-arcs"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov arc instrumentation; the object names its absolute .gcda path", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-ftest-coverage"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov notes file", dialect: Some(Dialect::Gnu) },
@@ -8412,6 +8521,9 @@ impl CcCompiler {
         if parsed.mode == CompileMode::Assemble {
             hasher.update(b"mode:assemble\n");
         }
+        if parsed.mode == CompileMode::Precompile {
+            hasher.update(b"mode:precompile\n");
+        }
         log::trace!(
             target: "kache::cache_key",
             "[key:{}] pic={}",
@@ -8740,12 +8852,24 @@ impl CcCompiler {
         hasher.update(b"preprocessed:");
         hasher.update(pp_hash.as_bytes());
         hasher.update(b"\n");
+        if let Some(pch) = cc_pch_key(parsed, read_inputs.as_deref())? {
+            hasher.update(b"pch.v1:");
+            hasher.update(pch.as_bytes());
+            hasher.update(b"\n");
+            log::trace!(target: "kache::cache_key", "[key:{}] pch={}", trace_name, pch);
+        }
         log::trace!(
             target: "kache::cache_key",
             "[key:{}] preprocessed={}",
             trace_name,
             pp_hash
         );
+        // A PCH records its inputs' absolute paths, which the prefix maps do
+        // not rewrite, so it belongs to this checkout like any output that
+        // spells a root.
+        if parsed.mode == CompileMode::Precompile {
+            self.key_path_bound.set(true);
+        }
         // A read set whose object spells a checkout root is keyed to that
         // checkout: the digest is portable, the roots folded here are not,
         // which is the point. Another checkout reading the same memo folds
@@ -9038,8 +9162,10 @@ impl CcCompiler {
         // takes its real destination from the current invocation
         // (kunobi-ninja/kache#655).
         let discovers_outputs = matches!(parsed.mode, CompileMode::Compile)
-            || (matches!(parsed.mode, CompileMode::Preprocess | CompileMode::Assemble)
-                && parsed.output.is_some());
+            || (matches!(
+                parsed.mode,
+                CompileMode::Preprocess | CompileMode::Assemble | CompileMode::Precompile
+            ) && parsed.output.is_some());
         let mut keepalive = Vec::new();
         let mut artifacts = if exit_code == 0 && discovers_outputs {
             with_cc_sidecars(parsed, discover_cc_output_artifacts(parsed), sidecars_before)

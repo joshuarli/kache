@@ -668,6 +668,7 @@ fn volume_route_path_cc_uses_output_parent() {
         family: crate::compiler::cc::ToolFamily::Gnu,
         depinfo_roots: Vec::new(),
         serialize_diagnostics: None,
+        include_pch: None,
     };
     assert_eq!(
         super::volume_route_path_cc(&parsed),

@@ -145,7 +145,7 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | CCP-03 | RUNNING | CCP-01, CCP-02 | Branch `feat/ccp03-chromium-flags`: Chromium official flags verified and landed from the WIP branch; `-S -o` cached. Open: response files (`@file`), clang `--config`, GCC `-specs`, `-fsanitize-ignorelist`, `-x` and `-Wp,`/`-Xpreprocessor` audits. See "CCP-03..CCP-08 progress" below. |
 | CCP-04 | BLOCKED | CCP-02 | Comment-only reuse needs a column-aware layout key; see "CCP-04 finding" below. ccache's own reuse is wrong output when a comment changes width before code (`cc-eqp-column-significance`). `cc-eqp-comment-only` stays open in both profiles. |
 | CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (PR #52); `cc-out-gcno` (GCC and clang), `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Diagnostic formatting keyed per entry (`cc-out-diagnostics-format*`). Open: GCC diagnostic files, color-independent reuse with warnings, sidecars under `-S`. |
-| CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | Open conditional case `cc-pch-clang-use` (ccache sloppiness `pch_defines,time_macros`). Module consumers not yet. |
+| CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | clang PCH builds and `-include-pch` consumers cached by default (`cc-pch-clang-use`, `cc-pch-clang-define-variants` blocking); see "CCP-06 PCH" below. Open: GCC implicit `.gch` use through `-include`, `-fmodule-file=`/`-fprebuilt-module-path=` consumers, implicit modules. |
 | CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`, `cc-host-universal-objects`, `cc-host-universal-slice-headers` (universal objects keyed slice by slice: the driver refuses `-E` with several `-arch`, and a compile's depfile lists only the last slice's headers). `-Xarch_*` still refused. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM subset, cc-crate fixture, Chromium, CMake/Meson/Autotools launchers not started. |
 | CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`), broker exit race fix (PR #32), C/C++ hits verify blob hashes by default (PR #46), the non-local cache advisory left compiler stderr (PR #44). |
 | CCP-09 | TODO | CCP-02..CCP-08 | Performance protocol; estimator locked in lock.toml (seed 20261117). |
@@ -335,6 +335,19 @@ ways converges on one colored entry (`cc-out-diagnostics-color-reuse`,
 blocking). ccache instead compiles with color forced on, which the oracle's
 argument contract does not allow.
 
+**CCP-06 PCH.** Observed with Apple clang 21: a PCH records each
+input's modification time and size, and clang rejects it when either
+changes, even with identical bytes ("file has been modified since the
+precompiled header was built"). A consumer's `-MD` file names the PCH's
+inputs but not the PCH. So both a PCH build (`-x <lang>-header ... -o`,
+mode `Precompile`) and a `-include-pch` consumer fold the stamps of every
+read file, and the consumer folds the PCH's bytes. Dropping the stamps
+fails `cc-pch-clang-use` (`touch-header` restores a PCH clang would
+reject); dropping the bytes fails `cc-pch-clang-define-variants` (a
+retargeted `p.pch` reuses the other PCH's object). PCH builds are bound to
+their checkout, since a PCH records unmapped absolute paths. ccache needs
+`pch_defines,time_macros` sloppiness for the same reuse; kache needs none.
+
 **CCP-04 finding: expansion-equivalent reuse is not sound as ccache does it.**
 ccache's preprocessor mode keys by the `-E` text. That text separates
 tokens by one space whatever their columns were, so ccache reuses an
@@ -475,7 +488,7 @@ host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
    - CCP-05 remainder: GCC SARIF/JSON diagnostic files
      (`-fdiagnostics-format=sarif-file`, `-fdiagnostics-add-output=`, refused).
    - CCP-04, only with a column-aware layout key (see the finding above).
-   - PCH consumers, `-Xarch_*` per-slice flags, the LLVM subset, the Chromium
+   - Module consumers, `-Xarch_*` per-slice flags, the LLVM subset, the Chromium
      target, and CCP-09 performance.
 4. All campaign work runs in isolated worktrees under `.work/wt/`
    (gitignored via `.git/info/exclude`). Evidence needed afterwards lives in

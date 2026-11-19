@@ -890,7 +890,16 @@ status = "planned"
 [[case]]
 id = "cc-pch-clang-use"
 package = "CCP-06"
-summary = "conditional PCH profile: with ccache sloppiness pch_defines,time_macros a clang -include-pch consumer is reused; a rebuilt PCH must invalidate"
+summary = "a clang PCH and its -include-pch consumer are reused by default; edited and touched PCH inputs invalidate (ccache needs pch_defines,time_macros sloppiness)"
+profiles = ["both"]
+compilers = "clang"
+ccache.suite = "pch.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-pch-clang-define-variants"
+package = "CCP-06"
+summary = "PCH consumers that read the same files keep apart by the PCH bytes"
 profiles = ["both"]
 compilers = "clang"
 ccache.suite = "pch.bash"

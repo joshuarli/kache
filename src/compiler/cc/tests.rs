@@ -1536,7 +1536,7 @@ fn refuses_cuda_language_override_in_both_forms() {
 
 #[test]
 fn accepts_all_allowlisted_language_overrides() {
-    for language in LANGUAGE_OVERRIDE_ALLOWLIST {
+    for language in LANGUAGE_OVERRIDE_ALLOWLIST.iter().filter(|language| !language.ends_with("-header")) {
         let descs = refuse_descriptions(&["cc", "-x", language, "-c", "foo.cpp"]);
         assert!(
             descs.is_empty(),
@@ -1921,6 +1921,31 @@ fn sidecars_store_only_when_this_compile_wrote_them() {
     fs::write(&notes, "fresh notes").unwrap();
     let error = discover_cc_sidecars(before).unwrap_err();
     assert!(error.contains("unchanged"), "a .dwo an earlier build left must not be stored: {error}");
+}
+
+#[test]
+fn header_languages_build_a_pch_and_include_pch_consumers_compile() {
+    for language in ["c-header", "c++-header", "objective-c-header", "objective-c++-header"] {
+        for mode in [&[][..], &["-c"]] {
+            let args: Vec<&str> = ["clang", "-x", language, "pch.h", "-o", "pch.h.pch"].iter().chain(mode).copied().collect();
+            let parsed = CcArgs::parse(&s(&args)).unwrap();
+            assert_eq!(parsed.mode, CompileMode::Precompile, "{args:?}");
+            assert_eq!(parsed.sources, vec![PathBuf::from("pch.h")]);
+            assert!(parsed.refuse_reasons(&[]).is_empty(), "{args:?}: {:?}", parsed.refuse_reasons(&[]));
+        }
+    }
+    let default_output = CcArgs::parse(&s(&["clang", "-x", "c-header", "pch.h"])).unwrap();
+    assert_eq!(default_output.compiler_output_paths(), vec![PathBuf::from("pch.h.gch")]);
+    assert!(refuse_descriptions(&["clang", "-x", "c-header", "pch.h"]).iter().any(|d| d.contains("precompiled header without -o")));
+    let chained = ["clang", "-include-pch", "a.pch", "-x", "c-header", "b.h", "-o", "b.pch"];
+    assert!(refuse_descriptions(&chained).iter().any(|d| d.contains("another PCH")));
+
+    let consumer = CcArgs::parse(&s(&["clang", "-include-pch", "p.pch", "-c", "u.c", "-o", "u.o"])).unwrap();
+    assert_eq!(consumer.include_pch, Some(PathBuf::from("p.pch")));
+    assert_eq!(consumer.sources, vec![PathBuf::from("u.c")]);
+    assert!(consumer.refuse_reasons(&[]).is_empty(), "{:?}", consumer.refuse_reasons(&[]));
+    let assembly = ["clang", "-include-pch", "p.pch", "-S", "u.c", "-o", "u.s"];
+    assert!(refuse_descriptions(&assembly).iter().any(|d| d.contains("precompiled")));
 }
 
 #[test]

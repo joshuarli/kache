@@ -1979,7 +1979,9 @@ fn cc_named_output_restore_target(
 ) -> Option<std::path::PathBuf> {
     if !matches!(
         parsed.mode,
-        crate::compiler::cc::CompileMode::Preprocess | crate::compiler::cc::CompileMode::Assemble
+        crate::compiler::cc::CompileMode::Preprocess
+            | crate::compiler::cc::CompileMode::Assemble
+            | crate::compiler::cc::CompileMode::Precompile
     ) {
         return None;
     }
@@ -1993,7 +1995,9 @@ fn cc_named_output_restore_target(
 fn cc_store_revalidates_include_dirs(mode: crate::compiler::cc::CompileMode) -> bool {
     matches!(
         mode,
-        crate::compiler::cc::CompileMode::Compile | crate::compiler::cc::CompileMode::Assemble
+        crate::compiler::cc::CompileMode::Compile
+            | crate::compiler::cc::CompileMode::Assemble
+            | crate::compiler::cc::CompileMode::Precompile
     )
 }
 
@@ -2063,6 +2067,9 @@ fn cc_cache_entry_rejection_reason(
             if parsed.output.is_some() && !has_named_output =>
         {
             Some("matching entry lacks the preprocessed output required by this invocation")
+        }
+        crate::compiler::cc::CompileMode::Precompile if !has_named_output => {
+            Some("matching entry lacks the precompiled header required by this invocation")
         }
         crate::compiler::cc::CompileMode::Assemble if !has_named_output => {
             Some("matching entry lacks the assembly output required by this invocation")
