@@ -130,10 +130,10 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | Lane | Host | State | Notes |
 |---|---|---|---|
 | M1 | xcode-27 CI runner / Apple Silicon Mac | RUNNING (partial) | This host covers Apple clang 21.0.0/Xcode 27.0. Standalone LLVM Clang missing — see gaps. |
-| L1 | ubuntu-26.04 | RUNNING (advisory) | e2e-linux-glibc job runs; only `e2e-rust-transitive-native` fails (run 44244430288); cross-tree passes with escape hatch; gate assigned, advisory |
-| L2 | ubuntu-26.04-arm | RUNNING (advisory) | Same job matrix; only `e2e-rust-transitive-native` fails; cross-tree passes with escape hatch; advisory |
-| L3 | Alpine 3.24.2 musl x86_64 (container on ubuntu-26.04) | RUNNING (advisory) | linux-musl job; image LLVM 23.1.5 (prerelease b29e4d0) + gluon ninja 1.13.2 + apk GCC 15.2.0; e2e step advisory: `e2e-c-shims`, three `e2e-cmake-*`, `e2e-rust-transitive-native`, `e2e-cc-cl-xclang-deps` (intermittent) |
-| L4 | Alpine 3.24.2 musl aarch64 (container on ubuntu-26.04-arm) | RUNNING (advisory) | Same image and matrix; e2e step advisory: `e2e-c-shims`, three `e2e-cmake-*`, `e2e-rust-transitive-native`, `e2e-cc-cl-same-content-sources` (intermittent) |
+| L1 | ubuntu-26.04 | RUNNING (required, PR #50) | e2e-linux-glibc job runs; its only failure, `e2e-rust-transitive-native`, is fixed by PR #49; cross-tree passes with escape hatch; gate assigned, advisory |
+| L2 | ubuntu-26.04-arm | RUNNING (required, PR #50) | Same job matrix and fix (PR #49); cross-tree passes with escape hatch; advisory |
+| L3 | Alpine 3.24.2 musl x86_64 (container on ubuntu-26.04) | RUNNING (required, PR #50) | linux-musl job; image LLVM 23.1.5 (prerelease b29e4d0) + gluon ninja 1.13.2 + apk GCC 15.2.0; the e2e failures it showed are fixed by PRs #47–#49 (pending CI on main) |
+| L4 | Alpine 3.24.2 musl aarch64 (container on ubuntu-26.04-arm) | RUNNING (required, PR #50) | Same image and matrix; locally all green with PRs #44–#49 (52 executed, 0 failures) |
 
 ## Package ledger
 
@@ -143,11 +143,11 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | CCP-01 | DONE | CCP-00 bootstrap | Merged in PR #31 (a2ea56fd). CI evidence: run 44306769765 (logs and on-failure report artifacts retained 90 days, so until about 2027-02-16). `cc-oracle` and negative controls passed in `e2e (macOS)` (Apple clang), `cc-oracle (Linux x86_64/ARM64 glibc)` (apt GCC + clang) and `test (Linux x86_64/ARM64 musl)` (image GCC 15 + clang 23). Exit criteria met: minimal transitions pass on macOS and Linux, each control fails as intended, and the deliberate `-S` gap reports `KACHE_MISSED_REUSE`. `make cc-bench` moves to CCP-09. |
 | CCP-02 | RUNNING | CCP-01 | Branch `feat/ccp02-input-identity`: 20 input-identity cases; see "CCP-02 input identity" below. Not yet covered: same-path compiler replacement, wrapper/driver-mode selection, VFS overlays, PGO profiles, -march=native, user key config, diagnostic locale, profile switches against a populated cache, hash/compile/publish race barriers. |
 | CCP-03 | RUNNING | CCP-01, CCP-02 | Branch `feat/ccp03-chromium-flags`: Chromium official flags verified and landed from the WIP branch; `-S -o` cached. Open: response files (`@file`), clang `--config`, GCC `-specs`, `-fsanitize-ignorelist`, `-x` and `-Wp,`/`-Xpreprocessor` audits. See "CCP-03..CCP-08 progress" below. |
-| CCP-04 | TODO | CCP-02 | Equivalent-preprocessing reuse; design below. `cc-eqp-comment-only` is the open gap (reproducible profile). |
+| CCP-04 | BLOCKED | CCP-02 | Comment-only reuse needs a column-aware layout key; see "CCP-04 finding" below. ccache's own reuse is wrong output when a comment changes width before code (`cc-eqp-column-significance`). `cc-eqp-comment-only` stays open in both profiles. |
 | CCP-05 | RUNNING | CCP-02, CCP-03 | Open cases: `cc-out-gcno` (clang), `cc-out-split-dwarf` (Linux), `cc-out-serialized-diagnostics` (clang). |
 | CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | Open conditional case `cc-pch-clang-use` (ccache sloppiness `pch_defines,time_macros`). Module consumers not yet. |
 | CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`; open `cc-host-universal-objects`. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM subset, cc-crate fixture, Chromium, CMake/Meson/Autotools launchers not started. |
-| CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`) and the broker exit race fix (PR #32). Decision needed on `KACHE_VERIFY_RESTORES` (see below). |
+| CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`), broker exit race fix (PR #32), C/C++ hits verify blob hashes by default (PR #46), the non-local cache advisory left compiler stderr (PR #44). |
 | CCP-09 | TODO | CCP-02..CCP-08 | Performance protocol; estimator locked in lock.toml (seed 20261117). |
 
 ## CCP-01 differential runner
@@ -186,8 +186,8 @@ Findings for later packages:
   is on a FUSE filesystem ...` to the compiler's stderr on every compile.
   The oracle reports it as `KACHE_WRONG_OUTPUT` (stderr differs from raw).
   Reproduce: run `make cc-oracle` in the L4 image with
-  `CC_ORACLE_OUT` on the bind-mounted checkout. Runs use a container-local
-  `CC_ORACLE_OUT` until this is fixed.
+  `CC_ORACLE_OUT` on the bind-mounted checkout. Fixed in PR #44: C/C++
+  compiles only log the advisory.
 - On error, clang deletes an existing `-o` object and GCC leaves it in place.
   Kache matches both: `cc-core-failed-compile` passes for both toolchains.
 
@@ -249,16 +249,11 @@ Findings:
    Reproduced on Apple clang 21, GCC 15 and clang 23. The fix keys
    prefix-mapped line markers apart from the text. Regression:
    `cc-eqp-line-number-significance` (blocking).
-2. **Bit-flipped blobs are restored as hits (decision needed).** A
-   same-length corruption of a stored blob is served as a hit, because
-   kache content-verifies restores only when `KACHE_VERIFY_RESTORES` is
-   `sampled` or `always`, and the default is `off` (kunobi-ninja/kache#332).
-   ccache checksums every read. `cc-rel-store-corrupt-blobs` (open) shows
-   the default's exposure. `cc-rel-store-corrupt-blobs-verified`
-   (blocking, `always`) shows eviction and recovery work. Truncated or
-   deleted blobs and corrupt metadata already recover. Changing the
-   default changes restore cost for Rust entries too, so it is left to
-   the owner.
+2. **Bit-flipped blobs were restored as hits (fixed, PR #46).** Hits
+   re-hashed blobs only under `KACHE_VERIFY_RESTORES=sampled|always`, and
+   the default was `off`. The owner delegated the decision. C/C++ hits
+   now default to `always`; Rust stays `off`, since an rlib restore would
+   read every byte. `cc-rel-store-corrupt-blobs` is blocking.
 3. **Daemon spawn failed on an instant compiler exit (fixed, PR #32).**
    macOS identity pinning retried without re-checking for exit, failing
    the compile with "cannot read compiler process identity".
@@ -296,20 +291,33 @@ GCC's `.gcno` and the object carry a compile-time stamp even under
 stamp-aware comparator before it can be judged; the case is clang-only
 until then.
 
-**CCP-04 design (not implemented).** In the default profile, kache keys
-compiles by read-set digest. Any content edit therefore misses, while
-ccache's preprocessor mode reuses line-preserving comment edits. The
-plan: publish each compiled entry under a second key derived from the
-line-aware expansion hash (#33), and look that key up after a digest
-miss on the stale-memo path, which already runs the preprocessor. Blobs
-are content-addressed, so the second publication costs only metadata.
+**CCP-04 finding: expansion-equivalent reuse is not sound as ccache does it.**
+ccache's preprocessor mode keys by the `-E` text. That text separates
+tokens by one space whatever their columns were, so ccache reuses an
+object across an edit that widens an inline comment or the spacing
+before code on a line. The object's debug column info and the
+diagnostics' columns and source excerpts change with such an edit.
+`cc-eqp-column-significance` shows ccache 4.14.3 returning the stale
+result in both direct and preprocessor mode (`CCACHE_WRONG_OUTPUT`).
+Kache had the same bug wherever the expansion alone was its key; PR #45
+fixed it by always keying the read-set digest.
 
-To reuse on the first equivalent edit, as ccache does, populate would
-also need the expansion. That is one extra `-E` per cold miss, or a
-daemon-side `-E` after publication to stay off the critical path. The
-publish path also goes through the daemon handoff (`CcHandoff` carries
-one key), memo commits and admission, so this is the next large change,
-not a local edit.
+Sound comment-edit reuse needs a key that keeps every token's line and
+column while dropping comment text. A replayed diagnostic must also not
+quote a changed line. Candidates:
+
+- clang's token dump (`-Xclang -dump-tokens`), which carries spelling
+  locations. It is clang-only and costs an extra frontend pass.
+- A kache lexer over the read set that blanks comments to the same
+  width and strips trailing whitespace. It must handle line splices,
+  trigraphs, raw strings and `#embed` data exactly, or it serves wrong
+  output.
+
+Either choice also needs a second published key per entry (the earlier
+design: blobs are content-addressed, so the alias costs metadata), and
+reuse only for entries with empty stderr. Until one is built,
+`cc-eqp-comment-only` stays open. Counting it toward parity would
+copy a ccache behavior that is wrong output in a neighbouring case.
 
 ## Open gaps and blockers
 
@@ -362,6 +370,32 @@ KACH-27 fixture `e2e-rust-transitive-native`.
 
 No PRs open at hand-off.
 
+## Session 2026-11-18, second run
+
+The owner delegated the two open decisions ("I take your recommendations
+on the rest"). Each PR passed `make check`. A local merge of all of
+them passed `make cc-oracle cc-oracle-negative-control` on macOS (Apple
+clang 21) and in the L4 image (GCC 15, clang 23), and macOS `make e2e`
+(52 executed, all green).
+
+| PR | What |
+|---|---|
+| #43 | stop tracking fixture build outputs; closes KACH-23, so `make e2e` no longer dirties the tree |
+| #44 | the non-local cache advisory leaves C/C++ compiler stderr (logged, and `kache doctor`); rustc unchanged. The oracle now runs with its output on the OrbStack FUSE bind mount |
+| #45 | **wrong output fixed:** preprocess-first keys fold the read-set digest; the expansion alone lost column positions (`cc-eqp-column-significance`, blocking) |
+| #46 | C/C++ hits verify blob hashes by default (`KACHE_VERIFY_RESTORES` decision); `cc-rel-store-corrupt-blobs` blocking |
+| #47 | **wrong output fixed:** a restored dep-info file named the producing object (`a/x.o:` in `b/x.d`); object-only targets are now stored as a placeholder and restored as this invocation's object. Also fixes KACH-27 finding 2 (CMake TryCompile `-MT`) |
+| #48 | e2e harness drains a build-spawned daemon before each report; fixes the intermittent musl clang-cl fixtures |
+| #49 | build-script results stop binding to their checkout on Linux: GNU `ar` member headers and keyed tool paths (`CC = Some(/opt/...)`) read as unmapped absolute paths. Fixes KACH-27 finding 1 (`e2e-rust-transitive-native`) |
+| #50 | the Linux e2e gates (glibc jobs, musl in-image step) are required; closes KACH-21 and KACH-27 |
+
+With #44–#49 merged locally, the L4 image's `make e2e` reported 52
+executed, 2 skipped and no failures. `make e2e-negative-control` and
+`make cc-oracle` also passed. This was the first all-green Linux e2e
+run. Before these PRs, L4 failed eight fixtures. PR #50's CI then passed
+every job with the Linux gates required: glibc e2e on x86_64 and ARM64,
+the musl in-image e2e on both architectures, and macOS.
+
 ## Resume instructions
 
 1. Read this ledger, [lock.toml](lock.toml), [cases.toml](cases.toml) and
@@ -369,20 +403,11 @@ No PRs open at hand-off.
 2. Verify every kache change with all of:
    - `make check`;
    - `make cc-oracle cc-oracle-negative-control` on macOS;
-   - the same in the L4 image, with `TOOLCHAINS="gcc clang"` and
-     `CC_ORACLE_OUT=/tmp/cc-oracle` (the bind mount is FUSE under
-     OrbStack);
+   - the same in the L4 image, with `TOOLCHAINS="gcc clang"`;
    - `PATH=/opt/homebrew/bin:$PATH make e2e`.
-
-   `make e2e` deletes tracked fixture build files (KACH-23); restore them
-   with `git checkout -- scenarios/` before committing.
 3. Next work, in priority order:
-   - Owner decision on `KACHE_VERIFY_RESTORES` (bit-flipped blobs restored
-     as hits).
-   - CCP-04 equivalent-preprocessing reuse (design above).
-   - KACH-27 remaining items: the cmake TryCompile `-MT` target, and the
-     intermittent `e2e-cpp-hello` on musl x86_64 (artifacts now upload).
    - CCP-05 output sets (`.gcno` comparator for GCC, `.dwo`, `.dia`).
+   - CCP-04, only with a column-aware layout key (see the finding above).
    - Universal objects, PCH consumers, the LLVM subset, the Chromium
      target, and CCP-09 performance.
 4. All campaign work runs in isolated worktrees under `.work/wt/`
