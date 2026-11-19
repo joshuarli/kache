@@ -29,6 +29,9 @@ case's `source` is preprocessing with `-E`, `-M` or `-MM`, a probe with
 
 After every compile the runner records exit status, stdout, stderr, and the
 whole fixture tree (path, kind, mode, blake3). Kache must match `raw` exactly.
+One exception: GCC stamps a coverage object and its `.gcno` with the compile
+time. Where `u.o` contains the stamp its `u.gcno` carries, both are hashed
+with the stamp zeroed. A pair whose stamps disagree is hashed as written.
 Timestamps are not compared. Source files get a fixed modification time, and
 each written file gets a later fixed time, so neither cache sees a file
 modified moments before the compile. Change times cannot be set, so after

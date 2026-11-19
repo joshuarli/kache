@@ -254,6 +254,56 @@ pub fn inventory(root: &Path) -> Result<Inventory> {
     Ok(out)
 }
 
+/// The stamp a `.gcno` notes file shares with its object.
+fn gcov_stamp(notes: &[u8]) -> Option<[u8; 4]> {
+    if notes.len() < 12 || &notes[..4] != b"oncg" {
+        return None;
+    }
+    notes[8..12].try_into().ok()
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|window| window == needle)
+}
+
+/// GCC stamps a coverage object and its `.gcno` with the compile time, so
+/// raw GCC output differs on every run. Where an object and its notes carry
+/// the same stamp, both are hashed with it zeroed. A pair whose stamps
+/// disagree keeps its bytes, so it still differs from a consistent pair.
+fn without_gcov_stamp(path: &Path, mut bytes: Vec<u8>) -> Result<Vec<u8>> {
+    let (notes, object) = match path.extension().and_then(|ext| ext.to_str()) {
+        Some("gcno") => (None, path.with_extension("o")),
+        Some("o") => (Some(path.with_extension("gcno")), path.to_path_buf()),
+        _ => return Ok(bytes),
+    };
+    let stamp = match &notes {
+        None => gcov_stamp(&bytes),
+        Some(notes) => match std::fs::read(notes) {
+            Ok(notes) => gcov_stamp(&notes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        },
+    };
+    let Some(stamp) = stamp else {
+        return Ok(bytes);
+    };
+    if notes.is_some() {
+        while let Some(at) = find(&bytes, &stamp) {
+            bytes[at..at + 4].fill(0);
+        }
+    } else {
+        let paired = match std::fs::read(&object) {
+            Ok(object) => find(&object, &stamp).is_some(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error.into()),
+        };
+        if paired {
+            bytes[8..12].fill(0);
+        }
+    }
+    Ok(bytes)
+}
+
 fn walk(root: &Path, dir: &Path, out: &mut Inventory) -> Result<()> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)?.collect::<std::io::Result<_>>()?;
     entries.sort_by_key(|e| e.file_name());
@@ -279,11 +329,13 @@ fn walk(root: &Path, dir: &Path, out: &mut Inventory) -> Result<()> {
             }
         } else {
             let bytes = std::fs::read(&path)?;
+            let size = bytes.len() as u64;
+            let bytes = without_gcov_stamp(&path, bytes)?;
             Entry {
                 kind: EntryKind::File,
                 mode,
                 digest: blake3::hash(&bytes).to_hex().to_string(),
-                size: bytes.len() as u64,
+                size,
             }
         };
         out.insert(rel, entry);
@@ -1001,6 +1053,27 @@ mod tests {
         assert_eq!(inv["d/f"].size, 3);
         assert_eq!(inv["l"].kind, EntryKind::Symlink);
         assert_eq!(inv["l"].digest, "d/f");
+    }
+
+    #[test]
+    fn gcov_stamps_are_zeroed_only_in_consistent_pairs() {
+        let notes = |stamp: &[u8; 4]| [&b"oncgB33*"[..], stamp, b"rest"].concat();
+        let object = |stamp: &[u8; 4]| [&b"obj:"[..], stamp, b":end"].concat();
+        let digests = |gcno: Vec<u8>, o: Vec<u8>| {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::write(root.path().join("u.gcno"), gcno).unwrap();
+            std::fs::write(root.path().join("u.o"), o).unwrap();
+            let inv = inventory(root.path()).unwrap();
+            (inv["u.gcno"].digest.clone(), inv["u.o"].digest.clone())
+        };
+        let first = digests(notes(b"\x01\x02\x03\x04"), object(b"\x01\x02\x03\x04"));
+        let second = digests(notes(b"\x05\x06\x07\x08"), object(b"\x05\x06\x07\x08"));
+        assert_eq!(first, second, "two raw runs differ only by their stamp");
+        let mismatched = digests(notes(b"\x01\x02\x03\x04"), object(b"\x05\x06\x07\x08"));
+        assert_ne!(mismatched.0, first.0);
+        assert_ne!(mismatched.1, first.1);
+        let other_content = digests(notes(b"\x01\x02\x03\x04"), [&b"obj:"[..], b"\x01\x02\x03\x04", b":END"].concat());
+        assert_ne!(other_content.1, first.1, "only the stamp is ignored");
     }
 
     #[test]
