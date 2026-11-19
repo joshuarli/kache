@@ -92,8 +92,8 @@ Provisioning, not engineering:
 | CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (PR #52); `cc-out-gcno` (GCC and clang), `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Diagnostic formatting keyed per entry (`cc-out-diagnostics-format*`). Diagnostics-bearing entries replay only under their own color setting; empty diagnostics serve every setting (`cc-out-diagnostics-color-reuse`, `-color-cross`, `-source-escapes` blocking). GCC `-fdiagnostics-format=json-file` cached as a sidecar (`cc-out-diagnostics-json-file`, blocking); SARIF outputs refused for good (see "CCP-05 GCC diagnostic files"). Open: sidecars under `-S`. |
 | CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | clang PCH builds and `-include-pch` consumers cached by default (`cc-pch-clang-use`, `cc-pch-clang-define-variants` blocking); see "CCP-06 PCH" below. Clang explicit module consumers (`-fmodule-file=`, `-fprebuilt-module-path=`) cached; `cc-module-fmodule-file`, `cc-module-body-edit`, `cc-module-prebuilt-path`, `cc-module-add-remove` blocking on Linux clang 23; see "CCP-06 modules" below. Implicit PCH (GCC `<name>.gch` through `#include`/`-include`, clang's driver `-include` → `.pch`) keyed by every candidate; `cc-pch-gcc-include`, `cc-pch-gcc-leading-include`, `cc-pch-gcc-directory`, `cc-pch-clang-implicit` blocking; see "CCP-06 implicit PCH". Open: implicit modules, module production. |
 | CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`, `cc-host-universal-objects`, `cc-host-universal-slice-headers` (universal objects keyed slice by slice: the driver refuses `-E` with several `-arch`, and a compile's depfile lists only the last slice's headers). `-Xarch_<arch>` operands keyed per slice (`cc-host-xarch`, blocking): each slice is re-parsed with its own operands, and dropping the other slices' operands is what separates them (keeping all fails `edit-x86_64-header` with `KACHE_WRONG_OUTPUT`). `-Xarch_*` outside a universal compile, or naming no built slice, is refused. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM 21.1.8 subset (`make cc-project-llvm`: `llvm-tblgen` and `LLVMCore`, CMake + Ninja, kache as compiler launcher, TableGen-generated headers in the build tree) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23; the image needs `apk add python3` for LLVM's configure), 2026-11-19: 377 objects byte-identical across raw, cold and warm kache, warm build 377 local hits and no compiles, warm `llvm-tblgen` output identical to raw. cc-crate fixture, Chromium, Meson/Autotools launchers not started. |
-| CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`), broker exit race fix (PR #32), C/C++ hits verify blob hashes by default (PR #46), the non-local cache advisory left compiler stderr (PR #44). |
-| CCP-09 | TODO | CCP-02..CCP-08 | Performance protocol; estimator locked in lock.toml (seed 20261117). |
+| CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`), broker exit race fix (PR #32), C/C++ hits verify blob hashes by default (PR #46), the non-local cache advisory left compiler stderr (PR #44). Identity cases (2026-11-19, blocking): `cc-input-compiler-replaced` (a driver at the same path that changes only code generation), `cc-input-driver-mode` (C vs C++ driver), `cc-policy-profile-switch` (transparent ↔ reproducible against a populated cache, every arm following the step's profile). Open: wrapper selection, user key config, controlled hash/compile/publication races, concurrency and eviction. |
+| CCP-09 | RUNNING | CCP-02..CCP-08 | `make cc-bench` (`kache-cc-bench`): raw/ccache/kache over a tiny-C corpus (48 units, `-j1`), a header-heavy C++ corpus (12 units), pinned zlib and the pinned LLVM subset; scenarios cold, output-cleaned warm, settled and immediate source/header edits and reverts, relocated tree, and a single-unit compile after the kache daemon stops and at steady state. Untimed shim validation first; timed pairs admitted only when counters and objects match it. Estimator corrected to a log-space t-interval (lock.toml `uncertainty_correction`). See "CCP-09 baseline" below. |
 
 ## CCP-01 differential runner
 
@@ -407,6 +407,36 @@ comment-reading diagnostic of every compiler version, so kache declines
 it: a comment edit recompiles. Decided 2026-11-19 under the campaign's
 correctness-first rule; `cc-eqp-comment-only` stays open as the recorded
 gap rather than being counted toward parity.
+
+## CCP-09 baseline
+
+**Method.** `make cc-bench TOOLCHAINS=...` fetches and verifies the pinned
+archives (untimed), then for each workload replays every arm untimed
+through compiler shims that log one line per execution. That replay
+fixes, per scenario, the code generations, the cache counters (kache's
+event log, ccache's `--print-stats`) and an object digest that must equal
+raw's. Timed pairs then run in a seeded order (lock seed 20261117) on the
+real compilers and are admitted only when counters and objects match the
+validated replay. Preparation (unpack, configure, CMake) and the settle
+waits are outside the timer. Kache runs its default profile with
+`KACHE_BASE_DIR` at the tree; raw and ccache get the `-ffile-prefix-map`
+and `SOURCE_DATE_EPOCH=0` kache adds, and ccache gets `base_dir` and
+`hash_dir = false` for the relocated tree. Settled edits wait past the
+2 s racing-write window; immediate edits compile at once. Every edit first
+waits 1.1 s, because macOS make compares whole-second stamps.
+
+**Validation results, 2026-11-19 (untimed).** Every workload validates on
+M1 Apple clang 21 and in the L4 image with GCC 15 and clang 23: all three
+arms make raw's objects in every scenario, kache and ccache restore every
+unit on warm, revert and relocated builds, and edits recompile exactly the
+units raw recompiles (LLVM: 377 units cold, 41 for the `Comdat.h` edit).
+
+**First measured loss (fixed).** The L4 GCC validation showed kache
+recompiling every unit of the C++ corpus on every warm build ("the compile
+left no usable read set"): the hidden-assembler-input check refused any
+expansion containing `\()`, and libstdc++'s `<regex>` spells it in a
+string literal. The check now requires a closing `.endm`/`.endr` for that
+backstop (`fix(cc): stop refusing C++ units whose strings spell \()`).
 
 ## Open gaps and blockers
 
