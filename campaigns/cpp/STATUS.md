@@ -518,6 +518,10 @@ host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
    - `make cc-oracle cc-oracle-negative-control` on macOS;
    - the same in the L4 image, with `TOOLCHAINS="gcc clang"
      CC_ORACLE_OUT=/tmp/cc-oracle` (see the session 2026-11-19 note);
+     after syncing a scratch copy with `rsync -a`, touch its `.rs` files:
+     rsync keeps the source's older mtimes, so a copy that last built a
+     hand-applied mutation keeps the mutated binary (2026-11-19: a stale
+     binary failed `cc-module-prebuilt-path` until rebuilt);
    - `PATH=/opt/homebrew/bin:$PATH make e2e`.
 3. Next work, in priority order:
    - The LLVM subset, the Chromium
