@@ -1,5 +1,5 @@
-summary = "conditional PCH profile: with ccache sloppiness pch_defines,time_macros a clang -include-pch consumer is reused; a rebuilt PCH must invalidate (CCP-06)"
-cohort = "open"
+summary = "a clang PCH and its -include-pch consumer are reused; a rebuilt PCH, an edited header and a header touched without edits (clang then rejects the PCH) all recompile (CCP-06)"
+cohort = "blocking"
 families = ["clang"]
 profiles = ["transparent", "reproducible"]
 outputs = ["pch.h.pch", "u.o"]
@@ -19,10 +19,20 @@ reuse = "miss"
 
 [[step]]
 name = "restore"
-reuse = "like-ccache"
+reuse = "hit"
 action = [{ op = "delete-outputs" }]
 
 [[step]]
 name = "edit-header"
 reuse = "miss"
 action = [{ op = "write", path = "pch.h", content = "#define PCH_VALUE 2\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-edited"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "touch-header"
+reuse = "miss"
+action = [{ op = "touch", path = "pch.h" }, { op = "delete-outputs" }]
