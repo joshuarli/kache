@@ -12,6 +12,9 @@ type Roots = [(PathBuf, String, u8)];
 struct Record {
     text: String,
     paths: Vec<Location>,
+    /// The formatting flags the text was printed under.
+    #[deser(default)]
+    format: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -22,7 +25,24 @@ struct Location {
     json: bool,
 }
 
+#[cfg(test)]
 pub(super) fn store<'a>(text: &'a str, roots: &Roots) -> Cow<'a, str> {
+    store_formatted(text, roots, "")
+}
+
+/// Whether `text`, as stored, was printed under the formatting flags
+/// `format` names. Empty output reads the same under any formatting.
+pub(super) fn formatted_for(text: &str, format: &str) -> bool {
+    if text.is_empty() {
+        return true;
+    }
+    match text.strip_prefix(PREFIX) {
+        None => format.is_empty(),
+        Some(record) => deser_json::from_str::<Record>(record).is_ok_and(|record| record.format == format),
+    }
+}
+
+pub(super) fn store_formatted<'a>(text: &'a str, roots: &Roots, format: &str) -> Cow<'a, str> {
     if text.is_empty() {
         return Cow::Borrowed(text);
     }
@@ -71,7 +91,7 @@ pub(super) fn store<'a>(text: &'a str, roots: &Roots) -> Cow<'a, str> {
             }
         }
     }
-    if paths.is_empty() && !text.starts_with(PREFIX) {
+    if paths.is_empty() && format.is_empty() && !text.starts_with(PREFIX) {
         return Cow::Borrowed(text);
     }
     // Sorted by offset: `restore` walks these ranges in order to rebuild the
@@ -81,6 +101,7 @@ pub(super) fn store<'a>(text: &'a str, roots: &Roots) -> Cow<'a, str> {
     let record = Record {
         text: text.to_string(),
         paths,
+        format: format.to_string(),
     };
     Cow::Owned(format!(
         "{PREFIX}{}",

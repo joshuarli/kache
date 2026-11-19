@@ -1,0 +1,21 @@
+summary = "a unit with warnings built with and without color: ccache reuses both by storing colored text and stripping it on replay; kache keeps one entry per formatting and recompiles the other (CCP-05)"
+cohort = "open"
+profiles = ["transparent", "reproducible"]
+outputs = ["plain.o", "color.o"]
+
+[[compile]]
+argv = ["{cc}", "-Wall", "-c", "u.c", "-o", "plain.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-Wall", "-fdiagnostics-color=always", "-c", "u.c", "-o", "color.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "like-ccache"
+action = [{ op = "delete-outputs" }]

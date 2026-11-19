@@ -152,7 +152,8 @@ fn malformed_ranges_and_missing_roots_are_rejected_without_panics() {
             "{PREFIX}{}",
             deser_json::to_string(&Record {
                 text: text.into(),
-                paths
+                paths,
+                format: String::new(),
             })
             .unwrap()
         )
@@ -212,4 +213,24 @@ fn non_utf8_roots_do_not_guess_a_path_spelling() {
     ));
     let stored = store("/A/a.c:1: warning\n", &roots("/A"));
     assert!(restore(&stored, &opaque_roots).is_err());
+}
+
+#[test]
+fn stored_diagnostics_serve_only_the_formatting_they_were_printed_under() {
+    let roots = [];
+    let color = "-fdiagnostics-color=always";
+    let warning = "u.c:1:20: warning: unused variable\n";
+    let colored = store_formatted(warning, &roots, color);
+    assert!(formatted_for(&colored, color));
+    assert!(!formatted_for(&colored, ""));
+    assert!(!formatted_for(&colored, "-fno-color-diagnostics"));
+    assert_eq!(restore(&colored, &roots).unwrap(), warning);
+
+    let plain = store_formatted(warning, &roots, "");
+    assert_eq!(plain, warning, "unformatted text without paths stays as it was");
+    assert!(formatted_for(&plain, ""));
+    assert!(!formatted_for(&plain, color));
+
+    assert!(formatted_for("", color), "nothing to replay reads the same under any formatting");
+    assert!(formatted_for(&store_formatted("", &roots, color), ""));
 }

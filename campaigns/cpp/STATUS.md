@@ -144,7 +144,7 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | CCP-02 | RUNNING | CCP-01 | Branch `feat/ccp02-input-identity`: 20 input-identity cases; see "CCP-02 input identity" below. Not yet covered: same-path compiler replacement, wrapper/driver-mode selection, VFS overlays, PGO profiles, -march=native, user key config, diagnostic locale, profile switches against a populated cache, hash/compile/publish race barriers. |
 | CCP-03 | RUNNING | CCP-01, CCP-02 | Branch `feat/ccp03-chromium-flags`: Chromium official flags verified and landed from the WIP branch; `-S -o` cached. Open: response files (`@file`), clang `--config`, GCC `-specs`, `-fsanitize-ignorelist`, `-x` and `-Wp,`/`-Xpreprocessor` audits. See "CCP-03..CCP-08 progress" below. |
 | CCP-04 | BLOCKED | CCP-02 | Comment-only reuse needs a column-aware layout key; see "CCP-04 finding" below. ccache's own reuse is wrong output when a comment changes width before code (`cc-eqp-column-significance`). `cc-eqp-comment-only` stays open in both profiles. |
-| CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (PR #52); `cc-out-gcno` (GCC and clang), `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Open: `-fdiagnostics-format`/GCC SARIF outputs, sidecars under `-S`. |
+| CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (PR #52); `cc-out-gcno` (GCC and clang), `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Diagnostic formatting keyed per entry (`cc-out-diagnostics-format*`). Open: GCC diagnostic files, color-independent reuse with warnings, sidecars under `-S`. |
 | CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | Open conditional case `cc-pch-clang-use` (ccache sloppiness `pch_defines,time_macros`). Module consumers not yet. |
 | CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`; open `cc-host-universal-objects`. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM subset, cc-crate fixture, Chromium, CMake/Meson/Autotools launchers not started. |
 | CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`), broker exit race fix (PR #32), C/C++ hits verify blob hashes by default (PR #46), the non-local cache advisory left compiler stderr (PR #44). |
@@ -317,6 +317,18 @@ Observed on Apple clang 21, GCC 15.2 and clang 23 (L4 image):
 - GCC coverage hits were also checked by hand in the L4 image: `gcov`
   reports 100% after running the binary linked from a restored pair.
 
+**CCP-05 diagnostic formatting finding.** Before this fix, every
+`-fdiagnostics-*` flag and the color switches were left out of the
+probe argv (to share the read-set memo) and out of the key. A
+`-fdiagnostics-format=msvc` or `-fdiagnostics-color=always` compile then
+replayed another formatting's warnings (`cc-out-diagnostics-format`,
+`cc-out-diagnostics-format-msvc`: `KACHE_WRONG_OUTPUT` on the old binary).
+Issue #1461 requires warning-free units to reuse across formatting, so the
+key folds only `-fdiagnostics-format=`, and each entry's stored
+diagnostics record the formatting flags they were printed under. An entry
+with diagnostics under other flags is rejected and replaced. GCC options
+that write diagnostics to files pass through.
+
 **CCP-04 finding: expansion-equivalent reuse is not sound as ccache does it.**
 ccache's preprocessor mode keys by the `-E` text. That text separates
 tokens by one space whatever their columns were, so ccache reuses an
@@ -432,7 +444,11 @@ the musl in-image e2e on both architectures, and macOS.
    - the same in the L4 image, with `TOOLCHAINS="gcc clang"`;
    - `PATH=/opt/homebrew/bin:$PATH make e2e`.
 3. Next work, in priority order:
-   - CCP-05 remainder: `-fdiagnostics-format`/GCC SARIF outputs.
+   - CCP-05 remainder: GCC SARIF/JSON diagnostic files
+     (`-fdiagnostics-format=sarif-file`, `-fdiagnostics-add-output=`, refused),
+     and color-independent reuse of units with warnings
+     (`cc-out-diagnostics-color-reuse`, open: store colored text and strip it
+     on replay, as ccache does).
    - CCP-04, only with a column-aware layout key (see the finding above).
    - Universal objects, PCH consumers, the LLVM subset, the Chromium
      target, and CCP-09 performance.

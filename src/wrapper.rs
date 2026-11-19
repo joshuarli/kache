@@ -1755,8 +1755,10 @@ fn run_cc_with_store(
                 } else {
                     &result.stdout
                 };
-                let stdout = cc_diagnostics::store(stdout, &parsed.depinfo_roots);
-                let stderr = cc_diagnostics::store(&result.stderr, &parsed.depinfo_roots);
+                let format = parsed.diagnostic_format_fingerprint();
+                let stdout = cc_diagnostics::store_formatted(stdout, &parsed.depinfo_roots, &format);
+                let stderr =
+                    cc_diagnostics::store_formatted(&result.stderr, &parsed.depinfo_roots, &format);
                 // The put and everything after it are wall-clock time on a
                 // build script's serial C compiles. Hand them to the daemon
                 // when it will take them; it holds the key from then on.
@@ -2025,6 +2027,13 @@ fn cc_cache_entry_rejection_reason(
         .files
         .iter()
         .any(|file| file.name == crate::compiler::cc::CC_STDOUT_STORE_NAME);
+
+    let format = parsed.diagnostic_format_fingerprint();
+    if !cc_diagnostics::formatted_for(&meta.stdout, &format)
+        || !cc_diagnostics::formatted_for(&meta.stderr, &format)
+    {
+        return Some("matching entry replays diagnostics printed under other formatting flags");
+    }
 
     let sidecars = parsed.sidecar_outputs();
     let unexpected_sidecar = meta.files.iter().any(|file| {

@@ -1,0 +1,34 @@
+summary = "diagnostic color and option display change the stderr a hit replays; a compile with warnings never replays text printed under other formatting (CCP-05)"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["plain.o", "color.o", "last-wins.o", "no-option.o"]
+
+[[compile]]
+argv = ["{cc}", "-Wall", "-c", "u.c", "-o", "plain.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-Wall", "-fdiagnostics-color=always", "-c", "u.c", "-o", "color.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-Wall", "-fdiagnostics-color=always", "-fdiagnostics-color=never", "-c", "u.c", "-o", "last-wins.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-Wall", "-fno-diagnostics-show-option", "-c", "u.c", "-o", "no-option.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "any"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit"
+reuse = "miss"
+action = [{ op = "write", path = "u.c", content = "int u(int x) { int unused; return x * 9; }\n" }, { op = "delete-outputs" }]

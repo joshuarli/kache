@@ -1,0 +1,22 @@
+summary = "clang -fdiagnostics-format=msvc replays its own location format, never a default-format entry's (CCP-05)"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["plain.o", "msvc.o"]
+
+[[compile]]
+argv = ["{cc}", "-Wall", "-c", "u.c", "-o", "plain.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-Wall", "-fdiagnostics-format=msvc", "-c", "u.c", "-o", "msvc.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
