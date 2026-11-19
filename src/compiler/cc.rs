@@ -1345,6 +1345,72 @@ impl CcArgs {
     }
 }
 
+/// How an entry's stored diagnostics can serve an invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiagnosticReplay {
+    AsStored,
+    /// Printed with color for an invocation that wants none. GCC's and
+    /// clang's colored text is their plain text with escapes added.
+    WithoutColor,
+}
+
+/// `Some(true)` for a switch that turns diagnostic color on. The compiler's
+/// stderr is a pipe under kache, so `auto` is off.
+fn diagnostic_color_switch(arg: &str) -> Option<bool> {
+    match arg {
+        "-fcolor-diagnostics" | "-fdiagnostics-color" | "-fdiagnostics-color=always" => Some(true),
+        "-fno-color-diagnostics"
+        | "-fno-diagnostics-color"
+        | "-fdiagnostics-color=never"
+        | "-fdiagnostics-color=auto" => Some(false),
+        _ => None,
+    }
+}
+
+/// A formatting fingerprint without its color switches, and whether color
+/// ends up on.
+fn without_color_switches(fingerprint: &str) -> (Vec<&str>, bool) {
+    let mut rest = Vec::new();
+    let mut color = false;
+    let mut args = fingerprint.split('\x1f').filter(|arg| !arg.is_empty()).peekable();
+    while let Some(arg) = args.next() {
+        let switch = if arg == "-Xclang" {
+            match args.peek().and_then(|next| diagnostic_color_switch(next)) {
+                Some(on) => {
+                    args.next();
+                    Some(on)
+                }
+                None => None,
+            }
+        } else {
+            diagnostic_color_switch(arg)
+        };
+        match switch {
+            Some(on) => color = on,
+            None => rest.push(arg),
+        }
+    }
+    (rest, color)
+}
+
+/// Whether diagnostics stored under the `stored` formatting fingerprint can
+/// be replayed for an invocation whose fingerprint is `current`.
+pub(crate) fn diagnostic_replay(stored: &str, current: &str) -> Option<DiagnosticReplay> {
+    if stored == current {
+        return Some(DiagnosticReplay::AsStored);
+    }
+    let (stored_rest, stored_color) = without_color_switches(stored);
+    let (current_rest, current_color) = without_color_switches(current);
+    if stored_rest != current_rest {
+        return None;
+    }
+    match (stored_color, current_color) {
+        (true, true) | (false, false) => Some(DiagnosticReplay::AsStored),
+        (true, false) => Some(DiagnosticReplay::WithoutColor),
+        (false, true) => None,
+    }
+}
+
 fn cc_terminal_diagnostic_flag(arg: &str) -> bool {
     matches!(
         arg,

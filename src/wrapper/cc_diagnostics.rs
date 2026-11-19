@@ -30,16 +30,56 @@ pub(super) fn store<'a>(text: &'a str, roots: &Roots) -> Cow<'a, str> {
     store_formatted(text, roots, "")
 }
 
-/// Whether `text`, as stored, was printed under the formatting flags
-/// `format` names. Empty output reads the same under any formatting.
-pub(super) fn formatted_for(text: &str, format: &str) -> bool {
+/// The formatting flags `text` was stored under, or `None` for empty
+/// output, which reads the same under any formatting. Text stored without a
+/// record was printed with no formatting flags.
+pub(super) fn stored_format(text: &str) -> Result<Option<String>> {
     if text.is_empty() {
-        return true;
+        return Ok(None);
     }
     match text.strip_prefix(PREFIX) {
-        None => format.is_empty(),
-        Some(record) => deser_json::from_str::<Record>(record).is_ok_and(|record| record.format == format),
+        None => Ok(Some(String::new())),
+        Some(record) => deser_json::from_str::<Record>(record)
+            .map(|record| Some(record.format))
+            .context("invalid cached cc diagnostics"),
     }
+}
+
+/// `text` without terminal escapes: CSI sequences (color, erase) and OSC
+/// sequences (hyperlinks), as GCC and clang add them to colored output.
+pub(super) fn without_terminal_escapes(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            plain.push(c);
+            continue;
+        }
+        match chars.peek() {
+            Some('[') => {
+                chars.next();
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                chars.next();
+                while let Some(c) = chars.next() {
+                    if c == '\x07' {
+                        break;
+                    }
+                    if c == '\x1b' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            _ => plain.push(c),
+        }
+    }
+    plain
 }
 
 pub(super) fn store_formatted<'a>(text: &'a str, roots: &Roots, format: &str) -> Cow<'a, str> {

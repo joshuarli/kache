@@ -827,7 +827,7 @@ status = "oracle"
 [[case]]
 id = "cc-out-diagnostics-color-reuse"
 package = "CCP-05"
-summary = "open: reuse a unit with warnings across color flags, as ccache does by stripping stored color"
+summary = "a unit with warnings reuses across color flags: colored entries replay without escapes"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "color_diagnostics.bash"
