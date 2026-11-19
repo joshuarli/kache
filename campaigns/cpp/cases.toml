@@ -836,10 +836,28 @@ status = "oracle"
 [[case]]
 id = "cc-out-diagnostics-color-reuse"
 package = "CCP-05"
-summary = "a unit with warnings reuses across color flags: colored entries replay without escapes"
+summary = "a unit without diagnostics reuses one entry across color flags"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "color_diagnostics.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-out-diagnostics-color-cross"
+package = "CCP-05"
+summary = "a warning holding the source's own CSI/OSC escapes is not served across color settings; output stays exactly raw"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "color_diagnostics.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-out-diagnostics-source-escapes"
+package = "CCP-05"
+summary = "a hit replays a warning's source-authored CSI/OSC escapes exactly, colored and plain"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
 status = "oracle"
 
 [[case]]
@@ -918,6 +936,42 @@ status = "oracle"
 id = "cc-pch-clang-define-variants"
 package = "CCP-06"
 summary = "PCH consumers that read the same files keep apart by the PCH bytes"
+profiles = ["both"]
+compilers = "clang"
+ccache.suite = "pch.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-pch-gcc-include"
+package = "CCP-06"
+summary = "GCC's implicit h.h.gch for -include h.h: absent/present/replaced/removed and an edited header under an older usable .gch"
+profiles = ["both"]
+compilers = "gcc"
+ccache.suite = "pch.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-pch-gcc-leading-include"
+package = "CCP-06"
+summary = "GCC's implicit .gch for a leading #include, found in an earlier search directory than the header"
+profiles = ["both"]
+compilers = "gcc"
+ccache.suite = "pch.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-pch-gcc-directory"
+package = "CCP-06"
+summary = "a .gch directory: GCC selects the first valid variant; rejected and accepted variants are keyed"
+profiles = ["both"]
+compilers = "gcc"
+ccache.suite = "pch.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-pch-clang-implicit"
+package = "CCP-06"
+summary = "clang's driver compiles -include h.h against h.h.pch when it exists; appear/replace/remove are keyed"
 profiles = ["both"]
 compilers = "clang"
 ccache.suite = "pch.bash"

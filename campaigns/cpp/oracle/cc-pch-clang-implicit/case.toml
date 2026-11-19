@@ -1,0 +1,49 @@
+summary = "clang's driver compiles -include h.h against h.h.pch when that file exists: a .pch that appears, is swapped for one built from another header or disappears changes the object, and each earlier state reuses (CCP-06)"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+ccache_config = { sloppiness = "pch_defines,time_macros" }
+
+[[compile]]
+argv = ["{cc}", "-g", "-O1", "-x", "c-header", "h.h", "-o", "built/h.h.pch"]
+source = "h.h"
+reuse = "any"
+
+[[compile]]
+argv = ["{cc}", "-g", "-O1", "-x", "c-header", "alt/h.h", "-o", "built/alt.h.pch"]
+source = "alt/h.h"
+reuse = "any"
+
+[[compile]]
+argv = ["{cc}", "-g", "-O1", "-include", "h.h", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "pch-appears"
+reuse = "miss"
+action = [{ op = "symlink", path = "h.h.pch", target = "built/h.h.pch" }]
+
+[[step]]
+name = "restore-with-pch"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "pch-other-build"
+reuse = "miss"
+action = [{ op = "symlink", path = "h.h.pch", target = "built/alt.h.pch" }]
+
+[[step]]
+name = "pch-removed"
+reuse = "hit"
+action = [{ op = "remove", path = "h.h.pch" }]

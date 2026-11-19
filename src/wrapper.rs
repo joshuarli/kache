@@ -2032,7 +2032,7 @@ fn cc_cache_entry_rejection_reason(
         .iter()
         .any(|file| file.name == crate::compiler::cc::CC_STDOUT_STORE_NAME);
 
-    if cc_diagnostic_replays(parsed, meta).is_none() {
+    if !cc_diagnostics_replay(parsed, meta) {
         return Some("matching entry replays diagnostics printed under other formatting flags");
     }
 
@@ -2440,18 +2440,16 @@ fn restore_cc_stdout_from_cache(
     Ok(())
 }
 
-/// How the entry's stdout and stderr can be replayed for this invocation,
-/// or `None` when either was printed under formatting it cannot serve.
-fn cc_diagnostic_replays(
-    parsed: &crate::compiler::cc::CcArgs,
-    meta: &EntryMeta,
-) -> Option<[crate::compiler::cc::DiagnosticReplay; 2]> {
+/// Whether the entry's stdout and stderr can be replayed for this
+/// invocation: each is empty or was printed under formatting it shares.
+fn cc_diagnostics_replay(parsed: &crate::compiler::cc::CcArgs, meta: &EntryMeta) -> bool {
     let current = parsed.diagnostic_format_fingerprint();
-    let replay = |text: &str| match cc_diagnostics::stored_format(text).ok()? {
-        None => Some(crate::compiler::cc::DiagnosticReplay::AsStored),
-        Some(stored) => crate::compiler::cc::diagnostic_replay(&stored, &current),
+    let replays = |text: &str| match cc_diagnostics::stored_format(text) {
+        Ok(None) => true,
+        Ok(Some(stored)) => crate::compiler::cc::diagnostic_replay(&stored, &current),
+        Err(_) => false,
     };
-    Some([replay(&meta.stdout)?, replay(&meta.stderr)?])
+    replays(&meta.stdout) && replays(&meta.stderr)
 }
 
 /// Decode and validate diagnostic locations before publishing any hit output.
@@ -2460,14 +2458,10 @@ fn restore_cc_hit(
     parsed: &crate::compiler::cc::CcArgs,
     mut meta: EntryMeta,
 ) -> Result<EntryMeta> {
-    let [stdout_replay, stderr_replay] = cc_diagnostic_replays(parsed, &meta)
-        .context("cc restore: cached diagnostics were printed under other formatting flags")?;
-    let replay = |text: String, how| match how {
-        crate::compiler::cc::DiagnosticReplay::AsStored => text,
-        crate::compiler::cc::DiagnosticReplay::WithoutColor => {
-            cc_diagnostics::without_terminal_escapes(&text)
-        }
-    };
+    anyhow::ensure!(
+        cc_diagnostics_replay(parsed, &meta),
+        "cc restore: cached diagnostics were printed under other formatting flags"
+    );
     if let std::borrow::Cow::Owned(stdout) =
         cc_diagnostics::restore(&meta.stdout, &parsed.depinfo_roots)?
     {
@@ -2478,8 +2472,6 @@ fn restore_cc_hit(
     {
         meta.stderr = stderr;
     }
-    meta.stdout = replay(meta.stdout, stdout_replay);
-    meta.stderr = replay(meta.stderr, stderr_replay);
     restore_cc_from_cache(store, parsed, &meta)?;
     Ok(meta)
 }

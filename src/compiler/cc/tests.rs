@@ -1740,8 +1740,7 @@ fn universal_slices_are_keyed_one_arch_at_a_time() {
 }
 
 #[test]
-fn colored_diagnostics_serve_colorless_invocations_and_not_the_reverse() {
-    use DiagnosticReplay::{AsStored, WithoutColor};
+fn diagnostics_replay_only_under_the_color_setting_they_were_printed_with() {
     let fingerprint = |args: &[&str]| {
         CcArgs::parse(&s(&[&["clang", "-c", "u.c"][..], args].concat()))
             .unwrap()
@@ -1749,25 +1748,23 @@ fn colored_diagnostics_serve_colorless_invocations_and_not_the_reverse() {
     };
     let plain = fingerprint(&[]);
     let color = fingerprint(&["-fdiagnostics-color=always"]);
-    assert_eq!(diagnostic_replay(&color, &color), Some(AsStored));
-    assert_eq!(diagnostic_replay(&color, &plain), Some(WithoutColor));
-    assert_eq!(diagnostic_replay(&plain, &color), None, "plain text cannot be colored");
+    assert!(diagnostic_replay(&color, &color));
+    assert!(!diagnostic_replay(&color, &plain), "stripping escapes would strip the source's own");
+    assert!(!diagnostic_replay(&plain, &color), "plain text cannot be colored");
     for off in [
         &["-fno-color-diagnostics"][..],
         &["-fdiagnostics-color=never"],
         &["-fdiagnostics-color=auto"],
         &["-fcolor-diagnostics", "-fno-color-diagnostics"],
     ] {
-        assert_eq!(diagnostic_replay(&color, &fingerprint(off)), Some(WithoutColor), "{off:?}");
-        assert_eq!(diagnostic_replay(&plain, &fingerprint(off)), Some(AsStored), "{off:?}");
+        assert!(!diagnostic_replay(&color, &fingerprint(off)), "{off:?}");
+        assert!(diagnostic_replay(&plain, &fingerprint(off)), "{off:?}");
     }
     for on in [&["-fcolor-diagnostics"][..], &["-Xclang", "-fcolor-diagnostics"], &["-fno-color-diagnostics", "-fdiagnostics-color"]] {
-        assert_eq!(diagnostic_replay(&color, &fingerprint(on)), Some(AsStored), "{on:?}");
+        assert!(diagnostic_replay(&color, &fingerprint(on)), "{on:?}");
     }
     let no_option = fingerprint(&["-fno-diagnostics-show-option"]);
-    let color_no_option = fingerprint(&["-fdiagnostics-color=always", "-fno-diagnostics-show-option"]);
-    assert_eq!(diagnostic_replay(&color, &no_option), None, "other formatting still has to agree");
-    assert_eq!(diagnostic_replay(&color_no_option, &no_option), Some(WithoutColor));
+    assert!(!diagnostic_replay(&plain, &no_option), "other formatting still has to agree");
 }
 
 #[test]
@@ -10196,4 +10193,90 @@ fn explicit_module_consumers_key_every_module_file_they_can_load() {
     assert_ne!(renamed, dir());
     std::fs::remove_dir_all(&prebuilt).unwrap();
     assert_ne!(empty, dir());
+}
+
+#[test]
+fn leading_include_names_stop_at_the_first_token() {
+    let text = b"/* a\n comment */ #include \"a.h\"\n// x\n#  include_next <b/c.h>\n%:import \"d.h\"\n#define X 1\nint x;\n#include \"late.h\"\n";
+    assert_eq!(cc_leading_include_names(text).unwrap(), ["a.h", "b/c.h", "d.h"]);
+    assert_eq!(cc_leading_include_names(b"#include \\\n \"spliced.h\"\n").unwrap(), ["spliced.h"]);
+    assert!(cc_leading_include_names(b"#include CONFIG\n").is_none());
+    assert!(cc_leading_include_names(b"int x;\n#include CONFIG\n").unwrap().is_empty());
+}
+
+#[test]
+fn implicit_precompiled_headers_key_every_candidate_the_compiler_can_load() {
+    let temp = tempfile::tempdir().unwrap();
+    let mock = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_cc_constant_output.sh");
+    let gcc = temp.path().join("gcc");
+    let clang = temp.path().join("clang");
+    std::os::unix::fs::symlink(&mock, &gcc).unwrap();
+    std::os::unix::fs::symlink(&mock, &clang).unwrap();
+    let (pch, inc) = (temp.path().join("pch"), temp.path().join("inc"));
+    std::fs::create_dir(&pch).unwrap();
+    std::fs::create_dir(&inc).unwrap();
+    let source = temp.path().join("v.c");
+    std::fs::write(&source, "#include \"h.h\"\nint v;\n").unwrap();
+    let compiler = CcCompiler::new();
+    let hasher = crate::cache_key::FileHasher::new();
+    let key = |program: &Path, family: ToolFamily, extra: &[String]| {
+        let mut argv = vec![program.display().to_string(), format!("-I{}", pch.display()), format!("-I{}", inc.display())];
+        argv.extend(extra.iter().cloned());
+        argv.extend(["-c".to_string(), source.display().to_string()]);
+        let parsed = compiler.parse(&argv).unwrap();
+        assert_eq!(parsed.family, family);
+        cc_implicit_pch_key(&parsed, &hasher).unwrap()
+    };
+    let gnu = || key(&gcc, ToolFamily::Gnu, &[]);
+
+    assert_eq!(gnu(), None);
+    std::fs::write(inc.join("h.h.gch"), "one").unwrap();
+    let beside_header = gnu().unwrap();
+    std::fs::write(pch.join("h.h.gch"), "two!").unwrap();
+    let both = gnu().unwrap();
+    assert_ne!(beside_header, both);
+    std::fs::remove_file(inc.join("h.h.gch")).unwrap();
+    let earlier = gnu().unwrap();
+    assert_ne!(both, earlier);
+    std::fs::write(pch.join("h.h.gch"), "three!!").unwrap();
+    assert_ne!(earlier, gnu().unwrap());
+    std::fs::remove_file(pch.join("h.h.gch")).unwrap();
+    std::fs::create_dir(pch.join("h.h.gch")).unwrap();
+    std::fs::write(pch.join("h.h.gch/a"), "variant").unwrap();
+    let variants = gnu().unwrap();
+    std::fs::write(pch.join("h.h.gch/b"), "variant").unwrap();
+    assert_ne!(variants, gnu().unwrap());
+    std::fs::remove_dir_all(pch.join("h.h.gch")).unwrap();
+    assert_eq!(gnu(), None);
+
+    let forced = temp.path().join("f.h");
+    let include = ["-include".to_string(), forced.display().to_string()];
+    assert_eq!(key(&gcc, ToolFamily::Gnu, &include), None);
+    std::fs::write(temp.path().join("f.h.gch"), "forced").unwrap();
+    assert!(key(&gcc, ToolFamily::Gnu, &include).is_some());
+    let long = [format!("--include={}", forced.display())];
+    assert!(key(&gcc, ToolFamily::Gnu, &long).is_some());
+    std::fs::remove_file(temp.path().join("f.h.gch")).unwrap();
+
+    std::fs::write(&source, "#include CONFIG\nint v;\n").unwrap();
+    assert_eq!(gnu(), None);
+    std::fs::write(inc.join("config.h.gch"), "spelled by a macro").unwrap();
+    assert!(gnu().is_some());
+    std::fs::write(&source, "#include \"h.h\"\nint v;\n").unwrap();
+    std::fs::write(inc.join("h.h.gch"), "one").unwrap();
+
+    // A driver named for GCC may be clang (Apple's `cc`), so clang's `.pch`
+    // candidate counts for it too.
+    std::fs::write(temp.path().join("f.h.pch"), "clang pch").unwrap();
+    assert!(key(&gcc, ToolFamily::Gnu, &include).is_some());
+    std::fs::remove_file(temp.path().join("f.h.pch")).unwrap();
+
+    // clang loads only the driver's `-include` candidates.
+    let clang_key = |extra: &[String]| key(&clang, ToolFamily::Clang, extra);
+    assert_eq!(clang_key(&[]), None);
+    assert_eq!(clang_key(&include), None);
+    std::fs::write(temp.path().join("f.h.pch"), "clang pch").unwrap();
+    let pch_only = clang_key(&include).unwrap();
+    std::fs::write(temp.path().join("f.h.gch"), "clang gch").unwrap();
+    assert_ne!(pch_only, clang_key(&include).unwrap());
 }

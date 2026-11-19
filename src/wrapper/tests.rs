@@ -2596,6 +2596,57 @@ fn cc_hit_validates_both_diagnostic_streams_before_restoring_outputs() {
 }
 
 #[test]
+fn cc_hit_replays_colored_diagnostics_only_to_colored_invocations() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&test_config(dir.path().join("cache"))).unwrap();
+    let input = dir.path().join("cached.o");
+    let output = dir.path().join("unit.o");
+    std::fs::write(&input, b"cached object").unwrap();
+    let parse = |extra: &[&str]| {
+        let mut argv = vec!["gcc", "-c", "unit.c", "-o", output.to_str().unwrap()];
+        argv.extend_from_slice(extra);
+        crate::compiler::cc::CcArgs::parse(&s(&argv)).unwrap()
+    };
+    let colored = parse(&["-fdiagnostics-color=always"]);
+    let plain = parse(&["-fdiagnostics-color=never"]);
+    // GCC's decoration around a message the source wrote with its own CSI and
+    // OSC sequences, which GCC prints as they are under either setting.
+    let stderr = "\x1b[01m\x1b[Kunit.c:1:9:\x1b[m\x1b[K \x1b[01;35m\x1b[Kwarning: \x1b[m\x1b[K\x1b[31mUSER\x1b[0m \x1b]8;;https://example.invalid\x07link\x1b]8;;\x07\n";
+    let put = |key: &str, stderr: &str| {
+        store
+            .put(
+                key,
+                "unit",
+                &[],
+                &[],
+                "",
+                "",
+                &[(input.clone(), "__kache_cc_object.o".into())],
+                "",
+                &cc_diagnostics::store_formatted(stderr, &[], &colored.diagnostic_format_fingerprint()),
+            )
+            .unwrap();
+        store.get(key).unwrap().unwrap()
+    };
+    let warned = put("colored-warning", stderr);
+
+    assert!(restore_cc_hit(&store, &plain, warned.clone()).is_err());
+    assert!(!output.exists(), "a declined hit restores nothing");
+
+    let restored = restore_cc_hit(&store, &colored, warned).unwrap();
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    replay_cached_diagnostics(&restored, &mut out, &mut err);
+    assert!(out.is_empty());
+    assert_eq!(String::from_utf8(err).unwrap(), stderr, "every escape replays as stored");
+    std::fs::remove_file(&output).unwrap();
+
+    let silent = put("colored-silent", "");
+    let restored = restore_cc_hit(&store, &plain, silent).unwrap();
+    assert!(restored.stderr.is_empty(), "no diagnostics reads the same under any formatting");
+    assert_eq!(std::fs::read(&output).unwrap(), b"cached object");
+}
+
+#[test]
 fn replay_diagnostics_forwards_both_compiler_streams() {
     let mut out = Vec::new();
     let mut err = Vec::new();

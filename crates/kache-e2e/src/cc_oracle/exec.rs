@@ -254,54 +254,14 @@ pub fn inventory(root: &Path) -> Result<Inventory> {
     Ok(out)
 }
 
-/// The stamp a `.gcno` notes file shares with its object.
-fn gcov_stamp(notes: &[u8]) -> Option<[u8; 4]> {
-    if notes.len() < 12 || &notes[..4] != b"oncg" {
-        return None;
-    }
-    notes[8..12].try_into().ok()
-}
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|window| window == needle)
-}
-
-/// GCC stamps a coverage object and its `.gcno` with the compile time, so
-/// raw GCC output differs on every run. Where an object and its notes carry
-/// the same stamp, both are hashed with it zeroed. A pair whose stamps
-/// disagree keeps its bytes, so it still differs from a consistent pair.
-fn without_gcov_stamp(path: &Path, mut bytes: Vec<u8>) -> Result<Vec<u8>> {
-    let (notes, object) = match path.extension().and_then(|ext| ext.to_str()) {
-        Some("gcno") => (None, path.with_extension("o")),
-        Some("o") => (Some(path.with_extension("gcno")), path.to_path_buf()),
-        _ => return Ok(bytes),
-    };
-    let stamp = match &notes {
-        None => gcov_stamp(&bytes),
-        Some(notes) => match std::fs::read(notes) {
-            Ok(notes) => gcov_stamp(&notes),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
-        },
-    };
-    let Some(stamp) = stamp else {
-        return Ok(bytes);
-    };
-    if notes.is_some() {
-        while let Some(at) = find(&bytes, &stamp) {
-            bytes[at..at + 4].fill(0);
-        }
-    } else {
-        let paired = match std::fs::read(&object) {
-            Ok(object) => find(&object, &stamp).is_some(),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(error) => return Err(error.into()),
-        };
-        if paired {
-            bytes[8..12].fill(0);
+fn without_unstable_bytes(mut tree: Inventory, unstable: &[String]) -> Inventory {
+    for path in unstable {
+        if let Some(entry) = tree.get_mut(path).filter(|entry| entry.kind == EntryKind::File) {
+            entry.digest = String::from("unstable");
+            entry.size = 0;
         }
     }
-    Ok(bytes)
+    tree
 }
 
 fn walk(root: &Path, dir: &Path, out: &mut Inventory) -> Result<()> {
@@ -318,6 +278,8 @@ fn walk(root: &Path, dir: &Path, out: &mut Inventory) -> Result<()> {
                 mode,
                 digest: std::fs::read_link(&path)?.to_string_lossy().into_owned(),
                 size: 0,
+                stamp_free: None,
+                stamp_unresolved: None,
             }
         } else if meta.is_dir() {
             walk(root, &path, out)?;
@@ -326,16 +288,23 @@ fn walk(root: &Path, dir: &Path, out: &mut Inventory) -> Result<()> {
                 mode,
                 digest: String::new(),
                 size: 0,
+                stamp_free: None,
+                stamp_unresolved: None,
             }
         } else {
             let bytes = std::fs::read(&path)?;
-            let size = bytes.len() as u64;
-            let bytes = without_gcov_stamp(&path, bytes)?;
+            let (stamp_free, stamp_unresolved) = match super::gcov::stamp(&path, &bytes)? {
+                super::gcov::Stamp::None => (None, None),
+                super::gcov::Stamp::Zeroed(digest) => (Some(digest), None),
+                super::gcov::Stamp::Unresolved(why) => (None, Some(why)),
+            };
             Entry {
                 kind: EntryKind::File,
                 mode,
                 digest: blake3::hash(&bytes).to_hex().to_string(),
-                size,
+                size: bytes.len() as u64,
+                stamp_free,
+                stamp_unresolved,
             }
         };
         out.insert(rel, entry);
@@ -695,7 +664,7 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                 status: output.status.code(),
                 stdout: output.stdout,
                 stderr: output.stderr,
-                tree: inventory(ctx.fixture)?,
+                tree: without_unstable_bytes(inventory(ctx.fixture)?, &case.unstable),
                 executions,
                 kache_result,
             });
@@ -1084,6 +1053,24 @@ mod tests {
     }
 
     #[test]
+    fn unstable_files_compare_by_kind_and_mode_but_not_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("h.gch"), "one build").unwrap();
+        std::fs::write(root.path().join("u.o"), "object").unwrap();
+        let unstable = ["h.gch".to_string()];
+        let first = without_unstable_bytes(inventory(root.path()).unwrap(), &unstable);
+        std::fs::write(root.path().join("h.gch"), "another build").unwrap();
+        let second = without_unstable_bytes(inventory(root.path()).unwrap(), &unstable);
+        assert_eq!(first, second);
+        std::fs::write(root.path().join("u.o"), "other object").unwrap();
+        let third = without_unstable_bytes(inventory(root.path()).unwrap(), &unstable);
+        assert_ne!(second["u.o"], third["u.o"]);
+        std::fs::remove_file(root.path().join("h.gch")).unwrap();
+        let fourth = without_unstable_bytes(inventory(root.path()).unwrap(), &unstable);
+        assert!(!fourth.contains_key("h.gch"));
+    }
+
+    #[test]
     fn inventory_records_kind_mode_and_content() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("d")).unwrap();
@@ -1099,24 +1086,41 @@ mod tests {
     }
 
     #[test]
-    fn gcov_stamps_are_zeroed_only_in_consistent_pairs() {
-        let notes = |stamp: &[u8; 4]| [&b"oncgB33*"[..], stamp, b"rest"].concat();
-        let object = |stamp: &[u8; 4]| [&b"obj:"[..], stamp, b":end"].concat();
-        let digests = |gcno: Vec<u8>, o: Vec<u8>| {
+    fn coverage_pairs_compare_without_their_own_stamp_only() {
+        use super::super::gcov::tests::{VERSION, notes, object};
+        use super::super::judge::differences;
+        let observe = |gcno: Vec<u8>, o: Vec<u8>| {
             let root = tempfile::tempdir().unwrap();
             std::fs::write(root.path().join("u.gcno"), gcno).unwrap();
             std::fs::write(root.path().join("u.o"), o).unwrap();
-            let inv = inventory(root.path()).unwrap();
-            (inv["u.gcno"].digest.clone(), inv["u.o"].digest.clone())
+            Observation { tree: inventory(root.path()).unwrap(), ..Default::default() }
         };
-        let first = digests(notes(b"\x01\x02\x03\x04"), object(b"\x01\x02\x03\x04"));
-        let second = digests(notes(b"\x05\x06\x07\x08"), object(b"\x05\x06\x07\x08"));
-        assert_eq!(first, second, "two raw runs differ only by their stamp");
-        let mismatched = digests(notes(b"\x01\x02\x03\x04"), object(b"\x05\x06\x07\x08"));
-        assert_ne!(mismatched.0, first.0);
-        assert_ne!(mismatched.1, first.1);
-        let other_content = digests(notes(b"\x01\x02\x03\x04"), [&b"obj:"[..], b"\x01\x02\x03\x04", b":END"].concat());
-        assert_ne!(other_content.1, first.1, "only the stamp is ignored");
+        let pair = |text: &[u8], stamp: [u8; 4]| observe(notes(VERSION, stamp), object(text, VERSION, stamp));
+        let (one, two) = (*b"\x01\x02\x03\x04", *b"\x05\x06\x07\x08");
+        let first = pair(b"code", one);
+        let second = pair(b"code", two);
+        assert_ne!(first.tree["u.o"].digest, second.tree["u.o"].digest, "the raw digests are kept");
+        assert!(differences(&first, &second).is_empty(), "two raw runs differ only by their stamp");
+
+        // Object bytes that happen to equal the stamp are ordinary data.
+        let copy = pair(&[&b"code"[..], &one].concat(), one);
+        let other = pair(&[&b"code"[..], &two].concat(), two);
+        assert_eq!(differences(&copy, &other), ["u.o: content differs"]);
+
+        let unrelated = pair(b"CODE", two);
+        assert_eq!(differences(&first, &unrelated), ["u.o: content differs"]);
+
+        let inconsistent = observe(notes(VERSION, one), object(b"code", VERSION, two));
+        let found = differences(&first, &inconsistent);
+        assert_eq!(found.len(), 1, "the notes file is the reference's own: {found:?}");
+        assert!(found[0].starts_with("u.o: content differs (coverage stamp unresolved"), "{found:?}");
+
+        let zero = pair(b"code", [0; 4]);
+        assert!(differences(&first, &zero).is_empty());
+
+        let truncated = observe(b"oncg*51B\x01".to_vec(), object(b"code", VERSION, one));
+        assert_eq!(truncated.tree["u.o"].stamp_free, None);
+        assert!(differences(&first, &truncated).iter().all(|d| d.contains("coverage stamp unresolved")));
     }
 
     #[test]

@@ -1,0 +1,45 @@
+summary = "GCC loads pch/h.h.gch in place of inc/h.h for a #include before the main file's first token, looking in each search directory before the header: a .gch appearing in an earlier directory, swapped for another build or removed changes the object, and removing it reuses the object built without it. GCC writes a different .gch on every build, so the steps that rebuild one do not require reuse (CCP-06)"
+cohort = "blocking"
+families = ["gcc"]
+profiles = ["transparent", "reproducible"]
+outputs = ["v.o"]
+unstable = ["built/h.h.gch", "built/alt.h.gch"]
+ccache_config = { sloppiness = "pch_defines,time_macros" }
+
+[[compile]]
+argv = ["{cc}", "-g", "-O1", "-x", "c-header", "inc/h.h", "-o", "built/h.h.gch"]
+source = "inc/h.h"
+reuse = "any"
+
+[[compile]]
+argv = ["{cc}", "-g", "-O1", "-x", "c-header", "alt/h.h", "-o", "built/alt.h.gch"]
+source = "alt/h.h"
+reuse = "any"
+
+[[compile]]
+argv = ["{cc}", "-g", "-O1", "-Ipch", "-Iinc", "-c", "v.c", "-o", "v.o"]
+source = "v.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "gch-appears-earlier"
+reuse = "miss"
+action = [{ op = "symlink", path = "pch/h.h.gch", target = "../built/h.h.gch" }]
+
+[[step]]
+name = "gch-other-build"
+reuse = "miss"
+action = [{ op = "symlink", path = "pch/h.h.gch", target = "../built/alt.h.gch" }]
+
+[[step]]
+name = "gch-removed"
+reuse = "hit"
+action = [{ op = "remove", path = "pch/h.h.gch" }]

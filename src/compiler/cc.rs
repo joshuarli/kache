@@ -1501,15 +1501,6 @@ impl CcArgs {
     }
 }
 
-/// How an entry's stored diagnostics can serve an invocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DiagnosticReplay {
-    AsStored,
-    /// Printed with color for an invocation that wants none. GCC's and
-    /// clang's colored text is their plain text with escapes added.
-    WithoutColor,
-}
-
 /// `Some(true)` for a switch that turns diagnostic color on. The compiler's
 /// stderr is a pipe under kache, so `auto` is off.
 fn diagnostic_color_switch(arg: &str) -> Option<bool> {
@@ -1550,20 +1541,16 @@ fn without_color_switches(fingerprint: &str) -> (Vec<&str>, bool) {
 }
 
 /// Whether diagnostics stored under the `stored` formatting fingerprint can
-/// be replayed for an invocation whose fingerprint is `current`.
-pub(crate) fn diagnostic_replay(stored: &str, current: &str) -> Option<DiagnosticReplay> {
-    if stored == current {
-        return Some(DiagnosticReplay::AsStored);
-    }
-    let (stored_rest, stored_color) = without_color_switches(stored);
-    let (current_rest, current_color) = without_color_switches(current);
-    if stored_rest != current_rest {
-        return None;
-    }
-    match (stored_color, current_color) {
-        (true, true) | (false, false) => Some(DiagnosticReplay::AsStored),
-        (true, false) => Some(DiagnosticReplay::WithoutColor),
-        (false, true) => None,
+/// be replayed as they are for an invocation whose fingerprint is `current`:
+/// the two differ at most in spellings of the same color setting. Colored
+/// text does not serve a colorless invocation. Removing escapes from it
+/// would also remove the escapes a source wrote into a message, which the
+/// compiler prints as they are under either setting.
+pub(crate) fn diagnostic_replay(stored: &str, current: &str) -> bool {
+    stored == current || {
+        let (stored_rest, stored_color) = without_color_switches(stored);
+        let (current_rest, current_color) = without_color_switches(current);
+        stored_rest == current_rest && stored_color == current_color
     }
 }
 
@@ -2749,6 +2736,199 @@ fn cc_module_inputs_key(
                 let digest = hash(&Path::new(dir).join(&name))?;
                 fields.push(format!("{}={digest}", name.to_string_lossy()));
             }
+        }
+    }
+    Ok((!fields.is_empty()).then(|| fields.join("\x1f")))
+}
+
+/// The operands of `-include`, `--include` and `--include=`, in order.
+fn cc_forced_includes(rest: &[String]) -> Vec<&str> {
+    let mut names = Vec::new();
+    let mut args = rest.iter();
+    while let Some(arg) = args.next() {
+        if let Some(value) = arg.strip_prefix("--include=") {
+            names.push(value);
+        } else if (arg == "-include" || arg == "--include")
+            && let Some(value) = args.next()
+        {
+            names.push(value.as_str());
+        }
+    }
+    names
+}
+
+/// The header names the main file includes before its first token, where
+/// GCC may load a precompiled header in place of the header. `None` when
+/// one of them is spelled through a macro.
+fn cc_leading_include_names(text: &[u8]) -> Option<Vec<String>> {
+    let text = cc_splice_lines(text);
+    let mut names = Vec::new();
+    let mut in_comment = false;
+    for raw in text.split(|&byte| byte == b'\n') {
+        let mut line = Vec::with_capacity(raw.len());
+        let mut i = 0;
+        while i < raw.len() {
+            if in_comment {
+                match memchr::memmem::find(&raw[i..], b"*/") {
+                    Some(end) => {
+                        in_comment = false;
+                        line.push(b' ');
+                        i += end + 2;
+                    }
+                    None => i = raw.len(),
+                }
+            } else if raw[i..].starts_with(b"/*") {
+                in_comment = true;
+                i += 2;
+            } else if raw[i..].starts_with(b"//") {
+                break;
+            } else {
+                line.push(raw[i]);
+                i += 1;
+            }
+        }
+        let line = line.trim_ascii();
+        if line.is_empty() {
+            continue;
+        }
+        let Some(directive) = line.strip_prefix(b"#").or_else(|| line.strip_prefix(b"%:")) else {
+            break;
+        };
+        let directive = directive.trim_ascii_start();
+        let Some(operand) = [b"include_next".as_slice(), b"include", b"import"]
+            .iter()
+            .find_map(|keyword| directive.strip_prefix(*keyword))
+        else {
+            continue;
+        };
+        let operand = operand.trim_ascii_start();
+        let close = match operand.first() {
+            Some(b'"') => b'"',
+            Some(b'<') => b'>',
+            _ => return None,
+        };
+        let end = memchr::memchr(close, &operand[1..])?;
+        names.push(String::from_utf8_lossy(&operand[1..=end]).into_owned());
+    }
+    Some(names)
+}
+
+/// What the precompiled headers a compile may load without naming them add
+/// to the key.
+///
+/// GCC loads `<dir>/<name>.gch`, a file or a directory of variants, in place
+/// of a header included before the main file's first token, looking in each
+/// search directory before the header itself. clang's driver turns
+/// `-include X` into `-include-pch X.pch` (or `X.gch`) when that file exists;
+/// those candidates are folded for every driver, since one named `cc` may be
+/// clang.
+/// Neither the expansion nor the dependency file names the precompiled
+/// header, and once GCC loads one its dependency file drops the header and
+/// everything it includes, so the key folds each candidate that exists, by
+/// name and directory position. A compile with none keys as it did before.
+fn cc_implicit_pch_key(
+    parsed: &CcArgs,
+    file_hasher: &crate::cache_key::FileHasher<'_>,
+) -> Result<Option<String>> {
+    if !matches!(parsed.family, ToolFamily::Gnu | ToolFamily::Clang) {
+        return Ok(None);
+    }
+    let cwd = parsed
+        .invocation_env
+        .cwd()
+        .context("cc invocation has no working directory")?;
+    let forced = cc_forced_includes(&parsed.rest);
+    let mut fields = Vec::new();
+    let mut fold = |label: String, path: PathBuf| -> Result<()> {
+        let meta = match std::fs::metadata(&path) {
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => {
+                return Ok(());
+            }
+            meta => meta.with_context(|| format!("stating precompiled header {}", path.display()))?,
+        };
+        if !meta.is_dir() {
+            let digest = file_hasher
+                .hash(&path)
+                .with_context(|| format!("hashing precompiled header {}", path.display()))?;
+            fields.push(format!("{label}={digest}"));
+            return Ok(());
+        }
+        let mut entries = Vec::new();
+        for entry in std::fs::read_dir(&path)
+            .with_context(|| format!("listing precompiled headers in {}", path.display()))?
+        {
+            let entry = entry?;
+            if entry.path().is_file() {
+                entries.push(entry.file_name());
+            }
+        }
+        entries.sort();
+        fields.push(format!("{label}/"));
+        for name in entries {
+            let digest = file_hasher.hash(&path.join(&name)).with_context(|| {
+                format!("hashing precompiled header {}", path.join(&name).display())
+            })?;
+            fields.push(format!("{label}/{}={digest}", name.to_string_lossy()));
+        }
+        Ok(())
+    };
+    // A driver named `cc` or `c++` may be clang whatever the family its name
+    // suggests, so every driver folds clang's `-include` candidates.
+    for name in &forced {
+        for ext in ["pch", "gch"] {
+            fold(format!("{name}.{ext}"), absolutize_path(cwd, Path::new(&format!("{name}.{ext}"))))?;
+        }
+    }
+    if parsed.family == ToolFamily::Clang {
+        return Ok((!fields.is_empty()).then(|| fields.join("\x1f")));
+    }
+    let mut dirs = vec![cwd.to_path_buf()];
+    for dir in cc_user_include_dirs(parsed, cwd).into_iter().chain(cc_system_include_dirs(parsed, cwd)) {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    let leading = match parsed.sources.first() {
+        Some(source) => {
+            let path = absolutize_path(cwd, source);
+            let text = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+            cc_leading_include_names(&text)
+        }
+        None => Some(Vec::new()),
+    };
+    let Some(leading) = leading else {
+        // The name a macro spells is unknown, so every precompiled header in
+        // the search directories is a candidate.
+        for (index, dir) in dirs.iter().enumerate() {
+            let entries = match std::fs::read_dir(dir) {
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => continue,
+                entries => entries.with_context(|| format!("listing {}", dir.display()))?,
+            };
+            let mut names = Vec::new();
+            for entry in entries {
+                let name = entry?.file_name();
+                if Path::new(&name).extension().is_some_and(|ext| ext == "gch") {
+                    names.push(name);
+                }
+            }
+            names.sort();
+            for name in names {
+                fold(format!("{}@{index}", name.to_string_lossy()), dir.join(&name))?;
+            }
+        }
+        for name in forced {
+            fold(format!("{name}.gch"), absolutize_path(cwd, Path::new(&format!("{name}.gch"))))?;
+        }
+        return Ok((!fields.is_empty()).then(|| fields.join("\x1f")));
+    };
+    for name in forced.into_iter().map(str::to_string).chain(leading) {
+        let candidate = format!("{name}.gch");
+        if Path::new(&candidate).is_absolute() {
+            fold(candidate.clone(), PathBuf::from(&candidate))?;
+            continue;
+        }
+        for (index, dir) in dirs.iter().enumerate() {
+            fold(format!("{candidate}@{index}"), dir.join(&candidate))?;
         }
     }
     Ok((!fields.is_empty()).then(|| fields.join("\x1f")))
@@ -8685,6 +8865,12 @@ impl CcCompiler {
             hasher.update(modules.as_bytes());
             hasher.update(b"\n");
             log::trace!(target: "kache::cache_key", "[key:{}] modules={}", trace_name, modules);
+        }
+        if let Some(pch) = cc_implicit_pch_key(parsed, ctx.file_hasher)? {
+            hasher.update(b"implicit-pch.v1:");
+            hasher.update(pch.as_bytes());
+            hasher.update(b"\n");
+            log::trace!(target: "kache::cache_key", "[key:{}] implicit_pch={}", trace_name, pch);
         }
 
         // Built-in raw-keyed flags have object effects the resolved compiler

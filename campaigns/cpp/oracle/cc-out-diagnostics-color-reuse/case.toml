@@ -1,4 +1,4 @@
-summary = "a unit with warnings built with and without color reuses both: a colored entry replays without its escapes for a colorless build, and a colorless entry seen by a colored build is replaced (CCP-05)"
+summary = "a unit with no diagnostics built with and without color reuses one entry for both settings, the colored build from the plain build's entry in the very first step: empty output reads the same under any formatting (CCP-05)"
 cohort = "blocking"
 profiles = ["transparent", "reproducible"]
 outputs = ["plain.o", "color.o"]
@@ -10,6 +10,7 @@ source = "u.c"
 [[compile]]
 argv = ["{cc}", "-Wall", "-fdiagnostics-color=always", "-c", "u.c", "-o", "color.o"]
 source = "u.c"
+reuse = "hit"
 
 [[step]]
 name = "populate"

@@ -1,0 +1,21 @@
+summary = "a warning whose text the source wrote with its own CSI and OSC sequences, built with and without color under one key: neither entry serves the other setting, since GCC prints the source's escapes as they are and stripping escapes from colored text would remove them, so every build recompiles and prints exactly what the raw compiler does (CCP-05)"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["color.o", "plain.o"]
+
+[[compile]]
+argv = ["{cc}", "-fdiagnostics-color=always", "-c", "u.c", "-o", "color.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-fdiagnostics-color=never", "-c", "u.c", "-o", "plain.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "each-setting-replaces-the-other"
+reuse = "miss"
+action = [{ op = "delete-outputs" }]

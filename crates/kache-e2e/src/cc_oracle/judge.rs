@@ -54,6 +54,12 @@ pub struct Entry {
     /// blake3 of the file bytes, or the symlink target.
     pub digest: String,
     pub size: u64,
+    /// For one half of a GCC coverage pair whose stamp was located: the
+    /// digest with that stamp zeroed, which is what two raw compiles share.
+    pub stamp_free: Option<String>,
+    /// For one half of a coverage pair whose stamp could not be located
+    /// safely: why. Its bytes are compared as they are.
+    pub stamp_unresolved: Option<String>,
 }
 
 /// Every path under the fixture root after an invocation.
@@ -75,7 +81,7 @@ pub struct Executions {
     pub codegen_argv: Vec<Vec<String>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Observation {
     /// `None` when the process died from a signal.
     pub status: Option<i32>,
@@ -277,7 +283,15 @@ pub fn differences(reference: &Observation, other: &Observation) -> Vec<String> 
         match other.tree.get(path) {
             None => out.push(format!("missing {path}")),
             Some(got) if got.kind != entry.kind => out.push(format!("{path}: {:?} vs {:?}", entry.kind, got.kind)),
-            Some(got) if got.digest != entry.digest => out.push(format!("{path}: content differs")),
+            Some(got)
+                if got.digest != entry.digest
+                    && (entry.stamp_free.is_none() || got.stamp_free != entry.stamp_free) =>
+            {
+                match entry.stamp_unresolved.as_ref().or(got.stamp_unresolved.as_ref()) {
+                    Some(why) => out.push(format!("{path}: content differs (coverage stamp unresolved: {why})")),
+                    None => out.push(format!("{path}: content differs")),
+                }
+            }
             Some(got) if got.mode != entry.mode => {
                 out.push(format!("{path}: mode {:o} vs {:o}", entry.mode, got.mode))
             }
@@ -312,6 +326,8 @@ mod tests {
             mode: 0o644,
             digest: digest.to_string(),
             size: 1,
+            stamp_free: None,
+            stamp_unresolved: None,
         }
     }
 
