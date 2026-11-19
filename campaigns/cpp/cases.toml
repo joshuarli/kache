@@ -753,6 +753,15 @@ ccache.suite = "kache-original"
 status = "oracle"
 
 [[case]]
+id = "cc-eqp-fallthrough-comment"
+package = "CCP-04"
+summary = "a same-width comment reword with identical -E text and token columns changes GCC -Wimplicit-fallthrough diagnostics; ccache 4.14.3 reuses it in both modes and is wrong"
+profiles = ["both"]
+compilers = "gcc"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
 id = "cc-eqp-line-number-significance"
 package = "CCP-04"
 summary = "edit moving line numbers is NOT a hit (debug line info is observable)"
