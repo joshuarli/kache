@@ -851,9 +851,10 @@ impl CcArgs {
     /// - **Precompiled headers** (`-include-pch`, `-emit-pch`):
     ///   PCHs are non-portable across compiler versions and depend
     ///   on the entire include graph at PCH-build time.
-    /// - **Modules** (`-fmodules`, `-fcxx-modules`): module
-    ///   compilation has its own dependency model; doesn't fit the
-    ///   per-TU cache model.
+    /// - **Implicit modules** (`-fmodules`, `-fcxx-modules`): the module
+    ///   cache is built and read behind the compile. Explicit consumers
+    ///   (`-fmodule-file=`, `-fprebuilt-module-path=`) are keyed by
+    ///   [`cc_module_inputs_key`]; producing a module file is unclassified.
     /// - **Any flag not classified by [`CC_FLAGS`]**: the cache key
     ///   captures the preprocessor expansion plus the codegen flags
     ///   kache explicitly models (`FlagClass::ModeledInKey`) plus the
@@ -2628,6 +2629,67 @@ fn cc_pch_key(parsed: &CcArgs, read_inputs: Option<&[PathBuf]>) -> Result<Option
     Ok(Some(fields.join("\x1f")))
 }
 
+/// What the module files a C++20 module consumer may load add to the key.
+///
+/// Neither the preprocessor output nor the dependency file names an imported
+/// module, and clang does not revalidate a module file against the interface
+/// it was built from, so the bytes of every module file the consumer can
+/// reach are the only record of what it imports. `-fmodule-file=[name=]path`
+/// names one file, folded as absent when it does not exist because clang
+/// fails only if the unit imports it. `-fprebuilt-module-path=dir` makes
+/// clang open `dir/<name>.pcm` by module name, so every `.pcm` entry is
+/// folded by name, and adding, renaming or removing one changes the key.
+fn cc_module_inputs_key(
+    parsed: &CcArgs,
+    file_hasher: &crate::cache_key::FileHasher<'_>,
+) -> Result<Option<String>> {
+    let mut fields = Vec::new();
+    let hash = |path: &Path| -> Result<String> {
+        let resolved = parsed
+            .invocation_env
+            .resolve(path)
+            .context("resolving a module file")?;
+        match std::fs::metadata(&resolved) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok("absent".to_string()),
+            _ => file_hasher
+                .hash(&resolved)
+                .with_context(|| format!("hashing module file {}", resolved.display())),
+        }
+    };
+    for arg in &parsed.rest {
+        if let Some(value) = arg.strip_prefix("-fmodule-file=") {
+            let path = value.split_once('=').map_or(value, |(_, path)| path);
+            fields.push(format!("file:{value}={}", hash(Path::new(path))?));
+        } else if let Some(dir) = arg.strip_prefix("-fprebuilt-module-path=") {
+            let resolved = parsed
+                .invocation_env
+                .resolve(Path::new(dir))
+                .context("resolving a prebuilt module directory")?;
+            let entries = match std::fs::read_dir(&resolved) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    fields.push(format!("dir:{dir}:absent"));
+                    continue;
+                }
+                entries => entries.with_context(|| format!("listing prebuilt modules in {}", resolved.display()))?,
+            };
+            let mut names = Vec::new();
+            for entry in entries {
+                let name = entry?.file_name();
+                if Path::new(&name).extension().is_some_and(|ext| ext == "pcm") {
+                    names.push(name);
+                }
+            }
+            names.sort();
+            fields.push(format!("dir:{dir}"));
+            for name in names {
+                let digest = hash(&Path::new(dir).join(&name))?;
+                fields.push(format!("{}={digest}", name.to_string_lossy()));
+            }
+        }
+    }
+    Ok((!fields.is_empty()).then(|| fields.join("\x1f")))
+}
+
 fn preprocess_hash(
     parsed: &CcArgs,
     prefix_maps: &[CcPrefixMap],
@@ -2823,6 +2885,8 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Prefix("--warning-suppression-mappings="), class: FlagClass::ParserHandled, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fsanitize-ignorelist="), class: FlagClass::ParserHandled, source: "clang sanitizer ignorelist, keyed by content", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fcrash-diagnostics-dir="), class: FlagClass::NoObjectEffect, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-fmodule-file="), class: FlagClass::ParserHandled, source: "CCP-06 — clang explicit module consumer; the key folds the module file's bytes", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-fprebuilt-module-path="), class: FlagClass::ParserHandled, source: "CCP-06 — clang prebuilt module directory; the key folds every module file in it", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-include-pch"), class: FlagClass::ParserHandled, source: "CCP-06 — clang PCH consumer; the key folds the PCH bytes and its inputs' stamps", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("--coverage"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov instrumentation and notes; the sidecar key folds the paths the outputs embed", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fprofile-arcs"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov arc instrumentation; the object names its absolute .gcda path", dialect: Some(Dialect::Gnu) },
@@ -8549,6 +8613,13 @@ impl CcCompiler {
                     hasher.update(b"\n");
                 }
             }
+        }
+
+        if let Some(modules) = cc_module_inputs_key(parsed, ctx.file_hasher)? {
+            hasher.update(b"modules.v1:");
+            hasher.update(modules.as_bytes());
+            hasher.update(b"\n");
+            log::trace!(target: "kache::cache_key", "[key:{}] modules={}", trace_name, modules);
         }
 
         // Built-in raw-keyed flags have object effects the resolved compiler

@@ -150,6 +150,11 @@ pub struct Compile {
     /// the file passes `source` instead.
     #[deser(default)]
     pub also_names: Vec<String>,
+    /// Kache passes this invocation through, so it must generate code in
+    /// every step, whatever the step requires of the others: the module
+    /// interface a consumer case builds first, for example.
+    #[deser(default)]
+    pub uncached: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -163,6 +168,12 @@ pub struct Step {
     /// means the reference arm failed, not that kache matched it.
     #[deser(default)]
     pub status: i32,
+}
+
+impl Step {
+    pub fn reuse_for(&self, compile: &Compile) -> Reuse {
+        if compile.uncached { Reuse::Miss } else { self.reuse }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -351,6 +362,14 @@ action = [{ op = "delete-outputs" }, { op = "write", path = "a.h", content = "x"
             Action::Write { path, keep_mtime: true, .. } if path == "a.h"
         ));
         assert!(case.applies_to_os("linux"));
+        assert_eq!(case.steps[1].reuse_for(&case.compiles[0]), Reuse::Hit);
+    }
+
+    #[test]
+    fn an_uncached_compile_must_generate_code_in_every_step() {
+        let text = MINIMAL.replace("source = \"a.c\"\n", "source = \"a.c\"\nuncached = true\n");
+        let case = parse("c", &text, PathBuf::from("s")).unwrap();
+        assert_eq!(case.steps[1].reuse_for(&case.compiles[0]), Reuse::Miss);
     }
 
     #[test]

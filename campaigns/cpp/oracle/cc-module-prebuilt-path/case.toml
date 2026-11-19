@@ -1,0 +1,39 @@
+summary = "a -fprebuilt-module-path= consumer is reused, and a template-body edit to a module it finds by name recompiles it (CCP-06)"
+cohort = "blocking"
+families = ["clang"]
+os = ["linux"]
+profiles = ["transparent", "reproducible"]
+outputs = ["pre/N.pcm", "pre/M.pcm", "use.o"]
+
+[[compile]]
+argv = ["{cxx}", "-std=c++20", "--precompile", "N.cppm", "-o", "pre/N.pcm"]
+source = "N.cppm"
+uncached = true
+
+[[compile]]
+argv = ["{cxx}", "-std=c++20", "--precompile", "-fprebuilt-module-path=pre", "M.cppm", "-o", "pre/M.pcm"]
+source = "M.cppm"
+uncached = true
+
+[[compile]]
+argv = ["{cxx}", "-std=c++20", "-fprebuilt-module-path=pre", "-c", "use.cpp", "-o", "use.o"]
+source = "use.cpp"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-template-body"
+reuse = "miss"
+action = [{ op = "write", path = "M.cppm", content = "export module M;\nimport N;\nexport int seven() { return base() + 4; }\nexport template <class T> T twice(T x) { return x * 3; }\n" }]
+
+[[step]]
+name = "restore-edited"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

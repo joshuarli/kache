@@ -10101,3 +10101,52 @@ fn response_files_expand_for_gnu_drivers_only_and_refuse_when_unsafe() {
     let nested = compiler.parse(&args(&["gcc", "-c", "@nested.rsp"])).unwrap();
     assert!(format!("{:?}", nested.refuse_reasons(&[])).contains("response file"));
 }
+
+#[cfg(unix)]
+#[test]
+fn explicit_module_consumers_key_every_module_file_they_can_load() {
+    let temp = tempfile::tempdir().unwrap();
+    let fake_clang = temp.path().join("clang++");
+    std::os::unix::fs::symlink(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_cc_constant_output.sh"), &fake_clang).unwrap();
+    let source = temp.path().join("use.cpp");
+    std::fs::write(&source, "import M;\n").unwrap();
+    let prebuilt = temp.path().join("pre");
+    std::fs::create_dir(&prebuilt).unwrap();
+    let module = temp.path().join("M.pcm");
+    let compiler = CcCompiler::new();
+    let file_hasher = crate::cache_key::FileHasher::new();
+    let normalizer = crate::path_normalizer::PathNormalizer::empty();
+    let env = crate::invocation::InvocationEnv::capture();
+    let cache = temp.path().join("cache");
+    let ctx = KeyCtx { invocation_env: &env, file_hasher: &file_hasher, path_normalizer: &normalizer, cache_dir: &cache, key_salt: None, key_env_vars: &[], extra_inputs_digest: None, build_script_inputs_digest: None };
+    let key = |flag: String| {
+        let parsed = compiler
+            .parse(&[fake_clang.to_string_lossy().into_owned(), "-std=c++20".into(), "-c".into(), source.to_string_lossy().into_owned(), flag])
+            .unwrap();
+        assert!(parsed.refuse_reasons(&[]).is_empty());
+        compiler.key_for_test(&parsed, &ctx)
+    };
+    let named = || key(format!("-fmodule-file=M={}", module.display()));
+    let absent = named();
+    std::fs::write(&module, "module bytes").unwrap();
+    let present = named();
+    assert_ne!(absent, present);
+    std::fs::write(&module, "rebuilt module bytes").unwrap();
+    assert_ne!(present, named());
+    assert_ne!(named(), key(format!("-fmodule-file={}", module.display())));
+
+    let dir = || key(format!("-fprebuilt-module-path={}", prebuilt.display()));
+    let empty = dir();
+    std::fs::write(prebuilt.join("notes.txt"), "not a module").unwrap();
+    assert_eq!(empty, dir());
+    std::fs::write(prebuilt.join("M.pcm"), "module bytes").unwrap();
+    let added = dir();
+    assert_ne!(empty, added);
+    std::fs::rename(prebuilt.join("M.pcm"), prebuilt.join("N.pcm")).unwrap();
+    let renamed = dir();
+    assert_ne!(added, renamed);
+    std::fs::write(prebuilt.join("N.pcm"), "rebuilt module bytes").unwrap();
+    assert_ne!(renamed, dir());
+    std::fs::remove_dir_all(&prebuilt).unwrap();
+    assert_ne!(empty, dir());
+}

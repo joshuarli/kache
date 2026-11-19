@@ -164,6 +164,10 @@ Kache caches a precompiled header built with `-x c-header` (or `c++-header`, `ob
 
 A precompiled header records the modification time and size of every file it was built from, and clang refuses to use it once either changes, even when the contents are the same. Kache keys both kinds of compile on those times and sizes as well as on contents, so a hit happens only where a fresh compile would succeed: touching a header recompiles the precompiled header and its users. A user is also keyed on the precompiled header's bytes. Precompiled header entries are reused only in the checkout that built them, because a precompiled header records absolute paths.
 
+## Modules
+
+Kache caches a clang `-c` compile that imports C++20 modules through `-fmodule-file=` or `-fprebuilt-module-path=`. The preprocessor output and dependency file do not mention imported modules, so the key includes the bytes of every module file the compile can load: each `-fmodule-file=` path, and every `.pcm` file in each `-fprebuilt-module-path=` directory. Rebuilding a module after a template edit recompiles its users, and adding, removing or replacing a `.pcm` in a prebuilt directory recompiles every user of that directory. Building a module file (`--precompile`) and implicit modules (`-fmodules`) pass through.
+
 ## Portability
 
 GCC and Clang entries can be reused across worktrees when source and build paths normalize cleanly. On a miss Kache adds `-ffile-prefix-map` rules that map the checkout and Cargo's build directories to fixed names such as `/kache/cc-root`, so debug info and `__FILE__` in those objects name the fixed path.
@@ -193,7 +197,7 @@ Kache currently passes through:
 - multi-source invocations, and multi-architecture invocations that also ask for coverage, split DWARF or serialized diagnostics
 - `-x` languages other than C, C++, Objective-C, Objective-C++, and assembly, such as `-x cuda` and `-x hip`, and `.cu` sources given to `cc` or `clang`
 - response files under clang-cl, response files that name other response files, and response files whose quoting GCC and Clang read differently (an empty quoted argument, a backslash before a line break, carriage returns)
-- precompiled headers built without `-o` or from another precompiled header, `-include-pch` outside `-c`, `-include` naming a `.pch` or `.gch`, and modules
+- precompiled headers built without `-o` or from another precompiled header, `-include-pch` outside `-c`, `-include` naming a `.pch` or `.gch`, building module files, and implicit modules
 - coverage, split DWARF and serialized diagnostics outside `-c`, such as `-S --coverage`
 - assembly, including inline `asm` in C, that reads another file with `.incbin` or `.include`
 - assembly that uses macros or repetitions (`.macro`, `.irp`, `.irpc`, `.rept`, `.altmacro`) able to generate those directives

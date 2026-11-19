@@ -1,0 +1,1 @@
+Prebuilt modules the consumer finds by name; only .pcm entries are modules.
