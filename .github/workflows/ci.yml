@@ -146,14 +146,7 @@ jobs:
           path: .work/tmp/cc-oracle/*/report.*
           include-hidden-files: true
           if-no-files-found: warn
-      # Advisory until KACH-27 closes (see TODO.md): the full gate corpus
-      # runs with --deny-missing-tools and results upload on failure, but
-      # known Linux/musl divergences currently fail assertions. Not
-      # required for merge while KACH-27 is open. `make test in image`
-      # above stays required.
       - name: e2e in image
-        id: e2e_image
-        continue-on-error: true
         run: |
           docker run --rm --init \
             --platform "${{ matrix.platform }}" \
@@ -166,9 +159,8 @@ jobs:
             sh -ec '
               mkdir -p /kache/tmp && make e2e && make e2e-negative-control
             '
-      # continue-on-error hides the step's failure from failure().
       - name: Upload fixture results on failure
-        if: failure() || steps.e2e_image.outcome == 'failure'
+        if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-results-musl-${{ matrix.arch }}-${{ github.run_id }}
@@ -215,15 +207,10 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
 
-  # Advisory until KACH-27 closes: the gate runs the full corpus with
-  # --deny-missing-tools and uploads results on failure, but known Linux
-  # divergences (see TODO.md KACH-27) currently fail assertions. Not
-  # required for merge while KACH-27 is open.
   e2e-linux-glibc:
     name: e2e (Linux ${{ matrix.arch }} glibc)
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
-    continue-on-error: true
     permissions:
       contents: read
     strategy:
