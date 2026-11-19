@@ -7196,7 +7196,6 @@ struct PrefetchedHash {
 struct RecentHash {
     hash: String,
     fingerprint: Option<FileFingerprint>,
-    header_scan: Option<(i64, String)>,
 }
 
 /// [`hash_file`], for a read that follows a stat of the same file.
@@ -7769,13 +7768,36 @@ impl<'db> FileHasher<'db> {
         mapped_content: &impl Fn(&Path) -> Option<CcContentHashes>,
     ) -> Option<(String, Vec<PathBuf>)> {
         let cache = self.cache.as_ref()?;
-        let record = match cache.get_cc_preprocess_memo(memo_key) {
-            Ok(record) => record?,
+        let records = match cache.get_cc_preprocess_memos(memo_key) {
+            Ok(records) => records,
             Err(error) => {
                 log::debug!("cc preprocess memo lookup failed: {error}");
                 return None;
             }
         };
+        if records.is_empty() {
+            log::debug!("cc preprocess memo: no read set recorded for {memo_key}");
+        }
+        let (record, satisfied) = records.into_iter().find_map(|record| {
+            let satisfied = self.memo_record_is_unchanged(&record, &resolve, mapped_content)?;
+            Some((record, satisfied))
+        })?;
+        if record.needs_touch
+            && let Err(error) = cache.touch_cc_preprocess_memo(memo_key, &record.preprocessed_hash)
+        {
+            log::debug!("cc preprocess memo touch failed: {error}");
+        }
+        Some((record.preprocessed_hash, satisfied))
+    }
+
+    /// The paths that hold every input of `record` unchanged, in order, or
+    /// `None` if any input changed or the record is malformed.
+    fn memo_record_is_unchanged(
+        &self,
+        record: &CcPreprocessMemo,
+        resolve: &impl Fn(&str) -> Vec<PathBuf>,
+        mapped_content: &impl Fn(&Path) -> Option<CcContentHashes>,
+    ) -> Option<Vec<PathBuf>> {
         // A `pb:` prefix marks a path-bound read set; the digest follows.
         let digest = record
             .preprocessed_hash
@@ -7795,28 +7817,17 @@ impl<'db> FileHasher<'db> {
             log::debug!("cc preprocess memo hash is invalid");
             return None;
         }
-        let inputs = record.inputs;
-        if inputs.is_empty() {
+        if record.inputs.is_empty() {
             return None;
         }
         // The paths that satisfied the memo are the inputs this invocation
         // would have discovered by preprocessing, and the caller needs them to
         // resolve include shadowing without a fresh dependency capture.
-        let mut satisfied = Vec::with_capacity(inputs.len());
-        for (expected, scan) in inputs.iter().zip(&record.header_scans) {
-            satisfied.push(self.memo_input_is_unchanged(
-                expected,
-                scan,
-                &resolve,
-                mapped_content,
-            )?);
-        }
-        if record.needs_touch
-            && let Err(error) = cache.touch_cc_preprocess_memo(memo_key)
-        {
-            log::debug!("cc preprocess memo touch failed: {error}");
-        }
-        Some((record.preprocessed_hash, satisfied))
+        record
+            .inputs
+            .iter()
+            .map(|expected| self.memo_input_is_unchanged(expected, resolve, mapped_content))
+            .collect()
     }
 
     /// Does this input still hold the bytes the memo was recorded against?
@@ -7828,7 +7839,6 @@ impl<'db> FileHasher<'db> {
     fn memo_input_is_unchanged(
         &self,
         expected: &CcPreprocessMemoInput,
-        header_scan: &Option<(i64, String)>,
         resolve: &impl Fn(&str) -> Vec<PathBuf>,
         mapped_content: &impl Fn(&Path) -> Option<CcContentHashes>,
     ) -> Option<PathBuf> {
@@ -7862,7 +7872,6 @@ impl<'db> FileHasher<'db> {
                     RecentHash {
                         hash: expected.content.clone(),
                         fingerprint: Some(current.fingerprint),
-                        header_scan: header_scan.clone(),
                     },
                 );
                 return Some(path.clone());
@@ -8009,43 +8018,54 @@ impl<'db> FileHasher<'db> {
     /// snapshot for the write guard; do not stat every input a second time.
     /// A new scan must report the hash of its bytes so a racing save cannot
     /// poison the content-addressed result.
+    /// The content hash of each input, from the stamp this invocation
+    /// already verified when it has one.
+    pub(crate) fn cc_content_hashes(&self, paths: &[PathBuf]) -> anyhow::Result<Vec<String>> {
+        paths
+            .iter()
+            .map(|path| {
+                let resolved = self.resolve_path(path)?;
+                let verified = self
+                    .recent_hashes
+                    .borrow()
+                    .get(&resolved)
+                    .filter(|recent| recent.fingerprint.is_some())
+                    .map(|recent| recent.hash.clone());
+                match verified {
+                    Some(content) => Ok(content),
+                    None => self.hash(path),
+                }
+            })
+            .collect()
+    }
+
+    /// The header-probe resolution recorded for `read_set`, if any.
+    pub(crate) fn cc_probe_resolution(&self, read_set: &str) -> Option<String> {
+        let cache = self.cache.as_ref()?;
+        cache
+            .get_cc_probe_resolution(read_set)
+            .inspect_err(|error| log::debug!("cc probe resolution lookup failed: {error}"))
+            .ok()
+            .flatten()
+    }
+
+    pub(crate) fn record_cc_probe_resolution(&self, read_set: &str, resolution: &str) {
+        if let Some(cache) = &self.cache
+            && let Err(error) = cache.put_cc_probe_resolution(read_set, resolution)
+        {
+            log::debug!("cc probe resolution update failed: {error}");
+        }
+    }
+
     pub(crate) fn cc_header_scans(
         &self,
         paths: &[PathBuf],
         version: i64,
         scan: &impl Fn(&Path) -> anyhow::Result<(String, String)>,
     ) -> anyhow::Result<Vec<String>> {
-        let mut contents = Vec::with_capacity(paths.len());
+        let contents = self.cc_content_hashes(paths)?;
         let mut known = std::collections::HashMap::new();
-        for path in paths {
-            let selected = {
-                let resolved = self.resolve_path(path)?;
-                let recent = self.recent_hashes.borrow();
-                recent.get(&resolved).and_then(|recent| {
-                    recent
-                        .fingerprint
-                        .as_ref()
-                        .map(|_| (recent.hash.clone(), recent.header_scan.clone()))
-                })
-            };
-            let content = match selected {
-                Some((content, analysis)) => {
-                    if let Some((scan_version, scan)) = analysis
-                        && scan_version == version
-                    {
-                        known.insert(content.clone(), scan);
-                    }
-                    content
-                }
-                None => self.hash(path)?,
-            };
-            contents.push(content);
-        }
-        let missing: Vec<_> = contents
-            .iter()
-            .filter(|content| !known.contains_key(*content))
-            .map(String::as_str)
-            .collect();
+        let missing: Vec<_> = contents.iter().map(String::as_str).collect();
         if let Some(cache) = &self.cache {
             match cache.get_cc_header_scans(version, &missing) {
                 Ok(found) => known.extend(found),
@@ -8169,7 +8189,6 @@ impl<'db> FileHasher<'db> {
             if self
                 .memo_input_is_unchanged(
                     expected,
-                    &None,
                     &|_: &str| vec![recorded_path.clone()],
                     mapped_content,
                 )
@@ -8259,7 +8278,6 @@ impl<'db> FileHasher<'db> {
         let recent = RecentHash {
             hash,
             fingerprint: observed.map(|observed| observed.fingerprint),
-            header_scan: None,
         };
         self.recent_hashes
             .borrow_mut()
@@ -8755,8 +8773,7 @@ impl<'db> FileHasher<'db> {
             RecentHash {
                 hash: hash.clone(),
                 fingerprint: Some(reported.fingerprint),
-                header_scan: None,
-            },
+                },
         );
         Ok(hash)
     }

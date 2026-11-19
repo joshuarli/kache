@@ -3743,12 +3743,14 @@ fn test_cc_direct_key_compiles_once_without_a_preprocess() {
     assert_last_cc_event(&report, "miss", 1);
     assert_last_cc_preprocessor_runs(&report, 1);
 
+    // Reverting the header returns to a read set the memo still keeps, so
+    // the earlier entry is found without the preprocessor.
     std::fs::write(project.path().join("value.h"), "#define VALUE 7\n").unwrap();
     std::fs::remove_file(project.path().join("foo.o")).unwrap();
     run_kache_cc(project.path(), cache_dir.path(), &args);
     let report = kache_report(cache_dir.path());
     assert_last_cc_event(&report, "local_hit", 0);
-    assert_last_cc_preprocessor_runs(&report, 1);
+    assert_last_cc_preprocessor_runs(&report, 0);
     assert_cc_report_counts(&report, 2, 2);
 }
 

@@ -18160,3 +18160,46 @@ fn identity_from_sdk_root_reads_system_version_plist() {
     );
     assert!(identity_from_sdk_root(missing_version.path()).is_err());
 }
+
+/// A header edited and then reverted reads as the state the memo recorded
+/// first: the lookup walks past the edited read set to the one that holds,
+/// so the unit keys without preprocessing. Neither answers while the
+/// header holds bytes neither recorded.
+#[test]
+fn cc_preprocess_memo_finds_an_earlier_read_set_after_a_revert() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("idx.sqlite");
+    let source = dir.path().join("source.c");
+    let header = dir.path().join("header.h");
+    std::fs::write(&source, "#include \"header.h\"\n").unwrap();
+    let hasher = FileHasher::persistent(&db);
+    let record = |hasher: &FileHasher<'_>, hash: &str| {
+        let inputs = hasher
+            .cc_preprocess_fingerprints(
+                &[
+                    (source.to_string_lossy().into_owned(), source.clone()),
+                    (header.to_string_lossy().into_owned(), header.clone()),
+                ],
+                "",
+                &no_mapping,
+            )
+            .unwrap();
+        hasher.cc_preprocess_memo_record_if_unchanged("unit", hash, &inputs, &no_mapping);
+    };
+    let found = |hasher: &FileHasher<'_>| {
+        hasher
+            .cc_preprocess_memo_lookup("unit", no_remap, &no_mapping)
+            .map(|(hash, _)| hash)
+    };
+    let (before, edited) = ("b".repeat(64), "e".repeat(64));
+    std::fs::write(&header, "#define VALUE 1\n").unwrap();
+    record(&hasher, &before);
+    std::fs::write(&header, "#define VALUE 2\n").unwrap();
+    record(&FileHasher::persistent(&db), &edited);
+    assert_eq!(found(&FileHasher::persistent(&db)), Some(edited));
+
+    std::fs::write(&header, "#define VALUE 1\n").unwrap();
+    assert_eq!(found(&FileHasher::persistent(&db)), Some(before));
+    std::fs::write(&header, "#define VALUE 3\n").unwrap();
+    assert_eq!(found(&FileHasher::persistent(&db)), None);
+}
