@@ -1688,6 +1688,37 @@ fn refuses_multi_arch() {
 }
 
 #[test]
+fn colored_diagnostics_serve_colorless_invocations_and_not_the_reverse() {
+    use DiagnosticReplay::{AsStored, WithoutColor};
+    let fingerprint = |args: &[&str]| {
+        CcArgs::parse(&s(&[&["clang", "-c", "u.c"][..], args].concat()))
+            .unwrap()
+            .diagnostic_format_fingerprint()
+    };
+    let plain = fingerprint(&[]);
+    let color = fingerprint(&["-fdiagnostics-color=always"]);
+    assert_eq!(diagnostic_replay(&color, &color), Some(AsStored));
+    assert_eq!(diagnostic_replay(&color, &plain), Some(WithoutColor));
+    assert_eq!(diagnostic_replay(&plain, &color), None, "plain text cannot be colored");
+    for off in [
+        &["-fno-color-diagnostics"][..],
+        &["-fdiagnostics-color=never"],
+        &["-fdiagnostics-color=auto"],
+        &["-fcolor-diagnostics", "-fno-color-diagnostics"],
+    ] {
+        assert_eq!(diagnostic_replay(&color, &fingerprint(off)), Some(WithoutColor), "{off:?}");
+        assert_eq!(diagnostic_replay(&plain, &fingerprint(off)), Some(AsStored), "{off:?}");
+    }
+    for on in [&["-fcolor-diagnostics"][..], &["-Xclang", "-fcolor-diagnostics"], &["-fno-color-diagnostics", "-fdiagnostics-color"]] {
+        assert_eq!(diagnostic_replay(&color, &fingerprint(on)), Some(AsStored), "{on:?}");
+    }
+    let no_option = fingerprint(&["-fno-diagnostics-show-option"]);
+    let color_no_option = fingerprint(&["-fdiagnostics-color=always", "-fno-diagnostics-show-option"]);
+    assert_eq!(diagnostic_replay(&color, &no_option), None, "other formatting still has to agree");
+    assert_eq!(diagnostic_replay(&color_no_option, &no_option), Some(WithoutColor));
+}
+
+#[test]
 fn diagnostics_written_to_files_refuse() {
     for flag in [
         "-fdiagnostics-format=sarif-file",

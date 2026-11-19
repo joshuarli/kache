@@ -1,7 +1,7 @@
 summary = "diagnostic color and option display change the stderr a hit replays; a compile with warnings never replays text printed under other formatting (CCP-05)"
 cohort = "blocking"
 profiles = ["transparent", "reproducible"]
-outputs = ["plain.o", "color.o", "last-wins.o", "no-option.o"]
+outputs = ["plain.o", "color.o", "no-option.o"]
 
 [[compile]]
 argv = ["{cc}", "-Wall", "-c", "u.c", "-o", "plain.o"]
@@ -9,10 +9,6 @@ source = "u.c"
 
 [[compile]]
 argv = ["{cc}", "-Wall", "-fdiagnostics-color=always", "-c", "u.c", "-o", "color.o"]
-source = "u.c"
-
-[[compile]]
-argv = ["{cc}", "-Wall", "-fdiagnostics-color=always", "-fdiagnostics-color=never", "-c", "u.c", "-o", "last-wins.o"]
 source = "u.c"
 
 [[compile]]

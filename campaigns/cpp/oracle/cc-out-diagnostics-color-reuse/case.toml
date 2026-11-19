@@ -1,5 +1,5 @@
-summary = "a unit with warnings built with and without color: ccache reuses both by storing colored text and stripping it on replay; kache keeps one entry per formatting and recompiles the other (CCP-05)"
-cohort = "open"
+summary = "a unit with warnings built with and without color reuses both: a colored entry replays without its escapes for a colorless build, and a colorless entry seen by a colored build is replaced (CCP-05)"
+cohort = "blocking"
 profiles = ["transparent", "reproducible"]
 outputs = ["plain.o", "color.o"]
 
@@ -17,5 +17,5 @@ reuse = "miss"
 
 [[step]]
 name = "restore"
-reuse = "like-ccache"
+reuse = "hit"
 action = [{ op = "delete-outputs" }]

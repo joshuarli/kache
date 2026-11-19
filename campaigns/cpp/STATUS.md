@@ -327,7 +327,13 @@ Issue #1461 requires warning-free units to reuse across formatting, so the
 key folds only `-fdiagnostics-format=`, and each entry's stored
 diagnostics record the formatting flags they were printed under. An entry
 with diagnostics under other flags is rejected and replaced. GCC options
-that write diagnostics to files pass through.
+that write diagnostics to files pass through. A colored entry also serves a
+colorless invocation with its CSI and OSC escapes removed: for GCC 15,
+clang 23 and Apple clang 21 that leaves the plain output byte for byte. A
+colorless entry seen by a colored build is replaced, so a tree built both
+ways converges on one colored entry (`cc-out-diagnostics-color-reuse`,
+blocking). ccache instead compiles with color forced on, which the oracle's
+argument contract does not allow.
 
 **CCP-04 finding: expansion-equivalent reuse is not sound as ccache does it.**
 ccache's preprocessor mode keys by the `-E` text. That text separates
@@ -467,10 +473,7 @@ host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
    - `PATH=/opt/homebrew/bin:$PATH make e2e`.
 3. Next work, in priority order:
    - CCP-05 remainder: GCC SARIF/JSON diagnostic files
-     (`-fdiagnostics-format=sarif-file`, `-fdiagnostics-add-output=`, refused),
-     and color-independent reuse of units with warnings
-     (`cc-out-diagnostics-color-reuse`, open: store colored text and strip it
-     on replay, as ccache does).
+     (`-fdiagnostics-format=sarif-file`, `-fdiagnostics-add-output=`, refused).
    - CCP-04, only with a column-aware layout key (see the finding above).
    - Universal objects, PCH consumers, the LLVM subset, the Chromium
      target, and CCP-09 performance.
