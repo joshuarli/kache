@@ -543,6 +543,31 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
     Ok(run)
 }
 
+/// What a step's own profile changes in the arm environment `run_arm` built
+/// for the run's profile: the same variables, set or removed.
+fn switch_profile_env(command: &mut Command, case: &Case, arm: Arm, to: Profile) {
+    match arm {
+        Arm::Kache => match to {
+            Profile::Transparent => {
+                command.env("KACHE_CC_PATH_NORMALIZE", "0").env("KACHE_CC_SOURCE_DATE_EPOCH", "passthrough");
+            }
+            Profile::Reproducible => {
+                command.env_remove("KACHE_CC_PATH_NORMALIZE").env_remove("KACHE_CC_SOURCE_DATE_EPOCH");
+            }
+        },
+        Arm::RawPassthrough => {}
+        _ if case.env.contains_key("SOURCE_DATE_EPOCH") => {}
+        _ => match to {
+            Profile::Reproducible => {
+                command.env("SOURCE_DATE_EPOCH", "0");
+            }
+            Profile::Transparent => {
+                command.env_remove("SOURCE_DATE_EPOCH");
+            }
+        },
+    }
+}
+
 struct ArmEnv<'a> {
     shims: &'a Path,
     vars: &'a [(&'a str, OsString)],
@@ -594,14 +619,18 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                     c
                 }
             };
+            let step_profile = step.profile_or(profile);
             let args = match arm {
                 Arm::Kache => compile.argv[1..].iter().map(|a| expand(a, ctx.fixture)).collect(),
                 Arm::RawPassthrough => effective_args(&compile.argv, Profile::Transparent, ctx.fixture),
-                _ => effective_args(&compile.argv, profile, ctx.fixture),
+                _ => effective_args(&compile.argv, step_profile, ctx.fixture),
             };
             command.args(&args).current_dir(ctx.fixture).env_clear();
             for (k, v) in env {
                 command.env(k, v);
+            }
+            if step_profile != profile {
+                switch_profile_env(&mut command, case, arm, step_profile);
             }
             let started = Instant::now();
             let output = command

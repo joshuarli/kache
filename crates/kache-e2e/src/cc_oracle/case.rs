@@ -177,6 +177,16 @@ pub struct Step {
     /// means the reference arm failed, not that kache matched it.
     #[deser(default)]
     pub status: i32,
+    /// Run this step under another profile, in every arm: a policy switch
+    /// against a cache the earlier steps populated.
+    #[deser(default)]
+    pub profile: Option<Profile>,
+}
+
+impl Step {
+    pub fn profile_or(&self, run: Profile) -> Profile {
+        self.profile.unwrap_or(run)
+    }
 }
 
 impl Step {
@@ -381,6 +391,10 @@ action = [{ op = "delete-outputs" }, { op = "write", path = "a.h", content = "x"
         assert!(case.applies_to_os("linux"));
         assert_eq!(case.steps[1].reuse_for(&case.compiles[0]), Reuse::Hit);
         assert_eq!(case.compiles[0].driver_args, 0);
+        assert_eq!(case.steps[1].profile_or(Profile::Transparent), Profile::Transparent);
+        let switched = MINIMAL.replacen("reuse = \"hit\"\n", "reuse = \"hit\"\nprofile = \"reproducible\"\n", 1);
+        let case = parse("c", &switched, PathBuf::from("s")).unwrap();
+        assert_eq!(case.steps[1].profile_or(Profile::Transparent), Profile::Reproducible);
     }
 
     #[test]

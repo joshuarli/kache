@@ -327,7 +327,7 @@ summary = "switching transparent ↔ reproducible against populated caches rekey
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-depfile-escape"

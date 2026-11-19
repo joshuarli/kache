@@ -1,0 +1,29 @@
+summary = "switching kache between the transparent and reproducible profiles against a populated cache: __FILE__ of an absolute source path is the real path under one and the mapped root under the other, so neither entry serves the other policy, and each policy reuses its own entry when the build switches back (CCP-08)"
+cohort = "blocking"
+profiles = ["transparent"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-O1", "-c", "{fixture}/u.c", "-o", "u.o"]
+source = "{fixture}/u.c"
+
+[[step]]
+name = "populate-transparent"
+reuse = "miss"
+
+[[step]]
+name = "switch-to-reproducible"
+reuse = "miss"
+profile = "reproducible"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "back-to-transparent"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "reproducible-again"
+reuse = "hit"
+profile = "reproducible"
+action = [{ op = "delete-outputs" }]
