@@ -990,6 +990,26 @@ impl CcArgs {
             ));
         }
 
+        // clang applies `-Xarch_<arch> <operand>` to that slice alone and
+        // ignores it when no slice matches. Only universal compiles key each
+        // slice from its own arguments; elsewhere the parse would apply the
+        // operand clang ignores.
+        let slices = self.arch_slices();
+        let mut args = self.rest.iter();
+        while let Some(arg) = args.next() {
+            let Some(arch) = arg.strip_prefix("-Xarch_") else { continue };
+            let operand = args.next();
+            if slices.len() < 2
+                || !slices.iter().any(|slice| slice == arch)
+                || operand.is_none_or(|operand| operand == "-arch" || operand.starts_with("-Xarch_"))
+            {
+                reasons.push(RefuseReason::Unsupported(
+                    "cc -Xarch_<arch> outside a universal compile that builds <arch> — not yet",
+                ));
+                break;
+            }
+        }
+
         // Sidecars are modeled for `-c` only. `-S` still writes the notes
         // file, and `-E` still writes serialized diagnostics.
         if self.mode != CompileMode::Compile
@@ -1168,25 +1188,33 @@ impl CcArgs {
         self.arch_slices().len() > 1
     }
 
-    /// This invocation with its `-arch` flags narrowed to `arch`, for keying
-    /// one slice.
-    fn single_slice(&self, arch: &str) -> CcArgs {
-        let mut slice = self.clone();
-        slice.rest.clear();
+    /// This invocation as one slice would see it, for keying that slice: its
+    /// `-arch` flags narrowed to `arch`, each `-Xarch_<arch>` operand kept
+    /// and every other slice's operands dropped.
+    fn single_slice(&self, arch: &str) -> Result<CcArgs> {
+        let mut argv = vec![self.program.clone()];
         let mut args = self.rest.iter();
         let mut placed = false;
         while let Some(arg) = args.next() {
             if arg == "-arch" {
                 args.next();
                 if !placed {
-                    slice.rest.extend(["-arch".to_string(), arch.to_string()]);
+                    argv.extend(["-arch".to_string(), arch.to_string()]);
                     placed = true;
                 }
+            } else if let Some(target) = arg.strip_prefix("-Xarch_") {
+                if let Some(operand) = args.next()
+                    && target == arch
+                {
+                    argv.push(operand.clone());
+                }
             } else {
-                slice.rest.push(arg.clone());
+                argv.push(arg.clone());
             }
         }
-        slice
+        let mut slice = CcArgs::parse_for(&argv, &self.invocation_env)?;
+        slice.depinfo_roots = self.depinfo_roots.clone();
+        Ok(slice)
     }
 
     /// The files a `-c` compile writes beside its object.
@@ -2566,7 +2594,7 @@ fn preprocess_universal_hash(
     let mut fingerprints: Vec<crate::cache_key::CcPreprocessMemoInput> = Vec::new();
     let mut path_bound = false;
     for arch in parsed.arch_slices() {
-        let slice = preprocess_hash(&parsed.single_slice(&arch), prefix_maps, file_hasher)?;
+        let slice = preprocess_hash(&parsed.single_slice(&arch)?, prefix_maps, file_hasher)?;
         let inputs = slice
             .fingerprints
             .with_context(|| format!("cc: the {arch} slice gave no read set to key"))?;
@@ -2885,6 +2913,7 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Prefix("--warning-suppression-mappings="), class: FlagClass::ParserHandled, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fsanitize-ignorelist="), class: FlagClass::ParserHandled, source: "clang sanitizer ignorelist, keyed by content", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fcrash-diagnostics-dir="), class: FlagClass::NoObjectEffect, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-Xarch_"), class: FlagClass::RawKeyed, source: "CCP-07 — clang per-slice operand; keyed with its operand, and each slice is preprocessed with its own operands", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fmodule-file="), class: FlagClass::ParserHandled, source: "CCP-06 — clang explicit module consumer; the key folds the module file's bytes", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fprebuilt-module-path="), class: FlagClass::ParserHandled, source: "CCP-06 — clang prebuilt module directory; the key folds every module file in it", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-include-pch"), class: FlagClass::ParserHandled, source: "CCP-06 — clang PCH consumer; the key folds the PCH bytes and its inputs' stamps", dialect: Some(Dialect::Gnu) },
@@ -4665,7 +4694,7 @@ fn cc_raw_flags_for_key(parsed: &CcArgs, prefix_maps: &[CcPrefixMap]) -> Vec<Vec
     let mut flags = Vec::new();
     let mut args = parsed.rest.iter();
     while let Some(arg) = args.next() {
-        if arg == "-mllvm" {
+        if arg == "-mllvm" || arg.starts_with("-Xarch_") {
             if let Some(value) = args.next() {
                 flags.push(arg.as_bytes().to_vec());
                 flags.push(value.as_bytes().to_vec());

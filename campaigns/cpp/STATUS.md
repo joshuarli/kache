@@ -146,7 +146,7 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | CCP-04 | BLOCKED | CCP-02 | Comment-only reuse needs a column-aware layout key; see "CCP-04 finding" below. ccache's own reuse is wrong output when a comment changes width before code (`cc-eqp-column-significance`). `cc-eqp-comment-only` stays open in both profiles. |
 | CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (PR #52); `cc-out-gcno` (GCC and clang), `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Diagnostic formatting keyed per entry (`cc-out-diagnostics-format*`). Open: GCC diagnostic files, color-independent reuse with warnings, sidecars under `-S`. |
 | CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | clang PCH builds and `-include-pch` consumers cached by default (`cc-pch-clang-use`, `cc-pch-clang-define-variants` blocking); see "CCP-06 PCH" below. Clang explicit module consumers (`-fmodule-file=`, `-fprebuilt-module-path=`) cached; `cc-module-fmodule-file`, `cc-module-body-edit`, `cc-module-prebuilt-path`, `cc-module-add-remove` blocking on Linux clang 23; see "CCP-06 modules" below. Open: GCC implicit `.gch` use through `-include`, implicit modules, module production. |
-| CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`, `cc-host-universal-objects`, `cc-host-universal-slice-headers` (universal objects keyed slice by slice: the driver refuses `-E` with several `-arch`, and a compile's depfile lists only the last slice's headers). `-Xarch_*` still refused. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM subset, cc-crate fixture, Chromium, CMake/Meson/Autotools launchers not started. |
+| CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`, `cc-host-universal-objects`, `cc-host-universal-slice-headers` (universal objects keyed slice by slice: the driver refuses `-E` with several `-arch`, and a compile's depfile lists only the last slice's headers). `-Xarch_<arch>` operands keyed per slice (`cc-host-xarch`, blocking): each slice is re-parsed with its own operands, and dropping the other slices' operands is what separates them (keeping all fails `edit-x86_64-header` with `KACHE_WRONG_OUTPUT`). `-Xarch_*` outside a universal compile, or naming no built slice, is refused. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM subset, cc-crate fixture, Chromium, CMake/Meson/Autotools launchers not started. |
 | CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`), broker exit race fix (PR #32), C/C++ hits verify blob hashes by default (PR #46), the non-local cache advisory left compiler stderr (PR #44). |
 | CCP-09 | TODO | CCP-02..CCP-08 | Performance protocol; estimator locked in lock.toml (seed 20261117). |
 
@@ -503,7 +503,7 @@ host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
    - CCP-05 remainder: GCC SARIF/JSON diagnostic files
      (`-fdiagnostics-format=sarif-file`, `-fdiagnostics-add-output=`, refused).
    - CCP-04, only with a column-aware layout key (see the finding above).
-   - `-Xarch_*` per-slice flags, the LLVM subset, the Chromium
+   - The LLVM subset, the Chromium
      target, and CCP-09 performance.
 4. All campaign work runs in isolated worktrees under `.work/wt/`
    (gitignored via `.git/info/exclude`). Evidence needed afterwards lives in

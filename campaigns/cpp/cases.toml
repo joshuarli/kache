@@ -1024,7 +1024,7 @@ summary = "-Xarch_* per-slice options keyed per slice"
 profiles = ["both"]
 compilers = ["apple-clang"]
 ccache.suite = "multi_arch.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-host-frameworks"

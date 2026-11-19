@@ -156,7 +156,7 @@ GCC writes a `.dwo` for `-gsplit-dwarf` without `-g`, and Clang does not; Mach-O
 
 ## Universal objects
 
-A compile with several `-arch` flags, which writes one object holding a slice per architecture, is cached. Each slice can include different headers, so Kache preprocesses and records the inputs of each slice on its own; the compiler's own dependency file lists only the last slice's headers. Universal compiles always run the preprocessor before looking up an entry.
+A compile with several `-arch` flags, which writes one object holding a slice per architecture, is cached. Each slice can include different headers, so Kache preprocesses and records the inputs of each slice on its own; the compiler's own dependency file lists only the last slice's headers. Universal compiles always run the preprocessor before looking up an entry. An `-Xarch_<arch>` option applies only to that slice, both in the compile and in the slice's key. `-Xarch_<arch>` in a compile that does not build `<arch>`, or in a compile with a single `-arch`, passes through.
 
 ## Precompiled headers
 
