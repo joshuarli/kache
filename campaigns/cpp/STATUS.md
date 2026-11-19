@@ -144,7 +144,7 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | CCP-02 | RUNNING | CCP-01 | Branch `feat/ccp02-input-identity`: 20 input-identity cases; see "CCP-02 input identity" below. Not yet covered: same-path compiler replacement, wrapper/driver-mode selection, VFS overlays, PGO profiles, -march=native, user key config, diagnostic locale, profile switches against a populated cache, hash/compile/publish race barriers. |
 | CCP-03 | RUNNING | CCP-01, CCP-02 | Branch `feat/ccp03-chromium-flags`: Chromium official flags verified and landed from the WIP branch; `-S -o` cached. Open: response files (`@file`), clang `--config`, GCC `-specs`, `-fsanitize-ignorelist`, `-x` and `-Wp,`/`-Xpreprocessor` audits. See "CCP-03..CCP-08 progress" below. |
 | CCP-04 | BLOCKED | CCP-02 | Comment-only reuse needs a column-aware layout key; see "CCP-04 finding" below. ccache's own reuse is wrong output when a comment changes width before code (`cc-eqp-column-significance`). `cc-eqp-comment-only` stays open in both profiles. |
-| CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (PR #52); `cc-out-gcno` (GCC and clang), `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Diagnostic formatting keyed per entry (`cc-out-diagnostics-format*`). Open: GCC diagnostic files, color-independent reuse with warnings, sidecars under `-S`. |
+| CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (PR #52); `cc-out-gcno` (GCC and clang), `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Diagnostic formatting keyed per entry (`cc-out-diagnostics-format*`). Colored entries serve colorless builds (PR #56). GCC `-fdiagnostics-format=json-file` cached as a sidecar (`cc-out-diagnostics-json-file`, blocking); SARIF outputs refused for good (see "CCP-05 GCC diagnostic files"). Open: sidecars under `-S`. |
 | CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | clang PCH builds and `-include-pch` consumers cached by default (`cc-pch-clang-use`, `cc-pch-clang-define-variants` blocking); see "CCP-06 PCH" below. Clang explicit module consumers (`-fmodule-file=`, `-fprebuilt-module-path=`) cached; `cc-module-fmodule-file`, `cc-module-body-edit`, `cc-module-prebuilt-path`, `cc-module-add-remove` blocking on Linux clang 23; see "CCP-06 modules" below. Open: GCC implicit `.gch` use through `-include`, implicit modules, module production. |
 | CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`, `cc-host-universal-objects`, `cc-host-universal-slice-headers` (universal objects keyed slice by slice: the driver refuses `-E` with several `-arch`, and a compile's depfile lists only the last slice's headers). `-Xarch_<arch>` operands keyed per slice (`cc-host-xarch`, blocking): each slice is re-parsed with its own operands, and dropping the other slices' operands is what separates them (keeping all fails `edit-x86_64-header` with `KACHE_WRONG_OUTPUT`). `-Xarch_*` outside a universal compile, or naming no built slice, is refused. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM subset, cc-crate fixture, Chromium, CMake/Meson/Autotools launchers not started. |
 | CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`), broker exit race fix (PR #32), C/C++ hits verify blob hashes by default (PR #46), the non-local cache advisory left compiler stderr (PR #44). |
@@ -335,6 +335,19 @@ ways converges on one colored entry (`cc-out-diagnostics-color-reuse`,
 blocking). ccache instead compiles with color forced on, which the oracle's
 argument contract does not allow.
 
+**CCP-05 GCC diagnostic files.** Observed with GCC 15.2 (L4 image):
+`-fdiagnostics-format=json-file` always writes a file, `[]` when there is
+nothing to report, into the working directory as the object's name less its
+extension, the source's extension, then `.gcc.json`, whatever directory
+`-o` names. Two identical compiles write identical bytes, so it is a
+required sidecar. The preprocessing pass must not carry the flag: with it,
+`-E` wrote `<source>.gcc.json` and clobbered another compile's file
+(`cc-out-diagnostics-json-file` failed until it was stripped). Dropping
+the sidecar fails `restore` with a missing file. SARIF
+(`-fdiagnostics-format=sarif-file`, `-fdiagnostics-add-output=sarif`) is
+refused permanently: two identical compiles write different logs, since
+each records its start and end times and cc1's temporary `.s` path.
+
 **CCP-06 PCH.** Observed with Apple clang 21: a PCH records each
 input's modification time and size, and clang rejects it when either
 changes, even with identical bytes ("file has been modified since the
@@ -500,8 +513,6 @@ host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
      CC_ORACLE_OUT=/tmp/cc-oracle` (see the session 2026-11-19 note);
    - `PATH=/opt/homebrew/bin:$PATH make e2e`.
 3. Next work, in priority order:
-   - CCP-05 remainder: GCC SARIF/JSON diagnostic files
-     (`-fdiagnostics-format=sarif-file`, `-fdiagnostics-add-output=`, refused).
    - CCP-04, only with a column-aware layout key (see the finding above).
    - The LLVM subset, the Chromium
      target, and CCP-09 performance.

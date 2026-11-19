@@ -126,7 +126,7 @@ When a record exists but a file in it changed, Kache runs the preprocessor to re
 
 On a miss Kache compiles with `SOURCE_DATE_EPOCH=0` unless the build exports its own value, so objects that use `__DATE__` or `__TIME__` stay identical between rebuilds and show the Unix epoch date. Set `KACHE_CC_SOURCE_DATE_EPOCH=passthrough` to stop Kache from setting it.
 
-A hit replays the warnings the compile printed. A compile without warnings is reused whatever its diagnostic color and display flags, such as `-fdiagnostics-color=always` or `-fno-diagnostics-show-option`. An entry with warnings is reused under the flags it was printed with. An entry printed with color also serves a build without color: Kache removes the color escapes, which leaves exactly the compiler's plain text. Under other flags, including color for an entry printed without it, Kache recompiles and replaces the entry, so a project built both ways keeps a colored entry that serves both. `-fdiagnostics-format=` is part of the key, because some formats print even when there is nothing to report. GCC options that write diagnostics to a file, such as `-fdiagnostics-format=sarif-file` and `-fdiagnostics-add-output=`, pass through.
+A hit replays the warnings the compile printed. A compile without warnings is reused whatever its diagnostic color and display flags, such as `-fdiagnostics-color=always` or `-fno-diagnostics-show-option`. An entry with warnings is reused under the flags it was printed with. An entry printed with color also serves a build without color: Kache removes the color escapes, which leaves exactly the compiler's plain text. Under other flags, including color for an entry printed without it, Kache recompiles and replaces the entry, so a project built both ways keeps a colored entry that serves both. `-fdiagnostics-format=` is part of the key, because some formats print even when there is nothing to report. GCC's `-fdiagnostics-format=json-file` is cached with the file it writes. GCC options that write SARIF, `-fdiagnostics-format=sarif-file`, `-fdiagnostics-add-output=` and `-fdiagnostics-set-output=`, pass through: a SARIF log records when its compile ran and the compiler's temporary file names, so no stored log can match a fresh compile.
 
 A cache directory on a network or virtual file system, which can corrupt Kache's index, is reported by `kache doctor` and in Kache's log. Kache does not add the warning to a compile's standard error, so the compile's messages match the compiler's own.
 
@@ -144,11 +144,12 @@ Upgrading from the JSON memo format discards those memos once; units rediscover 
 
 ## Coverage, split DWARF and serialized diagnostics
 
-A `-c` compile with `--coverage`, `-ftest-coverage`, `-fprofile-arcs`, `-gsplit-dwarf` or clang's `--serialize-diagnostics <file>` is cached with the files it writes beside the object. A hit restores the whole set or nothing:
+A `-c` compile with `--coverage`, `-ftest-coverage`, `-fprofile-arcs`, `-gsplit-dwarf` clang's `--serialize-diagnostics <file>` or GCC's `-fdiagnostics-format=json-file` is cached with the files it writes beside the object. A hit restores the whole set or nothing:
 
 - the `.gcno` notes file, named after the object with its extension replaced
 - the `.dwo` split-DWARF file, named the same way
 - the `.dia` file at the path the flag names
+- GCC's JSON diagnostics, which GCC writes to the working directory whatever directory `-o` names: `-o out/a.o` for `w.c` writes `a.c.gcc.json`
 
 A coverage object records the absolute path of its `.gcda` file, and the notes file records the compilation directory. Coverage entries are therefore reused only from the same directory and output path. A split-DWARF object records its `.dwo` path as the build spelled it, so its entries are reused only for the same output path but stay portable across checkouts.
 

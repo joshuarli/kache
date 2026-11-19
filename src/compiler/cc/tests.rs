@@ -1772,15 +1772,31 @@ fn colored_diagnostics_serve_colorless_invocations_and_not_the_reverse() {
 
 #[test]
 fn diagnostics_written_to_files_refuse() {
-    for flag in [
-        "-fdiagnostics-format=sarif-file",
-        "-fdiagnostics-format=json-file",
-        "-fdiagnostics-add-output=sarif",
-        "-fdiagnostics-set-output=sarif:file=u.sarif",
+    for args in [
+        &["gcc", "-c", "u.c", "-o", "u.o", "-fdiagnostics-format=sarif-file"][..],
+        &["gcc", "-c", "u.c", "-o", "u.o", "-fdiagnostics-add-output=sarif"],
+        &["gcc", "-c", "u.c", "-o", "u.o", "-fdiagnostics-set-output=sarif:file=u.sarif"],
+        &["clang", "-c", "u.c", "-o", "u.o", "-fdiagnostics-format=json-file"],
+        &["gcc", "-S", "u.c", "-o", "u.s", "-fdiagnostics-format=json-file"],
+        &["gcc", "-c", "u.c", "-fdiagnostics-format=json-file", "-fdiagnostics-format=text"],
     ] {
-        let descs = refuse_descriptions(&["gcc", "-c", "u.c", "-o", "u.o", flag]);
-        assert!(descs.iter().any(|d| d.contains("written to a file")), "{flag}: {descs:?}");
+        let descs = refuse_descriptions(args);
+        assert!(descs.iter().any(|d| d.contains("written to a file")), "{args:?}: {descs:?}");
     }
+    let json = |args: &[&str]| {
+        let parsed = CcArgs::parse(&s(args)).unwrap();
+        assert!(parsed.refuse_reasons(&[]).is_empty(), "{args:?}");
+        parsed
+            .sidecar_outputs()
+            .into_iter()
+            .filter(|out| out.role == CcSidecar::JsonDiagnostics && out.presence == CcSidecarPresence::Required)
+            .map(|out| out.path)
+            .collect::<Vec<_>>()
+    };
+    let format = "-fdiagnostics-format=json-file";
+    assert_eq!(json(&["gcc", "-c", "src/w.c", format]), [PathBuf::from("w.c.gcc.json")]);
+    assert_eq!(json(&["gcc", "-c", "src/w.c", "-o", "out/a.b.o", format]), [PathBuf::from("a.b.c.gcc.json")]);
+    assert_eq!(json(&["g++", "-c", "w.cpp", "-o", "out/noext", format]), [PathBuf::from("noext.cpp.gcc.json")]);
     for flag in ["-fdiagnostics-format=json", "-fdiagnostics-format=sarif-stderr"] {
         assert!(refuse_descriptions(&["gcc", "-c", "u.c", "-o", "u.o", flag]).is_empty(), "{flag}");
     }

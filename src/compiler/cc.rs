@@ -390,13 +390,15 @@ pub(crate) enum CcSidecar {
     CoverageNotes,
     SplitDwarf,
     SerializedDiagnostics,
+    JsonDiagnostics,
 }
 
 impl CcSidecar {
-    const ALL: [CcSidecar; 3] = [
+    const ALL: [CcSidecar; 4] = [
         CcSidecar::CoverageNotes,
         CcSidecar::SplitDwarf,
         CcSidecar::SerializedDiagnostics,
+        CcSidecar::JsonDiagnostics,
     ];
 
     pub(crate) fn store_name(self) -> &'static str {
@@ -404,6 +406,7 @@ impl CcSidecar {
             CcSidecar::CoverageNotes => "sidecar.gcno",
             CcSidecar::SplitDwarf => "sidecar.dwo",
             CcSidecar::SerializedDiagnostics => "sidecar.dia",
+            CcSidecar::JsonDiagnostics => "sidecar.gcc.json",
         }
     }
 
@@ -1023,11 +1026,17 @@ impl CcArgs {
         }
 
         // GCC diagnostic outputs that write files a hit would not restore.
-        if self.rest.iter().any(|arg| {
-            matches!(arg.as_str(), "-fdiagnostics-format=sarif-file" | "-fdiagnostics-format=json-file")
-                || arg.starts_with("-fdiagnostics-add-output=")
-                || arg.starts_with("-fdiagnostics-set-output=")
-        }) {
+        // A SARIF log records the run's own start and end times and cc1's
+        // temporary file names, so no stored log matches a fresh compile's.
+        let unmodeled_json = self.rest.iter().any(|arg| arg == "-fdiagnostics-format=json-file")
+            && self.gcc_json_diagnostics_file().is_none();
+        if unmodeled_json
+            || self.rest.iter().any(|arg| {
+                arg == "-fdiagnostics-format=sarif-file"
+                    || arg.starts_with("-fdiagnostics-add-output=")
+                    || arg.starts_with("-fdiagnostics-set-output=")
+            })
+        {
             reasons.push(RefuseReason::Unsupported(
                 "cc diagnostics written to a file — not yet",
             ));
@@ -1259,7 +1268,33 @@ impl CcArgs {
                 presence: CcSidecarPresence::Required,
             });
         }
+        if let Some(path) = self.gcc_json_diagnostics_file() {
+            outputs.push(CcSidecarOutput {
+                role: CcSidecar::JsonDiagnostics,
+                path,
+                presence: CcSidecarPresence::Required,
+            });
+        }
         outputs
+    }
+
+    /// The file GCC writes for `-fdiagnostics-format=json-file`, even when
+    /// there is nothing to report. Observed with GCC 15: it lands in the
+    /// working directory whatever directory `-o` names, as the object's name
+    /// without its extension, then the source's extension, then `.gcc.json`
+    /// (`-o out/a.b.o` with `w.c` writes `a.b.c.gcc.json`).
+    fn gcc_json_diagnostics_file(&self) -> Option<PathBuf> {
+        if self.family != ToolFamily::Gnu || self.mode != CompileMode::Compile {
+            return None;
+        }
+        let format = self.rest.iter().rev().find_map(|arg| arg.strip_prefix("-fdiagnostics-format="));
+        if format != Some("json-file") {
+            return None;
+        }
+        let source_ext = self.sources.first()?.extension()?.to_str()?;
+        let object = self.object_output_path()?;
+        let stem = object.file_stem()?.to_str()?;
+        Some(PathBuf::from(format!("{stem}.{source_ext}.gcc.json")))
     }
 
     /// Coverage instrumentation: the object names its absolute `.gcda`
@@ -1840,6 +1875,7 @@ fn build_preprocess_args(parsed: &CcArgs) -> Vec<String> {
                         iter.next(); // also drop the flag's value
                     }
                     "-MMD" | "-MD" | "-MP" | "-MG" => {}
+                    "-fdiagnostics-format=json-file" => {}
                     _ => out.push(arg.clone()),
                 }
             }

@@ -834,6 +834,15 @@ ccache.suite = "color_diagnostics.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-out-diagnostics-json-file"
+package = "CCP-05"
+summary = "GCC -fdiagnostics-format=json-file output restored on hit; SARIF files stay refused (they record each run's times and temporary paths)"
+profiles = ["both"]
+compilers = "gcc"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
 id = "cc-out-diagnostics-format-msvc"
 package = "CCP-05"
 summary = "-fdiagnostics-format=msvc replays its own location format (clang)"
