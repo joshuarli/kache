@@ -3975,3 +3975,108 @@ fn test_cc_direct_key_binds_a_root_spelling_object_to_its_checkout() {
     let report = kache_report(cache_dir.path());
     assert_last_cc_event(&report, "local_hit", 0);
 }
+
+/// Compiles started together against an empty cache: half share one key
+/// and race to key, compile and publish one entry, the other half share
+/// another. Every caller must get the compiler's own object for its unit,
+/// none another unit's, and the entries left must serve hits.
+#[test]
+fn test_cc_concurrent_compiles_each_get_the_compilers_object() {
+    build_kache();
+
+    let project = TempDir::new().unwrap();
+    let cache_dir = TempDir::new().unwrap();
+    let _cache_dir_daemon = common::DaemonGuard::new(kache_binary(), cache_dir.path());
+    std::fs::write(project.path().join("value.h"), "#define VALUE 7\n").unwrap();
+    for (unit, expression) in [("foo", "VALUE"), ("bar", "VALUE + 1")] {
+        std::fs::write(
+            project.path().join(format!("{unit}.c")),
+            format!(
+                "#include <stdio.h>\n#include \"value.h\"\nint value(void) {{ return {expression}; }}\n"
+            ),
+        )
+        .unwrap();
+    }
+    settle_writes(&[project.path()]);
+    let compiled = |unit: &str| {
+        let status = std::process::Command::new("cc")
+            .args(["-O0", "-g0", "-c", &format!("{unit}.c"), "-o", &format!("raw-{unit}.o")])
+            .current_dir(project.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::read(project.path().join(format!("raw-{unit}.o"))).unwrap()
+    };
+    let raw = [("foo", compiled("foo")), ("bar", compiled("bar"))];
+    assert_ne!(raw[0].1, raw[1].1);
+
+    const CALLERS: usize = 8;
+    let unit_of = |caller: usize| raw[caller % 2].0;
+    let barrier = std::sync::Barrier::new(CALLERS);
+    std::thread::scope(|threads| {
+        for caller in 0..CALLERS {
+            let (barrier, project, cache_dir) = (&barrier, project.path(), cache_dir.path());
+            let unit = unit_of(caller);
+            threads.spawn(move || {
+                let mut command = hermetic_command(
+                    kache_binary(),
+                    cache_dir,
+                    Some(&isolated_config_path(cache_dir)),
+                );
+                command
+                    .args(["cc", "-O0", "-g0", "-c", &format!("{unit}.c")])
+                    .args(["-o", &format!("out{caller}.o")])
+                    .current_dir(project);
+                barrier.wait();
+                let result = command.output().unwrap();
+                assert!(
+                    result.status.success(),
+                    "caller {caller}: {}",
+                    String::from_utf8_lossy(&result.stderr)
+                );
+            });
+        }
+    });
+    for caller in 0..CALLERS {
+        assert_eq!(
+            std::fs::read(project.path().join(format!("out{caller}.o"))).unwrap(),
+            raw[caller % 2].1,
+            "caller {caller} ({}.c) got another object than the compiler's",
+            unit_of(caller)
+        );
+    }
+    let results = || -> Vec<String> {
+        kache_report(cache_dir.path())["all_events"]
+            .as_seq()
+            .unwrap()
+            .iter()
+            .map(|event| event["result"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while results().len() < CALLERS && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let raced = results();
+    assert_eq!(raced.len(), CALLERS, "{raced:?}");
+    assert!(
+        raced
+            .iter()
+            .all(|result| matches!(result.as_str(), "miss" | "dup" | "local_hit")),
+        "every racer is cached or compiled, none passed through: {raced:?}"
+    );
+
+    for (unit, object) in &raw {
+        let output = format!("warm-{unit}.o");
+        run_kache_cc(
+            project.path(),
+            cache_dir.path(),
+            &["cc", "-O0", "-g0", "-c", &format!("{unit}.c"), "-o", &output],
+        );
+        let report = kache_report(cache_dir.path());
+        let last = report["all_events"].as_seq().and_then(|events| events.last()).unwrap();
+        assert_eq!(last["crate_name"].as_str(), Some(format!("{unit}.c").as_str()));
+        assert_eq!(last["result"].as_str(), Some("local_hit"));
+        assert_eq!(&std::fs::read(project.path().join(&output)).unwrap(), object);
+    }
+}
