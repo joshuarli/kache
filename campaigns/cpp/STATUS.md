@@ -144,7 +144,7 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | CCP-02 | RUNNING | CCP-01 | Branch `feat/ccp02-input-identity`: 20 input-identity cases; see "CCP-02 input identity" below. Not yet covered: same-path compiler replacement, wrapper/driver-mode selection, VFS overlays, PGO profiles, -march=native, user key config, diagnostic locale, profile switches against a populated cache, hash/compile/publish race barriers. |
 | CCP-03 | RUNNING | CCP-01, CCP-02 | Branch `feat/ccp03-chromium-flags`: Chromium official flags verified and landed from the WIP branch; `-S -o` cached. Open: response files (`@file`), clang `--config`, GCC `-specs`, `-fsanitize-ignorelist`, `-x` and `-Wp,`/`-Xpreprocessor` audits. See "CCP-03..CCP-08 progress" below. |
 | CCP-04 | BLOCKED | CCP-02 | Comment-only reuse needs a column-aware layout key; see "CCP-04 finding" below. ccache's own reuse is wrong output when a comment changes width before code (`cc-eqp-column-significance`). `cc-eqp-comment-only` stays open in both profiles. |
-| CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (branch `feat/ccp05-output-sets`); `cc-out-gcno`, `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Open: a stamp-aware GCC `.gcno` comparator, `-fdiagnostics-format`/GCC SARIF outputs, sidecars under `-S`. |
+| CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (PR #52); `cc-out-gcno` (GCC and clang), `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Open: `-fdiagnostics-format`/GCC SARIF outputs, sidecars under `-S`. |
 | CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | Open conditional case `cc-pch-clang-use` (ccache sloppiness `pch_defines,time_macros`). Module consumers not yet. |
 | CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`; open `cc-host-universal-objects`. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM subset, cc-crate fixture, Chromium, CMake/Meson/Autotools launchers not started. |
 | CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`), broker exit race fix (PR #32), C/C++ hits verify blob hashes by default (PR #46), the non-local cache advisory left compiler stderr (PR #44). |
@@ -287,9 +287,10 @@ comment-only edits in the default (reproducible) profile.
 - Store-fault actions.
 
 GCC's `.gcno` and the object carry a compile-time stamp even under
-`-frandom-seed` and `SOURCE_DATE_EPOCH`, so GCC coverage needs a
-stamp-aware comparator before it can be judged; the case is clang-only
-until then.
+`-frandom-seed` and `SOURCE_DATE_EPOCH`: the notes' bytes 8..12 and one
+4-byte run in the object, nothing else. The oracle hashes a pair whose
+object holds its notes' stamp with the stamp zeroed, and a disagreeing
+pair as written, so GCC coverage is judged like any other output.
 
 **CCP-05 sidecars.** A `-c` compile with `--coverage`, `-ftest-coverage`,
 `-fprofile-arcs`, `-gsplit-dwarf` or clang's `--serialize-diagnostics`
@@ -313,10 +314,8 @@ Observed on Apple clang 21, GCC 15.2 and clang 23 (L4 image):
   is missing, or a file unchanged (mtime, size) since before the compile,
   stops the store. A hit restores the whole set, and an entry whose
   sidecar set differs from the invocation's misses.
-- GCC coverage hits were checked by hand in the L4 image: the restored
-  `.gcno` stamp matches the restored object, and `gcov` reports 100% after
-  running the linked binary. Raw GCC is not reproducible, so the oracle
-  case stays clang-only until a stamp-aware comparator exists.
+- GCC coverage hits were also checked by hand in the L4 image: `gcov`
+  reports 100% after running the binary linked from a restored pair.
 
 **CCP-04 finding: expansion-equivalent reuse is not sound as ccache does it.**
 ccache's preprocessor mode keys by the `-E` text. That text separates
@@ -433,8 +432,7 @@ the musl in-image e2e on both architectures, and macOS.
    - the same in the L4 image, with `TOOLCHAINS="gcc clang"`;
    - `PATH=/opt/homebrew/bin:$PATH make e2e`.
 3. Next work, in priority order:
-   - CCP-05 remainder: a stamp-aware GCC `.gcno` comparator, and
-     `-fdiagnostics-format`/GCC SARIF outputs.
+   - CCP-05 remainder: `-fdiagnostics-format`/GCC SARIF outputs.
    - CCP-04, only with a column-aware layout key (see the finding above).
    - Universal objects, PCH consumers, the LLVM subset, the Chromium
      target, and CCP-09 performance.
