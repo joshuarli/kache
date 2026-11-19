@@ -154,6 +154,10 @@ A coverage object records the absolute path of its `.gcda` file, and the notes f
 
 GCC writes a `.dwo` for `-gsplit-dwarf` without `-g`, and Clang does not; Mach-O targets never write one. Kache stores the `.dwo` when the compiler writes it. A sidecar left unchanged from an earlier build, or a required sidecar the compiler did not write, stops Kache from storing the compile.
 
+## Universal objects
+
+A compile with several `-arch` flags, which writes one object holding a slice per architecture, is cached. Each slice can include different headers, so Kache preprocesses and records the inputs of each slice on its own; the compiler's own dependency file lists only the last slice's headers. Universal compiles always run the preprocessor before looking up an entry.
+
 ## Portability
 
 GCC and Clang entries can be reused across worktrees when source and build paths normalize cleanly. On a miss Kache adds `-ffile-prefix-map` rules that map the checkout and Cargo's build directories to fixed names such as `/kache/cc-root`, so debug info and `__FILE__` in those objects name the fixed path.
@@ -180,7 +184,7 @@ Kache currently passes through:
 
 - link and whole-program steps
 - assembly output (`-S`) without `-o`, and output to standard output (`-o -`)
-- multi-source or multi-architecture invocations
+- multi-source invocations, and multi-architecture invocations that also ask for coverage, split DWARF or serialized diagnostics
 - `-x` languages other than C, C++, Objective-C, Objective-C++, and assembly, such as `-x cuda` and `-x hip`, and `.cu` sources given to `cc` or `clang`
 - response files under clang-cl, response files that name other response files, and response files whose quoting GCC and Clang read differently (an empty quoted argument, a backslash before a line break, carriage returns)
 - precompiled headers and modules

@@ -1002,6 +1002,15 @@ ccache.suite = "multi_arch.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-host-universal-slice-headers"
+package = "CCP-07"
+summary = "each universal slice's own headers invalidate the object; the compiler's depfile lists only the last slice"
+profiles = ["both"]
+compilers = ["apple-clang"]
+ccache.suite = "multi_arch.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-host-xarch"
 package = "CCP-07"
 summary = "-Xarch_* per-slice options keyed per slice"
