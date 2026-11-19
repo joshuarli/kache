@@ -753,6 +753,15 @@ ccache.suite = "kache-original"
 status = "oracle"
 
 [[case]]
+id = "cc-eqp-fallthrough-comment"
+package = "CCP-04"
+summary = "a same-width comment reword with identical -E text and token columns changes GCC -Wimplicit-fallthrough diagnostics; ccache 4.14.3 reuses it in both modes and is wrong"
+profiles = ["both"]
+compilers = "gcc"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
 id = "cc-eqp-line-number-significance"
 package = "CCP-04"
 summary = "edit moving line numbers is NOT a hit (debug line info is observable)"
@@ -831,6 +840,15 @@ summary = "a unit with warnings reuses across color flags: colored entries repla
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "color_diagnostics.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-out-diagnostics-json-file"
+package = "CCP-05"
+summary = "GCC -fdiagnostics-format=json-file output restored on hit; SARIF files stay refused (they record each run's times and temporary paths)"
+profiles = ["both"]
+compilers = "gcc"
+ccache.suite = "kache-original"
 status = "oracle"
 
 [[case]]
@@ -1024,7 +1042,7 @@ summary = "-Xarch_* per-slice options keyed per slice"
 profiles = ["both"]
 compilers = ["apple-clang"]
 ccache.suite = "multi_arch.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-host-frameworks"

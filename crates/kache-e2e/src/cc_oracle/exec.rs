@@ -403,6 +403,24 @@ fn cache_disabled_applies(control: Option<Control>, profile: Profile) -> bool {
     control == Some(Control::CacheDisabled) && profile == Profile::Transparent
 }
 
+/// Whether `control` has a step to fault in this case and profile. Every
+/// fault waits for a step after populate with a particular requirement, so
+/// a case without one runs the control untouched and proves nothing.
+pub fn control_can_inject(control: Control, case: &Case, profile: Profile) -> bool {
+    let mut later = case
+        .steps
+        .iter()
+        .skip(1)
+        .flat_map(|step| case.compiles.iter().map(move |compile| step.reuse_for(compile)));
+    match control {
+        Control::StaleOutput => !case.outputs.is_empty() && later.any(|reuse| reuse == Reuse::Miss),
+        Control::DisabledInvalidation => later.any(|reuse| reuse == Reuse::Miss),
+        Control::OmitSidecar => !case.outputs.is_empty() && later.any(|reuse| reuse == Reuse::Hit),
+        Control::CacheDisabled => cache_disabled_applies(Some(control), profile) && later.any(|reuse| reuse == Reuse::Hit),
+        Control::ReferenceFailure => case.steps.iter().any(|step| step.status == 0),
+    }
+}
+
 /// Expand `{fixture}` in a case-supplied argument or environment value.
 pub fn expand(value: &str, fixture: &Path) -> String {
     value.replace("{fixture}", &fixture.to_string_lossy())
@@ -850,6 +868,31 @@ fn kache_events_since(kache: &Path, store: &Path, seen: &mut usize) -> Result<Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controls_skip_cases_without_a_step_to_fault() {
+        let case = |steps: &str| {
+            let text = format!(
+                "summary = \"s\"\ncohort = \"blocking\"\nprofiles = [\"transparent\"]\noutputs = [\"a.o\"]\n\n[[compile]]\nargv = [\"{{cc}}\", \"-c\", \"a.c\"]\nsource = \"a.c\"\n\n[[step]]\nname = \"populate\"\nreuse = \"miss\"\n{steps}"
+            );
+            super::super::case::parse("c", &text, PathBuf::from("s")).unwrap()
+        };
+        let populate_only = case("");
+        let restore = case("\n[[step]]\nname = \"restore\"\nreuse = \"hit\"\n");
+        let edit = case("\n[[step]]\nname = \"edit\"\nreuse = \"miss\"\n");
+        let (t, r) = (Profile::Transparent, Profile::Reproducible);
+        for control in [Control::StaleOutput, Control::DisabledInvalidation] {
+            assert!(!control_can_inject(control, &populate_only, t), "{control:?}");
+            assert!(!control_can_inject(control, &restore, t), "{control:?}");
+            assert!(control_can_inject(control, &edit, t), "{control:?}");
+        }
+        assert!(!control_can_inject(Control::OmitSidecar, &edit, t));
+        assert!(control_can_inject(Control::OmitSidecar, &restore, r));
+        assert!(control_can_inject(Control::CacheDisabled, &restore, t));
+        assert!(!control_can_inject(Control::CacheDisabled, &restore, r));
+        assert!(!control_can_inject(Control::CacheDisabled, &edit, t));
+        assert!(control_can_inject(Control::ReferenceFailure, &populate_only, r));
+    }
 
     #[test]
     fn cxx_drivers_follow_the_c_driver_name() {

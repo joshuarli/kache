@@ -1,0 +1,34 @@
+summary = "-Xarch_<arch> operands reach only their slice of a universal object: each slice finds its own header through its own -I, and an edit to either header recompiles (CCP-07)"
+cohort = "blocking"
+families = ["clang"]
+os = ["macos"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-arch", "arm64", "-arch", "x86_64", "-Xarch_arm64", "-Iarm", "-Xarch_arm64", "-DSLICE=1", "-Xarch_x86_64", "-Ix86", "-Xarch_x86_64", "-DSLICE=2", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-x86_64-header"
+reuse = "miss"
+action = [{ op = "write", path = "x86/slice.h", content = "#define V 4\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "edit-arm64-header"
+reuse = "miss"
+action = [{ op = "write", path = "arm/slice.h", content = "#define V 6\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-edited"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

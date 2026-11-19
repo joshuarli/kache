@@ -1699,9 +1699,40 @@ fn universal_slices_are_keyed_one_arch_at_a_time() {
     .unwrap();
     assert!(parsed.is_universal());
     assert_eq!(parsed.arch_slices(), s(&["arm64", "x86_64"]));
-    assert_eq!(parsed.single_slice("x86_64").rest, s(&["-arch", "x86_64", "-O2", "-c", "u.c"]));
-    assert!(!parsed.single_slice("x86_64").is_universal());
+    assert_eq!(parsed.single_slice("x86_64").unwrap().rest, s(&["-arch", "x86_64", "-O2", "-c", "u.c"]));
+    assert!(!parsed.single_slice("x86_64").unwrap().is_universal());
     assert_eq!(cc_target_arch(&parsed), "arm64+x86_64");
+
+    let xarch = CcArgs::parse(&s(&[
+        "clang", "-arch", "arm64", "-arch", "x86_64", "-Xarch_arm64", "-DSLICE=1", "-c", "u.c",
+    ]))
+    .unwrap();
+    assert!(xarch.refuse_reasons(&[]).is_empty(), "{:?}", xarch.refuse_reasons(&[]));
+    let arm = xarch.single_slice("arm64").unwrap();
+    assert_eq!(arm.rest, s(&["-arch", "arm64", "-DSLICE=1", "-c", "u.c"]));
+    assert_eq!(arm.defines, [("SLICE".to_string(), Some("1".to_string()))]);
+    let intel = xarch.single_slice("x86_64").unwrap();
+    assert_eq!(intel.rest, s(&["-arch", "x86_64", "-c", "u.c"]));
+    assert!(intel.defines.is_empty());
+    let other = CcArgs::parse(&s(&[
+        "clang", "-arch", "arm64", "-arch", "x86_64", "-Xarch_x86_64", "-DSLICE=1", "-c", "u.c",
+    ]))
+    .unwrap();
+    assert_ne!(cc_raw_flags_for_key(&xarch, &[]), cc_raw_flags_for_key(&other, &[]));
+    for refused in [
+        &["clang", "-arch", "arm64", "-Xarch_arm64", "-DSLICE=1", "-c", "u.c"][..],
+        &["clang", "-arch", "arm64", "-arch", "x86_64", "-Xarch_i386", "-DSLICE=1", "-c", "u.c"],
+        &["clang", "-arch", "arm64", "-arch", "x86_64", "-c", "u.c", "-Xarch_arm64"],
+        &["clang", "-arch", "arm64", "-arch", "x86_64", "-Xarch_arm64", "-Xarch_x86_64", "-DS", "-c", "u.c"],
+        &["clang", "-arch", "arm64", "-arch", "x86_64", "-Xarch_arm64", "-arch", "-c", "u.c"],
+    ] {
+        let parsed = CcArgs::parse(&s(refused)).unwrap();
+        assert!(
+            parsed.refuse_reasons(&[]).iter().any(|r| r.description().contains("-Xarch_")),
+            "{refused:?}: {:?}",
+            parsed.refuse_reasons(&[])
+        );
+    }
     assert!(!cc_direct_key_eligible(&parsed), "the compiler's depfile lists one slice");
     let plain = CcArgs::parse(&s(&["clang", "-arch", "arm64", "-c", "u.c"])).unwrap();
     assert!(!plain.is_universal());
@@ -1741,15 +1772,31 @@ fn colored_diagnostics_serve_colorless_invocations_and_not_the_reverse() {
 
 #[test]
 fn diagnostics_written_to_files_refuse() {
-    for flag in [
-        "-fdiagnostics-format=sarif-file",
-        "-fdiagnostics-format=json-file",
-        "-fdiagnostics-add-output=sarif",
-        "-fdiagnostics-set-output=sarif:file=u.sarif",
+    for args in [
+        &["gcc", "-c", "u.c", "-o", "u.o", "-fdiagnostics-format=sarif-file"][..],
+        &["gcc", "-c", "u.c", "-o", "u.o", "-fdiagnostics-add-output=sarif"],
+        &["gcc", "-c", "u.c", "-o", "u.o", "-fdiagnostics-set-output=sarif:file=u.sarif"],
+        &["clang", "-c", "u.c", "-o", "u.o", "-fdiagnostics-format=json-file"],
+        &["gcc", "-S", "u.c", "-o", "u.s", "-fdiagnostics-format=json-file"],
+        &["gcc", "-c", "u.c", "-fdiagnostics-format=json-file", "-fdiagnostics-format=text"],
     ] {
-        let descs = refuse_descriptions(&["gcc", "-c", "u.c", "-o", "u.o", flag]);
-        assert!(descs.iter().any(|d| d.contains("written to a file")), "{flag}: {descs:?}");
+        let descs = refuse_descriptions(args);
+        assert!(descs.iter().any(|d| d.contains("written to a file")), "{args:?}: {descs:?}");
     }
+    let json = |args: &[&str]| {
+        let parsed = CcArgs::parse(&s(args)).unwrap();
+        assert!(parsed.refuse_reasons(&[]).is_empty(), "{args:?}");
+        parsed
+            .sidecar_outputs()
+            .into_iter()
+            .filter(|out| out.role == CcSidecar::JsonDiagnostics && out.presence == CcSidecarPresence::Required)
+            .map(|out| out.path)
+            .collect::<Vec<_>>()
+    };
+    let format = "-fdiagnostics-format=json-file";
+    assert_eq!(json(&["gcc", "-c", "src/w.c", format]), [PathBuf::from("w.c.gcc.json")]);
+    assert_eq!(json(&["gcc", "-c", "src/w.c", "-o", "out/a.b.o", format]), [PathBuf::from("a.b.c.gcc.json")]);
+    assert_eq!(json(&["g++", "-c", "w.cpp", "-o", "out/noext", format]), [PathBuf::from("noext.cpp.gcc.json")]);
     for flag in ["-fdiagnostics-format=json", "-fdiagnostics-format=sarif-stderr"] {
         assert!(refuse_descriptions(&["gcc", "-c", "u.c", "-o", "u.o", flag]).is_empty(), "{flag}");
     }

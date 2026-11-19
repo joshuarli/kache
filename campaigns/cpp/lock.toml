@@ -146,7 +146,11 @@ verified = "2026-11-17: downloaded; sha256 matches the release asset digest"
 [projects.llvm]
 repo = "https://github.com/llvm/llvm-project"
 ref = "llvmorg-21.1.8"
+url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/llvm-project-21.1.8.src.tar.xz"
+sha256 = "4633a23617fa31a3ea51242586ea7fb1da7140e426bd62fc164261fe036aa142"
+targets = ["llvm-tblgen", "LLVMCore"]
 purpose = "fixed LLVM/Clang target subset (C++); reuses scenarios/bench-llvm's pin and build shape (X86 target, Release, assertions off)"
+verified = "2026-11-19: downloaded; sha256 matches the release asset digest"
 note = "bump only with an explicit baseline-change commit"
 
 [projects.chromium]

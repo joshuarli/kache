@@ -148,6 +148,9 @@ pub fn run(config: &Config) -> Result<Outcome> {
         }
         for case in &selected {
             for profile in case.profiles.iter().copied().filter(|p| config.profiles.contains(p)) {
+                if config.control.is_some_and(|control| !exec::control_can_inject(control, case, profile)) {
+                    continue;
+                }
                 let expected_rows = case.steps.len() * case.compiles.len();
                 let mut run = CaseRun {
                     case: case.id.clone(),

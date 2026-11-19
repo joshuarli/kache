@@ -1,0 +1,32 @@
+summary = "-fdiagnostics-format=json-file writes <object stem>.<source extension>.gcc.json in the working directory even with nothing to report; a hit restores it beside the object and an edit that silences the warning rewrites it (CCP-05)"
+cohort = "blocking"
+families = ["gcc"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o", "u.c.gcc.json", "out/v.o", "v.c.gcc.json"]
+
+[[compile]]
+argv = ["{cc}", "-Wall", "-fdiagnostics-format=json-file", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-fdiagnostics-format=json-file", "-c", "u.c", "-o", "out/v.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "silence-warning"
+reuse = "miss"
+action = [{ op = "write", path = "u.c", content = "int f(int x) { return x; }\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-silenced"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

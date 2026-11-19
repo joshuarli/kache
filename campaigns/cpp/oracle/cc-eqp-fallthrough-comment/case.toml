@@ -1,0 +1,23 @@
+summary = "a same-width comment edit that leaves the -E text and every token's column unchanged still changes GCC's diagnostics: -Wimplicit-fallthrough honors a /* fallthrough */ comment, so the edited unit must recompile and warn (CCP-04)"
+cohort = "blocking"
+families = ["gcc"]
+profiles = ["transparent", "reproducible"]
+outputs = ["ft.o"]
+
+[[compile]]
+argv = ["{cc}", "-Wimplicit-fallthrough", "-c", "ft.c", "-o", "ft.o"]
+source = "ft.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "reword-fallthrough-comment"
+reuse = "miss"
+action = [{ op = "write", path = "ft.c", content = "int f(int x) {\n  switch (x) {\n  case 1:\n    x++;\n    /* carry on    */\n  case 2:\n    return x;\n  }\n  return 0;\n}\n" }, { op = "delete-outputs" }]
