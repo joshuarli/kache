@@ -554,6 +554,32 @@ pub fn members(path: &std::path::Path) -> anyhow::Result<Vec<ArchiveMember>> {
     Ok(members)
 }
 
+/// The data of each member of the regular `ar` archive in `bytes`, without
+/// the headers, the symbol tables and the GNU long-name table, or `None`
+/// when `bytes` is not one. Header fields such as a GNU `/0` name are not
+/// paths, so a scan for paths must skip them.
+pub fn member_data(bytes: &[u8]) -> Option<Vec<&[u8]>> {
+    let mut pos = AR_MAGIC.len();
+    if bytes.get(..pos)? != AR_MAGIC {
+        return None;
+    }
+    let mut data = Vec::new();
+    while pos < bytes.len() {
+        let header = bytes.get(pos..pos + AR_HEADER_LEN)?;
+        let field = ar_name(&header[0..16]).filter(|_| &header[58..60] == b"`\n")?;
+        let size = parse_ar_decimal(&header[48..58])?;
+        let start = pos + AR_HEADER_LEN;
+        let member = bytes.get(start..start.checked_add(size)?)?;
+        if let Some(count) = field.strip_prefix("#1/") {
+            data.push(member.get(parse_ar_decimal(count.as_bytes())?..)?);
+        } else if !matches!(field, "/" | "/SYM64/" | "//") && !is_bsd_symdef(field) {
+            data.push(member);
+        }
+        pos = start + size + (size & 1);
+    }
+    Some(data)
+}
+
 /// The `//` table entry at a GNU `/N` reference. GNU ends an entry with `/\n`,
 /// a COFF `.lib` with NUL.
 fn gnu_long_name(table: Option<&[u8]>, offset: &str) -> Option<String> {
@@ -2144,6 +2170,33 @@ mod tests {
         // Opening a dir succeeds on Unix; reading it does not.
         #[cfg(unix)]
         assert!(has_archive_magic(dir.path()).is_err());
+    }
+
+    #[test]
+    fn member_data_skips_headers_and_tables() {
+        let mut gnu = AR_MAGIC.to_vec();
+        gnu.extend(member("/", SYMTAB));
+        gnu.extend(member("//", b"1d1ea73a2512983e-value.o/\n"));
+        gnu.extend(member("/0", b"odd"));
+        gnu.extend(member("b.o/", b"/abs/b.c"));
+        assert_eq!(
+            member_data(&gnu),
+            Some(vec![b"odd".as_slice(), b"/abs/b.c".as_slice()])
+        );
+
+        let mut bsd = AR_MAGIC.to_vec();
+        bsd.extend(member("#1/20", b"__.SYMDEF SORTED\0\0\0\0syms"));
+        bsd.extend(member("#1/4", b"a.o\0data"));
+        assert_eq!(
+            member_data(&bsd),
+            Some(vec![b"syms".as_slice(), b"data".as_slice()])
+        );
+
+        assert_eq!(member_data(b"!<arch>\n"), Some(Vec::new()));
+        assert_eq!(member_data(b"not an archive"), None);
+        let mut truncated = AR_MAGIC.to_vec();
+        truncated.extend(&member("a.o/", b"data")[..AR_HEADER_LEN + 2]);
+        assert_eq!(member_data(&truncated), None);
     }
 
     #[test]
