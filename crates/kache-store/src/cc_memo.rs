@@ -90,6 +90,34 @@ pub struct CcPreprocessMemo {
     pub needs_touch: bool,
 }
 
+/// Read sets kept per memo key. A memo key names one unit (its arguments,
+/// source and compiler); each header state it compiled under is a read set
+/// of its own, and keeping earlier ones lets a header edit that is reverted
+/// find its entry again without preprocessing.
+pub const CC_MEMO_VARIANTS: usize = 8;
+
+/// The row a read set is stored under: `<memo_key>/<digest of its hash>`.
+/// Releases that recorded one read set per unit write
+/// `ON CONFLICT(memo_key)`, which needs `memo_key` to stay UNIQUE on its
+/// own, so the variants of one unit share a key prefix instead.
+fn variant_key(memo_key: &str, preprocessed_hash: &str) -> String {
+    let digest = blake3::hash(preprocessed_hash.as_bytes()).to_hex();
+    format!("{memo_key}/{}", &digest[..VARIANT_DIGEST_LEN])
+}
+
+const VARIANT_DIGEST_LEN: usize = 32;
+
+/// The rows holding every variant of `memo_key`: keys in the half-open
+/// range (`/` is followed by `0` in byte order) of exactly a variant key's
+/// length, so another key that merely starts with `<memo_key>/` is not one.
+fn variant_range(memo_key: &str) -> (String, String, i64) {
+    (
+        format!("{memo_key}/"),
+        format!("{memo_key}0"),
+        (memo_key.len() + 1 + VARIANT_DIGEST_LEN) as i64,
+    )
+}
+
 fn has_current_schema(db: &Connection) -> rusqlite::Result<bool> {
     db.query_row(
         "SELECT EXISTS(SELECT 1 FROM pragma_table_info('cc_preprocess_memos') WHERE name = 'input_count')",
@@ -400,38 +428,71 @@ impl FileHashCache<'_> {
         tx.commit()
     }
 
+    /// The newest read set recorded for `memo_key`, if any.
     pub fn get_cc_preprocess_memo(
         &self,
         memo_key: &str,
     ) -> rusqlite::Result<Option<CcPreprocessMemo>> {
+        Ok(self.get_cc_preprocess_memos(memo_key)?.into_iter().next())
+    }
+
+    /// Every read set recorded for `memo_key`, newest first. A damaged or
+    /// incomplete reference set cannot stand in for the full closure, so a
+    /// variant missing any input row is left out.
+    pub fn get_cc_preprocess_memos(
+        &self,
+        memo_key: &str,
+    ) -> rusqlite::Result<Vec<CcPreprocessMemo>> {
         // One statement provides a single SQLite read snapshot. Reading the
         // digest separately could pair an old digest with a replacement's inputs.
         let mut stmt = self.db().prepare_cached(
             "SELECT m.preprocessed_hash, m.input_count, m.last_used <= unixepoch() - 86400,
                     i.id, i.name, i.content, i.mapped, i.local_path,
                     i.size, i.mtime_ns, i.ctime_ns, i.inode, i.proof,
-                    s.version, s.scan
+                    s.version, s.scan, m.id
              FROM cc_preprocess_memos m
              LEFT JOIN cc_memo_input_refs r ON r.memo_id = m.id
              LEFT JOIN cc_memo_inputs i ON i.id = r.input_id
              LEFT JOIN cc_header_scans s ON s.content = i.content
-             WHERE m.memo_key = ?1 ORDER BY r.input_id",
+             WHERE m.memo_key >= ?1 AND m.memo_key < ?2 AND length(m.memo_key) = ?3
+             ORDER BY m.id DESC, r.input_id",
         )?;
-        let mut rows = stmt.query([memo_key])?;
-        let mut result = None;
-        let mut expected_count = 0;
-        while let Some(row) = rows.next()? {
-            if row.get::<_, Option<i64>>(3)?.is_none() {
-                return Ok(None);
+        let (low, high, length) = variant_range(memo_key);
+        let mut rows = stmt.query(params![low, high, length])?;
+        let mut variants = Vec::new();
+        // The variant being read: its row id, expected input count, and
+        // whether every input row it references is present.
+        let mut current: Option<(i64, i64, bool, CcPreprocessMemo)> = None;
+        let finish = |variant: Option<(i64, i64, bool, CcPreprocessMemo)>,
+                      variants: &mut Vec<CcPreprocessMemo>| {
+            if let Some((_, expected, complete, memo)) = variant
+                && complete
+                && expected > 0
+                && memo.inputs.len() as i64 == expected
+            {
+                variants.push(memo);
             }
-            if result.is_none() {
-                expected_count = row.get::<_, i64>(1)?;
-                result = Some(CcPreprocessMemo {
-                    preprocessed_hash: row.get(0)?,
-                    inputs: Vec::new(),
-                    header_scans: Vec::new(),
-                    needs_touch: row.get(2)?,
-                });
+        };
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(15)?;
+            if current.as_ref().is_none_or(|(open, ..)| *open != id) {
+                finish(current.take(), &mut variants);
+                current = Some((
+                    id,
+                    row.get(1)?,
+                    true,
+                    CcPreprocessMemo {
+                        preprocessed_hash: row.get(0)?,
+                        inputs: Vec::new(),
+                        header_scans: Vec::new(),
+                        needs_touch: row.get(2)?,
+                    },
+                ));
+            }
+            let (_, _, complete, memo) = current.as_mut().expect("opened above");
+            if row.get::<_, Option<i64>>(3)?.is_none() {
+                *complete = false;
+                continue;
             }
             let stamp = FileFingerprint {
                 path: row.get(7)?,
@@ -441,12 +502,12 @@ impl FileHashCache<'_> {
                 inode: row.get(11)?,
             };
             let proven = row.get::<_, Option<i64>>(12)? == Some(stamp_proof(&stamp));
-            result.as_mut().unwrap().header_scans.push(
+            memo.header_scans.push(
                 row.get::<_, Option<i64>>(13)?
                     .map(|version| row.get(14).map(|scan| (version, scan)))
                     .transpose()?,
             );
-            result.as_mut().unwrap().inputs.push(CcPreprocessMemoInput {
+            memo.inputs.push(CcPreprocessMemoInput {
                 name: row.get(4)?,
                 content: row.get(5)?,
                 mapped: row.get(6)?,
@@ -454,8 +515,8 @@ impl FileHashCache<'_> {
                 observed_ns: 0,
             });
         }
-        // A damaged/incomplete reference set cannot stand in for the full closure.
-        Ok(result.filter(|memo| expected_count > 0 && memo.inputs.len() as i64 == expected_count))
+        finish(current, &mut variants);
+        Ok(variants)
     }
 
     /// Record `inputs` as the read set behind `preprocessed_hash`.
@@ -473,15 +534,21 @@ impl FileHashCache<'_> {
         inputs: &[CcPreprocessMemoInput],
     ) -> rusqlite::Result<()> {
         let tx = Transaction::new_unchecked(self.db(), TransactionBehavior::Immediate)?;
+        // Recorded again, a read set moves to the front: row ids order the
+        // variants by when they were last recorded.
+        let row_key = variant_key(memo_key, preprocessed_hash);
+        tx.execute(
+            "DELETE FROM cc_memo_input_refs WHERE memo_id IN
+             (SELECT id FROM cc_preprocess_memos WHERE memo_key = ?1)",
+            [&row_key],
+        )?;
+        tx.execute("DELETE FROM cc_preprocess_memos WHERE memo_key = ?1", [&row_key])?;
         let id: i64 = tx.query_row(
             "INSERT INTO cc_preprocess_memos(memo_key, preprocessed_hash, input_count)
-             VALUES (?1, ?2, 0) ON CONFLICT(memo_key) DO UPDATE SET
-             preprocessed_hash = excluded.preprocessed_hash, last_used = unixepoch()
-             RETURNING id",
-            params![memo_key, preprocessed_hash],
+             VALUES (?1, ?2, 0) RETURNING id",
+            params![row_key, preprocessed_hash],
             |row| row.get(0),
         )?;
-        tx.execute("DELETE FROM cc_memo_input_refs WHERE memo_id = ?1", [id])?;
         {
             let mut put = tx.prepare_cached(
                 "INSERT INTO cc_memo_inputs(name, content, mapped, local_path, size, mtime_ns, ctime_ns, inode, proof)
@@ -538,6 +605,19 @@ impl FileHashCache<'_> {
              (SELECT count(*) FROM cc_memo_input_refs WHERE memo_id = ?1) WHERE id = ?1",
             [id],
         )?;
+        let (low, high, length) = variant_range(memo_key);
+        let surplus = "SELECT id FROM cc_preprocess_memos
+                       WHERE memo_key >= ?1 AND memo_key < ?2 AND length(memo_key) = ?3
+                       ORDER BY id DESC LIMIT -1 OFFSET ?4";
+        let keep = CC_MEMO_VARIANTS as i64;
+        tx.execute(
+            &format!("DELETE FROM cc_memo_input_refs WHERE memo_id IN ({surplus})"),
+            params![low, high, length, keep],
+        )?;
+        tx.execute(
+            &format!("DELETE FROM cc_preprocess_memos WHERE id IN ({surplus})"),
+            params![low, high, length, keep],
+        )?;
         tx.commit()
     }
 
@@ -557,11 +637,15 @@ impl FileHashCache<'_> {
 
     /// Called after a successful validation and only when the read marked it
     /// due. The SQL guard also bounds updates by competing processes.
-    pub fn touch_cc_preprocess_memo(&self, memo_key: &str) -> rusqlite::Result<usize> {
+    pub fn touch_cc_preprocess_memo(
+        &self,
+        memo_key: &str,
+        preprocessed_hash: &str,
+    ) -> rusqlite::Result<usize> {
         self.db().execute(
             "UPDATE cc_preprocess_memos SET last_used = unixepoch()
              WHERE memo_key = ?1 AND last_used <= unixepoch() - 86400",
-            [memo_key],
+            [variant_key(memo_key, preprocessed_hash)],
         )
     }
 
@@ -777,6 +861,56 @@ mod tests {
         assert_eq!(b.inputs, vec![read_back(moved)]);
         assert_eq!(count(&cache, "cc_memo_inputs"), 2);
         assert!(cache.get_cc_preprocess_memo("absent").unwrap().is_none());
+    }
+
+    /// Each header state a unit compiled under keeps its own read set, so
+    /// reverting a header finds the earlier one. Recording a read set again
+    /// makes it the newest, and only the newest few are kept.
+    #[test]
+    fn a_unit_keeps_its_recent_read_sets_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = FileHashCache::open(&dir.path().join("index.db")).unwrap();
+        let hashes = |cache: &FileHashCache<'_>, key: &str| {
+            cache
+                .get_cc_preprocess_memos(key)
+                .unwrap()
+                .into_iter()
+                .map(|memo| memo.preprocessed_hash)
+                .collect::<Vec<_>>()
+        };
+        cache
+            .put_cc_preprocess_memo_inputs("unit", "before", &[input("a.h", "one")])
+            .unwrap();
+        cache
+            .put_cc_preprocess_memo_inputs("unit", "edited", &[input("a.h", "two")])
+            .unwrap();
+        cache
+            .put_cc_preprocess_memo_inputs("unit/", "neighbour", &[input("a.h", "one")])
+            .unwrap();
+        assert_eq!(hashes(&cache, "unit"), ["edited", "before"]);
+        let before = &cache.get_cc_preprocess_memos("unit").unwrap()[1];
+        assert_eq!(before.inputs, vec![read_back(input("a.h", "one"))]);
+
+        cache
+            .put_cc_preprocess_memo_inputs("unit", "before", &[input("a.h", "one")])
+            .unwrap();
+        assert_eq!(hashes(&cache, "unit"), ["before", "edited"]);
+
+        for state in 0..CC_MEMO_VARIANTS {
+            cache
+                .put_cc_preprocess_memo_inputs("unit", &format!("s{state}"), &[input("a.h", "s")])
+                .unwrap();
+        }
+        let kept = hashes(&cache, "unit");
+        assert_eq!(kept.len(), 8);
+        assert_eq!(kept.first().map(String::as_str), Some("s7"));
+        assert!(!kept.iter().any(|hash| hash == "before" || hash == "edited"));
+        assert_eq!(
+            count(&cache, "cc_memo_input_refs"),
+            9,
+            "evicted read sets drop their references"
+        );
+        assert_eq!(hashes(&cache, "unit/"), ["neighbour"]);
     }
 
     /// A stamp taken less than the settle window after its file changed is
@@ -1000,7 +1134,18 @@ mod tests {
 
         let other = input("other.h", "o");
         record_as_older_release(&cache, "older", std::slice::from_ref(&other));
-        assert_eq!(stamp_of("older"), unproven(other.fingerprint.path));
+        assert!(
+            cache.get_cc_preprocess_memo("older").unwrap().is_none(),
+            "a read set only an older release recorded is never served"
+        );
+        // Referenced by this release without a settled stamp of its own, the
+        // row keeps the older release's stamp, which proves nothing.
+        let mut unsettled = other.clone();
+        unsettled.observed_ns = unsettled.fingerprint.ctime_ns;
+        cache
+            .put_cc_preprocess_memo_inputs("c", "h", std::slice::from_ref(&unsettled))
+            .unwrap();
+        assert_eq!(stamp_of("c"), unproven(other.fingerprint.path));
     }
 
     /// A mapped hash or verdict an older release recorded is never served,
@@ -1196,8 +1341,8 @@ mod tests {
                 .unwrap()
                 .needs_touch
         );
-        assert_eq!(cache.touch_cc_preprocess_memo("live").unwrap(), 1);
-        assert_eq!(cache.touch_cc_preprocess_memo("live").unwrap(), 0);
+        assert_eq!(cache.touch_cc_preprocess_memo("live", "b").unwrap(), 1);
+        assert_eq!(cache.touch_cc_preprocess_memo("live", "b").unwrap(), 0);
         assert!(
             !cache
                 .get_cc_preprocess_memo("live")

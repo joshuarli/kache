@@ -212,7 +212,7 @@ fn run_benchmark(
 
     let touch_start = Instant::now();
     for sample in samples {
-        shared.touch_cc_preprocess_memo(&sample.memo_key)?;
+        shared.touch_cc_preprocess_memo(&sample.memo_key, &sample.preprocessed_hash)?;
     }
     let touch_ms = elapsed(touch_start);
     measurements.push(Measurement {

@@ -7769,13 +7769,36 @@ impl<'db> FileHasher<'db> {
         mapped_content: &impl Fn(&Path) -> Option<CcContentHashes>,
     ) -> Option<(String, Vec<PathBuf>)> {
         let cache = self.cache.as_ref()?;
-        let record = match cache.get_cc_preprocess_memo(memo_key) {
-            Ok(record) => record?,
+        let records = match cache.get_cc_preprocess_memos(memo_key) {
+            Ok(records) => records,
             Err(error) => {
                 log::debug!("cc preprocess memo lookup failed: {error}");
                 return None;
             }
         };
+        if records.is_empty() {
+            log::debug!("cc preprocess memo: no read set recorded for {memo_key}");
+        }
+        let (record, satisfied) = records.into_iter().find_map(|record| {
+            let satisfied = self.memo_record_is_unchanged(&record, &resolve, mapped_content)?;
+            Some((record, satisfied))
+        })?;
+        if record.needs_touch
+            && let Err(error) = cache.touch_cc_preprocess_memo(memo_key, &record.preprocessed_hash)
+        {
+            log::debug!("cc preprocess memo touch failed: {error}");
+        }
+        Some((record.preprocessed_hash, satisfied))
+    }
+
+    /// The paths that hold every input of `record` unchanged, in order, or
+    /// `None` if any input changed or the record is malformed.
+    fn memo_record_is_unchanged(
+        &self,
+        record: &CcPreprocessMemo,
+        resolve: &impl Fn(&str) -> Vec<PathBuf>,
+        mapped_content: &impl Fn(&Path) -> Option<CcContentHashes>,
+    ) -> Option<Vec<PathBuf>> {
         // A `pb:` prefix marks a path-bound read set; the digest follows.
         let digest = record
             .preprocessed_hash
@@ -7795,28 +7818,18 @@ impl<'db> FileHasher<'db> {
             log::debug!("cc preprocess memo hash is invalid");
             return None;
         }
-        let inputs = record.inputs;
-        if inputs.is_empty() {
+        if record.inputs.is_empty() {
             return None;
         }
         // The paths that satisfied the memo are the inputs this invocation
         // would have discovered by preprocessing, and the caller needs them to
         // resolve include shadowing without a fresh dependency capture.
-        let mut satisfied = Vec::with_capacity(inputs.len());
-        for (expected, scan) in inputs.iter().zip(&record.header_scans) {
-            satisfied.push(self.memo_input_is_unchanged(
-                expected,
-                scan,
-                &resolve,
-                mapped_content,
-            )?);
-        }
-        if record.needs_touch
-            && let Err(error) = cache.touch_cc_preprocess_memo(memo_key)
-        {
-            log::debug!("cc preprocess memo touch failed: {error}");
-        }
-        Some((record.preprocessed_hash, satisfied))
+        record
+            .inputs
+            .iter()
+            .zip(&record.header_scans)
+            .map(|(expected, scan)| self.memo_input_is_unchanged(expected, scan, resolve, mapped_content))
+            .collect()
     }
 
     /// Does this input still hold the bytes the memo was recorded against?
