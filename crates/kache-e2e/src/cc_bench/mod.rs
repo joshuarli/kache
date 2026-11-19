@@ -76,6 +76,8 @@ pub struct Observation {
     /// blake3 over every object's path and bytes.
     pub objects: String,
     pub object_count: usize,
+    /// Host load across the timed build.
+    pub load: crate::bench_host::PhaseLoad,
 }
 
 /// Cache results a scenario recorded: kache's event log, ccache's stats.
@@ -461,7 +463,9 @@ fn replay(cfg: &Config, workload: &Workload, arm: Arm, root: &Path, shims: Optio
             std::fs::write(log, "")?;
         }
         let before = counters(arm, cfg, &setup)?;
+        let load_start = crate::bench_host::LoadSample::take();
         let (wall_ms, cpu_ms, max_rss_kib) = measure(&cfg.meter, command, &current.env, log.as_deref())?;
+        let load = crate::bench_host::PhaseLoad::between(&load_start, &crate::bench_host::LoadSample::take());
         if arm == Arm::Kache {
             await_quiet_event_log(&setup.store.join("events.jsonl"));
         }
@@ -476,6 +480,7 @@ fn replay(cfg: &Config, workload: &Workload, arm: Arm, root: &Path, shims: Optio
             counters: delta(&after, &before),
             objects,
             object_count,
+            load,
         });
     }
     kache_daemon("stop")?;
@@ -671,6 +676,15 @@ pub fn markdown(report: &Report) -> String {
         }
         let rejected: Vec<_> = w.timed.iter().filter(|r| !r.admitted).collect();
         s.push_str(&format!("\nTimed replays: {} admitted, {} rejected.\n", w.timed.len() - rejected.len(), rejected.len()));
+        let loads: Vec<f64> = w
+            .timed
+            .iter()
+            .flat_map(|r| &r.observations)
+            .filter_map(|o| o.load.loadavg_start.map(|l| l[0]))
+            .collect();
+        if let (Some(low), Some(high)) = (loads.iter().cloned().reduce(f64::min), loads.iter().cloned().reduce(f64::max)) {
+            s.push_str(&format!("Host 1-minute load at the start of timed builds: {low:.2} to {high:.2}.\n"));
+        }
         for r in rejected {
             s.push_str(&format!("- rejected {} pair {}: {}\n", r.arm.as_str(), r.pair.unwrap_or(0) + 1, r.rejection.as_deref().unwrap_or("")));
         }
