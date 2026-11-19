@@ -219,7 +219,7 @@ summary = "gcc vs g++ vs clang vs clang++ driver mode changes are keyed"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "base.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-specs-file"

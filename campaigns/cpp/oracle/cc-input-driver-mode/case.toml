@@ -1,0 +1,21 @@
+summary = "the same arguments through the C and the C++ driver are different compiles: g++ and clang++ compile a .c file as C++, so neither entry serves the other driver (CCP-08)"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["c.o", "cxx.o"]
+
+[[compile]]
+argv = ["{cc}", "-O1", "-c", "u.c", "-o", "c.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cxx}", "-O1", "-c", "u.c", "-o", "cxx.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
