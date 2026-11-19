@@ -28,7 +28,7 @@ fn header_availability_uses_each_clients_relative_paths_and_include_environment(
                 let inputs = &inputs;
                 threads.spawn(move || {
                     let names =
-                        cc_shadowing_names(parsed, inputs, &crate::cache_key::FileHasher::new())
+                        cc_shadowing_names(parsed, inputs, &[], &crate::cache_key::FileHasher::new())
                             .unwrap();
                     assert_eq!(names.probes.len(), 1);
                     assert!(
@@ -7765,7 +7765,7 @@ fn quoted_probe_outside_user_dirs_and_relocated_probe_have_the_same_resolution()
         fs::write(&header, "#if __has_include(\"optional.h\")\n#endif\n").unwrap();
         let inputs = [source, header];
         let names =
-            cc_shadowing_names(&parsed, &inputs, &crate::cache_key::FileHasher::new()).unwrap();
+            cc_shadowing_names(&parsed, &inputs, &[], &crate::cache_key::FileHasher::new()).unwrap();
         let before = digest_cc_shadowing_names(&parsed, &names).unwrap();
         let optional = elsewhere.join("optional.h");
         fs::write(&optional, "#define VALUE 23\n").unwrap();
@@ -7801,7 +7801,7 @@ fn include_next_notices_a_later_candidate_even_when_the_first_still_exists() {
     parsed.includes.push(later.clone());
     fs::write(first.join("optional.h"), "int x;\n").unwrap();
     let names =
-        cc_shadowing_names(&parsed, &[source], &crate::cache_key::FileHasher::new()).unwrap();
+        cc_shadowing_names(&parsed, &[source], &[], &crate::cache_key::FileHasher::new()).unwrap();
     let before = digest_cc_shadowing_names(&parsed, &names).unwrap();
     fs::write(later.join("optional.h"), "int y;\n").unwrap();
     assert_ne!(before, digest_cc_shadowing_names(&parsed, &names).unwrap());
@@ -7817,7 +7817,7 @@ fn a_probe_rechecks_a_symlink_whose_target_appears_after_the_key() {
     let target = temp.path().join("target");
     std::os::unix::fs::symlink(&target, include.join("optional.h")).unwrap();
     let names =
-        cc_shadowing_names(&parsed, &[source], &crate::cache_key::FileHasher::new()).unwrap();
+        cc_shadowing_names(&parsed, &[source], &[], &crate::cache_key::FileHasher::new()).unwrap();
     let (digest, stamps) = digest_cc_shadowing_names_stamped(&parsed, &names, None).unwrap();
     assert!(
         stamps.is_none(),
@@ -8039,7 +8039,7 @@ fn joined_quote_and_after_dirs_can_start_with_a_hyphen() {
 fn joined_quote_dir_with_a_hyphen_tracks_shadowing() {
     let _lock = crate::test_support::process_state_test_lock();
     let shadowing_digest = |parsed: &CcArgs, inputs: &[PathBuf]| {
-        let names = cc_shadowing_names(parsed, inputs, &crate::cache_key::FileHasher::new())?;
+        let names = cc_shadowing_names(parsed, inputs, &[], &crate::cache_key::FileHasher::new())?;
         digest_cc_shadowing_names(parsed, &names)
     };
     // A relative joined value must begin with `-` to exercise this spelling.
@@ -8523,6 +8523,7 @@ fn a_stamped_recheck_notices_a_header_added_after_the_key() {
     let names = cc_shadowing_names(
         &parsed,
         &[source.clone(), read],
+        &[],
         &crate::cache_key::FileHasher::new(),
     )
     .unwrap();
@@ -10279,4 +10280,37 @@ fn implicit_precompiled_headers_key_every_candidate_the_compiler_can_load() {
     let pch_only = clang_key(&include).unwrap();
     std::fs::write(temp.path().join("f.h.gch"), "clang gch").unwrap();
     assert_ne!(pch_only, clang_key(&include).unwrap());
+}
+
+/// The include-resolution digest a memo is checked against must not depend
+/// on the order its read set arrives in: preprocessing reports inclusion
+/// order, a memo the order its shared rows were first recorded. It must
+/// still tell apart which header's probe found its name.
+#[test]
+fn shadowing_digest_is_independent_of_read_set_order() {
+    let temp = tempfile::tempdir().unwrap();
+    let (parsed, source, _) = probing_unit(temp.path(), "int x;\n");
+    let headers = ["one", "two"].map(|dir| {
+        let dir = temp.path().join(dir);
+        fs::create_dir(&dir).unwrap();
+        let header = dir.join("probe.h");
+        fs::write(&header, "#if __has_include(\"optional.h\")\n#endif\n").unwrap();
+        header
+    });
+    let digest = |inputs: &[PathBuf]| digest_cc_include_shadowing(&parsed, inputs).unwrap();
+    let forward = [source.clone(), headers[0].clone(), headers[1].clone()];
+    let backward = [headers[1].clone(), source.clone(), headers[0].clone(), headers[1].clone()];
+
+    let first = headers[0].with_file_name("optional.h");
+    fs::write(&first, "").unwrap();
+    assert_eq!(digest(&forward), digest(&backward));
+    let found_by_first = digest(&forward);
+    fs::remove_file(&first).unwrap();
+    fs::write(headers[1].with_file_name("optional.h"), "").unwrap();
+    assert_eq!(digest(&forward), digest(&backward));
+    assert_ne!(
+        digest(&forward),
+        found_by_first,
+        "which header's probe found the name is part of the resolution"
+    );
 }

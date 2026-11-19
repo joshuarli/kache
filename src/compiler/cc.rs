@@ -6496,7 +6496,7 @@ fn cc_trace_name(parsed: &CcArgs) -> String {
 fn digest_cc_include_shadowing(parsed: &CcArgs, read_inputs: &[PathBuf]) -> Result<String> {
     digest_cc_shadowing_names(
         parsed,
-        &cc_shadowing_names(parsed, read_inputs, &crate::cache_key::FileHasher::new())?,
+        &cc_shadowing_names(parsed, read_inputs, &[], &crate::cache_key::FileHasher::new())?,
     )
 }
 
@@ -6520,6 +6520,7 @@ struct CcProbedHeader {
 fn cc_shadowing_names(
     parsed: &CcArgs,
     read_inputs: &[PathBuf],
+    prefix_maps: &[CcPrefixMap],
     file_hasher: &crate::cache_key::FileHasher<'_>,
 ) -> Result<CcShadowingNames> {
     let cwd = parsed
@@ -6624,6 +6625,24 @@ fn cc_shadowing_names(
             });
         }
     }
+    // The digest folds probes in this order. A probe's availability is a
+    // function of its name and candidates alone, so a canonical order over
+    // them describes the same lookups whichever order the read set arrived
+    // in: preprocessing reports inclusion order, a memo reports its rows'.
+    // Mapped spellings keep the order the same on every checkout.
+    result.probes.sort_by_cached_key(|probe| {
+        (
+            probe.name.clone(),
+            probe
+                .candidates
+                .iter()
+                .map(|candidate| cc_mapped_path(candidate, prefix_maps))
+                .collect::<Vec<_>>(),
+        )
+    });
+    result
+        .probes
+        .dedup_by(|a, b| a.name == b.name && a.candidates == b.candidates);
     Ok(result)
 }
 
@@ -9050,10 +9069,11 @@ impl CcCompiler {
                 let Some((hash, expected_resolution)) = hash.split_once('@') else {
                     return Ok(None);
                 };
-                let names = cc_shadowing_names(parsed, &inputs, ctx.file_hasher)?;
+                let names = cc_shadowing_names(parsed, &inputs, &prefix_maps, ctx.file_hasher)?;
                 let (resolution, stamps) =
                     digest_cc_shadowing_names_stamped(parsed, &names, Some(ctx.file_hasher))?;
                 if resolution != expected_resolution {
+                    log::debug!("cc preprocess memo: include resolution differs from the recorded one");
                     return Ok(None);
                 }
                 memo_shadowing = Some((names, resolution, stamps));
@@ -9231,7 +9251,7 @@ impl CcCompiler {
             None => {
                 let names = read_inputs
                     .as_deref()
-                    .map(|inputs| cc_shadowing_names(parsed, inputs, ctx.file_hasher))
+                    .map(|inputs| cc_shadowing_names(parsed, inputs, &prefix_maps, ctx.file_hasher))
                     .transpose()?;
                 let (digest, stamps, mode) = match &names {
                     Some(names) => {
