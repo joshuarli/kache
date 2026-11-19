@@ -201,7 +201,7 @@ summary = "same path, different compiler binary content invalidates"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "direct.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-wrapper-selection"

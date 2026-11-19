@@ -243,6 +243,7 @@ fn run_case(case: &Case, profile: Profile, ctx: &ArmContext<'_>, run: &mut CaseR
                 kache: obs(Arm::Kache),
                 effective_argv: &effective,
                 passthrough_argv: &passthrough,
+                driver_args: compile.driver_args,
             });
             run.rows.push(RowResult {
                 step: step.name.clone(),

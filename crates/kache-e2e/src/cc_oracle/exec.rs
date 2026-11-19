@@ -578,7 +578,8 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
             std::fs::write(log, "")?;
             let driver = match compile.argv[0].as_str() {
                 "{cc}" => shims.join(&ctx.toolchain.cc_name),
-                _ => shims.join(&ctx.toolchain.cxx_name),
+                "{cxx}" => shims.join(&ctx.toolchain.cxx_name),
+                fixture_driver => PathBuf::from(expand(fixture_driver, ctx.fixture)),
             };
             let mut command = match arm {
                 Arm::Raw | Arm::RawRepeat | Arm::RawPassthrough => Command::new(&driver),
@@ -691,13 +692,22 @@ fn apply(action: &Action, case: &Case, arm: Arm, ctx: &ArmContext<'_>, store: &P
             path,
             content,
             keep_mtime,
+            executable,
         } => {
             let target = root.join(path);
             let previous = std::fs::metadata(&target).and_then(|m| m.modified()).ok();
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent)?;
             }
+            let raw_like = matches!(arm, Arm::Raw | Arm::RawRepeat | Arm::RawPassthrough);
+            let shims = if raw_like && ctx.control == Some(Control::ReferenceFailure) { ctx.failing_shims } else { ctx.shims };
+            let content = content
+                .replace("{cc}", &shims.join(&ctx.toolchain.cc_name).to_string_lossy())
+                .replace("{cxx}", &shims.join(&ctx.toolchain.cxx_name).to_string_lossy());
             std::fs::write(&target, content)?;
+            if *executable {
+                std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))?;
+            }
             match (keep_mtime, previous) {
                 (true, Some(time)) => set_mtime_to(&target, time)?,
                 (true, None) => bail!("case {}: keep_mtime on {path}, which did not exist", case.id),

@@ -1,0 +1,29 @@
+summary = "a compiler replaced at the same path recompiles: bin/cc is a driver script that changes only code generation (-fno-function-sections, then -ffunction-sections), so neither the arguments nor the preprocessor output change; returning to the earlier driver may reuse its object (CCP-08)"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{fixture}/bin/cc", "-O1", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+driver_args = 1
+
+[[step]]
+name = "populate"
+reuse = "miss"
+action = [{ op = "write", path = "bin/cc", content = "#!/bin/sh\nexec '{cc}' -fno-function-sections \"$@\"\n", executable = true }]
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "compiler-replaced"
+reuse = "miss"
+action = [{ op = "write", path = "bin/cc", content = "#!/bin/sh\nexec '{cc}' -ffunction-sections \"$@\"\n", executable = true }]
+
+[[step]]
+name = "compiler-restored"
+reuse = "like-ccache"
+action = [{ op = "write", path = "bin/cc", content = "#!/bin/sh\nexec '{cc}' -fno-function-sections \"$@\"\n", executable = true }]
