@@ -1,0 +1,21 @@
+summary = "a warning whose text the source wrote with its own CSI and OSC sequences replays from a hit exactly as the raw compiler prints it, colored and plain, each from the entry its own setting stored (CCP-05)"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["color.o", "plain.o"]
+
+[[compile]]
+argv = ["{cc}", "-fdiagnostics-color=always", "-DSETTING=1", "-c", "u.c", "-o", "color.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-fdiagnostics-color=never", "-DSETTING=2", "-c", "u.c", "-o", "plain.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

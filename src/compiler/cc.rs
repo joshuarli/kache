@@ -1501,15 +1501,6 @@ impl CcArgs {
     }
 }
 
-/// How an entry's stored diagnostics can serve an invocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DiagnosticReplay {
-    AsStored,
-    /// Printed with color for an invocation that wants none. GCC's and
-    /// clang's colored text is their plain text with escapes added.
-    WithoutColor,
-}
-
 /// `Some(true)` for a switch that turns diagnostic color on. The compiler's
 /// stderr is a pipe under kache, so `auto` is off.
 fn diagnostic_color_switch(arg: &str) -> Option<bool> {
@@ -1550,20 +1541,16 @@ fn without_color_switches(fingerprint: &str) -> (Vec<&str>, bool) {
 }
 
 /// Whether diagnostics stored under the `stored` formatting fingerprint can
-/// be replayed for an invocation whose fingerprint is `current`.
-pub(crate) fn diagnostic_replay(stored: &str, current: &str) -> Option<DiagnosticReplay> {
-    if stored == current {
-        return Some(DiagnosticReplay::AsStored);
-    }
-    let (stored_rest, stored_color) = without_color_switches(stored);
-    let (current_rest, current_color) = without_color_switches(current);
-    if stored_rest != current_rest {
-        return None;
-    }
-    match (stored_color, current_color) {
-        (true, true) | (false, false) => Some(DiagnosticReplay::AsStored),
-        (true, false) => Some(DiagnosticReplay::WithoutColor),
-        (false, true) => None,
+/// be replayed as they are for an invocation whose fingerprint is `current`:
+/// the two differ at most in spellings of the same color setting. Colored
+/// text does not serve a colorless invocation. Removing escapes from it
+/// would also remove the escapes a source wrote into a message, which the
+/// compiler prints as they are under either setting.
+pub(crate) fn diagnostic_replay(stored: &str, current: &str) -> bool {
+    stored == current || {
+        let (stored_rest, stored_color) = without_color_switches(stored);
+        let (current_rest, current_color) = without_color_switches(current);
+        stored_rest == current_rest && stored_color == current_color
     }
 }
 

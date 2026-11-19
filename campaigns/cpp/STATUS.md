@@ -144,7 +144,7 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | CCP-02 | RUNNING | CCP-01 | Branch `feat/ccp02-input-identity`: 20 input-identity cases; see "CCP-02 input identity" below. Not yet covered: same-path compiler replacement, wrapper/driver-mode selection, VFS overlays, PGO profiles, -march=native, user key config, diagnostic locale, profile switches against a populated cache, hash/compile/publish race barriers. |
 | CCP-03 | RUNNING | CCP-01, CCP-02 | Branch `feat/ccp03-chromium-flags`: Chromium official flags verified and landed from the WIP branch; `-S -o` cached. Open: response files (`@file`), clang `--config`, GCC `-specs`, `-fsanitize-ignorelist`, `-x` and `-Wp,`/`-Xpreprocessor` audits. See "CCP-03..CCP-08 progress" below. |
 | CCP-04 | LIMIT | CCP-02 | Comment-only reuse is declined: comment text and width are observable (see "CCP-04 finding"). ccache's reuse is wrong output when a comment changes width before code (`cc-eqp-column-significance`) and when a same-width reword changes GCC's fallthrough warning (`cc-eqp-fallthrough-comment`, blocking, ccache wrong in both modes). `cc-eqp-comment-only` stays open as the recorded gap. |
-| CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (PR #52); `cc-out-gcno` (GCC and clang), `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Diagnostic formatting keyed per entry (`cc-out-diagnostics-format*`). Colored entries serve colorless builds (PR #56). GCC `-fdiagnostics-format=json-file` cached as a sidecar (`cc-out-diagnostics-json-file`, blocking); SARIF outputs refused for good (see "CCP-05 GCC diagnostic files"). Open: sidecars under `-S`. |
+| CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (PR #52); `cc-out-gcno` (GCC and clang), `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Diagnostic formatting keyed per entry (`cc-out-diagnostics-format*`). Diagnostics-bearing entries replay only under their own color setting; empty diagnostics serve every setting (`cc-out-diagnostics-color-reuse`, `-color-cross`, `-source-escapes` blocking). GCC `-fdiagnostics-format=json-file` cached as a sidecar (`cc-out-diagnostics-json-file`, blocking); SARIF outputs refused for good (see "CCP-05 GCC diagnostic files"). Open: sidecars under `-S`. |
 | CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | clang PCH builds and `-include-pch` consumers cached by default (`cc-pch-clang-use`, `cc-pch-clang-define-variants` blocking); see "CCP-06 PCH" below. Clang explicit module consumers (`-fmodule-file=`, `-fprebuilt-module-path=`) cached; `cc-module-fmodule-file`, `cc-module-body-edit`, `cc-module-prebuilt-path`, `cc-module-add-remove` blocking on Linux clang 23; see "CCP-06 modules" below. Implicit PCH (GCC `<name>.gch` through `#include`/`-include`, clang's driver `-include` → `.pch`) keyed by every candidate; `cc-pch-gcc-include`, `cc-pch-gcc-leading-include`, `cc-pch-gcc-directory`, `cc-pch-clang-implicit` blocking; see "CCP-06 implicit PCH". Open: implicit modules, module production. |
 | CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`, `cc-host-universal-objects`, `cc-host-universal-slice-headers` (universal objects keyed slice by slice: the driver refuses `-E` with several `-arch`, and a compile's depfile lists only the last slice's headers). `-Xarch_<arch>` operands keyed per slice (`cc-host-xarch`, blocking): each slice is re-parsed with its own operands, and dropping the other slices' operands is what separates them (keeping all fails `edit-x86_64-header` with `KACHE_WRONG_OUTPUT`). `-Xarch_*` outside a universal compile, or naming no built slice, is refused. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM 21.1.8 subset (`make cc-project-llvm`: `llvm-tblgen` and `LLVMCore`, CMake + Ninja, kache as compiler launcher, TableGen-generated headers in the build tree) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23; the image needs `apk add python3` for LLVM's configure), 2026-11-19: 377 objects byte-identical across raw, cold and warm kache, warm build 377 local hits and no compiles, warm `llvm-tblgen` output identical to raw. cc-crate fixture, Chromium, Meson/Autotools launchers not started. |
 | CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`), broker exit race fix (PR #32), C/C++ hits verify blob hashes by default (PR #46), the non-local cache advisory left compiler stderr (PR #44). |
@@ -337,13 +337,22 @@ Issue #1461 requires warning-free units to reuse across formatting, so the
 key folds only `-fdiagnostics-format=`, and each entry's stored
 diagnostics record the formatting flags they were printed under. An entry
 with diagnostics under other flags is rejected and replaced. GCC options
-that write diagnostics to files pass through. A colored entry also serves a
-colorless invocation with its CSI and OSC escapes removed: for GCC 15,
-clang 23 and Apple clang 21 that leaves the plain output byte for byte. A
-colorless entry seen by a colored build is replaced, so a tree built both
-ways converges on one colored entry (`cc-out-diagnostics-color-reuse`,
-blocking). ccache instead compiles with color forced on, which the oracle's
-argument contract does not allow.
+that write diagnostics to files pass through. A colored entry with
+diagnostics serves only a colored invocation, and a colorless entry only a
+colorless one; the other setting recompiles and replaces the entry, so a
+tree built both ways alternates. Empty diagnostics serve every setting
+(`cc-out-diagnostics-color-reuse`, blocking). From PR #56 until 2026-11-19 a
+colored entry served a colorless invocation with every CSI and OSC sequence
+removed. That is wrong whenever the message text holds escapes of its own:
+GCC 15 prints a `#pragma GCC warning "\033[31mUSER\033[0m"` string's escape
+bytes as they are under `-fdiagnostics-color=never`, so stripping printed
+`warning: USER` where GCC prints the escapes (`cc-out-diagnostics-color-cross`
+fails with `KACHE_WRONG_OUTPUT` on the old code; clang prints such bytes as
+`<U+001B>`). Compiler decoration cannot be told from source text in the
+stored stream, so nothing is stripped. `cc-out-diagnostics-source-escapes`
+replays those escapes from a hit under each setting. ccache instead
+compiles with color forced on, which the oracle's argument contract does
+not allow.
 
 **CCP-05 GCC diagnostic files.** Observed with GCC 15.2 (L4 image):
 `-fdiagnostics-format=json-file` always writes a file, `[]` when there is

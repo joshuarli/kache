@@ -232,12 +232,3 @@ fn stored_diagnostics_record_the_formatting_they_were_printed_under() {
     assert_eq!(stored_format(&store_formatted("", &roots, color)).unwrap(), None);
     assert!(stored_format(&format!("{PREFIX}not json")).is_err());
 }
-
-#[test]
-fn terminal_escapes_are_removed_and_text_is_kept() {
-    let gcc = "\x1b[01m\x1b[Ku.c:1:20:\x1b[m\x1b[K \x1b[01;35m\x1b[Kwarning: \x1b[m\x1b[Kunused [\x1b]8;;https://gcc.gnu.org/x\x07-Wunused\x1b]8;;\x07]\n";
-    assert_eq!(without_terminal_escapes(gcc), "u.c:1:20: warning: unused [-Wunused]\n");
-    let clang = "\x1b[1mu.c:1:20: \x1b[0m\x1b[0;1;35mwarning: \x1b[0m\x1b]8;;file:///u.c\x1b\\link\x1b]8;;\x1b\\\n";
-    assert_eq!(without_terminal_escapes(clang), "u.c:1:20: warning: link\n");
-    assert_eq!(without_terminal_escapes("a \x1b b"), "a \x1b b", "a bare escape is not a sequence");
-}

@@ -1740,8 +1740,7 @@ fn universal_slices_are_keyed_one_arch_at_a_time() {
 }
 
 #[test]
-fn colored_diagnostics_serve_colorless_invocations_and_not_the_reverse() {
-    use DiagnosticReplay::{AsStored, WithoutColor};
+fn diagnostics_replay_only_under_the_color_setting_they_were_printed_with() {
     let fingerprint = |args: &[&str]| {
         CcArgs::parse(&s(&[&["clang", "-c", "u.c"][..], args].concat()))
             .unwrap()
@@ -1749,25 +1748,23 @@ fn colored_diagnostics_serve_colorless_invocations_and_not_the_reverse() {
     };
     let plain = fingerprint(&[]);
     let color = fingerprint(&["-fdiagnostics-color=always"]);
-    assert_eq!(diagnostic_replay(&color, &color), Some(AsStored));
-    assert_eq!(diagnostic_replay(&color, &plain), Some(WithoutColor));
-    assert_eq!(diagnostic_replay(&plain, &color), None, "plain text cannot be colored");
+    assert!(diagnostic_replay(&color, &color));
+    assert!(!diagnostic_replay(&color, &plain), "stripping escapes would strip the source's own");
+    assert!(!diagnostic_replay(&plain, &color), "plain text cannot be colored");
     for off in [
         &["-fno-color-diagnostics"][..],
         &["-fdiagnostics-color=never"],
         &["-fdiagnostics-color=auto"],
         &["-fcolor-diagnostics", "-fno-color-diagnostics"],
     ] {
-        assert_eq!(diagnostic_replay(&color, &fingerprint(off)), Some(WithoutColor), "{off:?}");
-        assert_eq!(diagnostic_replay(&plain, &fingerprint(off)), Some(AsStored), "{off:?}");
+        assert!(!diagnostic_replay(&color, &fingerprint(off)), "{off:?}");
+        assert!(diagnostic_replay(&plain, &fingerprint(off)), "{off:?}");
     }
     for on in [&["-fcolor-diagnostics"][..], &["-Xclang", "-fcolor-diagnostics"], &["-fno-color-diagnostics", "-fdiagnostics-color"]] {
-        assert_eq!(diagnostic_replay(&color, &fingerprint(on)), Some(AsStored), "{on:?}");
+        assert!(diagnostic_replay(&color, &fingerprint(on)), "{on:?}");
     }
     let no_option = fingerprint(&["-fno-diagnostics-show-option"]);
-    let color_no_option = fingerprint(&["-fdiagnostics-color=always", "-fno-diagnostics-show-option"]);
-    assert_eq!(diagnostic_replay(&color, &no_option), None, "other formatting still has to agree");
-    assert_eq!(diagnostic_replay(&color_no_option, &no_option), Some(WithoutColor));
+    assert!(!diagnostic_replay(&plain, &no_option), "other formatting still has to agree");
 }
 
 #[test]

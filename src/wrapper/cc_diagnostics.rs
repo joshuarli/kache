@@ -45,43 +45,6 @@ pub(super) fn stored_format(text: &str) -> Result<Option<String>> {
     }
 }
 
-/// `text` without terminal escapes: CSI sequences (color, erase) and OSC
-/// sequences (hyperlinks), as GCC and clang add them to colored output.
-pub(super) fn without_terminal_escapes(text: &str) -> String {
-    let mut plain = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '\x1b' {
-            plain.push(c);
-            continue;
-        }
-        match chars.peek() {
-            Some('[') => {
-                chars.next();
-                for c in chars.by_ref() {
-                    if ('@'..='~').contains(&c) {
-                        break;
-                    }
-                }
-            }
-            Some(']') => {
-                chars.next();
-                while let Some(c) = chars.next() {
-                    if c == '\x07' {
-                        break;
-                    }
-                    if c == '\x1b' && chars.peek() == Some(&'\\') {
-                        chars.next();
-                        break;
-                    }
-                }
-            }
-            _ => plain.push(c),
-        }
-    }
-    plain
-}
-
 pub(super) fn store_formatted<'a>(text: &'a str, roots: &Roots, format: &str) -> Cow<'a, str> {
     if text.is_empty() {
         return Cow::Borrowed(text);

@@ -836,10 +836,28 @@ status = "oracle"
 [[case]]
 id = "cc-out-diagnostics-color-reuse"
 package = "CCP-05"
-summary = "a unit with warnings reuses across color flags: colored entries replay without escapes"
+summary = "a unit without diagnostics reuses one entry across color flags"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "color_diagnostics.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-out-diagnostics-color-cross"
+package = "CCP-05"
+summary = "a warning holding the source's own CSI/OSC escapes is not served across color settings; output stays exactly raw"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "color_diagnostics.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-out-diagnostics-source-escapes"
+package = "CCP-05"
+summary = "a hit replays a warning's source-authored CSI/OSC escapes exactly, colored and plain"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
 status = "oracle"
 
 [[case]]

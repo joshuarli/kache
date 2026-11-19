@@ -1,1 +1,1 @@
-int u(int x) { int unused; return x * 7; }
+int u(int x) { return x * 7; }
