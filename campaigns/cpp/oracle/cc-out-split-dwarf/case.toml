@@ -1,11 +1,19 @@
-summary = "-gsplit-dwarf writes a .dwo beside the object; a hit must restore both (CCP-05)"
-cohort = "open"
+summary = "-gsplit-dwarf writes a .dwo beside the object; a hit restores both, an object naming another .dwo is never reused, and without -g the .dwo is restored exactly when the compiler writes one (CCP-05)"
+cohort = "blocking"
 os = ["linux"]
 profiles = ["transparent", "reproducible"]
-outputs = ["u.o", "u.dwo"]
+outputs = ["c/u.o", "c/u.dwo", "a/u.o", "a/u.dwo", "b/u.o", "b/u.dwo"]
 
 [[compile]]
-argv = ["{cc}", "-g", "-gsplit-dwarf", "-c", "u.c", "-o", "u.o"]
+argv = ["{cc}", "-gsplit-dwarf", "-c", "u.c", "-o", "c/u.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-g", "-gsplit-dwarf", "-c", "u.c", "-o", "a/u.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-g", "-gsplit-dwarf", "-c", "u.c", "-o", "b/u.o"]
 source = "u.c"
 
 [[step]]
@@ -14,7 +22,7 @@ reuse = "miss"
 
 [[step]]
 name = "restore"
-reuse = "like-ccache"
+reuse = "hit"
 action = [{ op = "delete-outputs" }]
 
 [[step]]

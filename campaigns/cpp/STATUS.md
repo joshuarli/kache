@@ -144,7 +144,7 @@ KACH-21 asked for Linux fixture scenarios in a gate with
 | CCP-02 | RUNNING | CCP-01 | Branch `feat/ccp02-input-identity`: 20 input-identity cases; see "CCP-02 input identity" below. Not yet covered: same-path compiler replacement, wrapper/driver-mode selection, VFS overlays, PGO profiles, -march=native, user key config, diagnostic locale, profile switches against a populated cache, hash/compile/publish race barriers. |
 | CCP-03 | RUNNING | CCP-01, CCP-02 | Branch `feat/ccp03-chromium-flags`: Chromium official flags verified and landed from the WIP branch; `-S -o` cached. Open: response files (`@file`), clang `--config`, GCC `-specs`, `-fsanitize-ignorelist`, `-x` and `-Wp,`/`-Xpreprocessor` audits. See "CCP-03..CCP-08 progress" below. |
 | CCP-04 | BLOCKED | CCP-02 | Comment-only reuse needs a column-aware layout key; see "CCP-04 finding" below. ccache's own reuse is wrong output when a comment changes width before code (`cc-eqp-column-significance`). `cc-eqp-comment-only` stays open in both profiles. |
-| CCP-05 | RUNNING | CCP-02, CCP-03 | Open cases: `cc-out-gcno` (clang), `cc-out-split-dwarf` (Linux), `cc-out-serialized-diagnostics` (clang). |
+| CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (branch `feat/ccp05-output-sets`); `cc-out-gcno`, `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Open: a stamp-aware GCC `.gcno` comparator, `-fdiagnostics-format`/GCC SARIF outputs, sidecars under `-S`. |
 | CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | Open conditional case `cc-pch-clang-use` (ccache sloppiness `pch_defines,time_macros`). Module consumers not yet. |
 | CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`; open `cc-host-universal-objects`. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM subset, cc-crate fixture, Chromium, CMake/Meson/Autotools launchers not started. |
 | CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`), broker exit race fix (PR #32), C/C++ hits verify blob hashes by default (PR #46), the non-local cache advisory left compiler stderr (PR #44). |
@@ -270,7 +270,7 @@ Objective-C++, and recovery from damaged stores.
 
 **Open gaps (`KACHE_MISSED_REUSE`, correct fallback):** `@rsp` response
 files (no case yet), clang `--config`, GCC `-specs`, explicit sanitizer
-ignorelists, `.gcno`/`.dwo`/`.dia` sidecars, universal objects, PCH
+ignorelists, universal objects, PCH
 consumers (conditional), and the token-pasted header probe and
 comment-only edits in the default (reproducible) profile.
 
@@ -290,6 +290,33 @@ GCC's `.gcno` and the object carry a compile-time stamp even under
 `-frandom-seed` and `SOURCE_DATE_EPOCH`, so GCC coverage needs a
 stamp-aware comparator before it can be judged; the case is clang-only
 until then.
+
+**CCP-05 sidecars.** A `-c` compile with `--coverage`, `-ftest-coverage`,
+`-fprofile-arcs`, `-gsplit-dwarf` or clang's `--serialize-diagnostics`
+caches the files it writes beside the object (`CcArgs::sidecar_outputs`).
+Observed on Apple clang 21, GCC 15.2 and clang 23 (L4 image):
+
+- Both compilers name `.gcno` and `.dwo` after the object with its last
+  extension replaced (`-o d/x.c.o` gives `d/x.c.gcno`); without `-o`, after
+  the source stem in the working directory.
+- `-gsplit-dwarf` without `-g` writes a `.dwo` under GCC and not under
+  clang; Apple clang never writes one. The `.dwo` is required only under
+  debug info on non-macOS hosts and stored when written otherwise.
+- A coverage object names its absolute `.gcda` path and the notes file the
+  compilation directory. A split-DWARF object names its `.dwo` as spelled.
+  The probe blanks per-TU paths, so the key folds these in a
+  `sidecars.v1` field: working directory and output for coverage, output
+  only for split DWARF (its compilation directory is prefix-mapped).
+  Removing the output fold makes `cc-out-gcno` fail with
+  `KACHE_WRONG_OUTPUT` (`b/u.o` reused `a/u.o`'s entry).
+- A sidecar is stored only when this compile wrote it: a required one that
+  is missing, or a file unchanged (mtime, size) since before the compile,
+  stops the store. A hit restores the whole set, and an entry whose
+  sidecar set differs from the invocation's misses.
+- GCC coverage hits were checked by hand in the L4 image: the restored
+  `.gcno` stamp matches the restored object, and `gcov` reports 100% after
+  running the linked binary. Raw GCC is not reproducible, so the oracle
+  case stays clang-only until a stamp-aware comparator exists.
 
 **CCP-04 finding: expansion-equivalent reuse is not sound as ccache does it.**
 ccache's preprocessor mode keys by the `-E` text. That text separates
@@ -406,7 +433,8 @@ the musl in-image e2e on both architectures, and macOS.
    - the same in the L4 image, with `TOOLCHAINS="gcc clang"`;
    - `PATH=/opt/homebrew/bin:$PATH make e2e`.
 3. Next work, in priority order:
-   - CCP-05 output sets (`.gcno` comparator for GCC, `.dwo`, `.dia`).
+   - CCP-05 remainder: a stamp-aware GCC `.gcno` comparator, and
+     `-fdiagnostics-format`/GCC SARIF outputs.
    - CCP-04, only with a column-aware layout key (see the finding above).
    - Universal objects, PCH consumers, the LLVM subset, the Chromium
      target, and CCP-09 performance.

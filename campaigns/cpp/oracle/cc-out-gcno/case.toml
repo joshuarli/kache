@@ -1,11 +1,15 @@
-summary = "--coverage writes a .gcno beside the object; a hit must restore both (CCP-05). GCC stamps .gcno and the object with the compile time, so GCC needs a stamp-aware comparator first"
-cohort = "open"
+summary = "--coverage writes a .gcno beside the object; a hit restores both, and an object naming another .gcda is never reused (CCP-05). GCC stamps .gcno and the object with the compile time, so raw GCC is not reproducible and the case is clang-only"
+cohort = "blocking"
 families = ["clang"]
 profiles = ["transparent", "reproducible"]
-outputs = ["u.o", "u.gcno"]
+outputs = ["a/u.o", "a/u.gcno", "b/u.o", "b/u.gcno"]
 
 [[compile]]
-argv = ["{cc}", "--coverage", "-c", "u.c", "-o", "u.o"]
+argv = ["{cc}", "--coverage", "-c", "u.c", "-o", "a/u.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "--coverage", "-c", "u.c", "-o", "b/u.o"]
 source = "u.c"
 
 [[step]]
@@ -14,8 +18,13 @@ reuse = "miss"
 
 [[step]]
 name = "restore"
-reuse = "like-ccache"
+reuse = "hit"
 action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "stale-notes"
+reuse = "hit"
+action = [{ op = "delete-outputs" }, { op = "write", path = "a/u.gcno", content = "stale\n" }]
 
 [[step]]
 name = "edit"

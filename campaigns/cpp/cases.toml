@@ -800,7 +800,7 @@ status = "oracle"
 [[case]]
 id = "cc-out-split-dwarf"
 package = "CCP-05"
-summary = ".dwo split DWARF restored on hit"
+summary = ".dwo split DWARF restored on hit; GCC writes it without -g, clang does not"
 profiles = ["both"]
 compilers = ["gcc", "clang"]
 ccache.suite = "split_dwarf.bash"
@@ -809,7 +809,7 @@ status = "oracle"
 [[case]]
 id = "cc-out-serialized-diagnostics"
 package = "CCP-05"
-summary = "-fdiagnostics-format=serialized and -fdiagnostics-add-output restored (clang)"
+summary = "--serialize-diagnostics .dia restored on hit (clang); -fdiagnostics-format=serialized and -fdiagnostics-add-output not yet modeled"
 profiles = ["both"]
 compilers = ["clang", "apple-clang"]
 ccache.suite = "serialize_diagnostics.bash"
