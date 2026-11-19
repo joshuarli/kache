@@ -6555,41 +6555,32 @@ fn cc_shadowing_names(
         .iter()
         .map(|path| absolutize_path(cwd, path))
         .collect::<Vec<_>>();
-    let scans = file_hasher.cc_header_scans(&read_inputs, 5, &|path| {
-        let bytes = fs::read(path)
-            .with_context(|| format!("reading header availability input {}", path.display()))?;
-        let probes = cc_header_probe_scan(&cc_splice_lines(&bytes));
-        Ok((
-            blake3::hash(&bytes).to_hex().to_string(),
-            deser_json::to_string(&probes)?,
-        ))
-    })?;
-    let scans = scans
-        .iter()
-        .map(|scan| deser_json::from_str::<Option<CcHeaderProbeScan>>(scan))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
     let definitions = parsed
         .defines
         .iter()
         .map(|(name, value)| format!("#define {name} {}\n", value.as_deref().unwrap_or("1")))
         .collect::<String>();
-    let argument_scan = cc_header_probe_scan(&cc_splice_lines(definitions.as_bytes()))
-        .context("cc: unresolved header availability probe in command-line definitions")?;
-    let all_scans = || {
-        scans
-            .iter()
-            .flatten()
-            .chain(std::iter::once(&argument_scan))
+    let contents = file_hasher.cc_content_hashes(&read_inputs)?;
+    let read_set = cc_probe_read_set(&contents, &definitions);
+    let resolved = match file_hasher
+        .cc_probe_resolution(&read_set)
+        .and_then(|recorded| deser_json::from_str::<CcReadSetProbes>(&recorded).ok())
+    {
+        Some(resolved) => resolved,
+        None => {
+            let resolved =
+                cc_resolve_read_set_probes(&read_inputs, &contents, &definitions, file_hasher)?;
+            file_hasher.record_cc_probe_resolution(&read_set, &deser_json::to_string(&resolved)?);
+            resolved
+        }
     };
-    let aliases = cc_header_probe_aliases(all_scans());
-    anyhow::ensure!(
-        cc_header_probe_pastes_are_resolved(all_scans(), &aliases)?,
-        "cc: token pasting may construct a header availability probe"
-    );
-    let argument_probes = cc_resolve_header_probes(&argument_scan, &aliases)
-        .context("cc: unresolved header availability probe in command-line definitions")?;
+    let by_content = resolved
+        .inputs
+        .iter()
+        .map(|(content, probes)| (content.as_str(), probes.as_slice()))
+        .collect::<std::collections::HashMap<_, _>>();
     let mut result = CcShadowingNames::default();
-    for (input, scan) in read_inputs.iter().zip(scans) {
+    for (input, content) in read_inputs.iter().zip(&contents) {
         let absolute = absolutize_path(cwd, input);
         // Keep the ordinary shadowing names as before: the most specific
         // relative path and the basename can both be used by an include.
@@ -6603,15 +6594,8 @@ fn cc_shadowing_names(
         if let Some(file_name) = absolute.file_name() {
             result.names.insert(PathBuf::from(file_name));
         }
-        let probes = scan.and_then(|scan| cc_resolve_header_probes(&scan, &aliases));
-        let Some(probes) = probes else {
-            anyhow::bail!(
-                "cc: a header availability probe (__has_include) in {} cannot be resolved \
-                 from literal source text",
-                input.display()
-            );
-        };
-        for probe in probes.iter().chain(&argument_probes) {
+        let probes = by_content.get(content.as_str()).copied().unwrap_or_default();
+        for probe in probes.iter().chain(&resolved.arguments) {
             let mut candidates = Vec::new();
             if probe.quoted
                 && let Some(parent) = absolute.parent()
@@ -6644,6 +6628,95 @@ fn cc_shadowing_names(
         .probes
         .dedup_by(|a, b| a.name == b.name && a.candidates == b.candidates);
     Ok(result)
+}
+
+/// Version of the header scans [`cc_resolve_read_set_probes`] reads.
+const CC_HEADER_SCAN_VERSION: i64 = 5;
+
+/// The probes a read set's headers make once every header's aliases are
+/// known. A function of the headers' bytes and the command-line
+/// definitions alone, so it is recorded under [`cc_probe_read_set`] and a
+/// unit that reads the same bytes again skips the scans: parsing them was
+/// most of a memo hit on headers such as the macOS SDK's, whose scans run
+/// to megabytes.
+#[derive(Default, deser::Serialize, deser::Deserialize)]
+struct CcReadSetProbes {
+    arguments: Vec<CcHeaderProbe>,
+    /// Each distinct content hash that probes, with its probes.
+    inputs: Vec<(String, Vec<CcHeaderProbe>)>,
+}
+
+/// Identity of a read set for [`CcReadSetProbes`]: its distinct contents
+/// and the command-line definitions, under the scan version and the
+/// resolution rules.
+fn cc_probe_read_set(contents: &[String], definitions: &str) -> String {
+    let mut distinct = contents.iter().map(String::as_str).collect::<Vec<_>>();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"kache.cc.probe-read-set.v1\0");
+    hasher.update(&CC_HEADER_SCAN_VERSION.to_le_bytes());
+    fold_cc_memo_field(&mut hasher, b"definitions", definitions.as_bytes());
+    hasher.update(&(distinct.len() as u64).to_le_bytes());
+    for content in distinct {
+        fold_cc_memo_field(&mut hasher, b"content", content.as_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Scan every input (memoised by content) and resolve the probes each makes
+/// against the aliases all of them and the command line define.
+fn cc_resolve_read_set_probes(
+    read_inputs: &[PathBuf],
+    contents: &[String],
+    definitions: &str,
+    file_hasher: &crate::cache_key::FileHasher<'_>,
+) -> Result<CcReadSetProbes> {
+    let scans = file_hasher.cc_header_scans(read_inputs, CC_HEADER_SCAN_VERSION, &|path| {
+        let bytes = fs::read(path)
+            .with_context(|| format!("reading header availability input {}", path.display()))?;
+        let probes = cc_header_probe_scan(&cc_splice_lines(&bytes));
+        Ok((
+            blake3::hash(&bytes).to_hex().to_string(),
+            deser_json::to_string(&probes)?,
+        ))
+    })?;
+    let scans = scans
+        .iter()
+        .map(|scan| deser_json::from_str::<Option<CcHeaderProbeScan>>(scan))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let argument_scan = cc_header_probe_scan(&cc_splice_lines(definitions.as_bytes()))
+        .context("cc: unresolved header availability probe in command-line definitions")?;
+    let all_scans = || {
+        scans
+            .iter()
+            .flatten()
+            .chain(std::iter::once(&argument_scan))
+    };
+    let aliases = cc_header_probe_aliases(all_scans());
+    anyhow::ensure!(
+        cc_header_probe_pastes_are_resolved(all_scans(), &aliases)?,
+        "cc: token pasting may construct a header availability probe"
+    );
+    let mut resolved = CcReadSetProbes {
+        arguments: cc_resolve_header_probes(&argument_scan, &aliases)
+            .context("cc: unresolved header availability probe in command-line definitions")?,
+        inputs: Vec::new(),
+    };
+    let mut seen = HashSet::new();
+    for ((input, content), scan) in read_inputs.iter().zip(contents).zip(scans) {
+        let Some(probes) = scan.and_then(|scan| cc_resolve_header_probes(&scan, &aliases)) else {
+            anyhow::bail!(
+                "cc: a header availability probe (__has_include) in {} cannot be resolved \
+                 from literal source text",
+                input.display()
+            );
+        };
+        if !probes.is_empty() && seen.insert(content.as_str()) {
+            resolved.inputs.push((content.clone(), probes));
+        }
+    }
+    Ok(resolved)
 }
 
 /// A header name an availability probe tests for.

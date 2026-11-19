@@ -10314,3 +10314,53 @@ fn shadowing_digest_is_independent_of_read_set_order() {
         "which header's probe found the name is part of the resolution"
     );
 }
+
+/// The probes a read set makes are recorded under its contents: a unit that
+/// reads the same bytes again takes them from the record instead of the
+/// scans, and changing a header's bytes names another record.
+#[test]
+fn header_probe_resolution_is_reused_by_content_and_redone_on_change() {
+    let temp = tempfile::tempdir().unwrap();
+    let (parsed, source, include) = probing_unit(temp.path(), "int x;\n");
+    let header = include.join("probe.h");
+    fs::write(&header, "#if __has_include(<one.h>)\n#endif\n").unwrap();
+    let db = temp.path().join("index.db");
+    let inputs = [source, header.clone()];
+    let probed = |hasher: &crate::cache_key::FileHasher<'_>| {
+        let mut names = cc_shadowing_names(&parsed, &inputs, &[], hasher)
+            .unwrap()
+            .probes
+            .into_iter()
+            .map(|probe| probe.name.display().to_string())
+            .collect::<Vec<_>>();
+        names.dedup();
+        names
+    };
+    let first = crate::cache_key::FileHasher::persistent(&db);
+    assert_eq!(probed(&first), ["one.h"]);
+
+    let hasher = crate::cache_key::FileHasher::persistent(&db);
+    let contents = hasher
+        .cc_content_hashes(&inputs.iter().map(|path| path.to_path_buf()).collect::<Vec<_>>())
+        .unwrap();
+    let read_set = cc_probe_read_set(&contents, "");
+    let planted = CcReadSetProbes {
+        arguments: Vec::new(),
+        inputs: vec![(
+            contents[1].clone(),
+            vec![CcHeaderProbe {
+                name: PathBuf::from("recorded.h"),
+                quoted: false,
+            }],
+        )],
+    };
+    hasher.record_cc_probe_resolution(&read_set, &deser_json::to_string(&planted).unwrap());
+    assert_eq!(
+        probed(&crate::cache_key::FileHasher::persistent(&db)),
+        ["recorded.h"],
+        "the same bytes take the recorded resolution"
+    );
+
+    fs::write(&header, "#if __has_include(<two.h>)\n#endif\n").unwrap();
+    assert_eq!(probed(&crate::cache_key::FileHasher::persistent(&db)), ["two.h"]);
+}

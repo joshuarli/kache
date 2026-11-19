@@ -1,7 +1,7 @@
 //! Shared C/C++ memo inputs. Artifact keys and input validation stay compiler-owned.
 
 use crate::file_hash::{FileFingerprint, FileHashCache, stamp_is_settled};
-use rusqlite::{Connection, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 #[derive(Debug, Clone, PartialEq, Eq, deser::Serialize, deser::Deserialize)]
 pub struct CcPreprocessMemoInput {
@@ -85,8 +85,6 @@ fn unproven(path: String) -> FileFingerprint {
 pub struct CcPreprocessMemo {
     pub preprocessed_hash: String,
     pub inputs: Vec<CcPreprocessMemoInput>,
-    /// Content-addressed header scans, in the same order as `inputs`.
-    pub header_scans: Vec<Option<(i64, String)>>,
     pub needs_touch: bool,
 }
 
@@ -189,6 +187,11 @@ pub(crate) fn ensure_mapped_hash_schema(db: &Connection) -> rusqlite::Result<()>
             content TEXT PRIMARY KEY,
             scan TEXT NOT NULL,
             version INTEGER NOT NULL
+         ) WITHOUT ROWID;
+         CREATE TABLE IF NOT EXISTS cc_probe_resolutions (
+            read_set TEXT PRIMARY KEY,
+            resolution TEXT NOT NULL,
+            recorded INTEGER NOT NULL DEFAULT (unixepoch())
          ) WITHOUT ROWID;",
     )
 }
@@ -265,7 +268,8 @@ fn purge(db: &Connection) -> rusqlite::Result<()> {
          DELETE FROM cc_memo_inputs;
          DELETE FROM cc_mapped_hashes;
          DELETE FROM cc_asm_scans;
-         DELETE FROM cc_header_scans;",
+         DELETE FROM cc_header_scans;
+         DELETE FROM cc_probe_resolutions;",
     )
 }
 
@@ -302,6 +306,23 @@ impl FileHashCache<'_> {
             }
         }
         Ok(found)
+    }
+
+    /// The header-probe resolution of a read set, keyed by an identity the
+    /// compiler derives from the set's contents (versions included).
+    pub fn get_cc_probe_resolution(&self, read_set: &str) -> rusqlite::Result<Option<String>> {
+        self.db()
+            .prepare_cached("SELECT resolution FROM cc_probe_resolutions WHERE read_set = ?1")?
+            .query_row([read_set], |row| row.get(0))
+            .optional()
+    }
+
+    pub fn put_cc_probe_resolution(&self, read_set: &str, resolution: &str) -> rusqlite::Result<()> {
+        self.db().execute(
+            "INSERT OR REPLACE INTO cc_probe_resolutions(read_set, resolution) VALUES (?1, ?2)",
+            params![read_set, resolution],
+        )?;
+        Ok(())
     }
 
     pub fn put_cc_header_scans(
@@ -448,12 +469,10 @@ impl FileHashCache<'_> {
         let mut stmt = self.db().prepare_cached(
             "SELECT m.preprocessed_hash, m.input_count, m.last_used <= unixepoch() - 86400,
                     i.id, i.name, i.content, i.mapped, i.local_path,
-                    i.size, i.mtime_ns, i.ctime_ns, i.inode, i.proof,
-                    s.version, s.scan, m.id
+                    i.size, i.mtime_ns, i.ctime_ns, i.inode, i.proof, m.id
              FROM cc_preprocess_memos m
              LEFT JOIN cc_memo_input_refs r ON r.memo_id = m.id
              LEFT JOIN cc_memo_inputs i ON i.id = r.input_id
-             LEFT JOIN cc_header_scans s ON s.content = i.content
              WHERE m.memo_key >= ?1 AND m.memo_key < ?2 AND length(m.memo_key) = ?3
              ORDER BY m.id DESC, r.input_id",
         )?;
@@ -474,7 +493,7 @@ impl FileHashCache<'_> {
             }
         };
         while let Some(row) = rows.next()? {
-            let id: i64 = row.get(15)?;
+            let id: i64 = row.get(13)?;
             if current.as_ref().is_none_or(|(open, ..)| *open != id) {
                 finish(current.take(), &mut variants);
                 current = Some((
@@ -484,7 +503,6 @@ impl FileHashCache<'_> {
                     CcPreprocessMemo {
                         preprocessed_hash: row.get(0)?,
                         inputs: Vec::new(),
-                        header_scans: Vec::new(),
                         needs_touch: row.get(2)?,
                     },
                 ));
@@ -502,11 +520,6 @@ impl FileHashCache<'_> {
                 inode: row.get(11)?,
             };
             let proven = row.get::<_, Option<i64>>(12)? == Some(stamp_proof(&stamp));
-            memo.header_scans.push(
-                row.get::<_, Option<i64>>(13)?
-                    .map(|version| row.get(14).map(|scan| (version, scan)))
-                    .transpose()?,
-            );
             memo.inputs.push(CcPreprocessMemoInput {
                 name: row.get(4)?,
                 content: row.get(5)?,
@@ -670,6 +683,11 @@ impl FileHashCache<'_> {
              (SELECT content FROM cc_memo_inputs)",
             [],
         )?;
+        // Recomputed from the scans when needed again, so age alone retires it.
+        tx.execute(
+            "DELETE FROM cc_probe_resolutions WHERE recorded < unixepoch() - 2592000",
+            [],
+        )?;
         tx.commit()?;
         Ok((memos, inputs))
     }
@@ -749,14 +767,6 @@ mod tests {
         cache
             .put_cc_preprocess_memo_inputs("live", "hash", &[input("a.h", "content-0")])
             .unwrap();
-        assert_eq!(
-            cache
-                .get_cc_preprocess_memo("live")
-                .unwrap()
-                .unwrap()
-                .header_scans,
-            [Some((2, "new".into()))]
-        );
         cache.prune_cc_preprocess_memos().unwrap();
         assert_eq!(count(&cache, "cc_header_scans"), 1);
         assert_eq!(
@@ -771,13 +781,14 @@ mod tests {
     /// the lock, the columns are there and the rows under them are current.
     #[test]
     fn the_purge_runs_once_however_many_openers_found_a_column_missing() {
-        const MEMO_TABLES: [&str; 6] = [
+        const MEMO_TABLES: [&str; 7] = [
             "cc_preprocess_memos",
             "cc_memo_inputs",
             "cc_memo_input_refs",
             "cc_mapped_hashes",
             "cc_asm_scans",
             "cc_header_scans",
+            "cc_probe_resolutions",
         ];
         let dir = tempfile::tempdir().unwrap();
         let cache = FileHashCache::open(&dir.path().join("index.db")).unwrap();
@@ -794,6 +805,7 @@ mod tests {
             cache
                 .put_cc_header_scans(1, &[("one".into(), "[]".into())])
                 .unwrap();
+            cache.put_cc_probe_resolution("set", "{}").unwrap();
         };
         let rows = |cache: &FileHashCache<'_>| MEMO_TABLES.map(|table| count(cache, table));
         record(&cache);
@@ -810,14 +822,14 @@ mod tests {
         // The first opener to take the lock adds the columns and purges.
         ensure_rule(cache.db()).unwrap();
         assert!(has_rule_columns(cache.db()).unwrap());
-        assert_eq!(rows(&cache), [0; 6]);
+        assert_eq!(rows(&cache), [0; 7]);
 
         // A second opener found a column missing before that, and takes the
         // lock only now, after rows were recorded under the columns.
         record(&cache);
-        assert_eq!(rows(&cache), [1; 6]);
+        assert_eq!(rows(&cache), [1; 7]);
         add_rule_columns(cache.db()).unwrap();
-        assert_eq!(rows(&cache), [1; 6], "the purge runs once");
+        assert_eq!(rows(&cache), [1; 7], "the purge runs once");
     }
 
     #[test]
@@ -911,6 +923,31 @@ mod tests {
             "evicted read sets drop their references"
         );
         assert_eq!(hashes(&cache, "unit/"), ["neighbour"]);
+    }
+
+    /// A read set's probe resolution is replaced when recorded again and
+    /// retired by age alone: it is recomputed from the scans when needed.
+    #[test]
+    fn probe_resolutions_round_trip_and_age_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = FileHashCache::open(&dir.path().join("index.db")).unwrap();
+        assert_eq!(cache.get_cc_probe_resolution("set").unwrap(), None);
+        cache.put_cc_probe_resolution("set", "first").unwrap();
+        cache.put_cc_probe_resolution("set", "second").unwrap();
+        cache.put_cc_probe_resolution("old", "kept until it ages").unwrap();
+        assert_eq!(cache.get_cc_probe_resolution("set").unwrap().as_deref(), Some("second"));
+        cache.prune_cc_preprocess_memos().unwrap();
+        assert_eq!(count(&cache, "cc_probe_resolutions"), 2);
+        cache
+            .db()
+            .execute(
+                "UPDATE cc_probe_resolutions SET recorded = unixepoch() - 2678400 WHERE read_set = 'old'",
+                [],
+            )
+            .unwrap();
+        cache.prune_cc_preprocess_memos().unwrap();
+        assert_eq!(cache.get_cc_probe_resolution("old").unwrap(), None);
+        assert_eq!(cache.get_cc_probe_resolution("set").unwrap().as_deref(), Some("second"));
     }
 
     /// A stamp taken less than the settle window after its file changed is
