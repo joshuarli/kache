@@ -2238,22 +2238,17 @@ fn preprocess_hash(
     parsed: &CcArgs,
     prefix_maps: &[CcPrefixMap],
     file_hasher: &crate::cache_key::FileHasher<'_>,
-    capture_dependencies: bool,
 ) -> Result<PreprocessHash> {
     let pp_args = key_preprocess_args(parsed, prefix_maps);
-    let dep_temp = if capture_dependencies {
-        match tempfile::Builder::new()
-            .prefix("kache-cc-preprocess-")
-            .tempdir_in(parsed.invocation_env.temp_dir())
-        {
-            Ok(temp) => Some(temp),
-            Err(error) => {
-                log::debug!("cc preprocess dependency tempdir unavailable: {error}");
-                None
-            }
+    let dep_temp = match tempfile::Builder::new()
+        .prefix("kache-cc-preprocess-")
+        .tempdir_in(parsed.invocation_env.temp_dir())
+    {
+        Ok(temp) => Some(temp),
+        Err(error) => {
+            log::debug!("cc preprocess dependency tempdir unavailable: {error}");
+            None
         }
-    } else {
-        None
     };
     let dep_path = dep_temp
         .as_ref()
@@ -8317,8 +8312,7 @@ impl CcCompiler {
             }));
         } else {
             let _trace = crate::phase_trace::phase("cc_preprocess");
-            let preprocessed =
-                preprocess_hash(parsed, &prefix_maps, ctx.file_hasher, memo_key.is_some())?;
+            let preprocessed = preprocess_hash(parsed, &prefix_maps, ctx.file_hasher)?;
             self.key_path_bound.set(preprocessed.path_bound);
             let read_inputs = preprocessed.fingerprints.as_ref().map(|inputs| {
                 inputs
@@ -8328,11 +8322,21 @@ impl CcCompiler {
             });
             // With the read set in hand the key is its digest, the same key a
             // compile-first run derives, so the two paths find each other's
-            // entries. The expansion hash stands in only when the dependency
-            // capture gave nothing to fingerprint.
-            let hash = match &preprocessed.fingerprints {
-                Some(fingerprints) => cc_direct_inputs_digest(fingerprints),
-                None => preprocessed.hash.clone(),
+            // entries. The expansion cannot key alone: it spells tokens apart
+            // by one space whatever their columns were, and debug info and
+            // diagnostics carry those columns. Without a memo key the build
+            // does not pin `__DATE__` and `__TIME__`, which only the expansion
+            // shows, so the key folds both.
+            let Some(fingerprints) = &preprocessed.fingerprints else {
+                anyhow::bail!(
+                    "cc: dependency capture gave no read set to key; the expansion alone loses column positions"
+                );
+            };
+            let digest = cc_direct_inputs_digest(fingerprints);
+            let hash = if memo_key.is_some() {
+                digest
+            } else {
+                format!("{digest}+{}", preprocessed.hash)
             };
             if let (Some(memo_key), Some(fingerprints)) = (memo_key, preprocessed.fingerprints) {
                 self.pending_preprocess_memo

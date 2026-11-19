@@ -744,6 +744,15 @@ ccache.suite = "direct.bash"
 status = "planned"
 
 [[case]]
+id = "cc-eqp-column-significance"
+package = "CCP-04"
+summary = "edit moving code within a line (comment or spacing width) is NOT a hit: debug columns and diagnostic columns are observable; ccache 4.14.3 reuses it in both modes and is wrong"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
 id = "cc-eqp-line-number-significance"
 package = "CCP-04"
 summary = "edit moving line numbers is NOT a hit (debug line info is observable)"
