@@ -1,11 +1,11 @@
-summary = "clang --serialize-diagnostics writes a .dia file; a hit must restore it (CCP-05)"
-cohort = "open"
+summary = "clang --serialize-diagnostics writes a .dia holding the warnings; a hit restores it with the object and replays the warning (CCP-05)"
+cohort = "blocking"
 families = ["clang"]
 profiles = ["transparent", "reproducible"]
-outputs = ["u.o", "u.dia"]
+outputs = ["u.o", "diag/u.dia"]
 
 [[compile]]
-argv = ["{cc}", "--serialize-diagnostics", "u.dia", "-c", "u.c", "-o", "u.o"]
+argv = ["{cc}", "-Wall", "--serialize-diagnostics", "diag/u.dia", "-c", "u.c", "-o", "u.o"]
 source = "u.c"
 
 [[step]]
@@ -14,10 +14,10 @@ reuse = "miss"
 
 [[step]]
 name = "restore"
-reuse = "like-ccache"
+reuse = "hit"
 action = [{ op = "delete-outputs" }]
 
 [[step]]
 name = "edit"
 reuse = "miss"
-action = [{ op = "write", path = "u.c", content = "int u(int x) { return x * 9; }\n" }, { op = "delete-outputs" }]
+action = [{ op = "write", path = "u.c", content = "int u(int x) { int unused; return x * 9; }\n" }, { op = "delete-outputs" }]

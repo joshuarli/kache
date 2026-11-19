@@ -667,6 +667,7 @@ fn volume_route_path_cc_uses_output_parent() {
         language_override: None,
         family: crate::compiler::cc::ToolFamily::Gnu,
         depinfo_roots: Vec::new(),
+        serialize_diagnostics: None,
     };
     assert_eq!(
         super::volume_route_path_cc(&parsed),
@@ -3292,6 +3293,65 @@ fn restore_cc_from_cache_skips_unrequested_depinfo_and_unknown_artifacts() {
     );
 
     restore_cc_from_cache(&store, &parsed, &meta).unwrap();
+}
+
+/// A hit has to land every sidecar where this invocation's compiler would
+/// write it, and an entry whose sidecar set differs must miss.
+#[test]
+fn restore_cc_from_cache_places_sidecars_and_rejects_a_different_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path().join("cache"));
+    let store = Store::open(&config).unwrap();
+    let blobs = [
+        ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &b"object"[..]),
+        ("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", b"notes"),
+        ("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", b"diagnostics"),
+    ];
+    for (hash, content) in blobs {
+        create_blob(&store, hash, content);
+    }
+    let path = |name: &str| dir.path().join(name).to_string_lossy().into_owned();
+    std::fs::create_dir(dir.path().join("diag")).unwrap();
+    let args = [
+        "clang".to_string(),
+        "-c".to_string(),
+        "u.c".to_string(),
+        "-o".to_string(),
+        path("u.c.o"),
+        "--coverage".to_string(),
+        "--serialize-diagnostics".to_string(),
+        path("diag/u.dia"),
+    ];
+    let parsed = CcCompiler::new().parse(&args).unwrap();
+    let full = entry_meta(
+        "cc-sidecar-key",
+        vec![
+            cached_file(crate::compiler::cc::CC_OBJECT_STORE_NAME, blobs[0].0),
+            cached_file("sidecar.gcno", blobs[1].0),
+            cached_file("sidecar.dia", blobs[2].0),
+        ],
+        &[],
+    );
+    assert_eq!(cc_cache_entry_rejection_reason(&parsed, &full), None);
+    restore_cc_from_cache(&store, &parsed, &full).unwrap();
+    assert_eq!(std::fs::read(dir.path().join("u.c.o")).unwrap(), b"object");
+    assert_eq!(std::fs::read(dir.path().join("u.c.gcno")).unwrap(), b"notes");
+    assert_eq!(std::fs::read(dir.path().join("diag/u.dia")).unwrap(), b"diagnostics");
+
+    let mut partial = full.clone();
+    partial.files.retain(|file| file.name != "sidecar.dia");
+    assert_eq!(
+        cc_cache_entry_rejection_reason(&parsed, &partial),
+        Some("matching entry lacks a sidecar this invocation requires")
+    );
+    let plain = CcCompiler::new()
+        .parse(&["cc".to_string(), "-c".to_string(), "u.c".to_string(), "-o".to_string(), path("u.c.o")])
+        .unwrap();
+    assert_eq!(
+        cc_cache_entry_rejection_reason(&plain, &full),
+        Some("matching entry holds a sidecar this invocation does not write")
+    );
+    assert!(restore_cc_from_cache(&store, &plain, &full).is_err());
 }
 
 /// Degenerate cc invocations with no object path fail before blob access,

@@ -27,8 +27,8 @@
 //!   (epic #762 / #259)
 //! - Assemble (`-S`) mode
 //! - Multi-source compiles, multi-arch fat binaries
-//! - Response files, coverage instrumentation, split DWARF,
-//!   precompiled headers, modules, `-o -`
+//! - Response files, precompiled headers, modules, `-o -`
+//! - Coverage, split DWARF and serialized diagnostics outside `-c`
 //! - Any flag not classified by [`CC_FLAGS`] (see [`classify_cc_flag`])
 //!   — an unmodeled codegen flag, a cross-target, profiling, or simply
 //!   a flag kache has not classified. Refused so an unknown flag is
@@ -272,6 +272,8 @@ pub struct CcArgs {
     pub family: ToolFamily,
     /// Path ownership captured at parse time for portable dependency sidecars.
     pub(crate) depinfo_roots: Vec<(PathBuf, String, u8)>,
+    /// clang's `--serialize-diagnostics <path>` output.
+    pub serialize_diagnostics: Option<PathBuf>,
 }
 
 /// Source file extensions the parser recognizes as C-family input.
@@ -323,6 +325,7 @@ enum CcArgAction {
     DepOutput,
     DepTarget,
     LanguageOverride,
+    SerializeDiagnostics,
     Include,
     /// clang-cl `/imsvc`: a system include directory. Its headers reach the
     /// key through the preprocessor expansion like `-isystem`'s; the
@@ -369,6 +372,49 @@ struct CcArgAnalysis<'a> {
     normalized: Vec<String>,
     refusal: Option<&'static str>,
     source: Option<&'static str>,
+}
+
+/// A file a `-c` compile writes beside its object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CcSidecar {
+    CoverageNotes,
+    SplitDwarf,
+    SerializedDiagnostics,
+}
+
+impl CcSidecar {
+    const ALL: [CcSidecar; 3] = [
+        CcSidecar::CoverageNotes,
+        CcSidecar::SplitDwarf,
+        CcSidecar::SerializedDiagnostics,
+    ];
+
+    pub(crate) fn store_name(self) -> &'static str {
+        match self {
+            CcSidecar::CoverageNotes => "sidecar.gcno",
+            CcSidecar::SplitDwarf => "sidecar.dwo",
+            CcSidecar::SerializedDiagnostics => "sidecar.dia",
+        }
+    }
+
+    pub(crate) fn from_store_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|sidecar| sidecar.store_name() == name)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CcSidecarPresence {
+    /// A successful compile always writes it.
+    Required,
+    /// Whether it is written depends on the compiler or target.
+    IfWritten,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CcSidecarOutput {
+    pub(crate) role: CcSidecar,
+    pub(crate) path: PathBuf,
+    pub(crate) presence: CcSidecarPresence,
 }
 
 static CC_ARG_SPECS: &[CcArgSpec] = &[
@@ -590,6 +636,22 @@ static CC_ARG_SPECS: &[CcArgSpec] = &[
         dialect: Some(Dialect::Gnu),
     },
     CcArgSpec {
+        matcher: Matcher::Exact("--serialize-diagnostics"),
+        value_form: CcArgValueForm::Separated,
+        action: CcArgAction::SerializeDiagnostics,
+        bucket: CcArgBucket::Artifact,
+        source: "clang serialized diagnostics output path",
+        dialect: Some(Dialect::Gnu),
+    },
+    CcArgSpec {
+        matcher: Matcher::Exact("-serialize-diagnostics"),
+        value_form: CcArgValueForm::Separated,
+        action: CcArgAction::SerializeDiagnostics,
+        bucket: CcArgBucket::Artifact,
+        source: "clang serialized diagnostics output path",
+        dialect: Some(Dialect::Gnu),
+    },
+    CcArgSpec {
         matcher: Matcher::Exact("-MQ"),
         value_form: CcArgValueForm::Separated,
         action: CcArgAction::DepTarget,
@@ -716,6 +778,7 @@ impl CcArgs {
             language_override: None,
             family,
             depinfo_roots: Vec::new(),
+            serialize_diagnostics: None,
         };
 
         // Walk argv through a table-driven parser so spelling variants
@@ -752,13 +815,9 @@ impl CcArgs {
     /// - **Multi-arch fat binaries** (`-arch x86_64 -arch arm64`):
     ///   output is a single file containing multiple object slices,
     ///   doesn't fit the per-source-per-output model.
-    /// - **Coverage instrumentation** (`--coverage`,
-    ///   `-fprofile-arcs`, `-ftest-coverage`): coverage tools need
-    ///   the original source paths in profraw data; cache hits
-    ///   would break coverage mapping.
-    /// - **Split DWARF** (`-gsplit-dwarf`): produces a separate
-    ///   `.dwo` file alongside the `.o`; output discovery would
-    ///   need to know about the pair.
+    /// - **Sidecars outside `-c`**: coverage notes, split DWARF and
+    ///   serialized diagnostics are modeled for object compiles only
+    ///   ([`CcArgs::sidecar_outputs`]).
     /// - **Precompiled headers** (`-include-pch`, `-emit-pch`):
     ///   PCHs are non-portable across compiler versions and depend
     ///   on the entire include graph at PCH-build time.
@@ -890,19 +949,16 @@ impl CcArgs {
             ));
         }
 
-        // Coverage instrumentation.
-        for flag in &["--coverage", "-fprofile-arcs", "-ftest-coverage"] {
-            if self.rest.iter().any(|a| a == flag) {
-                reasons.push(RefuseReason::Unsupported(
-                    "cc coverage instrumentation — not yet",
-                ));
-                break;
-            }
-        }
-
-        // Split DWARF (separate .dwo file alongside .o).
-        if self.rest.iter().any(|a| a == "-gsplit-dwarf") {
-            reasons.push(RefuseReason::Unsupported("cc -gsplit-dwarf — not yet"));
+        // Sidecars are modeled for `-c` only. `-S` still writes the notes
+        // file, and `-E` still writes serialized diagnostics.
+        if self.mode != CompileMode::Compile
+            && (self.coverage_instrumented()
+                || self.splits_dwarf()
+                || self.serialize_diagnostics.is_some())
+        {
+            reasons.push(RefuseReason::Unsupported(
+                "cc coverage, split DWARF or serialized diagnostics outside -c — not yet",
+            ));
         }
 
         // Precompiled headers.
@@ -1039,6 +1095,64 @@ impl CcArgs {
         Some(object)
     }
 
+    /// The files a `-c` compile writes beside its object.
+    ///
+    /// GCC and clang both name the notes and split-DWARF files after the
+    /// object with its last extension replaced. Without `-g`, GCC still
+    /// writes a `.dwo` for `-gsplit-dwarf` and clang does not, and Mach-O
+    /// targets never write one, so the `.dwo` is only certain under debug
+    /// info on other hosts.
+    pub(crate) fn sidecar_outputs(&self) -> Vec<CcSidecarOutput> {
+        if self.mode != CompileMode::Compile || self.family.dialect() != Dialect::Gnu {
+            return Vec::new();
+        }
+        let Some(object) = self.object_output_path() else {
+            return Vec::new();
+        };
+        let has = |flag: &str| self.rest.iter().any(|arg| arg == flag);
+        let mut outputs = Vec::new();
+        if has("--coverage") || has("-ftest-coverage") {
+            outputs.push(CcSidecarOutput {
+                role: CcSidecar::CoverageNotes,
+                path: object.with_extension("gcno"),
+                presence: CcSidecarPresence::Required,
+            });
+        }
+        if self.splits_dwarf() {
+            let certain = self.debug_level.is_some_and(|level| level > 0) && !cfg!(target_os = "macos");
+            outputs.push(CcSidecarOutput {
+                role: CcSidecar::SplitDwarf,
+                path: object.with_extension("dwo"),
+                presence: if certain {
+                    CcSidecarPresence::Required
+                } else {
+                    CcSidecarPresence::IfWritten
+                },
+            });
+        }
+        if let Some(path) = &self.serialize_diagnostics {
+            outputs.push(CcSidecarOutput {
+                role: CcSidecar::SerializedDiagnostics,
+                path: path.clone(),
+                presence: CcSidecarPresence::Required,
+            });
+        }
+        outputs
+    }
+
+    /// Coverage instrumentation: the object names its absolute `.gcda`
+    /// path and the notes file records the compilation directory.
+    fn coverage_instrumented(&self) -> bool {
+        self.rest.iter().any(|arg| {
+            matches!(arg.as_str(), "--coverage" | "-fprofile-arcs" | "-ftest-coverage")
+        })
+    }
+
+    /// Split DWARF: the object names its `.dwo` as the output was spelled.
+    fn splits_dwarf(&self) -> bool {
+        self.rest.iter().any(|arg| arg == "-gsplit-dwarf")
+    }
+
     /// Every filesystem output selected by a compile-mode invocation.
     ///
     /// Cacheable invocations have one source, but refused multi-source
@@ -1080,6 +1194,7 @@ impl CcArgs {
                 }));
             }
         }
+        paths.extend(self.sidecar_outputs().into_iter().map(|sidecar| sidecar.path));
         paths
     }
 
@@ -1142,7 +1257,14 @@ impl CcArgs {
         // codegen (CapturedByProbe) and stripping them from the memo key
         // would collapse distinct CRTs into one record (false hit, #285).
         let drops_value: &[&str] = match self.family.dialect() {
-            Dialect::Gnu => &["-o", "-MF", "-MT", "-MQ"],
+            Dialect::Gnu => &[
+                "-o",
+                "-MF",
+                "-MT",
+                "-MQ",
+                "--serialize-diagnostics",
+                "-serialize-diagnostics",
+            ],
             Dialect::Cl => &["-o"],
         };
         while let Some(arg) = iter.next() {
@@ -1348,6 +1470,11 @@ fn apply_cc_arg(parsed: &mut CcArgs, depinfo: &mut Option<DepInfoSpec>, arg: &Pa
                 parsed.language_override = Some(value.clone());
             }
         }
+        CcArgAction::SerializeDiagnostics => {
+            if let Some(value) = &arg.value {
+                parsed.serialize_diagnostics = Some(PathBuf::from(value));
+            }
+        }
         CcArgAction::Include => {
             if let Some(value) = &arg.value {
                 parsed.includes.push(PathBuf::from(value));
@@ -1488,7 +1615,8 @@ fn build_preprocess_args(parsed: &CcArgs) -> Vec<String> {
             while let Some(arg) = iter.next() {
                 match arg.as_str() {
                     "-c" | "-S" | "-P" => {}
-                    "-o" | "-MF" | "-MT" | "-MQ" => {
+                    "-o" | "-MF" | "-MT" | "-MQ" | "--serialize-diagnostics"
+                    | "-serialize-diagnostics" => {
                         iter.next(); // also drop the flag's value
                     }
                     "-MMD" | "-MD" | "-MP" | "-MG" => {}
@@ -2422,6 +2550,12 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Prefix("--warning-suppression-mappings="), class: FlagClass::ParserHandled, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fsanitize-ignorelist="), class: FlagClass::ParserHandled, source: "clang sanitizer ignorelist, keyed by content", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fcrash-diagnostics-dir="), class: FlagClass::NoObjectEffect, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("--coverage"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov instrumentation and notes; the sidecar key folds the paths the outputs embed", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-fprofile-arcs"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov arc instrumentation; the object names its absolute .gcda path", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-ftest-coverage"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov notes file", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-gsplit-dwarf"), class: FlagClass::RawKeyed, source: "CCP-05 — split DWARF; the object names its .dwo as the output was spelled", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("--serialize-diagnostics"), class: FlagClass::NoObjectEffect, source: "CCP-05 — clang serialized diagnostics output path", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-serialize-diagnostics"), class: FlagClass::NoObjectEffect, source: "CCP-05 — clang serialized diagnostics output path", dialect: Some(Dialect::Gnu) },
     // ── ModeledInKey: parser extracts into a typed field ──
     FlagSpec {
         // `-O` family: bare, digit (`-O0`..`-O3`), `-Os`/`-Oz`, `-Og`.
@@ -4495,12 +4629,45 @@ fn cc_resolved_per_tu_paths(parsed: &CcArgs) -> Vec<String> {
     if let Some(d) = parsed.depinfo_output_path() {
         add(&d);
     }
+    for sidecar in parsed.sidecar_outputs() {
+        add(&sidecar.path);
+    }
     for (target, _) in parsed.depinfo.iter().flat_map(|d| &d.targets) {
         set.insert(target.clone());
     }
     // Never blank an empty token (a no-op path would blank real tokens).
     set.remove("");
     set.into_iter().collect()
+}
+
+/// The sidecar set this invocation stores, and the location facts its
+/// outputs embed, which the probe blanks as per-TU paths. `None` when there
+/// are neither, so other keys keep their value.
+///
+/// Coverage outputs embed the compilation directory and the output as
+/// spelled; a split-DWARF object embeds only the latter, and its
+/// compilation directory is prefix-mapped like any debug object's.
+fn cc_sidecar_key(parsed: &CcArgs) -> Option<String> {
+    let mut fields: Vec<String> = parsed
+        .sidecar_outputs()
+        .into_iter()
+        .map(|sidecar| {
+            let presence = match sidecar.presence {
+                CcSidecarPresence::Required => "required",
+                CcSidecarPresence::IfWritten => "if-written",
+            };
+            format!("{}={presence}", sidecar.role.store_name())
+        })
+        .collect();
+    if parsed.coverage_instrumented() {
+        let cwd = parsed.invocation_env.cwd().map(|cwd| cwd.to_string_lossy().into_owned());
+        fields.push(format!("cwd={}", cwd.unwrap_or_default()));
+    }
+    if parsed.coverage_instrumented() || parsed.splits_dwarf() {
+        let object = parsed.object_output_path().map(|path| path.to_string_lossy().into_owned());
+        fields.push(format!("object={}", object.unwrap_or_default()));
+    }
+    (!fields.is_empty()).then(|| fields.join("\x1f"))
 }
 
 fn cl_debug_path_inputs(parsed: &CcArgs) -> Option<Vec<String>> {
@@ -8205,6 +8372,18 @@ impl CcCompiler {
             );
         }
 
+        if let Some(sidecars) = cc_sidecar_key(parsed) {
+            hasher.update(b"sidecars.v1:");
+            hasher.update(sidecars.as_bytes());
+            hasher.update(b"\n");
+            log::trace!(
+                target: "kache::cache_key",
+                "[key:{}] sidecars={}",
+                trace_name,
+                sidecars.replace('\x1f', " ")
+            );
+        }
+
         // Preprocessor expansion — the load-bearing input. Captures
         // the source plus every transitively-included header plus
         // macro expansion, with line positions keyed apart from the
@@ -8641,6 +8820,7 @@ impl CcCompiler {
         if let Some(epoch) = effective_source_date_epoch_for(&parsed.invocation_env) {
             command.env("SOURCE_DATE_EPOCH", epoch);
         }
+        let sidecars_before = snapshot_cc_sidecars(parsed);
         let output = command
             .invocation_output()
             .with_context(|| format!("executing {}", parsed.program))?;
@@ -8660,7 +8840,7 @@ impl CcCompiler {
                 && parsed.output.is_some());
         let mut keepalive = Vec::new();
         let mut artifacts = if exit_code == 0 && discovers_outputs {
-            discover_cc_output_artifacts(parsed)
+            with_cc_sidecars(parsed, discover_cc_output_artifacts(parsed), sidecars_before)
         } else {
             ArtifactSet::empty()
         };
@@ -8682,7 +8862,16 @@ impl CcCompiler {
             let embeds = parsed
                 .object_output_path()
                 .and_then(|path| parsed.invocation_env.resolve(&path))
-                .map(|path| cc_object_embeds_mapped_root(&path, &prefix_maps));
+                .map(|object| {
+                    let sidecars = artifacts
+                        .outputs()
+                        .iter()
+                        .filter(|artifact| CcSidecar::from_store_name(&artifact.store_name).is_some())
+                        .map(|artifact| artifact.path.clone());
+                    std::iter::once(object).chain(sidecars).try_fold(false, |found, path| {
+                        Ok(found || cc_object_embeds_mapped_root(&path, &prefix_maps)?)
+                    })
+                });
             if bind_on_embedded_root && !artifacts.is_empty() && matches!(embeds, Some(Ok(true))) {
                 path_bound = true;
             } else {
@@ -8896,6 +9085,96 @@ fn discover_cc_link_sidecars(output: &Path) -> Vec<Artifact> {
         });
     }
     sidecars
+}
+
+/// What a sidecar path held before the compile, to tell a fresh write from a
+/// file an earlier build left there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CcSidecarSnapshot {
+    sidecar: CcSidecarOutput,
+    path: Option<PathBuf>,
+    before: Option<(std::time::SystemTime, u64)>,
+}
+
+fn cc_sidecar_stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+pub(crate) fn snapshot_cc_sidecars(parsed: &CcArgs) -> Vec<CcSidecarSnapshot> {
+    parsed
+        .sidecar_outputs()
+        .into_iter()
+        .map(|sidecar| {
+            let path = parsed.invocation_env.resolve(&sidecar.path);
+            let before = path.as_deref().and_then(cc_sidecar_stamp);
+            CcSidecarSnapshot { sidecar, path, before }
+        })
+        .collect()
+}
+
+/// The sidecars this compile wrote, or why its outputs cannot be stored.
+///
+/// A sidecar counts only when this compile wrote it. A required one that is
+/// missing means the compiler put it somewhere the model did not predict. A
+/// file left unchanged from before the compile cannot be told apart from a
+/// stale one. Either way the entry would restore the wrong set.
+fn discover_cc_sidecars(snapshots: Vec<CcSidecarSnapshot>) -> Result<Vec<Artifact>, String> {
+    let mut artifacts = Vec::new();
+    for snapshot in snapshots {
+        let name = snapshot.sidecar.role.store_name();
+        let path = snapshot
+            .path
+            .ok_or_else(|| format!("{name} path could not be resolved"))?;
+        let after = std::fs::symlink_metadata(&path).ok();
+        let written = match &after {
+            None => false,
+            Some(meta) if !meta.file_type().is_file() || !regular_output_is_independent(&path, meta) => {
+                return Err(format!("{} is not a plain file", path.display()));
+            }
+            Some(_) => match snapshot.before {
+                None => true,
+                Some(before) => cc_sidecar_stamp(&path) != Some(before),
+            },
+        };
+        match (written, after.is_some(), snapshot.sidecar.presence) {
+            (true, _, _) => artifacts.push(Artifact {
+                path,
+                store_name: name.to_string(),
+                kind: ArtifactKind::Other("sidecar"),
+                required: true,
+            }),
+            (false, false, CcSidecarPresence::IfWritten) => {}
+            (false, false, CcSidecarPresence::Required) => {
+                return Err(format!("the compiler did not write {}", path.display()));
+            }
+            (false, true, _) => {
+                return Err(format!("{} is unchanged since before the compile", path.display()));
+            }
+        }
+    }
+    Ok(artifacts)
+}
+
+fn with_cc_sidecars(
+    parsed: &CcArgs,
+    artifacts: ArtifactSet,
+    snapshots: Vec<CcSidecarSnapshot>,
+) -> ArtifactSet {
+    if artifacts.is_empty() || snapshots.is_empty() {
+        return artifacts;
+    }
+    match discover_cc_sidecars(snapshots) {
+        Ok(sidecars) => {
+            let mut outputs = artifacts.outputs().to_vec();
+            outputs.extend(sidecars);
+            ArtifactSet::new(outputs)
+        }
+        Err(reason) => {
+            log::warn!("cc: {}: {reason}; not caching it", cc_trace_name(parsed));
+            ArtifactSet::empty()
+        }
+    }
 }
 
 /// Discover a successful C/C++ compile's cacheable outputs while preserving

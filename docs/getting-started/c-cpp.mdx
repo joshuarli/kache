@@ -140,6 +140,18 @@ GC removes memos unused for 30 days and then removes inputs with no references. 
 
 Upgrading from the JSON memo format discards those memos once; units rediscover their inputs on the next build. Compiled artifact entries remain available. SQLite reuses the freed pages. `kache doctor --repair` also compacts a large, sparse index when enough disk space is available; run it after builds finish to avoid lock contention.
 
+## Coverage, split DWARF and serialized diagnostics
+
+A `-c` compile with `--coverage`, `-ftest-coverage`, `-fprofile-arcs`, `-gsplit-dwarf` or clang's `--serialize-diagnostics <file>` is cached with the files it writes beside the object. A hit restores the whole set or nothing:
+
+- the `.gcno` notes file, named after the object with its extension replaced
+- the `.dwo` split-DWARF file, named the same way
+- the `.dia` file at the path the flag names
+
+A coverage object records the absolute path of its `.gcda` file, and the notes file records the compilation directory. Coverage entries are therefore reused only from the same directory and output path. A split-DWARF object records its `.dwo` path as the build spelled it, so its entries are reused only for the same output path but stay portable across checkouts.
+
+GCC writes a `.dwo` for `-gsplit-dwarf` without `-g`, and Clang does not; Mach-O targets never write one. Kache stores the `.dwo` when the compiler writes it. A sidecar left unchanged from an earlier build, or a required sidecar the compiler did not write, stops Kache from storing the compile.
+
 ## Portability
 
 GCC and Clang entries can be reused across worktrees when source and build paths normalize cleanly. On a miss Kache adds `-ffile-prefix-map` rules that map the checkout and Cargo's build directories to fixed names such as `/kache/cc-root`, so debug info and `__FILE__` in those objects name the fixed path.
@@ -170,7 +182,7 @@ Kache currently passes through:
 - `-x` languages other than C, C++, Objective-C, Objective-C++, and assembly, such as `-x cuda` and `-x hip`, and `.cu` sources given to `cc` or `clang`
 - response files under clang-cl, response files that name other response files, and response files whose quoting GCC and Clang read differently (an empty quoted argument, a backslash before a line break, carriage returns)
 - precompiled headers and modules
-- coverage and split-DWARF builds
+- coverage, split DWARF and serialized diagnostics outside `-c`, such as `-S --coverage`
 - assembly, including inline `asm` in C, that reads another file with `.incbin` or `.include`
 - assembly that uses macros or repetitions (`.macro`, `.irp`, `.irpc`, `.rept`, `.altmacro`) able to generate those directives
 - inline `asm` whose text is a computed expression rather than a string literal

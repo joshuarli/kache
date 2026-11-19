@@ -1682,23 +1682,171 @@ fn refuses_multi_arch() {
 }
 
 #[test]
-fn refuses_coverage_instrumentation() {
-    for flag in &["--coverage", "-fprofile-arcs", "-ftest-coverage"] {
-        let descs = refuse_descriptions(&["cc", "-c", "foo.c", flag]);
+fn sidecar_flags_cache_as_object_compiles_only() {
+    let cases: [&[&str]; 5] = [
+        &["--coverage"],
+        &["-fprofile-arcs"],
+        &["-ftest-coverage"],
+        &["-g", "-gsplit-dwarf"],
+        &["--serialize-diagnostics", "u.dia"],
+    ];
+    for flags in cases {
+        let compile: Vec<&str> = ["cc", "-c", "u.c", "-o", "u.o"].iter().chain(flags).copied().collect();
+        let descs = refuse_descriptions(&compile);
+        assert!(descs.is_empty(), "{flags:?} should cache under -c, got: {descs:?}");
+        for mode in ["-S", "-E"] {
+            let other: Vec<&str> = ["cc", mode, "u.c", "-o", "u.out"].iter().chain(flags).copied().collect();
+            let descs = refuse_descriptions(&other);
+            assert!(
+                descs.iter().any(|d| d.contains("outside -c")),
+                "{flags:?} under {mode} should refuse, got: {descs:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn sidecars_are_named_after_the_object() {
+    let parsed = CcArgs::parse(&s(&[
+        "cc",
+        "-c",
+        "src/u.c",
+        "-o",
+        "out/u.c.o",
+        "--coverage",
+        "-g",
+        "-gsplit-dwarf",
+        "--serialize-diagnostics",
+        "diag/u.dia",
+    ]))
+    .unwrap();
+    let dwo = if cfg!(target_os = "macos") {
+        CcSidecarPresence::IfWritten
+    } else {
+        CcSidecarPresence::Required
+    };
+    let sidecar = |role, path: &str, presence| CcSidecarOutput {
+        role,
+        path: PathBuf::from(path),
+        presence,
+    };
+    assert_eq!(
+        parsed.sidecar_outputs(),
+        vec![
+            sidecar(CcSidecar::CoverageNotes, "out/u.c.gcno", CcSidecarPresence::Required),
+            sidecar(CcSidecar::SplitDwarf, "out/u.c.dwo", dwo),
+            sidecar(CcSidecar::SerializedDiagnostics, "diag/u.dia", CcSidecarPresence::Required),
+        ]
+    );
+    let default = CcArgs::parse(&s(&["cc", "-c", "src/u.c", "-ftest-coverage", "-gsplit-dwarf"])).unwrap();
+    assert_eq!(
+        default.sidecar_outputs(),
+        vec![
+            sidecar(CcSidecar::CoverageNotes, "u.gcno", CcSidecarPresence::Required),
+            sidecar(CcSidecar::SplitDwarf, "u.dwo", CcSidecarPresence::IfWritten),
+        ]
+    );
+    let arcs_only = CcArgs::parse(&s(&["cc", "-c", "u.c", "-fprofile-arcs"])).unwrap();
+    assert_eq!(arcs_only.sidecar_outputs(), Vec::new());
+    assert!(
+        parsed.compiler_output_paths().contains(&PathBuf::from("diag/u.dia")),
+        "an existing sidecar path must get the same passthrough checks as the object"
+    );
+}
+
+#[test]
+fn serialized_diagnostics_path_stays_out_of_the_preprocess_and_probe_argv() {
+    let parsed = CcArgs::parse(&s(&[
+        "clang",
+        "-c",
+        "u.c",
+        "-o",
+        "u.o",
+        "--serialize-diagnostics",
+        "u.dia",
+        "-serialize-diagnostics",
+        "v.dia",
+    ]))
+    .unwrap();
+    assert_eq!(parsed.serialize_diagnostics, Some(PathBuf::from("v.dia")));
+    for argv in [build_preprocess_args(&parsed), parsed.config_args()] {
         assert!(
-            descs.iter().any(|d| d.contains("coverage")),
-            "expected coverage refuse for {flag}, got: {descs:?}"
+            !argv.iter().any(|arg| arg.ends_with(".dia") || arg.contains("serialize")),
+            "{argv:?}"
         );
     }
 }
 
 #[test]
-fn refuses_split_dwarf() {
-    let descs = refuse_descriptions(&["cc", "-c", "foo.c", "-gsplit-dwarf"]);
-    assert!(
-        descs.iter().any(|d| d.contains("gsplit-dwarf")),
-        "expected gsplit-dwarf refuse, got: {descs:?}"
+fn sidecar_key_folds_the_locations_outputs_embed() {
+    let key = |cwd: &str, args: &[&str]| {
+        let env = InvocationEnv::from_parts([("PATH", "")], Some(PathBuf::from(cwd)), None, PathBuf::from(cwd));
+        cc_sidecar_key(&CcArgs::parse_for(&s(args), &env).unwrap())
+    };
+    assert_eq!(key("/a", &["cc", "-c", "u.c", "-o", "u.o", "-g"]), None);
+
+    let coverage = ["cc", "-c", "u.c", "-o", "a/u.o", "--coverage"];
+    assert_ne!(key("/a", &coverage), key("/b", &coverage), "the notes record the directory");
+    assert_ne!(
+        key("/a", &coverage),
+        key("/a", &["cc", "-c", "u.c", "-o", "b/u.o", "--coverage"]),
+        "the object names its .gcda"
     );
+    let arcs = ["cc", "-c", "u.c", "-o", "a/u.o", "-fprofile-arcs"];
+    assert_ne!(key("/a", &arcs), key("/b", &arcs));
+
+    let split = ["cc", "-c", "u.c", "-o", "a/u.o", "-g", "-gsplit-dwarf"];
+    assert_eq!(key("/a", &split), key("/b", &split), "the compilation directory is prefix-mapped");
+    assert_ne!(
+        key("/a", &split),
+        key("/a", &["cc", "-c", "u.c", "-o", "b/u.o", "-g", "-gsplit-dwarf"]),
+        "the object names its .dwo"
+    );
+
+    let dia = |path| key("/a", &["cc", "-c", "u.c", "-o", "u.o", "--serialize-diagnostics", path]);
+    assert!(dia("x.dia").is_some());
+    assert_eq!(dia("x.dia"), dia("y.dia"), "the .dia path is not in any output");
+}
+
+#[test]
+fn sidecars_store_only_when_this_compile_wrote_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let env = InvocationEnv::from_parts([("PATH", "")], Some(root.clone()), None, root.clone());
+    let parsed = CcArgs::parse_for(&s(&["cc", "-c", "u.c", "-o", "u.o", "--coverage", "-gsplit-dwarf"]), &env).unwrap();
+    let notes = env.resolve(Path::new("u.gcno")).unwrap();
+    let dwo = env.resolve(Path::new("u.dwo")).unwrap();
+
+    let before = snapshot_cc_sidecars(&parsed);
+    let error = discover_cc_sidecars(before).unwrap_err();
+    assert!(error.contains("did not write"), "{error}");
+
+    let before = snapshot_cc_sidecars(&parsed);
+    fs::write(&notes, "notes").unwrap();
+    let stored = |found: Vec<Artifact>| {
+        found
+            .into_iter()
+            .map(|artifact| (artifact.store_name, artifact.path))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        stored(discover_cc_sidecars(before).unwrap()),
+        vec![("sidecar.gcno".to_string(), notes.clone())],
+        "a .dwo the compiler may skip is left out when it did"
+    );
+
+    let before = snapshot_cc_sidecars(&parsed);
+    fs::write(&dwo, "dwarf").unwrap();
+    fs::write(&notes, "rewritten").unwrap();
+    assert_eq!(
+        stored(discover_cc_sidecars(before).unwrap()),
+        vec![("sidecar.gcno".to_string(), notes.clone()), ("sidecar.dwo".to_string(), dwo.clone())]
+    );
+
+    let before = snapshot_cc_sidecars(&parsed);
+    fs::write(&notes, "fresh notes").unwrap();
+    let error = discover_cc_sidecars(before).unwrap_err();
+    assert!(error.contains("unchanged"), "a .dwo an earlier build left must not be stored: {error}");
 }
 
 #[test]
@@ -2383,14 +2531,14 @@ fn user_allowed_flag_stops_refusing() {
 }
 
 /// The allow-list can only add to the hashable set — it must NOT
-/// override a structural refusal like coverage instrumentation.
+/// override a structural refusal like modules.
 #[test]
 fn user_allowed_flag_cannot_override_structural_refusal() {
-    let args = &["cc", "-c", "foo.c", "-o", "foo.o", "--coverage"];
-    let descs = refuse_descriptions_with_flags(args, &flags(&["--coverage"]));
+    let args = &["cc", "-c", "foo.c", "-o", "foo.o", "-fmodules"];
+    let descs = refuse_descriptions_with_flags(args, &flags(&["-fmodules"]));
     assert!(
-        descs.iter().any(|d| d.contains("coverage")),
-        "coverage must still refuse even when allow-listed, got: {descs:?}"
+        descs.iter().any(|d| d.contains("modules")),
+        "modules must still refuse even when allow-listed, got: {descs:?}"
     );
 }
 

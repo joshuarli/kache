@@ -2026,6 +2026,22 @@ fn cc_cache_entry_rejection_reason(
         .iter()
         .any(|file| file.name == crate::compiler::cc::CC_STDOUT_STORE_NAME);
 
+    let sidecars = parsed.sidecar_outputs();
+    let unexpected_sidecar = meta.files.iter().any(|file| {
+        crate::compiler::cc::CcSidecar::from_store_name(&file.name)
+            .is_some_and(|role| !sidecars.iter().any(|sidecar| sidecar.role == role))
+    });
+    if unexpected_sidecar {
+        return Some("matching entry holds a sidecar this invocation does not write");
+    }
+    let missing_sidecar = sidecars.iter().any(|sidecar| {
+        sidecar.presence == crate::compiler::cc::CcSidecarPresence::Required
+            && !meta.files.iter().any(|file| file.name == sidecar.role.store_name())
+    });
+    if missing_sidecar {
+        return Some("matching entry lacks a sidecar this invocation requires");
+    }
+
     match parsed.mode {
         crate::compiler::cc::CompileMode::Compile if !has_object => {
             Some("matching entry lacks the object artifact required by this invocation")
@@ -2455,10 +2471,22 @@ fn restore_cc_from_cache(
     let mut prepared = Vec::new();
     let mut published_kinds = Vec::new();
     let mut targets = std::collections::HashSet::new();
+    let sidecars = parsed.sidecar_outputs();
 
     for cached in &meta.files {
-        let kind = classify_by_filename(&cached.name);
+        let sidecar = crate::compiler::cc::CcSidecar::from_store_name(&cached.name);
+        let kind = match sidecar {
+            Some(_) => ArtifactKind::Other("sidecar"),
+            None => classify_by_filename(&cached.name),
+        };
         let target = match kind {
+            ArtifactKind::Other("sidecar") => sidecars
+                .iter()
+                .find(|expected| Some(expected.role) == sidecar)
+                .map(|expected| expected.path.clone())
+                .with_context(|| {
+                    format!("cc restore: cached {} is not written by this invocation", cached.name)
+                })?,
             ArtifactKind::Object => parsed
                 .object_output_path()
                 .context("cc restore: cannot determine object output path")?,
