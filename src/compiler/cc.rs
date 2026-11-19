@@ -6579,14 +6579,21 @@ fn cc_shadowing_names(
         .iter()
         .map(|(content, probes)| (content.as_str(), probes.as_slice()))
         .collect::<std::collections::HashMap<_, _>>();
+    // Mapped, so a root spelled two ways (a base dir through `..`) gives an
+    // input the same relative name whichever spelling named it.
+    let mapped_dirs = dirs
+        .iter()
+        .map(|dir| PathBuf::from(cc_mapped_path(dir, prefix_maps)))
+        .collect::<Vec<_>>();
     let mut result = CcShadowingNames::default();
     for (input, content) in read_inputs.iter().zip(&contents) {
         let absolute = absolutize_path(cwd, input);
+        let mapped = PathBuf::from(cc_mapped_path(&absolute, prefix_maps));
         // Keep the ordinary shadowing names as before: the most specific
         // relative path and the basename can both be used by an include.
-        if let Some(relative) = dirs
+        if let Some(relative) = mapped_dirs
             .iter()
-            .filter_map(|dir| absolute.strip_prefix(dir).ok())
+            .filter_map(|dir| mapped.strip_prefix(dir).ok())
             .min_by_key(|relative| relative.components().count())
         {
             result.names.insert(relative.to_path_buf());
