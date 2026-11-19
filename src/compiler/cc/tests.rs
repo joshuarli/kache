@@ -1675,16 +1675,37 @@ fn clang_cl_slash_c_compile_is_not_refused() {
 }
 
 #[test]
-fn refuses_multi_arch() {
-    // Single -arch is fine; multi -arch produces a fat binary.
-    let single = refuse_descriptions(&["cc", "-c", "foo.c", "-arch", "arm64"]);
-    assert!(!single.iter().any(|d| d.contains("multi-arch")));
+fn universal_objects_cache_as_plain_compiles_only() {
+    let single = refuse_descriptions(&["clang", "-c", "foo.c", "-arch", "arm64"]);
+    assert!(single.is_empty(), "{single:?}");
+    let multi = refuse_descriptions(&["clang", "-c", "foo.c", "-arch", "arm64", "-arch", "x86_64"]);
+    assert!(multi.is_empty(), "{multi:?}");
+    for extra in [&["--coverage"][..], &["-g", "-gsplit-dwarf"], &["--serialize-diagnostics", "u.dia"]] {
+        let args: Vec<&str> = ["clang", "-c", "foo.c", "-o", "foo.o", "-arch", "arm64", "-arch", "x86_64"]
+            .iter()
+            .chain(extra)
+            .copied()
+            .collect();
+        let descs = refuse_descriptions(&args);
+        assert!(descs.iter().any(|d| d.contains("multi-arch")), "{extra:?}: {descs:?}");
+    }
+}
 
-    let multi = refuse_descriptions(&["cc", "-c", "foo.c", "-arch", "arm64", "-arch", "x86_64"]);
-    assert!(
-        multi.iter().any(|d| d.contains("multi-arch")),
-        "expected multi-arch refuse, got: {multi:?}"
-    );
+#[test]
+fn universal_slices_are_keyed_one_arch_at_a_time() {
+    let parsed = CcArgs::parse(&s(&[
+        "clang", "-arch", "arm64", "-O2", "-arch", "x86_64", "-arch", "arm64", "-c", "u.c",
+    ]))
+    .unwrap();
+    assert!(parsed.is_universal());
+    assert_eq!(parsed.arch_slices(), s(&["arm64", "x86_64"]));
+    assert_eq!(parsed.single_slice("x86_64").rest, s(&["-arch", "x86_64", "-O2", "-c", "u.c"]));
+    assert!(!parsed.single_slice("x86_64").is_universal());
+    assert_eq!(cc_target_arch(&parsed), "arm64+x86_64");
+    assert!(!cc_direct_key_eligible(&parsed), "the compiler's depfile lists one slice");
+    let plain = CcArgs::parse(&s(&["clang", "-arch", "arm64", "-c", "u.c"])).unwrap();
+    assert!(!plain.is_universal());
+    assert_eq!(cc_target_arch(&plain), "arm64");
 }
 
 #[test]

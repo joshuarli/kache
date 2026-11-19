@@ -940,12 +940,15 @@ impl CcArgs {
             ));
         }
 
-        // Multi-arch (`-arch X -arch Y` produces a fat binary).
-        // Single `-arch` is fine — many cc invocations specify it.
-        let arch_count = self.rest.windows(2).filter(|w| w[0] == "-arch").count();
-        if arch_count > 1 {
+        // Universal objects are keyed slice by slice. Sidecars would need
+        // one file per slice.
+        if self.is_universal()
+            && (self.family.dialect() != Dialect::Gnu
+                || !self.sidecar_outputs().is_empty()
+                || self.coverage_instrumented())
+        {
             reasons.push(RefuseReason::Unsupported(
-                "cc multi-arch -arch X -arch Y (fat-binary caching) — not yet",
+                "cc multi-arch -arch X -arch Y outside a plain clang compile — not yet",
             ));
         }
 
@@ -1104,6 +1107,43 @@ impl CcArgs {
         let mut object = self.object_output_path()?;
         object.set_extension("d");
         Some(object)
+    }
+
+    /// The `-arch` values in order, each once.
+    pub(crate) fn arch_slices(&self) -> Vec<String> {
+        let mut slices: Vec<String> = Vec::new();
+        for pair in self.rest.windows(2).filter(|pair| pair[0] == "-arch") {
+            if !slices.contains(&pair[1]) {
+                slices.push(pair[1].clone());
+            }
+        }
+        slices
+    }
+
+    /// A universal object: one compile writes a slice per `-arch`.
+    pub(crate) fn is_universal(&self) -> bool {
+        self.arch_slices().len() > 1
+    }
+
+    /// This invocation with its `-arch` flags narrowed to `arch`, for keying
+    /// one slice.
+    fn single_slice(&self, arch: &str) -> CcArgs {
+        let mut slice = self.clone();
+        slice.rest.clear();
+        let mut args = self.rest.iter();
+        let mut placed = false;
+        while let Some(arg) = args.next() {
+            if arg == "-arch" {
+                args.next();
+                if !placed {
+                    slice.rest.extend(["-arch".to_string(), arch.to_string()]);
+                    placed = true;
+                }
+            } else {
+                slice.rest.push(arg.clone());
+            }
+        }
+        slice
     }
 
     /// The files a `-c` compile writes beside its object.
@@ -1672,12 +1712,12 @@ struct CcPrefixMap {
 /// `-arch X` flag if present, else the host arch. (Multi-`-arch` is
 /// refused upstream, so at most one value is found here.)
 fn cc_target_arch(parsed: &CcArgs) -> String {
-    parsed
-        .rest
-        .windows(2)
-        .find(|w| w[0] == "-arch")
-        .map(|w| w[1].clone())
-        .unwrap_or_else(|| std::env::consts::ARCH.to_string())
+    let slices = parsed.arch_slices();
+    if slices.is_empty() {
+        std::env::consts::ARCH.to_string()
+    } else {
+        slices.join("+")
+    }
 }
 
 /// Build the argv for a preprocess-only run, dialect-dependent.
@@ -2455,6 +2495,37 @@ impl std::fmt::Display for CcHiddenInput {
 }
 
 impl std::error::Error for CcHiddenInput {}
+
+/// Preprocess each slice of a universal object on its own. The driver
+/// refuses `-E` with several `-arch` flags, and a compile's own depfile lists
+/// only the last slice's headers, so neither can key the whole object.
+fn preprocess_universal_hash(
+    parsed: &CcArgs,
+    prefix_maps: &[CcPrefixMap],
+    file_hasher: &crate::cache_key::FileHasher<'_>,
+) -> Result<PreprocessHash> {
+    let mut slices = Vec::new();
+    let mut fingerprints: Vec<crate::cache_key::CcPreprocessMemoInput> = Vec::new();
+    let mut path_bound = false;
+    for arch in parsed.arch_slices() {
+        let slice = preprocess_hash(&parsed.single_slice(&arch), prefix_maps, file_hasher)?;
+        let inputs = slice
+            .fingerprints
+            .with_context(|| format!("cc: the {arch} slice gave no read set to key"))?;
+        slices.push(format!("{arch}={}+{}", cc_direct_inputs_digest(&inputs), slice.hash));
+        path_bound |= slice.path_bound;
+        for input in inputs {
+            if !fingerprints.iter().any(|known| known.local_path() == input.local_path()) {
+                fingerprints.push(input);
+            }
+        }
+    }
+    Ok(PreprocessHash {
+        hash: slices.join(";"),
+        fingerprints: Some(fingerprints),
+        path_bound,
+    })
+}
 
 fn preprocess_hash(
     parsed: &CcArgs,
@@ -7351,6 +7422,7 @@ const CC_DIRECT_CAPTURE_TARGET: &str = "__kache_direct_capture";
 /// to accept the flags the capture adds.
 pub(crate) fn cc_direct_key_eligible(parsed: &CcArgs) -> bool {
     cc_direct_key_shape_ok(parsed)
+        && !parsed.is_universal()
         && crate::config::probe_memo_dir_for(&parsed.invocation_env).is_ok_and(|memo| {
             cc_driver_captures_dependencies_for(&parsed.program, &memo, &parsed.invocation_env)
         })
@@ -8519,6 +8591,7 @@ impl CcCompiler {
             .file_hasher
             .supports_cc_preprocess_memo()
             .then(|| cc_preprocess_memo_key(parsed, &prefix_maps, &resolved.version_line))
+            .filter(|_| !parsed.is_universal())
             .flatten();
         drop(trace_memo_key);
         // A content-matching read set is not enough: a formerly absent
@@ -8616,7 +8689,11 @@ impl CcCompiler {
             }));
         } else {
             let _trace = crate::phase_trace::phase("cc_preprocess");
-            let preprocessed = preprocess_hash(parsed, &prefix_maps, ctx.file_hasher)?;
+            let preprocessed = if parsed.is_universal() {
+                preprocess_universal_hash(parsed, &prefix_maps, ctx.file_hasher)?
+            } else {
+                preprocess_hash(parsed, &prefix_maps, ctx.file_hasher)?
+            };
             self.key_path_bound.set(preprocessed.path_bound);
             let read_inputs = preprocessed.fingerprints.as_ref().map(|inputs| {
                 inputs

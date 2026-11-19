@@ -1,0 +1,34 @@
+summary = "each slice of a universal object reads its own header; an edit to either slice's header must recompile, though the compiler's own depfile lists only the last slice's (CCP-07)"
+cohort = "blocking"
+families = ["clang"]
+os = ["macos"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-arch", "arm64", "-arch", "x86_64", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-arm64-header"
+reuse = "miss"
+action = [{ op = "write", path = "a.h", content = "#define V 6\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "edit-x86_64-header"
+reuse = "miss"
+action = [{ op = "write", path = "x.h", content = "#define V 4\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-edited"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
