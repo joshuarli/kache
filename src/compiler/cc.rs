@@ -2179,7 +2179,8 @@ fn cc_assembler_hidden_input(expansion: &[u8]) -> Option<&'static str> {
 /// opens its operand: a quote, or a backslash for an escaped quote in a C
 /// string or a macro argument. That keeps C++ member access such as
 /// `opts.include(` out. A macro facility counts when a blank follows it;
-/// `.altmacro` and the `\()` separator count anywhere.
+/// `.altmacro` counts anywhere, and the `\()` separator wherever a body is
+/// closed, which also catches an opening spelled without a blank (`.rept(1)`).
 fn cc_assembler_text_hidden_input(text: &[u8]) -> Option<&'static str> {
     let file = CC_ASSEMBLER_FILE_DIRECTIVES.into_iter().find(|directive| {
         cc_directive_operands(text, directive.as_bytes()).any(|rest| {
@@ -2202,9 +2203,14 @@ fn cc_assembler_text_hidden_input(text: &[u8]) -> Option<&'static str> {
             .map(|_| ".altmacro")
     })
     .or_else(|| {
-        text.windows(3)
-            .any(|window| window == br"\()")
-            .then_some(r"\()")
+        // `\()` acts only inside a macro, `.irp`, `.irpc` or `.rept` body,
+        // and every body is closed in the same text. Without a closing
+        // directive it is inert, as in libstdc++'s `<regex>`, which spells
+        // `".[\\()*+?{|^$"`.
+        let closes_a_body = [b".endm".as_slice(), b".endr"]
+            .into_iter()
+            .any(|end| cc_directive_operands(text, end).next().is_some());
+        (closes_a_body && text.windows(3).any(|window| window == br"\()")).then_some(r"\()")
     })
 }
 

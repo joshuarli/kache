@@ -5491,7 +5491,18 @@ fn assembler_file_reads_and_macros_are_refused() {
         found(".rept 1\n.inc\\()bin \"p.bin\"\n.endr"),
         Some(".rept")
     );
-    assert_eq!(found(".inc\\()bin \"p.bin\""), Some(r"\()"));
+    assert_eq!(
+        found(".rept(1)\n.inc\\()bin \"p.bin\"\n.endr"),
+        Some(r"\()"),
+        "an opening without a blank is caught by its closing"
+    );
+    assert_eq!(found(".macro\temit\n\\()\n.ENDM"), Some(".macro"));
+    assert_eq!(found(".inc\\()bin \"p.bin\""), None, "outside a body the separator is literal text");
+    assert_eq!(
+        found(r#"static const char* spec = ".[\\()*+?{|^$";"#),
+        None,
+        "libstdc++ <regex> spells the separator in an ordinary string"
+    );
     assert_eq!(found(".altmacro\n"), Some(".altmacro"));
     assert_eq!(found(".altmacro_x"), None);
 
