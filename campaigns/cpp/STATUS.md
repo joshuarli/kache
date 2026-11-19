@@ -434,6 +434,27 @@ run. Before these PRs, L4 failed eight fixtures. PR #50's CI then passed
 every job with the Linux gates required: glibc e2e on x86_64 and ARM64,
 the musl in-image e2e on both architectures, and macOS.
 
+## Session 2026-11-19 (third unattended run)
+
+Each kache PR passed `make check`, `make cc-oracle
+cc-oracle-negative-control` on macOS and in the L4 image (GCC 15,
+clang 23), macOS `make e2e`, and CI with every gate required.
+
+| PR | What |
+|---|---|
+| #52 | CCP-05: `.gcno`, `.dwo` and `.dia` sidecars cached and restored as a set; `cc-out-gcno`, `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking |
+| #53 | the oracle compares GCC coverage pairs with their shared stamp zeroed; `cc-out-gcno` runs for GCC |
+| #54 | **wrong output fixed:** hits replayed diagnostics printed under other formatting flags (`-fdiagnostics-format=msvc`, `-fdiagnostics-color=always`); `cc-out-diagnostics-format*` blocking, `cc-out-diagnostics-color-reuse` open |
+
+**L4 oracle output must not sit on the OrbStack bind mount.** With the
+oracle's work tree on the FUSE mount, about one run in thirteen showed
+`KACHE_MISSED_REUSE`: the daemon accepted a store handoff, then failed to
+stat its own hard-linked snapshot (`stating compiler output for
+__kache_cc_object.o`). The same three cases ran 30 times with the work tree
+on the container's overlay filesystem and never failed, and CI (real
+filesystems) has not shown it. Kache already reports that mount as not
+host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
+
 ## Resume instructions
 
 1. Read this ledger, [lock.toml](lock.toml), [cases.toml](cases.toml) and
@@ -441,7 +462,8 @@ the musl in-image e2e on both architectures, and macOS.
 2. Verify every kache change with all of:
    - `make check`;
    - `make cc-oracle cc-oracle-negative-control` on macOS;
-   - the same in the L4 image, with `TOOLCHAINS="gcc clang"`;
+   - the same in the L4 image, with `TOOLCHAINS="gcc clang"
+     CC_ORACLE_OUT=/tmp/cc-oracle` (see the session 2026-11-19 note);
    - `PATH=/opt/homebrew/bin:$PATH make e2e`.
 3. Next work, in priority order:
    - CCP-05 remainder: GCC SARIF/JSON diagnostic files
