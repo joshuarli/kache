@@ -5,6 +5,7 @@
 
 pub mod case;
 pub mod exec;
+mod gcov;
 pub mod judge;
 pub mod pin;
 mod report;

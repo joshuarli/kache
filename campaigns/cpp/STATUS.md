@@ -287,10 +287,20 @@ comment-only edits in the default (reproducible) profile.
 - Store-fault actions.
 
 GCC's `.gcno` and the object carry a compile-time stamp even under
-`-frandom-seed` and `SOURCE_DATE_EPOCH`: the notes' bytes 8..12 and one
-4-byte run in the object, nothing else. The oracle hashes a pair whose
-object holds its notes' stamp with the stamp zeroed, and a disagreeing
-pair as written, so GCC coverage is judged like any other output.
+`-frandom-seed` and `SOURCE_DATE_EPOCH`: the notes' bytes 8..12 and the
+`stamp` field of the object's `gcov_info` record (`.data.rel+0x10` in a
+GCC 15 aarch64 object), nothing else. clang's stamp is deterministic. Until
+2026-11-19 the oracle zeroed every occurrence of the stamp's bytes anywhere
+in the object, which could hide an unrelated difference in bytes that
+happened to match, and looped forever on a zero stamp. It now locates the
+one field structurally (`cc_oracle/gcov.rs`) and reports any pair it cannot
+locate as `coverage stamp unresolved` instead of normalizing it. Rerun
+2026-11-19: `cc-out-gcno` MATCHes for GCC 15 and clang 23 in the L4 image,
+and the stale-output, omit-sidecar and disabled-invalidation controls still
+detect their faults. `make cc-gcov-roundtrip` (link, run and `gcov` the
+restored objects and notes, against a raw build) passes for GCC 15 (L4)
+and Apple clang 21 (`GCOV="xcrun llvm-cov gcov"`); the L4 clang has no
+profile runtime or `llvm-cov`.
 
 **CCP-05 sidecars.** A `-c` compile with `--coverage`, `-ftest-coverage`,
 `-fprofile-arcs`, `-gsplit-dwarf` or clang's `--serialize-diagnostics`

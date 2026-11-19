@@ -29,9 +29,16 @@ case's `source` is preprocessing with `-E`, `-M` or `-MM`, a probe with
 
 After every compile the runner records exit status, stdout, stderr, and the
 whole fixture tree (path, kind, mode, blake3). Kache must match `raw` exactly.
-One exception: GCC stamps a coverage object and its `.gcno` with the compile
-time. Where `u.o` contains the stamp its `u.gcno` carries, both are hashed
-with the stamp zeroed. A pair whose stamps disagree is hashed as written.
+Two exceptions. GCC stamps a coverage object and its `.gcno` with the
+compile time. The runner finds the stamp field of the object's `gcov_info`
+record by its structure (64-bit little-endian ELF: the notes' version word
+and stamp, a relocated `.gcda` filename pointer and a relocated
+`__gcov_merge_*` pointer), and compares the pair with exactly that field and
+the notes' bytes 8..12 zeroed. Raw digests are kept. A pair whose record
+cannot be found, or disagrees with its notes, is compared as written, and a
+difference reports the reason as `coverage stamp unresolved`. Second, files a
+case lists as `unstable` (a GCC precompiled header, which is a memory dump)
+are compared by kind and mode only.
 Timestamps are not compared. Source files get a fixed modification time, and
 each written file gets a later fixed time, so neither cache sees a file
 modified moments before the compile. Change times cannot be set, so after
