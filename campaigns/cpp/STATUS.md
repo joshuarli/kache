@@ -41,8 +41,12 @@ Engineering work still open (not provisioning):
 - CCP-05: sidecars under `-S` pass through.
 - CCP-06: implicit modules and module production pass through.
 - CCP-07: the cc-crate fixture, Chromium, Meson and Autotools launchers.
-- CCP-08: compiler replacement, wrapper/driver selection, policy changes
-  against populated caches, controlled hash/compile/publication races.
+- CCP-08: compiler replacement, C/C++ driver selection and profile
+  switches against a populated cache now have oracle cases, and concurrent
+  same-key and different-key compiles an integration test
+  (`test_cc_concurrent_compiles_each_get_the_compilers_object`). Open:
+  wrapper selection (shim name vs `kache cc`), eviction racing a build,
+  interrupted publication, stale locks.
 - CCP-09: a quiet-host rerun of the baseline; the provisional one (below)
   ranks losses but was timed under load.
 
