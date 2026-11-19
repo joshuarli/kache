@@ -542,7 +542,7 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
     // Only a required hit can reveal a disabled cache.
     if cache_disabled_applies(ctx.control, profile)
         && arm == Arm::Kache
-        && case.steps.iter().any(|step| step.reuse == Reuse::Hit)
+        && case.steps.iter().any(|step| case.compiles.iter().any(|c| step.reuse_for(c) == Reuse::Hit))
     {
         run.injected = true;
     }
@@ -635,7 +635,7 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
 
             if fault_here {
                 match ctx.control {
-                    Some(Control::StaleOutput) if step.reuse == Reuse::Miss && !populated.is_empty() => {
+                    Some(Control::StaleOutput) if step.reuse_for(compile) == Reuse::Miss && !populated.is_empty() => {
                         for (path, bytes) in &populated {
                             if std::fs::read(path).ok().as_ref() != Some(bytes) {
                                 std::fs::write(path, bytes)?;
@@ -643,12 +643,12 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                             }
                         }
                     }
-                    Some(Control::DisabledInvalidation) if step.reuse == Reuse::Miss => {
+                    Some(Control::DisabledInvalidation) if step.reuse_for(compile) == Reuse::Miss => {
                         executions.codegen = 0;
                         executions.codegen_argv.clear();
                         run.injected = true;
                     }
-                    Some(Control::OmitSidecar) if step.reuse == Reuse::Hit => {
+                    Some(Control::OmitSidecar) if step.reuse_for(compile) == Reuse::Hit => {
                         if let Some(path) = case
                             .outputs
                             .iter()

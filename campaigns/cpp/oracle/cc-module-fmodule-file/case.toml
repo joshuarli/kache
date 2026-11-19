@@ -1,0 +1,45 @@
+summary = "an explicit -fmodule-file= consumer is reused, and retargeting its module path to another build of the same module misses although the source, preprocessor output and dependency file are unchanged (CCP-06; Apple clang disables C++20 named modules)"
+cohort = "blocking"
+families = ["clang"]
+os = ["linux"]
+profiles = ["transparent", "reproducible"]
+outputs = ["N.pcm", "M.pcm", "M2.pcm", "use.o"]
+
+[[compile]]
+argv = ["{cxx}", "-std=c++20", "--precompile", "N.cppm", "-o", "N.pcm"]
+source = "N.cppm"
+uncached = true
+
+[[compile]]
+argv = ["{cxx}", "-std=c++20", "--precompile", "-fmodule-file=N=N.pcm", "M.cppm", "-o", "M.pcm"]
+source = "M.cppm"
+uncached = true
+
+[[compile]]
+argv = ["{cxx}", "-std=c++20", "--precompile", "-fmodule-file=N=N.pcm", "M2.cppm", "-o", "M2.pcm"]
+source = "M2.cppm"
+uncached = true
+
+[[compile]]
+argv = ["{cxx}", "-std=c++20", "-fmodule-file=M=cur.pcm", "-fmodule-file=N=N.pcm", "-c", "use.cpp", "-o", "use.o"]
+source = "use.cpp"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+action = [{ op = "symlink", path = "cur.pcm", target = "M.pcm" }]
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "retarget"
+reuse = "miss"
+action = [{ op = "symlink", path = "cur.pcm", target = "M2.pcm" }]
+
+[[step]]
+name = "revert"
+reuse = "hit"
+action = [{ op = "delete-outputs" }, { op = "symlink", path = "cur.pcm", target = "M.pcm" }]

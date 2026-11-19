@@ -229,7 +229,7 @@ fn run_case(case: &Case, profile: Profile, ctx: &ArmContext<'_>, run: &mut CaseR
             let effective = exec::effective_args(&compile.argv, profile, &fixture);
             let passthrough = exec::effective_args(&compile.argv, Profile::Transparent, &fixture);
             let judgement = judge::judge(&Row {
-                reuse: step.reuse,
+                reuse: step.reuse_for(compile),
                 expected_status: step.status,
                 raw: obs(Arm::Raw),
                 raw_repeat: obs(Arm::RawRepeat),
@@ -243,7 +243,7 @@ fn run_case(case: &Case, profile: Profile, ctx: &ArmContext<'_>, run: &mut CaseR
             run.rows.push(RowResult {
                 step: step.name.clone(),
                 compile: c,
-                reuse: step.reuse,
+                reuse: step.reuse_for(compile),
                 judgement,
                 arms: arms
                     .iter()

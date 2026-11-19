@@ -938,40 +938,38 @@ prerequisites = "PCH profile; explicit time_macros behavior"
 [[case]]
 id = "cc-module-fmodule-file"
 package = "CCP-06"
-summary = "explicit -fmodule-file= consumers: hits/misses on module content changes"
+summary = "explicit -fmodule-file= consumers are keyed by the module file's bytes; a retargeted module path misses (Linux clang; Apple clang disables named modules)"
 profiles = ["both"]
 compilers = ["clang"]
 ccache.suite = "fmodule_file.bash"
-status = "conditional"
-prerequisites = "clang modules build tooling available; module file hashing viable"
+status = "oracle"
 
 [[case]]
 id = "cc-module-prebuilt-path"
 package = "CCP-06"
-summary = "-fprebuilt-module-path= directory consumers: directory contents keyed"
+summary = "-fprebuilt-module-path= directory consumers: every .pcm entry is keyed by name and bytes"
 profiles = ["both"]
 compilers = ["clang"]
 ccache.suite = "fprebuilt_module_path.bash"
-status = "conditional"
-prerequisites = "prebuilt module toolchain available"
+status = "oracle"
 
 [[case]]
 id = "cc-module-body-edit"
 package = "CCP-06"
-summary = "template-body edit in a consumed module invalidates"
+summary = "template-body edit in a consumed module, or an edit to a module it imports, invalidates"
 profiles = ["both"]
 compilers = ["clang"]
 ccache.suite = "fmodule_file.bash"
-status = "conditional"
+status = "oracle"
 
 [[case]]
 id = "cc-module-add-remove"
 package = "CCP-06"
-summary = "module file added/renamed/removed under -fprebuilt-module-path invalidates"
+summary = "module file added/swapped/removed under -fprebuilt-module-path invalidates; an earlier listing reuses"
 profiles = ["both"]
 compilers = ["clang"]
 ccache.suite = "fprebuilt_module_path.bash"
-status = "conditional"
+status = "oracle"
 
 [[case]]
 id = "cc-module-compiler-sdk"
