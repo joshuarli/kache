@@ -114,6 +114,8 @@ clang-cl /c foo.c /Fofoo.obj
 
 The source can be C, C++, Objective-C, Objective-C++, or assembly that goes through the preprocessor (`.S`, `.sx`). `cc -S src/foo.c -o build/foo.s` caches the assembly like an object. Arguments in an `@file` response file are expanded and keyed as if they had been passed directly, and the compile runs with the expanded arguments.
 
+A dependency file (`-MD`, `-MMD`) whose only target is the object is restored naming the object the current invocation writes, so one source compiled into two object directories shares an entry. Other `-MT` and `-MQ` targets are part of the key.
+
 The key includes the content of the source and of every header the compile reads, the compiler identity, modeled code-generation options, and normalized paths. Header changes therefore invalidate the entry.
 
 Kache can learn a GCC or Clang compile's read set without a separate preprocessor run. The first time it sees an invocation it compiles right away and asks the compiler for a dependency file alongside the object. A caller's own `-MD` file serves when present. Kache then fingerprints the files the compile read and keys from their digest. Peers compiling the same unit in other build directories wait for that record instead of compiling too.

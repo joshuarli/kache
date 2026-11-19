@@ -3790,6 +3790,39 @@ fn test_cc_direct_key_uses_the_callers_depfile() {
     assert_last_cc_event(&report, "local_hit", 0);
 }
 
+/// A depfile names its object, so one source compiled into two object
+/// directories shares an entry but restores a depfile naming the object
+/// this invocation writes, as the compiler would.
+#[test]
+fn test_cc_restored_depfile_names_this_invocations_object() {
+    build_kache();
+
+    let project = TempDir::new().unwrap();
+    let cache_dir = TempDir::new().unwrap();
+    let _cache_dir_daemon = common::DaemonGuard::new(kache_binary(), cache_dir.path());
+    std::fs::write(project.path().join("foo.c"), "int value(void) { return 7; }\n").unwrap();
+    for dir in ["a", "b"] {
+        std::fs::create_dir(project.path().join(dir)).unwrap();
+    }
+    let compile = |dir: &str| {
+        let object = format!("{dir}/foo.o");
+        run_kache_cc(
+            project.path(),
+            cache_dir.path(),
+            &["cc", "-O0", "-g0", "-MD", "-c", "foo.c", "-o", &object],
+        );
+        std::fs::read_to_string(project.path().join(dir).join("foo.d")).unwrap()
+    };
+
+    let cold = compile("a");
+    assert!(cold.starts_with("a/foo.o:"), "{cold}");
+    assert_last_cc_event(&kache_report(cache_dir.path()), "miss", 1);
+
+    let warm = compile("b");
+    assert_last_cc_event(&kache_report(cache_dir.path()), "local_hit", 0);
+    assert_eq!(warm, cold.replacen("a/foo.o:", "b/foo.o:", 1));
+}
+
 /// A translation unit whose assembler reads a file the compiler never
 /// opens cannot be keyed from the read set: it compiles and is not cached.
 #[test]

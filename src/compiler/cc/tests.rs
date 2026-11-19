@@ -1336,7 +1336,7 @@ fn parse_depinfo_mmd_excludes_system_headers() {
     assert!(d.emit);
     assert!(!d.include_system);
     assert_eq!(d.output, None);
-    assert_eq!(d.target, None);
+    assert!(d.targets.is_empty());
 }
 
 #[test]
@@ -1355,10 +1355,55 @@ fn parse_depinfo_mf_sets_output_path() {
 }
 
 #[test]
-fn parse_depinfo_mt_sets_target_name() {
-    let parsed = CcArgs::parse(&s(&["cc", "-c", "foo.c", "-MMD", "-MT", "build/foo.o"])).unwrap();
+fn parse_depinfo_targets_keep_every_mt_and_mq_in_order() {
+    let parsed = CcArgs::parse(&s(&[
+        "cc", "-c", "foo.c", "-MMD", "-MT", "build/foo.o", "-MQ", "a$b", "-MT", "c",
+    ]))
+    .unwrap();
     let d = parsed.depinfo.expect("dep-info should be set");
-    assert_eq!(d.target, Some("build/foo.o".to_string()));
+    assert_eq!(
+        d.targets,
+        vec![
+            ("build/foo.o".to_string(), false),
+            ("a$b".to_string(), true),
+            ("c".to_string(), false),
+        ]
+    );
+}
+
+#[test]
+fn depinfo_object_target_is_the_output_when_it_is_the_only_plain_target() {
+    let target = |args: &[&str]| cc_depinfo_object_target(&CcArgs::parse(&s(args)).unwrap());
+    assert_eq!(
+        target(&["cc", "-MD", "-c", "x.c", "-o", "a/x.o"]).as_deref(),
+        Some("a/x.o")
+    );
+    assert_eq!(target(&["cc", "-MD", "-c", "src/x.c"]).as_deref(), Some("x.o"));
+    assert_eq!(
+        target(&["cc", "-MD", "-c", "x.c", "-o", "CMakeFiles/cmTC_1a.dir/x.c.o"]).as_deref(),
+        Some("CMakeFiles/cmTC_1a.dir/x.c.o")
+    );
+    assert_eq!(
+        target(&["cc", "-MD", "-MT", "a/x.o", "-c", "x.c", "-o", "a/x.o"]).as_deref(),
+        Some("a/x.o")
+    );
+    assert_eq!(target(&["cc", "-c", "x.c", "-o", "a/x.o"]), None, "no dep-info");
+    assert_eq!(
+        target(&["cc", "-MD", "-MT", "other", "-c", "x.c", "-o", "a/x.o"]),
+        None,
+        "another target"
+    );
+    assert_eq!(
+        target(&["cc", "-MD", "-MT", "a/x.o", "-MT", "b", "-c", "x.c", "-o", "a/x.o"]),
+        None,
+        "a second target"
+    );
+    assert_eq!(
+        target(&["cc", "-MD", "-c", "x.c", "-o", "a b/x.o"]),
+        None,
+        "Make quotes a space"
+    );
+    assert_eq!(target(&["cc", "-MD", "-c", "x.c", "-o", "a$/x.o"]), None, "and a dollar");
 }
 
 #[test]

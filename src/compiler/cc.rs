@@ -199,9 +199,31 @@ pub struct DepInfoSpec {
     /// `-MF foo.d`: where to write the dep-info file. `None` means
     /// the compiler picks a default (typically next to the `.o`).
     pub output: Option<PathBuf>,
-    /// `-MT target`: the make target name for dep-info entries.
-    /// Defaults to the output object name.
-    pub target: Option<String>,
+    /// `-MT` / `-MQ` targets in argv order, `true` for `-MQ`. The compiler
+    /// names every one; with none it names the output.
+    pub targets: Vec<(String, bool)>,
+}
+
+/// Stands for the object path in a stored dep-info file whose only target
+/// is the object, so the entry restores under another object path.
+pub(crate) const CC_DEPINFO_OBJECT_PLACEHOLDER: &str = "@kache-object@";
+
+/// The dep-info target to store as [`CC_DEPINFO_OBJECT_PLACEHOLDER`]: the
+/// output's spelling, when it is the file's only target and Make writes it
+/// unquoted.
+pub(crate) fn cc_depinfo_object_target(parsed: &CcArgs) -> Option<String> {
+    let depinfo = parsed.depinfo.as_ref().filter(|d| d.emit)?;
+    let object = parsed.object_output_path()?.to_str()?.to_owned();
+    let only_target = match depinfo.targets.as_slice() {
+        [] => true,
+        [(target, _)] => *target == object,
+        _ => false,
+    };
+    let plain = !object.is_empty()
+        && object
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-/+,=@_~".contains(&b));
+    (only_target && plain).then_some(object)
 }
 
 /// Parsed C-family invocation.
@@ -1317,7 +1339,8 @@ fn apply_cc_arg(parsed: &mut CcArgs, depinfo: &mut Option<DepInfoSpec>, arg: &Pa
         CcArgAction::DepTarget => {
             if let Some(value) = &arg.value {
                 let d = depinfo.get_or_insert_with(DepInfoSpec::default);
-                d.target = Some(value.clone());
+                let quoted = matches!(arg.spec.matcher, Matcher::Exact("-MQ"));
+                d.targets.push((value.clone(), quoted));
             }
         }
         CcArgAction::LanguageOverride => {
@@ -4477,8 +4500,8 @@ fn cc_resolved_per_tu_paths(parsed: &CcArgs) -> Vec<String> {
     if let Some(d) = parsed.depinfo_output_path() {
         add(&d);
     }
-    if let Some(t) = parsed.depinfo.as_ref().and_then(|d| d.target.clone()) {
-        set.insert(t);
+    for (target, _) in parsed.depinfo.iter().flat_map(|d| &d.targets) {
+        set.insert(target.clone());
     }
     // Never blank an empty token (a no-op path would blank real tokens).
     set.remove("");
@@ -8149,19 +8172,24 @@ impl CcCompiler {
             hasher.update(b"depinfo_missing_generated:");
             hasher.update(&[depinfo.missing_generated as u8]);
             hasher.update(b"\n");
-            // `depinfo_target` is the make target from `-MT` (else the object
-            // file *name*, basename-only). It is hashed raw — keep an eye on it
-            // in the trace: a build-path-bearing `-MT` would leak here.
-            let depinfo_target: std::borrow::Cow<str> = if let Some(target) = &depinfo.target {
-                std::borrow::Cow::Borrowed(target.as_str())
-            } else if let Some(object) = parsed.object_output_path()
-                && let Some(name) = object.file_name()
-            {
-                std::borrow::Cow::Owned(name.to_string_lossy().into_owned())
-            } else {
-                std::borrow::Cow::Borrowed("")
+            // The targets the file names. An object-only target is stored as
+            // a placeholder and restored as this invocation's object, so it
+            // keys as the placeholder; any other target is in the file as
+            // spelled.
+            let depinfo_target = match cc_depinfo_object_target(parsed) {
+                Some(_) => CC_DEPINFO_OBJECT_PLACEHOLDER.to_string(),
+                None if depinfo.targets.is_empty() => parsed
+                    .object_output_path()
+                    .map(|object| format!("T{}", object.to_string_lossy()))
+                    .unwrap_or_default(),
+                None => depinfo
+                    .targets
+                    .iter()
+                    .map(|(target, quoted)| format!("{}{target}", if *quoted { 'Q' } else { 'T' }))
+                    .collect::<Vec<_>>()
+                    .join("\x1f"),
             };
-            hasher.update(b"depinfo_target:");
+            hasher.update(b"depinfo_target.v2:");
             hasher.update(depinfo_target.as_bytes());
             hasher.update(b"\n");
             log::trace!(
