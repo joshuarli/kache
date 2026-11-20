@@ -31,7 +31,9 @@ pub fn probe_key(prober_id: &str, req: &ProbeRequest<'_>) -> Option<String> {
 
 /// A probe belongs to the client's compiler selection, environment and cwd.
 /// Keep the cwd even for absolute compiler paths: a driver wrapper can select
-/// tools or read configuration relative to its current directory.
+/// tools or read configuration relative to its current directory. Under a
+/// declared base dir the cwd, and `PWD`, are keyed by their path below it:
+/// declaring one asserts that the tree reads the same files wherever it is.
 pub(crate) fn probe_key_for(
     prober_id: &str,
     req: &ProbeRequest<'_>,
@@ -41,13 +43,33 @@ pub(crate) fn probe_key_for(
         .resolve_program(Path::new(req.compiler))?
         .canonicalize()
         .ok()?;
+    let cwd = under_base_dirs(fingerprint_text(env.cwd()?.as_os_str().to_owned()), req.base_dirs);
     probe_key_from_parts(
         prober_id,
         req,
         &resolved,
-        env.vars_os().map(fingerprint_env_pair),
-        Some(env.cwd()?),
+        env.vars_os().map(fingerprint_env_pair).map(|(name, value)| {
+            let value = if name == "PWD" { under_base_dirs(value, req.base_dirs) } else { value };
+            (name, value)
+        }),
+        Some(&cwd),
     )
+}
+
+/// `path` with the longest declared base dir containing it replaced by that
+/// base's target, or `path` itself when none does.
+fn under_base_dirs(path: String, base_dirs: &[(String, String)]) -> String {
+    let below = |root: &str| {
+        let root = root.trim_end_matches(['/', '\\']);
+        let rest = path.strip_prefix(root)?;
+        (!root.is_empty() && (rest.is_empty() || rest.starts_with(['/', '\\']))).then_some(rest)
+    };
+    base_dirs
+        .iter()
+        .filter_map(|(root, target)| Some((root.len(), target, below(root)?)))
+        .max_by_key(|(len, _, _)| *len)
+        .map(|(_, target, rest)| format!("{target}{rest}"))
+        .unwrap_or(path)
 }
 
 /// A `vars_os` pair as fingerprint text. Converted here rather than via
@@ -98,7 +120,7 @@ fn probe_key_from_parts(
     req: &ProbeRequest<'_>,
     resolved: &Path,
     env_vars: impl Iterator<Item = (String, String)>,
-    cwd: Option<&Path>,
+    cwd: Option<&str>,
 ) -> Option<String> {
     let meta = std::fs::metadata(resolved).ok()?;
     let fingerprint = compiler_fingerprint(&meta);
@@ -126,7 +148,7 @@ fn probe_key_from_parts(
     h.update(env_fp.as_bytes());
     if let Some(cwd) = cwd {
         h.update(b"\ncwd:\n");
-        h.update(fingerprint_text(cwd.as_os_str().to_owned()).as_bytes());
+        h.update(cwd.as_bytes());
     }
     Some(h.finalize().to_hex().to_string())
 }
@@ -144,6 +166,7 @@ pub fn probe_key_isolated(prober_id: &str, program: &str) -> Option<String> {
             key_args: &[],
             per_tu_paths: &[],
             windows_aware: true,
+            base_dirs: &[],
         },
         &InvocationEnv::capture(),
     )
@@ -322,7 +345,52 @@ mod tests {
             key_args: &[],
             per_tu_paths: &[],
             windows_aware: true,
+            base_dirs: &[],
         }
+    }
+
+    #[test]
+    fn a_tree_moved_with_its_base_dir_reuses_the_probe() {
+        let root = TempDir::new().unwrap();
+        let compiler = NamedTempFile::new().unwrap();
+        let at = |tree: &str, below: &str| {
+            let cwd = root.path().join(tree).join(below);
+            let env = InvocationEnv::from_parts(
+                [("PWD", cwd.to_str().unwrap())],
+                Some(cwd.clone()),
+                None,
+                root.path().join("tmp"),
+            );
+            let base = vec![(
+                root.path().join(tree).display().to_string(),
+                "/kache/base-dir".to_string(),
+            )];
+            (env, base)
+        };
+        let key = |(env, base): (InvocationEnv, Vec<(String, String)>)| {
+            let request = ProbeRequest {
+                base_dirs: &base,
+                ..req(compiler.path().to_str().unwrap())
+            };
+            probe_key_for("cc", &request, &env).unwrap()
+        };
+        assert_eq!(key(at("first", "src")), key(at("second", "src")));
+        assert_ne!(key(at("first", "src")), key(at("first", "lib")));
+        let (env, _) = at("first", "src");
+        assert_ne!(key((env, Vec::new())), key(at("first", "src")));
+    }
+
+    #[test]
+    fn a_base_dir_holds_only_paths_below_it() {
+        let base = [("/r/a/".to_string(), "/kache/base-dir".to_string())];
+        assert_eq!(under_base_dirs("/r/a".into(), &base), "/kache/base-dir");
+        assert_eq!(under_base_dirs("/r/a/src".into(), &base), "/kache/base-dir/src");
+        assert_eq!(under_base_dirs("/r/ab/src".into(), &base), "/r/ab/src");
+        let nested = [
+            ("/r/a".to_string(), "/kache/base-dir".to_string()),
+            ("/r/a/src".to_string(), "/kache/base-dir-0".to_string()),
+        ];
+        assert_eq!(under_base_dirs("/r/a/src/x".into(), &nested), "/kache/base-dir-0/x");
     }
 
     #[test]
@@ -559,6 +627,7 @@ mod tests {
                 key_args: &flags,
                 per_tu_paths: &[],
                 windows_aware: true,
+                base_dirs: &[],
             },
             env.iter().cloned(),
         )

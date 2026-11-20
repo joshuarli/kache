@@ -10479,3 +10479,25 @@ fn the_header_scan_cache_starts_over_at_its_budget() {
     assert!(cache.scans.contains_key("d"));
     assert!(!cache.scans.contains_key("a"));
 }
+
+#[test]
+fn only_declared_base_dirs_key_the_probe_cwd() {
+    let map = |from: &str, to: &str| CcPrefixMap {
+        from: from.to_string(),
+        to: to.to_string(),
+    };
+    let maps = [
+        map("/r/base", CC_BASE_SENTINEL),
+        map("/r/configured", "/kache/base-dir-0"),
+        map("/r/base/build", CC_BUILD_SENTINEL),
+        map("/r/base/src", CC_SOURCE_SENTINEL),
+        map("/sdk", CC_SDKROOT_SENTINEL),
+    ];
+    assert_eq!(
+        cc_declared_base_dirs(&maps),
+        [
+            ("/r/base".to_string(), CC_BASE_SENTINEL.to_string()),
+            ("/r/configured".to_string(), "/kache/base-dir-0".to_string()),
+        ]
+    );
+}

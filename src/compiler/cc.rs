@@ -6243,6 +6243,22 @@ fn common_is_temp_dir(common: &Path, temp: &Path) -> bool {
 ///
 /// The same rewrite the expansion and the resolved tokens already get, so a
 /// path recorded here reads the same from any checkout the maps cover.
+/// The maps of declared base dirs (`KACHE_BASE_DIR`, `[paths].base_dirs`)
+/// as `(root, target)` pairs, for keying the compiler probe.
+fn cc_declared_base_dirs(prefix_maps: &[CcPrefixMap]) -> Vec<(String, String)> {
+    prefix_maps
+        .iter()
+        .filter(|map| {
+            map.to == CC_BASE_SENTINEL
+                || map
+                    .to
+                    .strip_prefix(CC_BASE_SENTINEL)
+                    .is_some_and(|index| index.starts_with('-'))
+        })
+        .map(|map| (map.from.clone(), map.to.clone()))
+        .collect()
+}
+
 fn cc_mapped_path(path: &Path, prefix_maps: &[CcPrefixMap]) -> String {
     // Text, not `env_os_key_bytes`: that encodes UTF-16 on Windows, and the
     // map sources and targets are UTF-8, so nothing would ever match and
@@ -8301,6 +8317,7 @@ impl CcCompiler {
                 key_args: &config_args,
                 per_tu_paths: &[],
                 windows_aware: Self::cc_link_probe_is_windows_aware(parsed.family),
+                base_dirs: &[],
             },
             &parsed.invocation_env,
         )?;
@@ -8842,6 +8859,7 @@ impl CcCompiler {
                 // remapped via -ffile-prefix-map). clang-cl keeps raw
                 // native paths → key stays path-literal (#299/#312).
                 windows_aware: parsed.family.dialect() != Dialect::Cl,
+                base_dirs: &cc_declared_base_dirs(&prefix_maps),
             },
             &parsed.invocation_env,
         )?;
