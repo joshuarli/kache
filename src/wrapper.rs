@@ -4351,7 +4351,7 @@ fn prepare_cc_store_files_in(
     let mut temporary_files = Vec::with_capacity(artifacts.outputs().len());
     for artifact in artifacts.outputs() {
         let mut builder = tempfile::Builder::new();
-        builder.prefix("kache-cc-artifact-");
+        builder.prefix(crate::daemon_publish::HANDOFF_SNAPSHOT_PREFIX);
         let staged = match staging_dir {
             Some(dir) => builder
                 .tempfile_in(dir)

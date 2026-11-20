@@ -206,6 +206,9 @@ impl PublishQueue {
 }
 
 /// Where a wrapper snapshots outputs it hands to the daemon.
+/// Prefix of a wrapper's output snapshot before it is handed off.
+pub(crate) const HANDOFF_SNAPSHOT_PREFIX: &str = "kache-cc-artifact-";
+
 pub(crate) fn handoff_dir(config: &Config) -> PathBuf {
     config.store_dir().join("staging").join(HANDOFF_DIR)
 }
@@ -812,9 +815,11 @@ fn newest_mtime(dir: &Path) -> Option<(std::time::SystemTime, u64)> {
 /// One whose newest entry is older than `grace` belongs to no live request:
 /// the daemon that accepted it died, or the wrapper died before handing it
 /// over. The store's own staging sweep only looks at files and so never
-/// reached these. Only `cc-` directories directly under the handoff directory
-/// are considered, a link is never followed, and nothing else in the store is
-/// walked.
+/// reached these. A wrapper that died before its hand-off leaves loose
+/// [`HANDOFF_SNAPSHOT_PREFIX`] files instead, reclaimed under the same grace.
+/// Only those files and `cc-` directories directly under the handoff
+/// directory are considered, a link is never followed, and nothing else in
+/// the store is walked.
 pub(crate) fn sweep_orphaned_handoffs(config: &Config, grace: Duration) -> HandoffSweep {
     let mut sweep = HandoffSweep::default();
     let Ok(entries) = std::fs::read_dir(handoff_dir(config)) else {
@@ -823,9 +828,21 @@ pub(crate) fn sweep_orphaned_handoffs(config: &Config, grace: Duration) -> Hando
     let now = std::time::SystemTime::now();
     for entry in entries.flatten() {
         let path = entry.path();
-        let is_request = entry.file_name().to_string_lossy().starts_with("cc-")
-            && std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir());
-        if !is_request {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if name.starts_with(HANDOFF_SNAPSHOT_PREFIX) && meta.is_file() {
+            if meta.modified().is_ok_and(|modified| handoff_is_abandoned(modified, now, grace))
+                && std::fs::remove_file(&path).is_ok()
+            {
+                sweep.removed += 1;
+                sweep.bytes_reclaimed += meta.len();
+            }
+            continue;
+        }
+        if !(name.starts_with("cc-") && meta.is_dir()) {
             continue;
         }
         let Some((newest, bytes)) = newest_mtime(&path) else {
@@ -923,11 +940,34 @@ mod tests {
         let stray = root.join("cc-file");
         std::fs::write(&stray, b"x").unwrap();
         filetime::set_file_mtime(&stray, hours_ago).unwrap();
+        // Snapshots a wrapper left when it died before handing them off.
+        let snapshot = |age: Option<filetime::FileTime>| {
+            let path = tempfile::Builder::new()
+                .prefix(HANDOFF_SNAPSHOT_PREFIX)
+                .tempfile_in(&root)
+                .unwrap()
+                .into_temp_path()
+                .keep()
+                .unwrap();
+            std::fs::write(&path, b"snapshot").unwrap();
+            if let Some(age) = age {
+                filetime::set_file_mtime(&path, age).unwrap();
+            }
+            path
+        };
+        let dead_snapshot = snapshot(Some(hours_ago));
+        let live_snapshot = snapshot(None);
+        let snapshot_dir = root.join(format!("{HANDOFF_SNAPSHOT_PREFIX}dir"));
+        std::fs::create_dir(&snapshot_dir).unwrap();
+        filetime::set_file_mtime(&snapshot_dir, hours_ago).unwrap();
 
         let sweep = sweep_orphaned_handoffs(&config, Duration::from_secs(3600));
 
-        assert_eq!(sweep.removed, 1, "{sweep:?}");
-        assert_eq!(sweep.bytes_reclaimed, b"object".len() as u64);
+        assert_eq!(sweep.removed, 2, "{sweep:?}");
+        assert_eq!(sweep.bytes_reclaimed, (b"object".len() + b"snapshot".len()) as u64);
+        assert!(!dead_snapshot.exists());
+        assert!(live_snapshot.exists());
+        assert!(snapshot_dir.exists());
         assert!(!abandoned.exists());
         assert!(live.exists());
         assert!(mixed.exists());

@@ -50,8 +50,32 @@ Engineering work still open (not provisioning):
   were behind that miss: the preprocess memo keyed the compiler's spelling
   (`cc` vs `/usr/bin/cc`), and `kache cc` behind shims resolved `cc` to the
   shim, so its probe and memo keyed kache's own binary and would not follow
-  a replaced compiler. Open: eviction racing a build, interrupted
-  publication, stale locks.
+  a replaced compiler. Store races, covered by kache-only tests rather than
+  ccache-compared oracle cases, so the `cc-rel-*` rows stay `planned`:
+  - Eviction: a blob removed between lookup and restore leaves every output
+    as it was and recompiles; nothing is published before every artifact is
+    staged (`a_cc_hit_whose_blob_goes_before_restore_leaves_every_output_and_recompiles`).
+    Compiles racing `kache clean --cache --all` each get the compiler's
+    object (`test_cc_compiles_racing_a_store_clear_get_the_compilers_object`);
+    that test does not reliably reach the lookup-to-restore window, the unit
+    test does.
+  - Killed compile: after `kache cc` is killed mid-compile, the next
+    compile neither waits nor misbuilds
+    (`test_cc_a_killed_compile_does_not_hold_up_the_next`). On macOS the
+    daemon brokers the compile, and the broker's identity kill takes the
+    compiler with the client and leaves no object. Linux declines delegation
+    ("compiler process isolation requires local execution"), so kache runs
+    the compiler in-process and a kill orphans it, as a killed raw driver
+    would; the next compile runs beside the orphan.
+  - Stale locks: every store lock is `flock`, released by the kernel when
+    its holder dies; old per-key lock files are swept for disk only.
+  - Interrupted publication: a put stages and renames blobs before one
+    transaction commits the row, so a kill leaves no visible partial entry.
+    A wrapper killed before its hand-off left loose snapshots in
+    `staging/handoff/`; the handoff sweep now reclaims them.
+  Open: a `meta.json` stranded by a kill between its rename and the row's
+  commit is a miss and is only reclaimed by a re-put of that key or an
+  index rebuild.
 - CCP-09: a quiet-host rerun of the baseline. The provisional runs below
   rank losses but were timed under load. The largest loss now is the
   per-hit fixed cost on small units.
