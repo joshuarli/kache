@@ -26,3 +26,19 @@ pub(crate) fn wait_for_committed(
 }
 
 pub(crate) use kache_config::InvocationEnv;
+
+/// Variables a shell or build driver rewrites for each command it runs. None
+/// changes what a compiler driver's probe reports or what the preprocessor
+/// expands: `_`, `OLDPWD` and `SHLVL` are shell bookkeeping, and the rest
+/// name this run's jobserver (`--jobserver-auth=fifo:/tmp/GMfifo…` differs
+/// per GNU make run) or its parallelism.
+pub(crate) const PER_COMMAND_ENV: &[&str] = &[
+    "_",
+    "OLDPWD",
+    "SHLVL",
+    "CARGO_MAKEFLAGS",
+    "MAKEFLAGS",
+    "MFLAGS",
+    "MAKELEVEL",
+    "NUM_JOBS",
+];
