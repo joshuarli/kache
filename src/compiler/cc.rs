@@ -2763,13 +2763,22 @@ fn cc_forced_includes(rest: &[String]) -> Vec<&str> {
     names
 }
 
+/// Whether `directive` (the text after `#`) is `keyword` as a whole word.
+fn cc_directive_is(directive: &[u8], keyword: &[u8]) -> bool {
+    directive
+        .strip_prefix(keyword)
+        .is_some_and(|rest| rest.first().is_none_or(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_'))
+}
+
 /// The header names the main file includes before its first token, where
 /// GCC may load a precompiled header in place of the header. `None` when
-/// one of them is spelled through a macro.
+/// one of them is spelled through a macro, or when text inside a
+/// conditional leaves the first token unknown.
 fn cc_leading_include_names(text: &[u8]) -> Option<Vec<String>> {
     let text = cc_splice_lines(text);
     let mut names = Vec::new();
     let mut in_comment = false;
+    let mut conditional_depth = 0usize;
     for raw in text.split(|&byte| byte == b'\n') {
         let mut line = Vec::with_capacity(raw.len());
         let mut i = 0;
@@ -2798,9 +2807,22 @@ fn cc_leading_include_names(text: &[u8]) -> Option<Vec<String>> {
             continue;
         }
         let Some(directive) = line.strip_prefix(b"#").or_else(|| line.strip_prefix(b"%:")) else {
+            // Text inside a conditional may be skipped, and then it is not the
+            // main file's first token: which includes still lead is unknown.
+            if conditional_depth > 0 {
+                return None;
+            }
             break;
         };
         let directive = directive.trim_ascii_start();
+        if [b"ifdef".as_slice(), b"ifndef", b"if"].iter().any(|keyword| cc_directive_is(directive, keyword)) {
+            conditional_depth += 1;
+            continue;
+        }
+        if cc_directive_is(directive, b"endif") {
+            conditional_depth = conditional_depth.saturating_sub(1);
+            continue;
+        }
         let Some(operand) = [b"include_next".as_slice(), b"include", b"import"]
             .iter()
             .find_map(|keyword| directive.strip_prefix(*keyword))
@@ -2903,8 +2925,11 @@ fn cc_implicit_pch_key(
         None => Some(Vec::new()),
     };
     let Some(leading) = leading else {
-        // The name a macro spells is unknown, so every precompiled header in
-        // the search directories is a candidate.
+        // The name a macro spells, or which includes lead past a conditional,
+        // is unknown, so every precompiled header in the search directories
+        // is a candidate. The marker keys this path apart from the narrower
+        // scan, which once let an object built against a `.gch` be stored
+        // under the key of a compile without one.
         for (index, dir) in dirs.iter().enumerate() {
             let entries = match std::fs::read_dir(dir) {
                 Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => continue,
@@ -2925,7 +2950,8 @@ fn cc_implicit_pch_key(
         for name in forced {
             fold(format!("{name}.gch"), absolutize_path(cwd, Path::new(&format!("{name}.gch"))))?;
         }
-        return Ok((!fields.is_empty()).then(|| fields.join("\x1f")));
+        fields.push("leading=unknown".to_string());
+        return Ok(Some(fields.join("\x1f")));
     };
     for name in forced.into_iter().map(str::to_string).chain(leading) {
         let candidate = format!("{name}.gch");

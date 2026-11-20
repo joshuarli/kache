@@ -19,9 +19,9 @@ Counts are taken from the files, not carried forward:
 `grep '^status = ' campaigns/cpp/cases.toml | sort | uniq -c` and
 `grep -l '^cohort = ' campaigns/cpp/oracle/*/case.toml`.
 
-- Inventory (`cases.toml`): 163 entries, and every oracle directory has
-  one: 67 `oracle`, 86 `planned`, 6 `conditional`, 4 `out_of_scope`.
-- Oracle cases (`oracle/`): 67, of which 63 `blocking` and 4 `open`
+- Inventory (`cases.toml`): 164 entries, and every oracle directory has
+  one: 71 `oracle`, 83 `planned`, 6 `conditional`, 4 `out_of_scope`.
+- Oracle cases (`oracle/`): 71, of which 67 `blocking` and 4 `open`
   (`cc-eqp-comment-only`, `cc-input-clang-config-file`,
   `cc-input-gcc-specs`, `cc-input-token-paste-probe`).
 - Gates: every Linux and macOS CI job is required (PR #50) and green on
@@ -127,7 +127,7 @@ Provisioning, not engineering:
 | CCP-03 | RUNNING | CCP-01, CCP-02 | Branch `feat/ccp03-chromium-flags`: Chromium official flags verified and landed from the WIP branch; `-S -o` cached. GNU `@file` response files cached (PR #38; `cc-rsp-basic`, `-quoted`, `-nested`, `-missing` blocking); `-fsanitize-ignorelist` keyed by content (PR #39). Open: further `@file` variants (planned), clang `--config` and GCC `-specs` (open cases), `-x` and `-Wp,`/`-Xpreprocessor` audits. See "CCP-03..CCP-08 progress" below. |
 | CCP-04 | LIMIT | CCP-02 | Comment-only reuse is declined: comment text and width are observable (see "CCP-04 finding"). ccache's reuse is wrong output when a comment changes width before code (`cc-eqp-column-significance`) and when a same-width reword changes GCC's fallthrough warning (`cc-eqp-fallthrough-comment`, blocking, ccache wrong in both modes). `cc-eqp-comment-only` stays open as the recorded gap. |
 | CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (PR #52); `cc-out-gcno` (GCC and clang), `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Diagnostic formatting keyed per entry (`cc-out-diagnostics-format*`). Diagnostics-bearing entries replay only under their own color setting; empty diagnostics serve every setting (`cc-out-diagnostics-color-reuse`, `-color-cross`, `-source-escapes` blocking). GCC `-fdiagnostics-format=json-file` cached as a sidecar (`cc-out-diagnostics-json-file`, blocking); SARIF outputs refused for good (see "CCP-05 GCC diagnostic files"). Open: sidecars under `-S`. |
-| CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | clang PCH builds and `-include-pch` consumers cached by default (`cc-pch-clang-use`, `cc-pch-clang-define-variants` blocking); see "CCP-06 PCH" below. Clang explicit module consumers (`-fmodule-file=`, `-fprebuilt-module-path=`) cached; `cc-module-fmodule-file`, `cc-module-body-edit`, `cc-module-prebuilt-path`, `cc-module-add-remove` blocking on Linux clang 23; see "CCP-06 modules" below. Implicit PCH (GCC `<name>.gch` through `#include`/`-include`, clang's driver `-include` → `.pch`) keyed by every candidate; `cc-pch-gcc-include`, `cc-pch-gcc-leading-include`, `cc-pch-gcc-directory`, `cc-pch-clang-implicit` blocking; see "CCP-06 implicit PCH". Open: implicit modules, module production. |
+| CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | clang PCH builds and `-include-pch` consumers cached by default (`cc-pch-clang-use`, `cc-pch-clang-define-variants` blocking); see "CCP-06 PCH" below. Clang explicit module consumers (`-fmodule-file=`, `-fprebuilt-module-path=`) cached; `cc-module-fmodule-file`, `cc-module-body-edit`, `cc-module-prebuilt-path`, `cc-module-add-remove` blocking on Linux clang 23; see "CCP-06 modules" below. Implicit PCH (GCC `<name>.gch` through `#include`/`-include`, clang's driver `-include` → `.pch`) keyed by every candidate; `cc-pch-gcc-include`, `cc-pch-gcc-leading-include`, `cc-pch-gcc-directory`, `cc-pch-gcc-skipped-text`, `cc-pch-clang-implicit` blocking; see "CCP-06 implicit PCH". Open: implicit modules, module production. |
 | CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`, `cc-host-universal-objects`, `cc-host-universal-slice-headers` (universal objects keyed slice by slice: the driver refuses `-E` with several `-arch`, and a compile's depfile lists only the last slice's headers). `-Xarch_<arch>` operands keyed per slice (`cc-host-xarch`, blocking): each slice is re-parsed with its own operands, and dropping the other slices' operands is what separates them (keeping all fails `edit-x86_64-header` with `KACHE_WRONG_OUTPUT`). `-Xarch_*` outside a universal compile, or naming no built slice, is refused. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM 21.1.8 subset (`make cc-project-llvm`: `llvm-tblgen` and `LLVMCore`, CMake + Ninja, kache as compiler launcher, TableGen-generated headers in the build tree) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23; the image needs `apk add python3` for LLVM's configure), 2026-11-19: 377 objects byte-identical across raw, cold and warm kache, warm build 377 local hits and no compiles, warm `llvm-tblgen` output identical to raw. cc-crate fixture, Chromium, Meson/Autotools launchers not started. |
 | CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`), broker exit race fix (PR #32), C/C++ hits verify blob hashes by default (PR #46), the non-local cache advisory left compiler stderr (PR #44). Identity cases (2026-11-19, blocking): `cc-input-compiler-replaced` (a driver at the same path that changes only code generation), `cc-input-driver-mode` (C vs C++ driver), `cc-policy-profile-switch` (transparent ↔ reproducible against a populated cache, every arm following the step's profile). Wrapper selection (shim vs `kache cc`) shares one entry. Open: user key config, controlled hash/compile/publication races, concurrency and eviction. |
 | CCP-09 | RUNNING | CCP-02..CCP-08 | `make cc-bench` (`kache-cc-bench`): raw/ccache/kache over a tiny-C corpus (48 units, `-j1`), a header-heavy C++ corpus (12 units), pinned zlib and the pinned LLVM subset; scenarios cold, output-cleaned warm, settled and immediate source/header edits and reverts, relocated tree, and a single-unit compile after the kache daemon stops and at steady state. Untimed shim validation first; timed pairs admitted only when counters and objects match it. Estimator corrected to a log-space t-interval (lock.toml `uncertainty_correction`). See "CCP-09 baseline" below. |
@@ -394,6 +394,35 @@ and accepted variants), `cc-pch-clang-implicit`. GCC writes a different
 consumer, as in ccache, and the cases mark such files `unstable`. Limits:
 the compiler's built-in system directories are not searched for `.gch`
 candidates.
+
+**Skipped text before the leading include (2026-11-20).** The scan for
+leading `#include`s stopped at the first non-directive line, even when that
+line sat inside `#if 0`. GCC does not count skipped text as the first
+token, so for
+
+```c
+#if 0
+ignored tokens
+#endif
+#include "h.h"
+```
+
+it still loads `h.h.gch`, while kache keyed no candidate. Reproduced on
+main `6b592ce1` with `cc-pch-gcc-skipped-text` (GCC 15.2, L4 image): the
+`.gch` holds `VALUE 1` and the textual header `VALUE 2`, and the source and
+header bytes never change. After the `.gch` appeared, and after it was
+replaced, kache restored the object built from the header, in both profiles
+and on the warm repeats (`KACHE_WRONG_OUTPUT`). ccache did the same in both
+modes (`CCACHE_WRONG_OUTPUT`). The removal steps matched. The scan now
+tracks conditional depth. Text inside any conditional means the first
+active token is unknown, so the scan treats the leading names as unknown:
+every `.gch` in the search directories is a candidate, as for a
+macro-spelled include. That path also folds a `leading=unknown` marker. The
+marker gives every affected source a new key, so no entry stored under the
+old narrower key (possibly an object built against a `.gch`) can be hit
+again. Preprocess memo records hold the `-E` result, which the `.gch` does
+not change, and need no invalidation. With the fix the case matches in both
+profiles, and the other implicit-PCH cases still match.
 
 **CCP-06 modules.** Observed with clang 23 on Linux: a consumer's `-E`
 output keeps `import M;` as `__preprocessed_import M;`, its `-MD` file

@@ -960,6 +960,15 @@ ccache.suite = "pch.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-pch-gcc-skipped-text"
+package = "CCP-06"
+summary = "GCC's implicit .gch for an #include after text that #if 0 skips: appear/replace/remove with unchanged source and header bytes"
+profiles = ["both"]
+compilers = "gcc"
+ccache.suite = "pch.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-pch-gcc-directory"
 package = "CCP-06"
 summary = "a .gch directory: GCC selects the first valid variant; rejected and accepted variants are keyed"

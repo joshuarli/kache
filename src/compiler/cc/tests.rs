@@ -10214,6 +10214,17 @@ fn leading_include_names_stop_at_the_first_token() {
     assert_eq!(cc_leading_include_names(b"#include \\\n \"spliced.h\"\n").unwrap(), ["spliced.h"]);
     assert!(cc_leading_include_names(b"#include CONFIG\n").is_none());
     assert!(cc_leading_include_names(b"int x;\n#include CONFIG\n").unwrap().is_empty());
+    assert!(cc_leading_include_names(b"#if 0\nignored tokens\n#endif\n#include \"h.h\"\n").is_none());
+    assert!(cc_leading_include_names(b"#ifdef X\nint y;\n#endif\n#include \"h.h\"\n").is_none());
+    assert_eq!(
+        cc_leading_include_names(b"#ifndef G\n#define G\n#include \"a.h\"\n#endif\n#include \"b.h\"\nint x;\n").unwrap(),
+        ["a.h", "b.h"]
+    );
+    assert_eq!(
+        cc_leading_include_names(b"#if 1\n#endif\n#ifdef\tX\n#endif\n#include \"h.h\"\nint x;\n#if 0\nz\n#endif\n").unwrap(),
+        ["h.h"]
+    );
+    assert_eq!(cc_leading_include_names(b"#iffy\n#endiffy\nint x;\n#include \"h.h\"\n").unwrap(), Vec::<String>::new());
 }
 
 #[test]
@@ -10271,9 +10282,22 @@ fn implicit_precompiled_headers_key_every_candidate_the_compiler_can_load() {
     std::fs::remove_file(temp.path().join("f.h.gch")).unwrap();
 
     std::fs::write(&source, "#include CONFIG\nint v;\n").unwrap();
-    assert_eq!(gnu(), None);
+    let unknown = gnu().unwrap();
     std::fs::write(inc.join("config.h.gch"), "spelled by a macro").unwrap();
-    assert!(gnu().is_some());
+    assert_ne!(gnu().unwrap(), unknown);
+    std::fs::remove_file(inc.join("config.h.gch")).unwrap();
+
+    // Text that `#if 0` skips is not the first token: GCC still loads
+    // h.h.gch, so the scan cannot stop there.
+    std::fs::write(&source, "#if 0\nignored tokens\n#endif\n#include \"h.h\"\nint v;\n").unwrap();
+    assert_eq!(gnu(), Some(unknown.clone()));
+    std::fs::write(pch.join("h.h.gch"), "one").unwrap();
+    let appeared = gnu().unwrap();
+    assert_ne!(appeared, unknown);
+    std::fs::write(pch.join("h.h.gch"), "three!!").unwrap();
+    assert_ne!(gnu().unwrap(), appeared);
+    std::fs::remove_file(pch.join("h.h.gch")).unwrap();
+    std::fs::write(inc.join("config.h.gch"), "spelled by a macro").unwrap();
     std::fs::write(&source, "#include \"h.h\"\nint v;\n").unwrap();
     std::fs::write(inc.join("h.h.gch"), "one").unwrap();
 
