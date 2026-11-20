@@ -908,6 +908,61 @@ fn cacheable_cc_command(root: &std::path::Path) -> Command {
 }
 
 #[test]
+fn cc_ignoring_source_date_epoch_does_not_restore_a_stale_time() {
+    let dir = FixtureDir::new();
+    let root = dir.path().canonicalize().unwrap();
+    fs::write(root.join("kache.toml"), "").unwrap();
+    fs::write(
+        root.join("unit.c"),
+        "#define CAT_(a,b) a##b\n#define CAT(a,b) CAT_(a,b)\n\
+         const char *build_time = CAT(__TI,ME__);\n\
+         const char *build_date = __DATE__;\n\
+         const char *build_stamp = __TIMESTAMP__;\n",
+    )
+    .unwrap();
+    let compiler = root.join("cc");
+    kache_fs::testutil::write_executable(
+        &compiler,
+        "#!/bin/sh\nunset SOURCE_DATE_EPOCH\nexec cc \"$@\"\n",
+    );
+    for discovery in ["0", "1"] {
+        let compile = || {
+            let output = cacheable_cc_command(&root)
+                .arg(&compiler)
+                .args(["-c", "unit.c", "-o", "unit.o"])
+                .env("SOURCE_DATE_EPOCH", "1700000000")
+                .env("KACHE_CC_PATH_NORMALIZE", "0")
+                .env("KACHE_CC_SOURCE_DATE_EPOCH", "passthrough")
+                .env("KACHE_DEFERRED_DISCOVERY", discovery)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            fs::read(root.join("unit.o")).unwrap()
+        };
+        let first = compile();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        fs::remove_file(root.join("unit.o")).unwrap();
+        let second = compile();
+        assert_ne!(
+            first, second,
+            "discovery={discovery}: wall-clock time must advance"
+        );
+        assert_eq!(last_cc_event(&root)["result"], "passthrough");
+    }
+    fs::write(root.join("unit.c"), "int x;\n").unwrap();
+    for expected in ["miss", "local_hit"] {
+        let output = cacheable_cc_command(&root)
+            .arg(&compiler)
+            .args(["-c", "unit.c", "-o", "unit.o"])
+            .env("SOURCE_DATE_EPOCH", "1700000000")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(last_cc_event(&root)["result"], expected);
+    }
+}
+
+#[test]
 fn deferred_cc_does_not_publish_inputs_changed_during_the_compile() {
     let dir = FixtureDir::new();
     let root = dir.path().canonicalize().unwrap();

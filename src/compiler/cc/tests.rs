@@ -4694,6 +4694,17 @@ fn a_memo_key_from_before_the_settle_rules_is_never_todays() {
         today, unguarded,
         "an old memo has no include-resolution proof"
     );
+    let unpinned = cc_preprocess_memo_key_as(
+        b"cc-preprocess-memo-v8",
+        &parsed,
+        &[],
+        "test compiler version",
+    )
+    .unwrap();
+    assert_ne!(
+        today, unpinned,
+        "an old memo did not verify the compiler's epoch support"
+    );
 }
 
 #[test]
@@ -8834,6 +8845,80 @@ fn the_direct_capture_probe_rejects_a_driver_that_writes_no_object_and_remembers
         !cc_driver_captures_dependencies(&dir.path().join("absent").to_string_lossy(), &memo),
         "an unresolvable driver is not probed"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn source_date_epoch_support_requires_successful_matching_expansions() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("unit.c"), "int x;\n").unwrap();
+    fs::write(dir.path().join("kache.toml"), "").unwrap();
+    let env = InvocationEnv::from_parts(
+        [
+            ("KACHE_CACHE_DIR", dir.path().join("cache").into_os_string()),
+            (
+                "KACHE_CONFIG",
+                dir.path().join("kache.toml").into_os_string(),
+            ),
+            ("KACHE_HOST_CONFIG", "".into()),
+        ],
+        Some(dir.path().to_owned()),
+        None,
+        dir.path().to_owned(),
+    );
+    let parsed = |name: &str, body: &str| {
+        let path = dir.path().join(name);
+        kache_fs::testutil::write_executable(&path, body);
+        CcArgs::parse_for(
+            &[path.to_str().unwrap().into(), "-c".into(), "unit.c".into()],
+            &env,
+        )
+        .unwrap()
+    };
+    let supported = parsed(
+        "supported-cc",
+        &format!(
+            "#!/bin/sh\necho run >> '{}'\ntest \"$KACHE_CC_KEY_PROBE\" = 1 || exit 9\ntest \"$SOURCE_DATE_EPOCH\" = 946684800 || exit 8\nprintf '\"Jan  1 2000\" \"00:00:00\"\\n'\n",
+            dir.path().join("runs").display(),
+        ),
+    );
+    assert!(cc_driver_honors_source_date_epoch(&supported));
+    assert!(cc_driver_honors_source_date_epoch(&supported));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("runs")).unwrap(),
+        "run\n"
+    );
+    for (name, body) in [
+        ("empty-cc", "#!/bin/sh\nexit 0\n"),
+        (
+            "failed-cc",
+            "#!/bin/sh\nprintf '\"Jan 1 2000\" \"00:00:00\"\\n'\nexit 1\n",
+        ),
+        (
+            "wrong-date-cc",
+            "#!/bin/sh\nprintf '\"Jan 2 2000\" \"00:00:00\"\\n'\n",
+        ),
+        (
+            "wrong-time-cc",
+            "#!/bin/sh\nprintf '\"Jan 1 2000\" \"00:00:01\"\\n'\n",
+        ),
+        ("signalled-cc", "#!/bin/sh\nkill -TERM $$\n"),
+    ] {
+        let args = parsed(name, body);
+        for _ in 0..2 {
+            assert!(!cc_driver_honors_source_date_epoch(&args), "{name}");
+        }
+    }
+    let missing = CcArgs::parse_for(
+        &[
+            dir.path().join("absent-cc").to_str().unwrap().into(),
+            "-c".into(),
+            "unit.c".into(),
+        ],
+        &env,
+    )
+    .unwrap();
+    assert!(!cc_driver_honors_source_date_epoch(&missing));
 }
 
 #[test]

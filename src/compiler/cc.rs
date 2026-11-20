@@ -1899,8 +1899,8 @@ fn build_preprocess_args(parsed: &CcArgs) -> Vec<String> {
 /// Runs `<cc> -E …` (gnu) or `<cc> /E …` (clang-cl) — see
 /// [`build_preprocess_args`] — with `SOURCE_DATE_EPOCH` pinned so the
 /// `__DATE__` / `__TIME__` macros expand deterministically (without
-/// this the hash would change every second → ~0% hit rate; gcc, clang,
-/// and clang-cl all honor it). The expansion includes every `#include`d
+/// this the hash would change every second → ~0% hit rate; support is probed
+/// before caching). The expansion includes every `#include`d
 /// header transitively, so any header change invalidates the key
 /// automatically — no separate dependency tracking needed. Bails (→
 /// passthrough) if the preprocessor yields empty stdout.
@@ -2986,7 +2986,7 @@ fn preprocess_hash(
         .as_ref()
         .map(|dir| dir.path().join("inputs.d"))
         .filter(|path| path.to_str().is_some());
-    let pp_args = dep_path.as_deref().map_or(pp_args.clone(), |path| {
+    let mut pp_args = dep_path.as_deref().map_or(pp_args.clone(), |path| {
         add_preprocess_dep_capture(parsed, pp_args.clone(), path)
     });
     let run = |args: &[String]| {
@@ -3012,7 +3012,8 @@ fn preprocess_hash(
         // dependency flags. Preserve the existing cache-key behavior and just
         // leave this invocation unmemoized.
         log::debug!("cc preprocess dependency capture failed; retrying without memo capture");
-        output = run(&key_preprocess_args(parsed, prefix_maps))?;
+        pp_args = key_preprocess_args(parsed, prefix_maps);
+        output = run(&pp_args)?;
     }
     if !output.status.success() {
         // Preprocess failed — the real compile would also fail.
@@ -3034,6 +3035,24 @@ fn preprocess_hash(
         // or a degenerate empty TU. Either way refuse rather than hash
         // nothing → passthrough.
         anyhow::bail!("cc -E key probe produced no output");
+    }
+    if !cc_source_date_epoch_is_pinned(parsed) {
+        let check_args = compose_cc_args(
+            &pp_args,
+            vec![
+                "-Wno-builtin-macro-redefined".into(),
+                "-D__DATE__=\"kache-unpinned-date\"".into(),
+                "-D__TIME__=\"kache-unpinned-time\"".into(),
+                "-D__TIMESTAMP__=\"kache-unpinned-timestamp\"".into(),
+            ],
+        );
+        let checked = run(&check_args)?;
+        anyhow::ensure!(
+            checked.status.success()
+                && checked.stdout == output.stdout
+                && checked.stderr == output.stderr,
+            "cc: unpinned time macros (not yet supported)"
+        );
     }
     let (text, layout) = split_line_markers(&output.stdout, prefix_maps);
     if let Some(construct) = cc_assembler_hidden_input(&text) {
@@ -5674,10 +5693,8 @@ fn parse_cc_normalize_toggle(value: Option<&str>) -> bool {
 ///   so warm rebuilds hit;
 /// - `None` only when the build set nothing *and* the user opted out via
 ///   `KACHE_CC_SOURCE_DATE_EPOCH=passthrough` — then kache pins nothing and the
-///   object bakes wall-clock. The unpinned `-E` probe then produces a
-///   time-dependent key, so a stale wall-clock object is very unlikely to be
-///   reused (best-effort, not a guarantee: two probes landing in the same
-///   second expand identically, so a cross-second cold store can still be hit).
+///   object bakes wall-clock. Without a verified pin, preprocessing refuses
+///   inputs whose expansion depends on time macros.
 fn effective_source_date_epoch_for(env: &InvocationEnv) -> Option<std::ffi::OsString> {
     resolve_source_date_epoch(
         env.var_os("SOURCE_DATE_EPOCH"),
@@ -5850,7 +5867,9 @@ const CC_ARTIFACT_SCHEMA: &[u8] = b"cc_artifact_schema:4\n";
 /// memo stores a content-only digest that can alias exchanged headers.
 /// v8: memo reuse also validates include resolution, including negative
 /// header availability probes; older read sets have no such proof.
-const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v8";
+/// v9: drivers that ignore SOURCE_DATE_EPOCH may only memoize expansions
+/// proven independent of time macros.
+const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v9";
 
 /// Local identity for a preprocessor invocation. The environment is included
 /// as selected by [`cc_memo_env_is_keyed`].
@@ -8067,6 +8086,7 @@ const CC_DIRECT_CAPTURE_TARGET: &str = "__kache_direct_capture";
 pub(crate) fn cc_direct_key_eligible(parsed: &CcArgs) -> bool {
     cc_direct_key_shape_ok(parsed)
         && !parsed.is_universal()
+        && cc_source_date_epoch_is_pinned(parsed)
         && crate::config::probe_memo_dir_for(&parsed.invocation_env).is_ok_and(|memo| {
             cc_driver_captures_dependencies_for(&parsed.program, &memo, &parsed.invocation_env)
         })
@@ -8114,6 +8134,55 @@ fn cc_driver_captures_dependencies_for(
     log::debug!("cc: probed {program} for compile-first capture: {supported}");
     crate::probe_memo::write_verified(&path, &digest, if supported { "ok" } else { "no" });
     supported
+}
+
+fn cc_source_date_epoch_is_pinned(parsed: &CcArgs) -> bool {
+    effective_source_date_epoch_for(&parsed.invocation_env).is_some()
+        && cc_driver_honors_source_date_epoch(parsed)
+}
+
+fn cc_driver_honors_source_date_epoch(parsed: &CcArgs) -> bool {
+    let env = &parsed.invocation_env;
+    let Ok(memo_dir) = crate::config::probe_memo_dir_for(env) else {
+        return false;
+    };
+    let Some(digest) = cc_direct_probe_material(&parsed.program, env) else {
+        return false;
+    };
+    let path = crate::probe_memo::memo_path(&memo_dir, "cc-source-date-epoch-v1", "txt", &digest);
+    if let Some(body) = crate::probe_memo::read_verified(&path, &digest) {
+        return body.trim() == "ok";
+    }
+    let supported = cc_source_date_epoch_probe(parsed).unwrap_or(false);
+    crate::probe_memo::write_verified(&path, &digest, if supported { "ok" } else { "no" });
+    supported
+}
+
+fn cc_source_date_epoch_probe(parsed: &CcArgs) -> Result<bool> {
+    let env = &parsed.invocation_env;
+    let dir = tempfile::Builder::new()
+        .prefix("kache-cc-epoch-probe-")
+        .tempdir_in(env.temp_dir())?;
+    fs::write(dir.path().join("epoch.c"), "__DATE__ __TIME__\n")?;
+    let mut command = env.command(&parsed.program)?;
+    match parsed.family.dialect() {
+        Dialect::Gnu => {
+            command.args(["-E", "-P", "epoch.c"]);
+        }
+        Dialect::Cl => {
+            command.args(["/EP", "epoch.c"]);
+        }
+    }
+    let output = command
+        .current_dir(dir.path())
+        .env("KACHE_CC_KEY_PROBE", "1")
+        .env("SOURCE_DATE_EPOCH", "946684800")
+        .invocation_output()?;
+    Ok(output.status.success()
+        && String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            == ["\"Jan", "1", "2000\"", "\"00:00:00\""])
 }
 
 fn cc_direct_probe_material(program: &str, env: &InvocationEnv) -> Option<String> {
