@@ -631,6 +631,32 @@ The tiny-C header edit's interval (1.11..1.61) overlaps the previous one.
    The fix keys a cwd under a declared base dir by its path below it.
 2. Per-hit fixed cost on tiny C: 8.7 ms against 4.5 ms per hit.
 
+   Under hyperfine, a single warm hit costs kache 9.3 ms and ccache 7.2 ms.
+   A process that does nothing takes 4.1 ms, so net of that the hit is 5.2 ms
+   against 3.1. Uncommitted timing marks put a 7.3 ms hit, from client start
+   to done, at:
+
+   | Stretch | Median |
+   |---|---|
+   | client config load and stdio capture | 0.45 ms |
+   | daemon, from request to commit | about 1.2 ms |
+   | worker start to compiler dispatch | 0.6 ms |
+   | the C/C++ path | 3.5 ms |
+   | after the C/C++ path returns, to done | 0.4 ms |
+
+   In the request-to-commit stretch, a per-request descriptor channel (a
+   temporary directory in `/tmp` and a datagram socket) takes 0.31 ms, and
+   rebuilding the invocation from the received descriptors takes 0.32 ms.
+   The worker-start stretch held a PATH scan in `launcher_args_for` (#75
+   skips it).
+
+   Candidates, none above 0.5 ms:
+   - pass descriptors over the request stream instead of a per-request
+     socket (a protocol change);
+   - fold the restore's three broker round trips into one;
+   - keep the store open across hits;
+   - reuse the daemon's configuration.
+
 ## Open gaps and blockers
 
 See "Current state" at the top; this list was folded into it on
