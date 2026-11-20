@@ -578,9 +578,7 @@ its header revert from 8.69x to 1.41x. **Losses now, ranked:**
 2. Header edit, 1.18x on tiny C and 1.24x on zlib: the miss path.
 3. Cold C++ and LLVM, 1.09x to 1.11x; tiny-C cold now beats ccache (0.79x).
 
-**Since that rerun, 2026-11-19..20 (phase traces, not cc-bench).** Merged
-against losses 1 and 2. A cc-bench rerun is still to do: it was deferred
-because the host was running another project's benchmark.
+**Since that rerun, 2026-11-19..20.** Merged against losses 1 and 2:
 
 - #65: the accept-loop wait above.
 - #68: an event no longer rewrites the build-session marker within the
@@ -606,6 +604,32 @@ A warm tiny-C hit's worker time is about 2.4 ms:
 Each part is now below 0.4 ms. Folding the restore's round trips into
 one changes the client-daemon protocol. Keeping the store open across
 hits must survive an index recovery that replaces `index.db`.
+
+**Rerun at 8430f6b6, 2026-11-20 (macOS, provisional).** Same host and
+protocol, run with `--workload corpus-c-tiny --workload corpus-cxx-headers
+--workload zlib`. LLVM was not rerun. 5 pairs per scenario, every timed
+replay admitted. The 1-minute load was 3.3 to 12.8. kache / ccache geomean,
+with the previous rerun's value in brackets:
+
+| scenario | tiny C | C++ headers | zlib |
+|---|---|---|---|
+| cold | 0.83 (0.79) | 1.11 (1.11) | 0.96 (1.07) |
+| warm | 1.89 (2.12) | 1.00 (1.09) | 1.22 (1.87) |
+| edit header, settled | 1.34 (1.18) | 1.03 (1.07) | 0.995 (1.24) |
+| revert header, settled | 1.63 (1.93) | 1.25 (1.33) | 1.11 (1.55) |
+| revert source, settled | 1.00 (1.56) | 1.32 (1.36) | 1.05 (1.17) |
+| relocated | 1.96 (2.22) | 2.28 (2.48) | 1.45 (2.02) |
+
+The tiny-C header edit's interval (1.11..1.61) overlaps the previous one.
+
+**Losses now, ranked:**
+
+1. Relocated. Every relocated hit ran the compiler probe again (28 ms for
+   a C++ unit): the probe key held the literal cwd and `PWD`, so a tree
+   moved with its `KACHE_BASE_DIR` re-probed in every directory. A relocated
+   C++ build used 880 ms of CPU against 374 ms warm, for the same 12 hits.
+   The fix keys a cwd under a declared base dir by its path below it.
+2. Per-hit fixed cost on tiny C: 8.7 ms against 4.5 ms per hit.
 
 ## Open gaps and blockers
 
