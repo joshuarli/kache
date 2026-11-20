@@ -31,6 +31,24 @@ cargo install --locked cargo-mutants --version 27.1.0
 
 Do not invoke `cargo mutants` with `RUSTC_WRAPPER=kache`. The Makefile clears it (unless `KACHE_SELF_HOST=1`). Hand-running mutants with a dogfood wrapper wraps kache in itself and the unmutated baseline dies.
 
+## Verification tiers
+
+Run the smallest tier that covers the change. CI is the cross-platform gate:
+it runs a superset of every local lane below on every PR.
+
+| Tier | What | When | Cost on an M1 |
+| --- | --- | --- | --- |
+| Edit | The regression: `cargo test -p kache --lib NAME` or `cargo test --test BINARY -- NAME`. Apply the mutation by hand and watch it fail | While iterating | Seconds to a minute |
+| Change | `make check`. When the change touches C/C++ keying, restore, outputs or diagnostics, also `make cc-oracle CASE=ID` for the cases it affects, or `make cc-oracle` and `make cc-oracle-negative-control` when it is broad | Before `gh pr create` | About 12 min for `make check`; the full cohort with its negative controls adds about 8 min (both estimated from one run) |
+| Scenario | CI on the PR: the oracle and its negative controls on macOS and four Linux cells, `e2e` and `e2e-negative-control`, and the Linux musl workspace tests | Every PR. Merge only when green | Not on the local host |
+| Full | `make cc-oracle-full`, `make cc-project-zlib`, `make cc-project-llvm`, `make cc-bench`, `make pr` | Only on request | Tens of minutes to hours |
+
+Do not rerun the oracle cohort, `make e2e` and a Linux container locally before
+every push. CI runs them on more cells, and a local container that runs only
+the oracle misses the Linux workspace tests. When a CI job fails, reproduce
+that job's target in its cell, for Linux musl in the `kache-builder` image the
+way `ci.yml` runs it, and rerun only what failed.
+
 ## How mutants die here
 
 Prefer tests and deleting dead branches over skip annotations.
