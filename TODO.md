@@ -1,5 +1,13 @@
 Prefix: KACH
-Next: 31
+Next: 32
+
+### KACH-31 · P4 · A put killed between its meta.json rename and its commit strands the entry directory
+
+- **Area:** Store
+- **Where:** `crates/kache-store/src/store.rs` (`put_with_compile_time_policy` Phase 2; `sweep_orphan_blobs`)
+- **Problem:** Phase 2 renames `meta.json` into `store/<key>/` inside the transaction, then commits the row. A kill between the rename and the commit leaves a `meta.json` with no row. `get` misses on it, which is correct. Its blobs have no rows and the orphan-blob sweep reclaims them. The directory itself is reclaimed only by a later put of the same key or by an index rebuild. Each occurrence leaks a small directory.
+- **Recommendation:** Do not delete such directories. A `meta.json` with no row is also what index recovery (#415, `rebuild_index_from_store`) rebuilds from after quarantining a corrupt index, and that rebuild is best-effort. A sweep that deleted rowless directories would destroy the only source left after a failed rebuild. Re-adopt instead, through the rebuild path, under `gc.lock` and `BEGIN IMMEDIATE`: a directory whose `meta.json` parses and whose blobs all exist and verify gets its rows back. Remove only a directory whose `meta.json` cannot be read. The orphan-blob sweep can unlink a stranded put's blobs after its grace, so re-adoption must check every blob first.
+- **Fix with:** store tests for three cases: a rowless entry with intact blobs is re-adopted and then hits; one with a missing blob is a miss that leaks nothing; one with an unreadable `meta.json` is removed.
 
 ### KACH-26 · P1 · Reach ccache-level local C/C++ compatibility
 

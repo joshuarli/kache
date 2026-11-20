@@ -75,7 +75,7 @@ Engineering work still open (not provisioning):
     `staging/handoff/`; the handoff sweep now reclaims them.
   Open: a `meta.json` stranded by a kill between its rename and the row's
   commit is a miss and is only reclaimed by a re-put of that key or an
-  index rebuild.
+  index rebuild (KACH-31).
 - CCP-09: a quiet-host rerun of the baseline. The provisional runs below
   rank losses but were timed under load. The largest loss now is the
   per-hit fixed cost on small units.
@@ -577,6 +577,85 @@ its header revert from 8.69x to 1.41x. **Losses now, ranked:**
    on the whole environment (KACH-29).
 2. Header edit, 1.18x on tiny C and 1.24x on zlib: the miss path.
 3. Cold C++ and LLVM, 1.09x to 1.11x; tiny-C cold now beats ccache (0.79x).
+
+**Since that rerun, 2026-11-19..20.** Merged against losses 1 and 2:
+
+- #65: the accept-loop wait above.
+- #68: an event no longer rewrites the build-session marker within the
+  same second. On a warm tiny-C hit, the session-marker work went from a
+  median 356 us to 77 us.
+- #69: the daemon keeps parsed header probe scans by content hash. On a
+  memo miss after a header edit, the include check went from 14.9 ms to
+  1.7 ms, and the whole miss from 74 to 60 ms; 52 ms of that is the
+  preprocessor and the compile.
+- #72: the compiler probe key leaves out per-command shell and
+  build-driver variables. GNU make 4.4's per-run jobserver FIFO in
+  `MAKEFLAGS` had re-probed once per build.
+
+A warm tiny-C hit's worker time is about 2.4 ms:
+
+| Part | Median |
+|---|---|
+| key (memo lookup 0.26 ms) | 0.7 ms |
+| restore: three broker round trips (prepare, publish, mtime stamp) | 0.67 ms |
+| event | 0.25 ms |
+| store open (SQLite open and pragmas) | 0.3 to 0.4 ms |
+
+Each part is now below 0.4 ms. Folding the restore's round trips into
+one changes the client-daemon protocol. Keeping the store open across
+hits must survive an index recovery that replaces `index.db`.
+
+**Rerun at 8430f6b6, 2026-11-20 (macOS, provisional).** Same host and
+protocol, run with `--workload corpus-c-tiny --workload corpus-cxx-headers
+--workload zlib`. LLVM was not rerun. 5 pairs per scenario, every timed
+replay admitted. The 1-minute load was 3.3 to 12.8. kache / ccache geomean,
+with the previous rerun's value in brackets:
+
+| scenario | tiny C | C++ headers | zlib |
+|---|---|---|---|
+| cold | 0.83 (0.79) | 1.11 (1.11) | 0.96 (1.07) |
+| warm | 1.89 (2.12) | 1.00 (1.09) | 1.22 (1.87) |
+| edit header, settled | 1.34 (1.18) | 1.03 (1.07) | 0.995 (1.24) |
+| revert header, settled | 1.63 (1.93) | 1.25 (1.33) | 1.11 (1.55) |
+| revert source, settled | 1.00 (1.56) | 1.32 (1.36) | 1.05 (1.17) |
+| relocated | 1.96 (2.22) | 2.28 (2.48) | 1.45 (2.02) |
+
+The tiny-C header edit's interval (1.11..1.61) overlaps the previous one.
+
+**Losses now, ranked:**
+
+1. Relocated. Every relocated hit ran the compiler probe again (28 ms for
+   a C++ unit): the probe key held the literal cwd and `PWD`, so a tree
+   moved with its `KACHE_BASE_DIR` re-probed in every directory. A relocated
+   C++ build used 880 ms of CPU against 374 ms warm, for the same 12 hits.
+   The fix keys a cwd under a declared base dir by its path below it.
+2. Per-hit fixed cost on tiny C: 8.7 ms against 4.5 ms per hit.
+
+   Under hyperfine, a single warm hit costs kache 9.3 ms and ccache 7.2 ms.
+   A process that does nothing takes 4.1 ms, so net of that the hit is 5.2 ms
+   against 3.1. Uncommitted timing marks put a 7.3 ms hit, from client start
+   to done, at:
+
+   | Stretch | Median |
+   |---|---|
+   | client config load and stdio capture | 0.45 ms |
+   | daemon, from request to commit | about 1.2 ms |
+   | worker start to compiler dispatch | 0.6 ms |
+   | the C/C++ path | 3.5 ms |
+   | after the C/C++ path returns, to done | 0.4 ms |
+
+   In the request-to-commit stretch, a per-request descriptor channel (a
+   temporary directory in `/tmp` and a datagram socket) takes 0.31 ms, and
+   rebuilding the invocation from the received descriptors takes 0.32 ms.
+   The worker-start stretch held a PATH scan in `launcher_args_for` (#75
+   skips it).
+
+   Candidates, none above 0.5 ms:
+   - pass descriptors over the request stream instead of a per-request
+     socket (a protocol change);
+   - fold the restore's three broker round trips into one;
+   - keep the store open across hits;
+   - reuse the daemon's configuration.
 
 ## Open gaps and blockers
 
