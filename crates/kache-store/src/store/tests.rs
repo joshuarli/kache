@@ -4714,6 +4714,107 @@ fn rebuild_index_skips_entries_whose_blobs_are_missing_or_wrong_size() {
     );
 }
 
+/// KACH-31: a rowless entry dir, as a put killed before its commit leaves
+/// it, is re-adopted when it can be served and removed when it cannot.
+#[test]
+fn stranded_entry_sweep_readopts_servable_entries_and_removes_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (intact, gone, garbled, young) = {
+        let store = Store::open(&config).unwrap();
+        (
+            put_entry(&store, dir.path(), 7, "intact", b"intact content"),
+            put_entry(&store, dir.path(), 8, "gone", b"vanishing content"),
+            put_entry(&store, dir.path(), 9, "garbled", b"garbled content"),
+            put_entry(&store, dir.path(), 10, "young", b"young content"),
+        )
+    };
+    let entry_dir = |k: &str| config.store_dir().join(k);
+    let meta_path = |k: &str| entry_dir(k).join("meta.json");
+    let gone_hash = deser_json::from_str::<EntryMeta>(&std::fs::read_to_string(meta_path(&gone)).unwrap())
+        .unwrap()
+        .files[0]
+        .hash
+        .clone();
+    let gone_blob = blob_path_in_store_dir(&config.store_dir(), &gone_hash);
+    let mut perms = std::fs::metadata(&gone_blob).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    std::fs::set_permissions(&gone_blob, perms).unwrap();
+    std::fs::remove_file(&gone_blob).unwrap();
+    std::fs::write(meta_path(&garbled), b"{ not json").unwrap();
+    std::fs::remove_file(config.index_db_path()).unwrap();
+    let old = filetime::FileTime::from_system_time(
+        std::time::SystemTime::now() - Duration::from_secs(7200),
+    );
+    for k in [&intact, &gone, &garbled] {
+        filetime::set_file_mtime(meta_path(k), old).unwrap();
+    }
+
+    let store = Store::open(&config).unwrap();
+    let indexed = put_entry(&store, dir.path(), 11, "indexed", b"indexed content");
+    filetime::set_file_mtime(meta_path(&indexed), old).unwrap();
+    let stats = store
+        .sweep_stranded_entries(Duration::from_secs(3600), KEY_LOCK_SWEEP_CAP)
+        .unwrap();
+
+    assert_eq!(
+        stats,
+        StrandedEntrySweepStats {
+            readopted: 1,
+            removed: 2
+        }
+    );
+    assert!(store.get(&intact).unwrap().is_some(), "a re-adopted entry hits");
+    assert!(store.get(&gone).unwrap().is_none());
+    assert!(!entry_dir(&gone).exists(), "an entry with a missing blob leaks no dir");
+    assert!(!entry_dir(&garbled).exists(), "an unreadable meta.json is removed");
+    assert!(
+        meta_path(&young).is_file() && !store.contains(&young),
+        "a meta.json younger than the grace is left for its owner"
+    );
+    assert!(store.contains(&indexed) && meta_path(&indexed).is_file());
+    let refcount = |k: &str| -> i64 {
+        store
+            .db
+            .query_row(
+                "SELECT refcount FROM blobs WHERE hash = (SELECT hash FROM entry_blobs WHERE cache_key = ?1)",
+                params![k],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(refcount(&intact), 1);
+    assert_eq!(refcount(&indexed), 1);
+    assert_eq!(
+        store
+            .sweep_stranded_entries(Duration::from_secs(3600), KEY_LOCK_SWEEP_CAP)
+            .unwrap(),
+        StrandedEntrySweepStats::default(),
+        "a second sweep finds nothing"
+    );
+    assert_eq!(refcount(&intact), 1);
+}
+
+/// The per-call cap bounds the work of one sweep; the rest wait.
+#[test]
+fn stranded_entry_sweep_stops_at_its_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let keys = {
+        let store = Store::open(&config).unwrap();
+        [
+            put_entry(&store, dir.path(), 12, "one", b"one content"),
+            put_entry(&store, dir.path(), 13, "two", b"two content"),
+        ]
+    };
+    std::fs::remove_file(config.index_db_path()).unwrap();
+    let store = Store::open(&config).unwrap();
+    let stats = store.sweep_stranded_entries(Duration::ZERO, 1).unwrap();
+    assert_eq!(stats.readopted, 1);
+    assert_eq!(keys.iter().filter(|k| store.contains(k)).count(), 1);
+}
+
 #[test]
 fn rebuild_index_validates_artifact_names_and_hashes_independently() {
     for (name, invalid_hash, accepted) in [
@@ -11287,6 +11388,16 @@ fn housekeeping_sweeps_key_locks_and_prunes_predictions() {
     // Nothing to do, as on a fresh store with predictions off.
     assert_eq!(store.sweep_housekeeping(), HousekeepingStats::default());
 
+    let stranded = put_entry(&store, dir.path(), 4, "stranded", b"stranded content");
+    store
+        .db
+        .execute_batch("DELETE FROM entries; DELETE FROM entry_blobs; DELETE FROM blobs;")
+        .unwrap();
+    filetime::set_file_mtime(
+        config.store_dir().join(&stranded).join("meta.json"),
+        filetime::FileTime::from_system_time(std::time::SystemTime::now() - TWO_HOURS),
+    )
+    .unwrap();
     let stale = aged_key_lock(&config, &key(1), TWO_HOURS);
     aged_key_lock(&config, &key(2), TWO_HOURS);
     let young = aged_key_lock(&config, &key(3), Duration::ZERO);
@@ -11324,10 +11435,13 @@ fn housekeeping_sweeps_key_locks_and_prunes_predictions() {
             key_locks_remaining: 1,
             predictions_pruned: 1,
             file_hashes_pruned: 1,
+            stranded_entries_readopted: 1,
+            stranded_entries_removed: 0,
         }
     );
     assert!(!stale.exists());
     assert!(young.exists());
+    assert!(store.contains(&stranded));
     assert!(predictions.get_input_prediction("live").unwrap().is_some());
     assert_eq!(predictions.get_input_prediction("unused").unwrap(), None);
 }

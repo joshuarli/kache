@@ -73,9 +73,10 @@ Engineering work still open (not provisioning):
     transaction commits the row, so a kill leaves no visible partial entry.
     A wrapper killed before its hand-off left loose snapshots in
     `staging/handoff/`; the handoff sweep now reclaims them.
-  Open: a `meta.json` stranded by a kill between its rename and the row's
-  commit is a miss and is only reclaimed by a re-put of that key or an
-  index rebuild (KACH-31).
+  A `meta.json` stranded by a kill between its rename and the row's commit
+  is a miss until GC housekeeping finds it an hour later. GC gives it its
+  rows back when every blob is present at its recorded size, and removes it
+  otherwise (`stranded_entry_sweep_readopts_servable_entries_and_removes_the_rest`).
 - CCP-09: a quiet-host rerun of the baseline. The provisional runs below
   rank losses but were timed under load. The largest loss now is the
   per-hit fixed cost on small units.
