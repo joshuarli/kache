@@ -8103,15 +8103,20 @@ fn open_session_id(content: &str, at_secs: u64) -> Option<String> {
 /// concurrent trigger. Guarded on the id still matching — if a newer build
 /// re-minted the marker between our read and this refresh, we must not
 /// resurrect the old session over it.
+///
+/// The stamp has whole seconds, so a marker already stamped this second is
+/// left alone: every hit logs an event, and a rewrite would store the same
+/// bytes at the cost of a tempfile and a rename.
 pub(crate) fn refresh_session_marker(config: &Config, root: &str, session_id: &str) {
     if root.is_empty() || session_id.is_empty() {
         return;
     }
     let marker = session_marker_path(config, root);
+    let now = now_epoch_secs();
     match std::fs::read_to_string(&marker) {
         Ok(content) => match parse_session_marker(&content) {
-            Some((_, id)) if id == session_id => {}
-            _ => return, // superseded or unreadable — never clobber
+            Some((touched, id)) if id == session_id && touched != now => {}
+            _ => return, // superseded, unreadable, or already this second's
         },
         Err(_) => return,
     }
@@ -8125,7 +8130,7 @@ pub(crate) fn refresh_session_marker(config: &Config, root: &str, session_id: &s
         return;
     };
     let tmp = tmp.into_temp_path();
-    let record = format!("v1 {} {}", now_epoch_secs(), session_id);
+    let record = format!("v1 {now} {session_id}");
     if std::fs::write(&tmp, record).is_err() {
         return;
     }

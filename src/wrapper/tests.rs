@@ -8245,6 +8245,29 @@ fn refresh_session_marker_extends_own_session_but_never_clobbers_newer() {
     assert_eq!(id, "newer");
 }
 
+#[cfg(unix)]
+#[test]
+fn refresh_session_marker_leaves_a_marker_already_stamped_this_second() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let config = test_config(dir.path().to_path_buf());
+    let root = "/ws";
+    let marker = session_marker_path(&config, root);
+    std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+
+    loop {
+        let now = now_epoch_secs();
+        std::fs::write(&marker, format!("v1 {now} mine")).unwrap();
+        let before = std::fs::metadata(&marker).unwrap().ino();
+        refresh_session_marker(&config, root, "mine");
+        let after = std::fs::metadata(&marker).unwrap().ino();
+        if now_epoch_secs() == now {
+            assert_eq!(after, before, "a same-second refresh replaced the marker");
+            break;
+        }
+    }
+}
+
 #[test]
 fn mint_session_id_is_opaque_and_distinct() {
     // A tight loop is the point: it drives the interval between calls below
