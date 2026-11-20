@@ -2284,6 +2284,14 @@ pub(crate) mod shim {
         Some(Ok(rewritten))
     }
 
+    /// Whether `path` is a kache shim by the rules [`resolve_real_compiler`]
+    /// skips one: in a marked directory, or resolving to kache.
+    fn is_kache_shim(path: &Path, self_exe: Option<&Path>) -> bool {
+        let resolve = |path: &Path| std::fs::canonicalize(path).ok();
+        path.parent().is_some_and(farm::has_marker)
+            || farm::resolves_to_kache(path, self_exe.and_then(resolve).as_deref(), &resolve)
+    }
+
     /// A launcher argv (`cc -c x.c` from `kache cc -c x.c`) whose bare
     /// compiler name PATH resolves to a kache shim, with that name replaced by
     /// the real compiler behind the shim, as the shim itself would run it.
@@ -2300,12 +2308,16 @@ pub(crate) mod shim {
         if Path::new(program).components().count() != 1 || !invoked_as_compiler_for(program, env) {
             return rewritten;
         }
+        let first = env.resolve_program(Path::new(program));
+        if first.as_deref().is_some_and(|first| !is_kache_shim(first, executable)) {
+            return rewritten;
+        }
         let paths = env.var_os("PATH").unwrap_or_default();
         let paths = std::env::split_paths(&paths)
             .filter_map(|path| env.resolve(&path))
             .collect::<Vec<_>>();
         if let Some(real) = resolve_real_compiler_on(program, &paths, executable)
-            && env.resolve_program(Path::new(program)).as_deref() != Some(real.as_path())
+            && first.as_deref() != Some(real.as_path())
             && let Some(real) = real.to_str()
         {
             rewritten[0] = real.to_owned();
@@ -2348,6 +2360,39 @@ mod shim_tests {
         assert_eq!(args("cc", &[&real]), ["cc", "-c"]);
         let shim_cc = shims.join("cc").display().to_string();
         assert_eq!(args(&shim_cc, &[&shims, &real]), [shim_cc.as_str(), "-c"]);
+    }
+
+    #[test]
+    fn a_launcher_skips_a_shim_known_by_its_directory_or_its_target_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let (marked, unmarked, real) = (
+            root.path().join("marked"),
+            root.path().join("unmarked"),
+            root.path().join("real"),
+        );
+        for dir in [&marked, &unmarked, &real] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let kache = root.path().join("kache");
+        kache_fs::testutil::write_executable(&kache, "#!/bin/sh\n");
+        kache_fs::testutil::write_executable(&real.join("cc"), "#!/bin/sh\n");
+        // Another install's shim: marked, but not this kache.
+        std::fs::write(marked.join(kache_shims::farm::MARKER), "").unwrap();
+        kache_fs::testutil::write_executable(&marked.join("cc"), "#!/bin/sh\n");
+        // This kache, linked from a directory nobody marked.
+        std::os::unix::fs::symlink(&kache, unmarked.join("cc")).unwrap();
+        let args = |path: &[&Path]| {
+            let env = super::InvocationEnv::from_parts(
+                [("PATH", std::env::join_paths(path).unwrap())],
+                Some(root.path().to_path_buf()),
+                None,
+                root.path().to_path_buf(),
+            );
+            launcher_args_for(&["cc".to_owned()], &env, Some(&kache))
+        };
+        let real_cc = real.join("cc").display().to_string();
+        assert_eq!(args(&[&marked, &real]), [real_cc.as_str()]);
+        assert_eq!(args(&[&unmarked, &real]), [real_cc.as_str()]);
     }
 
     #[test]
