@@ -1327,8 +1327,10 @@ impl Daemon {
         let housekeeping = gc_store.sweep_housekeeping();
         let prestage_pruned =
             crate::prestage::prune(&self.config.cache_dir, std::time::SystemTime::now());
+        let probes_pruned =
+            crate::probe::prune_records(&self.config.cache_dir, std::time::SystemTime::now());
         log::info!(
-            "gc: housekeeping; key_locks_removed={} key_locks_remaining={} predictions_pruned={} file_hashes_pruned={} stranded_entries_readopted={} stranded_entries_removed={} prestage_pruned={prestage_pruned}",
+            "gc: housekeeping; key_locks_removed={} key_locks_remaining={} predictions_pruned={} file_hashes_pruned={} stranded_entries_readopted={} stranded_entries_removed={} prestage_pruned={prestage_pruned} probes_pruned={probes_pruned}",
             housekeeping.key_locks_removed,
             housekeeping.key_locks_remaining,
             housekeeping.predictions_pruned,

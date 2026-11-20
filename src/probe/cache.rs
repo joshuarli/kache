@@ -240,6 +240,32 @@ pub fn store(cache_dir: &Path, key: &str, config: &ResolvedConfig) {
     let _ = tmp.persist(record_path(cache_dir, key));
 }
 
+/// How long a probe record lives after it was written. A hit does not
+/// refresh it, so a record still in use is probed again once this passes.
+const PROBE_RECORD_TTL: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Remove probe records, and temp files a killed writer left, written more
+/// than [`PROBE_RECORD_TTL`] before `now`. The probe key covers the
+/// environment, so a variable that changes per build writes one record per
+/// build and nothing else bounds them. Returns how many files were removed.
+pub(crate) fn prune(cache_dir: &Path, now: std::time::SystemTime) -> usize {
+    let Ok(records) = std::fs::read_dir(cache_dir.join(PROBE_SUBDIR)) else {
+        return 0;
+    };
+    records
+        .flatten()
+        .filter(|record| {
+            record
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|written| now.duration_since(written).ok())
+                .is_some_and(|age| age > PROBE_RECORD_TTL)
+        })
+        .filter(|record| std::fs::remove_file(record.path()).is_ok())
+        .count()
+}
+
 fn record_path(cache_dir: &Path, key: &str) -> PathBuf {
     cache_dir.join(PROBE_SUBDIR).join(format!("{key}.json"))
 }
@@ -678,6 +704,35 @@ mod tests {
         // The cache dir exists but `probes/` does not yet.
         store(cache.path(), "k", &sample("gcc 13"));
         assert!(cache.path().join(PROBE_SUBDIR).join("k.json").is_file());
+    }
+
+    #[test]
+    fn prune_removes_only_records_written_before_the_ttl() {
+        let cache = tempfile::tempdir().unwrap();
+        store(cache.path(), "old", &sample("old"));
+        store(cache.path(), "fresh", &sample("fresh"));
+        let now = std::time::SystemTime::now();
+        let written = |age: u64| {
+            filetime::FileTime::from_system_time(now - std::time::Duration::from_secs(age))
+        };
+        let week: u64 = 604_800;
+        filetime::set_file_mtime(record_path(cache.path(), "old"), written(week + 60)).unwrap();
+        filetime::set_file_mtime(record_path(cache.path(), "fresh"), written(week - 60)).unwrap();
+        let abandoned = cache.path().join(PROBE_SUBDIR).join(".tmpAbCdEf");
+        std::fs::write(&abandoned, b"{").unwrap();
+        filetime::set_file_mtime(&abandoned, written(week + 60)).unwrap();
+
+        assert_eq!(prune(cache.path(), now), 2);
+        assert!(load(cache.path(), "old").is_none());
+        assert!(!abandoned.exists());
+        assert_eq!(load(cache.path(), "fresh"), Some(sample("fresh")));
+        assert_eq!(prune(cache.path(), now), 0);
+    }
+
+    #[test]
+    fn prune_without_a_probe_dir_removes_nothing() {
+        let cache = tempfile::tempdir().unwrap();
+        assert_eq!(prune(cache.path(), std::time::SystemTime::now()), 0);
     }
 
     #[test]

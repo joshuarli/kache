@@ -44,6 +44,8 @@
 mod cache;
 mod resolve;
 
+pub(crate) use cache::prune as prune_records;
+
 use crate::invocation::InvocationEnv;
 use crate::invocation::process::CommandExt as _;
 use anyhow::{Context, Result};
