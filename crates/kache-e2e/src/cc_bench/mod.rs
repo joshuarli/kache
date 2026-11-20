@@ -27,6 +27,9 @@ const SETTLE: Duration = Duration::from_millis(2500);
 /// make compares whole-second stamps (GNU make 3.81, macOS), so an edit has
 /// to land in a later second than the outputs it should invalidate.
 const MAKE_TICK: Duration = Duration::from_millis(1100);
+/// How long a timed replay waits for the events its validation recorded,
+/// outside the timer: on a loaded host the log trails the build by seconds.
+const EVENT_DEADLINE: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[deser(rename_all = "snake_case")]
@@ -86,6 +89,12 @@ pub struct Counters {
     pub hits: u64,
     pub misses: u64,
     pub other: u64,
+}
+
+impl Counters {
+    fn total(&self) -> u64 {
+        self.hits + self.misses + self.other
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -387,7 +396,15 @@ fn write_shims(dir: &Path, tc: &crate::cc_oracle::exec::Toolchain) -> Result<()>
 }
 
 /// Replay every scenario for one arm. `shims` set means validation.
-fn replay(cfg: &Config, workload: &Workload, arm: Arm, root: &Path, shims: Option<&Path>, tc: &crate::cc_oracle::exec::Toolchain) -> Result<Replay> {
+fn replay(
+    cfg: &Config,
+    workload: &Workload,
+    arm: Arm,
+    root: &Path,
+    shims: Option<&Path>,
+    tc: &crate::cc_oracle::exec::Toolchain,
+    validated: Option<&Replay>,
+) -> Result<Replay> {
     let tree = root.join("tree");
     let moved = root.join("moved");
     let setup = arm_setup(cfg, arm, root, &tree, shims, &tc.cc, &tc.cxx);
@@ -469,7 +486,14 @@ fn replay(cfg: &Config, workload: &Workload, arm: Arm, root: &Path, shims: Optio
         if arm == Arm::Kache {
             await_quiet_event_log(&setup.store.join("events.jsonl"));
         }
-        let after = counters(arm, cfg, &setup)?;
+        let mut after = counters(arm, cfg, &setup)?;
+        if let Some(expected) = validated.and_then(|v| v.observations.iter().find(|o| o.scenario == name)) {
+            let deadline = Instant::now() + EVENT_DEADLINE;
+            while delta(&after, &before).total() < expected.counters.total() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(100));
+                after = counters(arm, cfg, &setup)?;
+            }
+        }
         let (objects, object_count) = objects_digest(workload, &tree_now)?;
         observations.push(Observation {
             scenario: name.to_string(),
@@ -547,7 +571,7 @@ pub fn run(cfg: &Config) -> Result<Report> {
         eprintln!("=> {} validation", workload.name);
         let validation = Arm::ALL
             .iter()
-            .map(|&arm| replay(cfg, &workload, arm, &root, Some(&shims), &tc))
+            .map(|&arm| replay(cfg, &workload, arm, &root, Some(&shims), &tc, None))
             .collect::<Result<Vec<_>>>()?;
         let validation_failures = validate(&validation);
         let mut timed = Vec::new();
@@ -557,7 +581,8 @@ pub fn run(cfg: &Config) -> Result<Report> {
                 rng.shuffle(&mut order);
                 eprintln!("=> {} pair {} ({})", workload.name, pair + 1, order.map(Arm::as_str).join(", "));
                 for arm in order {
-                    let mut r = replay(cfg, &workload, arm, &root, None, &tc)?;
+                    let validated = validation.iter().find(|v| v.arm == arm);
+                    let mut r = replay(cfg, &workload, arm, &root, None, &tc, validated)?;
                     r.pair = Some(pair);
                     admit(&mut r, &validation);
                     timed.push(r);
