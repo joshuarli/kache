@@ -70,7 +70,7 @@ pub struct Config {
     pub jobs: usize,
     /// This binary, re-run as the per-build resource meter.
     pub meter: PathBuf,
-    /// `PATH` for every arm: the one this runner was started with, recorded.
+    /// `PATH` for every arm, from [`declared_path`].
     pub path: String,
 }
 
@@ -721,6 +721,32 @@ pub fn run(cfg: &Config) -> Result<Report> {
     Ok(report)
 }
 
+/// Tools the workloads run by name besides the compilers.
+const TOOLS: [&str; 6] = ["make", "cmake", "ninja", "tar", "xz", "python3"];
+
+/// `PATH` for every arm: the directory where `inherited` first finds each of
+/// [`TOOLS`], then the system directories. The arms do not search the caller's
+/// whole `PATH`, so a stray tool there cannot change a build, and the report
+/// records only the directories the tools live in.
+pub fn declared_path(inherited: &std::ffi::OsStr) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for tool in TOOLS {
+        let found = std::env::split_paths(inherited).find(|dir| {
+            std::fs::metadata(dir.join(tool)).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        });
+        if let Some(dir) = found.filter(|dir| !dirs.contains(dir)) {
+            dirs.push(dir);
+        }
+    }
+    for system in ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] {
+        if !dirs.iter().any(|d| d == Path::new(system)) {
+            dirs.push(system.into());
+        }
+    }
+    std::env::join_paths(dirs).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
 /// Unrelated activity over a few seconds before anything is timed, so a busy
 /// host is turned away before a long run rather than after it.
 fn preflight(cfg: &Config) -> Option<activity::Activity> {
@@ -982,7 +1008,7 @@ pub fn markdown(report: &Report) -> String {
             s.push_str(&format!(
                 "Most unrelated activity around one timed build: {:.2} cores{}.\n\n",
                 a.unrelated_cores,
-                a.busiest.first().map_or(String::new(), |b| format!(", busiest `{}`", b.command))
+                a.busiest.first().map_or(String::new(), |b| format!(", busiest `{}`", b.name))
             ));
         }
         if !w.validation_failures.is_empty() {
@@ -1149,6 +1175,26 @@ mod tests {
         assert!(needs_another_pair(&workload(), &timed(&[100.0; 4], Some(quiet()))));
         assert!(!needs_another_pair(&workload(), &timed(&[100.0, 101.0, 99.0, 100.5, 100.2], Some(quiet()))));
         assert!(needs_another_pair(&workload(), &timed(&[100.0, 130.0, 105.0, 125.0, 110.0], Some(quiet()))));
+    }
+
+    #[test]
+    fn the_declared_path_holds_only_tool_and_system_directories() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let (tools, other) = (temp.path().join("tools"), temp.path().join("private-stuff"));
+        for dir in [&tools, &other] {
+            std::fs::create_dir(dir).unwrap();
+        }
+        for tool in ["ninja", "cmake"] {
+            std::fs::write(tools.join(tool), "").unwrap();
+            std::fs::set_permissions(tools.join(tool), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(other.join("make"), "").unwrap();
+        let inherited = std::env::join_paths([&other, &tools, &PathBuf::from("/usr/bin")]).unwrap();
+        let path = declared_path(&inherited);
+        assert!(path.split(':').any(|d| d == tools.display().to_string()), "{path}");
+        assert!(!path.contains("private-stuff"), "a non-executable `make` is not a tool: {path}");
+        assert_eq!(path.matches("/usr/bin").count(), 1, "{path}");
     }
 
     #[test]

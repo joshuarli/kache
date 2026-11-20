@@ -26,6 +26,8 @@ const TOP: usize = 5;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Process {
     pub cpu_ms: u64,
+    /// The whole command line, used only to tell the benchmark's processes
+    /// apart; it never reaches the report.
     pub command: String,
 }
 
@@ -36,13 +38,17 @@ pub struct Snapshot {
     processes: BTreeMap<u32, Process>,
     /// Host-wide busy CPU time since boot.
     system_busy_ms: Option<u64>,
+    /// Each process's executable file name.
+    names: BTreeMap<u32, String>,
 }
 
+/// One unrelated process in the evidence. Only its executable's file name
+/// is recorded: arguments and paths can name other people's work.
 #[derive(Debug, Clone, Serialize)]
 pub struct Busy {
     pub pid: u32,
     pub cpu_ms: u64,
-    pub command: String,
+    pub name: String,
 }
 
 /// What processes outside the benchmark used across one interval.
@@ -66,10 +72,12 @@ impl Snapshot {
     /// unknown, which acceptance treats as ineligible.
     pub fn take() -> Option<Self> {
         let output = Command::new("ps").args(["-A", "-o", "pid=,time=,command="]).env_clear().env("LC_ALL", "C").output().ok()?;
-        output.status.success().then(|| Snapshot {
+        let names = Command::new("ps").args(["-A", "-o", "pid=,comm="]).env_clear().env("LC_ALL", "C").output().ok()?;
+        (output.status.success() && names.status.success()).then(|| Snapshot {
             at: Instant::now(),
             processes: parse_ps(&String::from_utf8_lossy(&output.stdout)),
             system_busy_ms: system_busy_ms(),
+            names: parse_names(&String::from_utf8_lossy(&names.stdout)),
         })
     }
 
@@ -87,7 +95,7 @@ impl Snapshot {
             if *pid == me || ours(&process.command) {
                 own_ms += cpu_ms;
             } else if cpu_ms > 0 {
-                busy.push(Busy { pid: *pid, cpu_ms, command: process.command.chars().take(160).collect() });
+                busy.push(Busy { pid: *pid, cpu_ms, name: later.names.get(pid).cloned().unwrap_or_else(|| "?".into()) });
             }
         }
         busy.sort_by_key(|b| std::cmp::Reverse(b.cpu_ms));
@@ -170,6 +178,18 @@ pub fn parse_ps(text: &str) -> BTreeMap<u32, Process> {
         .collect()
 }
 
+/// `ps -o pid=,comm=` output, reduced to each executable's file name.
+pub fn parse_names(text: &str) -> BTreeMap<u32, String> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            let (pid, comm) = line.split_once(char::is_whitespace)?;
+            let comm = comm.trim();
+            Some((pid.parse().ok()?, comm.rsplit('/').next().unwrap_or(comm).to_string()))
+        })
+        .collect()
+}
+
 fn parse_cpu_time(text: &str) -> Option<u64> {
     let (days, clock) = match text.split_once('-') {
         Some((days, clock)) => (days.parse::<u64>().ok()?, clock),
@@ -196,7 +216,25 @@ mod tests {
     }
 
     fn snapshot(at: Instant, text: &str) -> Snapshot {
-        Snapshot { at, processes: parse_ps(text), system_busy_ms: None }
+        let names = parse_ps(text).into_iter().map(|(pid, p)| (pid, p.command.split(' ').next().unwrap().rsplit('/').next().unwrap().to_string())).collect();
+        Snapshot { at, processes: parse_ps(text), system_busy_ms: None, names }
+    }
+
+    #[test]
+    fn names_keep_only_the_executable_file_name() {
+        let names = parse_names("  10 /Applications/Orb.app/Contents/MacOS/Orb Helper\n  20 python3\n");
+        assert_eq!(names[&10], "Orb Helper");
+        assert_eq!(names[&20], "python3");
+    }
+
+    #[test]
+    fn evidence_names_processes_without_their_arguments() {
+        let start = Instant::now();
+        let before = snapshot(start, "  10 0:01.00 /usr/bin/tool --secret=/home/someone/project\n");
+        let after = snapshot(start + std::time::Duration::from_secs(10), "  10 0:09.00 /usr/bin/tool --secret=/home/someone/project\n");
+        let json = deser_json::to_string(&before.until(&after, |_| false, 0)).unwrap();
+        assert!(json.contains("\"name\":\"tool\""), "{json}");
+        assert!(!json.contains("someone"), "{json}");
     }
 
     #[test]
