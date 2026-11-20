@@ -112,6 +112,11 @@ pub struct ProbeRequest<'a> {
     /// objects keep raw native paths, so its key stays path-literal /
     /// machine-local (#299/#312). POSIX `/…` is always sentinelled.
     pub windows_aware: bool,
+    /// Declared base dirs as `(root, target)` pairs: `KACHE_BASE_DIR` and
+    /// `[paths].base_dirs`. A cwd or `PWD` under one is keyed by its path
+    /// below the root, so a relocated tree reuses its probes. Empty keys
+    /// the cwd literally.
+    pub base_dirs: &'a [(String, String)],
 }
 
 /// A compiler-family-specific probe strategy — the plugin seam.
@@ -242,6 +247,7 @@ pub(crate) fn probe_compiler_family_for(
         key_args: &[],
         per_tu_paths: &[],
         windows_aware: true,
+        base_dirs: &[],
     };
     let key = cache::probe_key_for("cc-family", &request, env);
 
@@ -563,6 +569,7 @@ fn live_probe_diagnostic_for(compiler: &str) -> LiveProbeDiagnostic {
         key_args: &args,
         per_tu_paths: &[],
         windows_aware: true,
+        base_dirs: &[],
     };
     let config = match CcProber.probe(&req) {
         Ok(config) => config,
@@ -684,6 +691,7 @@ mod tests {
             key_args: &[],
             per_tu_paths: &[],
             windows_aware: true,
+            base_dirs: &[],
         }
     }
 
@@ -1085,6 +1093,7 @@ esac
             key_args: &args,
             per_tu_paths: &[],
             windows_aware: true,
+            base_dirs: &[],
         };
         let Ok(config) = CcProber.probe(&request) else {
             eprintln!("skipping: no `cc` on PATH");
@@ -1479,6 +1488,7 @@ esac
             key_args: &["-O2".to_string()],
             per_tu_paths: &[],
             windows_aware: false,
+            base_dirs: &[],
         };
         let config = CcProber.probe(&req).expect("probe succeeds");
         assert_eq!(config.version_line, "mock-cc 1.0");
