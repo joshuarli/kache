@@ -4224,12 +4224,10 @@ fn test_cc_compiles_racing_a_store_clear_get_the_compilers_object() {
     assert!(clears.into_inner() >= 2, "the store was not cleared during the build");
 }
 
-/// A build that kills `kache cc` while its compiler runs: the next compile of
-/// the unit must not wait on anything the killed one claimed and must get the
-/// compiler's object. Where the daemon brokers the compile (macOS), the
-/// compiler goes with the killed client and leaves no object. Where kache runs
-/// it in-process (Linux declines delegation), it is orphaned as it would be
-/// under a killed raw driver, and the next compile runs beside it.
+/// After killing `kache cc` mid-compile, the next compile must get the compiler's
+/// object without waiting; Linux delegation depends on host isolation, including
+/// seccomp and no_new_privs. A delegated compile's orphaned descendant keeping
+/// output pipes open must not hold the discovery lock past cancellation.
 #[test]
 #[cfg(unix)]
 fn test_cc_a_killed_compile_does_not_hold_up_the_next() {

@@ -61,12 +61,10 @@ Engineering work still open (not provisioning):
     test does.
   - Killed compile: after `kache cc` is killed mid-compile, the next
     compile neither waits nor misbuilds
-    (`test_cc_a_killed_compile_does_not_hold_up_the_next`). On macOS the
-    daemon brokers the compile, and the broker's identity kill takes the
-    compiler with the client and leaves no object. Linux declines delegation
-    ("compiler process isolation requires local execution"), so kache runs
-    the compiler in-process and a kill orphans it, as a killed raw driver
-    would; the next compile runs beside the orphan.
+    (`test_cc_a_killed_compile_does_not_hold_up_the_next`); Linux delegation
+    depends on host isolation, including seccomp and no_new_privs. A delegated
+    compile whose orphaned descendant keeps output pipes open no longer holds
+    the discovery lock past cancellation.
   - Stale locks: every store lock is `flock`, released by the kernel when
     its holder dies; old per-key lock files are swept for disk only.
   - Interrupted publication: a put stages and renames blobs before one
