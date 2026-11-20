@@ -206,6 +206,8 @@ struct CaseFile {
     families: Vec<Family>,
     #[deser(default)]
     requires: Vec<Vec<String>>,
+    #[deser(default)]
+    requires_stdin: String,
     profiles: Vec<Profile>,
     #[deser(default)]
     outputs: Vec<String>,
@@ -231,6 +233,8 @@ pub struct Case {
     pub families: Vec<Family>,
     /// Raw compiler capability probes, run before any arm or fault injection.
     pub requires: Vec<Vec<String>>,
+    /// Source input shared by the raw capability probes; empty by default.
+    pub requires_stdin: String,
     pub profiles: Vec<Profile>,
     pub outputs: Vec<String>,
     /// Files the compiler writes with different bytes on every run, such as
@@ -325,6 +329,7 @@ pub fn parse(id: &str, text: &str, source_dir: PathBuf) -> Result<Case> {
         os: file.os,
         families: file.families,
         requires: file.requires,
+        requires_stdin: file.requires_stdin,
         profiles: file.profiles,
         outputs: file.outputs,
         unstable: file.unstable,
@@ -414,6 +419,10 @@ action = [{ op = "delete-outputs" }, { op = "write", path = "a.h", content = "x"
         let with = |requires: &str| format!("requires = {requires}\n{MINIMAL}");
         let c = parse("c", &with(r#"[["{cxx}", "-feature"]]"#), PathBuf::new()).unwrap();
         assert_eq!(c.requires, vec![vec!["{cxx}", "-feature"]]);
+        assert!(c.requires_stdin.is_empty());
+        let text = format!("requires_stdin = \"probe source\\n\"\n{}", with(r#"[["{cc}", "-x", "c", "-"]]"#));
+        let c = parse("c", &text, PathBuf::new()).unwrap();
+        assert_eq!(c.requires_stdin, "probe source\n");
         for invalid in ["[[]]", r#"[["clang", "-feature"]]"#, r#"[["{fixture}/cc"]]"#] {
             assert!(parse("c", &with(invalid), PathBuf::new()).is_err());
         }

@@ -3,6 +3,14 @@ cohort = "blocking"
 profiles = ["transparent", "reproducible"]
 outputs = ["u.o"]
 env = { SOURCE_DATE_EPOCH = "1700000000" }
+requires = [["{cc}", "-x", "c++", "-std=c++11", "-fsyntax-only", "-"]]
+requires_stdin = '''
+constexpr bool equal(const char *a, const char *b) {
+  return *a == *b && (*a == '\0' || equal(a + 1, b + 1));
+}
+static_assert(equal(__DATE__, "Nov 14 2023"), "SOURCE_DATE_EPOCH must pin __DATE__");
+static_assert(equal(__TIME__, "22:13:20"), "SOURCE_DATE_EPOCH must pin __TIME__");
+'''
 
 [[compile]]
 argv = ["{cc}", "-c", "u.c", "-o", "u.o"]

@@ -86,10 +86,14 @@ A case limited to some `families` reports `UNSUPPORTED_BY_COMPILER` for a
 toolchain whose `--version` banner names another family. That verdict does
 not fail the gate, but a run in which every case was unsupported does.
 Cases may also declare `requires`: explicit raw compiler capability probes run
-with empty stdin in isolated scratch directories, before any arm or negative
-control. A rejected probe reports `UNSUPPORTED_BY_COMPILER` with its stderr;
+in isolated scratch directories, before any arm or negative control. They receive
+the case's `env` (`{fixture}` names the scratch directory) and `requires_stdin`
+as source input, empty by default. A rejected probe reports
+`UNSUPPORTED_BY_COMPILER` with its stderr;
 spawn errors or termination by signal remain harness errors. Successful probes
 leave all case steps and verdict checks unchanged, including raw status errors.
+`cc-macro-date-time` compiles assertions that the caller's epoch pins `__DATE__`
+and `__TIME__`; compilers ignoring it are unsupported, not missed reuse.
 
 `CCACHE_WRONG_OUTPUT` records where a ccache arm differs from `raw`. It does
 not fail the gate. A run fails if any compile gets a failing verdict, a toolchain

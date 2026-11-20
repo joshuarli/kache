@@ -220,6 +220,8 @@ fn unsupported_requirements(
     for argv in &case.requires {
         let driver = if argv[0] == "{cc}" { &toolchain.cc } else { &toolchain.cxx };
         let scratch = tempfile::tempdir_in(state)?;
+        let stdin = scratch.path().join("stdin");
+        std::fs::write(&stdin, &case.requires_stdin)?;
         let output = std::process::Command::new(driver)
             .args(&argv[1..])
             .env_clear()
@@ -227,8 +229,9 @@ fn unsupported_requirements(
             .env("HOME", scratch.path())
             .env("TMPDIR", scratch.path())
             .env("LC_ALL", "C")
+            .envs(case.env.iter().map(|(key, value)| (key, value.replace("{fixture}", &scratch.path().to_string_lossy()))))
             .current_dir(scratch.path())
-            .stdin(std::process::Stdio::null())
+            .stdin(std::fs::File::open(stdin)?)
             .output()
             .with_context(|| format!("running capability probe {argv:?}"))?;
         anyhow::ensure!(output.status.code().is_some(), "capability probe {argv:?} terminated by signal");
@@ -444,6 +447,31 @@ reuse = "miss"
         assert_eq!(expected_verdict(Control::DisabledInvalidation), Verdict::KacheWrongOutput);
         assert_eq!(expected_verdict(Control::CacheDisabled), Verdict::KacheMissedReuse);
         assert_eq!(expected_verdict(Control::ReferenceFailure), Verdict::HarnessError);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn capability_probes_receive_source_and_case_environment() {
+        let root = tempfile::tempdir().unwrap();
+        let driver = root.path().join("cc");
+        kache_fs::testutil::write_executable(&driver,
+            "#!/bin/sh\nread -r source\n[ \"$source\" = epoch-source ] && [ \"$SOURCE_DATE_EPOCH\" = 1700000000 ]\n");
+        let tc = Toolchain {
+            name: "cc".into(), family: None, cc_name: "cc".into(), cxx_name: "c++".into(),
+            cc: driver.clone(), cxx: driver,
+        };
+        let mut c = case("a", "blocking", "");
+        c.requires = vec![vec!["{cc}".into(), "-".into()]];
+        c.env.insert("SOURCE_DATE_EPOCH".into(), "1700000000".into());
+        let path = std::ffi::OsStr::new("/usr/bin:/bin");
+        assert!(unsupported_requirements(&c, &tc, root.path(), path).unwrap().is_some());
+        c.requires_stdin = "epoch-source\n".into();
+        assert!(unsupported_requirements(&c, &tc, root.path(), path).unwrap().is_none());
+        c.env.insert("SOURCE_DATE_EPOCH".into(), "0".into());
+        assert!(unsupported_requirements(&c, &tc, root.path(), path).unwrap().is_some());
+        c.requires_stdin = "wrong-source\n".into();
+        c.env.insert("SOURCE_DATE_EPOCH".into(), "1700000000".into());
+        assert!(unsupported_requirements(&c, &tc, root.path(), path).unwrap().is_some());
     }
 
     #[test]

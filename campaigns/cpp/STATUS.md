@@ -182,6 +182,12 @@ Open-case results, identical on every host and toolchain:
 
 Findings for later packages:
 
+- **Time macros (CCP-02).** Clang <16 ignores `SOURCE_DATE_EPOCH`; kache
+  probes epoch support and passes time-dependent translation units through
+  on those drivers. `cc-macro-date-time` probes the raw compiler's pinned
+  date and time before running: unsupported drivers report
+  `UNSUPPORTED_BY_COMPILER`; capable drivers still must match and restore.
+
 - **Diagnostic leak (CCP-08).** With its store on a FUSE filesystem (an
   OrbStack virtiofs bind mount), kache prints `[kache] the cache directory
   is on a FUSE filesystem ...` to the compiler's stderr on every compile.
@@ -199,6 +205,12 @@ misses on musl CI that came from editing inside kache's racing-write window.
 The runner now waits for edits to settle; see the oracle README.
 
 ## CCP-02 input identity
+
+Time macros: clang <16 ignores `SOURCE_DATE_EPOCH`. Kache verifies driver
+support before trusting an epoch pin and passes time-dependent translation
+units through when it is ignored (PR #88); ordinary inputs still cache.
+The `cc-macro-date-time` capability probe gates only unsupported drivers,
+leaving the blocking miss/restore requirements intact on GCC and newer clang.
 
 Cases (all in [oracle/](oracle/)): `cc-input-same-size-mtime`,
 `-atomic-replace`, `-symlink-retarget`, `-header-shadowing`,
