@@ -2369,6 +2369,7 @@ fn codegen_knob_stems_classify_in_both_polarities() {
     // had only one polarity modeled. A regression that drops a stem (or
     // reverts to one-polarity rows) fails here, not in a 2-hour nightly.
     for stem in &[
+        "common",
         "omit-frame-pointer",
         "trapping-math",
         "semantic-interposition",

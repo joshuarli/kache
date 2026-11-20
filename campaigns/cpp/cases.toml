@@ -636,6 +636,15 @@ ccache.suite = "modules.bash"
 status = "planned"
 
 [[case]]
+id = "cc-flag-fcommon"
+package = "CCP-03"
+summary = "-fcommon / -fno-common (libtool's Darwin shared-object flag) are keyed and cached"
+profiles = ["both"]
+compilers = ["gcc", "clang"]
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-flag-mmacos-version-min"
 package = "CCP-03"
 summary = "-mmacos-version-min / -miphoneos-version-min etc. are keyed"

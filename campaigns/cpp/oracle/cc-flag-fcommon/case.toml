@@ -1,0 +1,29 @@
+summary = "-fcommon and -fno-common are keyed and cached: libtool adds -fno-common -DPIC to every Darwin shared-object compile. A tentative definition lands in a common symbol or in .bss by the flag, so the two flagged objects differ, and the unflagged one equals whichever the compiler defaults to (CCP-03)"
+cohort = "blocking"
+families = ["gcc", "clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["libtool.o", "common.o", "default.o"]
+
+[[compile]]
+argv = ["{cc}", "-fno-common", "-DPIC", "-fPIC", "-c", "t.c", "-o", "libtool.o"]
+source = "t.c"
+
+[[compile]]
+argv = ["{cc}", "-fcommon", "-c", "t.c", "-o", "common.o"]
+source = "t.c"
+
+# Apple clang defaults to -fcommon and GCC 10+ to -fno-common, so the
+# compile without either flag equals one of the two above and may reuse it.
+[[compile]]
+argv = ["{cc}", "-c", "t.c", "-o", "default.o"]
+source = "t.c"
+reuse = "any"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
