@@ -1,5 +1,13 @@
 Prefix: KACH
-Next: 31
+Next: 32
+
+### KACH-31 · P4 · A put killed between its meta.json rename and its commit strands the entry directory
+
+- **Area:** Store
+- **Where:** `crates/kache-store/src/store.rs` (`put_with_compile_time_policy` Phase 2; `sweep_orphan_blobs`)
+- **Problem:** Phase 2 renames `meta.json` into `store/<key>/` inside the transaction, then commits the row. A kill between the rename and the commit leaves a `meta.json` with no row. `get` misses on it, which is correct. Its blobs have no rows and the orphan-blob sweep reclaims them. The directory itself is reclaimed only by a later put of the same key or by an index rebuild. Each occurrence leaks a small directory.
+- **Recommendation:** Extend the GC housekeeping sweep: under `gc.lock` and `BEGIN IMMEDIATE`, remove entry directories older than a grace period whose key has no committed row. Re-check the row before unlinking, as `remove_entry_attempt` does.
+- **Fix with:** a store test that writes a `meta.json` with no row, ages it, sweeps, and expects the directory gone, while a young one and one with a row stay.
 
 ### KACH-26 · P1 · Reach ccache-level local C/C++ compatibility
 

@@ -75,7 +75,7 @@ Engineering work still open (not provisioning):
     `staging/handoff/`; the handoff sweep now reclaims them.
   Open: a `meta.json` stranded by a kill between its rename and the row's
   commit is a miss and is only reclaimed by a re-put of that key or an
-  index rebuild.
+  index rebuild (KACH-31).
 - CCP-09: a quiet-host rerun of the baseline. The provisional runs below
   rank losses but were timed under load. The largest loss now is the
   per-hit fixed cost on small units.
@@ -577,6 +577,35 @@ its header revert from 8.69x to 1.41x. **Losses now, ranked:**
    on the whole environment (KACH-29).
 2. Header edit, 1.18x on tiny C and 1.24x on zlib: the miss path.
 3. Cold C++ and LLVM, 1.09x to 1.11x; tiny-C cold now beats ccache (0.79x).
+
+**Since that rerun, 2026-11-19..20 (phase traces, not cc-bench).** Merged
+against losses 1 and 2. A cc-bench rerun is still to do: it was deferred
+because the host was running another project's benchmark.
+
+- #65: the accept-loop wait above.
+- #68: an event no longer rewrites the build-session marker within the
+  same second. On a warm tiny-C hit, the session-marker work went from a
+  median 356 us to 77 us.
+- #69: the daemon keeps parsed header probe scans by content hash. On a
+  memo miss after a header edit, the include check went from 14.9 ms to
+  1.7 ms, and the whole miss from 74 to 60 ms; 52 ms of that is the
+  preprocessor and the compile.
+- #72: the compiler probe key leaves out per-command shell and
+  build-driver variables. GNU make 4.4's per-run jobserver FIFO in
+  `MAKEFLAGS` had re-probed once per build.
+
+A warm tiny-C hit's worker time is about 2.4 ms:
+
+| Part | Median |
+|---|---|
+| key (memo lookup 0.26 ms) | 0.7 ms |
+| restore: three broker round trips (prepare, publish, mtime stamp) | 0.67 ms |
+| event | 0.25 ms |
+| store open (SQLite open and pragmas) | 0.3 to 0.4 ms |
+
+Each part is now below 0.4 ms. Folding the restore's round trips into
+one changes the client-daemon protocol. Keeping the store open across
+hits must survive an index recovery that replaces `index.db`.
 
 ## Open gaps and blockers
 
