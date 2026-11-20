@@ -568,6 +568,11 @@ pub const KEY_LOCK_SWEEP_GRACE: Duration = Duration::from_secs(3600);
 /// A store with 84k stale locks converges in five sweeps.
 pub const KEY_LOCK_SWEEP_CAP: usize = 20_000;
 
+/// How old a rowless entry's `meta.json` must be before GC re-adopts or
+/// removes it. A restored entry is extracted into its entry dir before its
+/// import takes the write lock; an hour leaves any import in flight far behind.
+pub const STRANDED_ENTRY_GRACE: Duration = Duration::from_secs(3600);
+
 /// What one [`Store::sweep_stale_key_locks`] pass saw and did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct KeyLockSweepStats {
@@ -988,6 +993,19 @@ pub struct HousekeepingStats {
     pub predictions_pruned: usize,
     /// File hash memo rows deleted as not written for a month (#1206).
     pub file_hashes_pruned: usize,
+    /// Rowless entry dirs given their rows back.
+    #[deser(default)]
+    pub stranded_entries_readopted: usize,
+    /// Rowless entry dirs removed because they could not be served.
+    #[deser(default)]
+    pub stranded_entries_removed: usize,
+}
+
+/// Counts from [`Store::sweep_stranded_entries`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StrandedEntrySweepStats {
+    pub readopted: usize,
+    pub removed: usize,
 }
 
 /// Whether `err` carries SQLite write contention (`SQLITE_BUSY` or
@@ -1889,6 +1907,54 @@ fn floor_blob_refs_at_mappings(
          )",
         params![cache_key],
     )
+}
+
+/// Insert `meta`'s entry row and its blob references, unless a row for
+/// `cache_key` is already there: its owner holds those refcounts. Returns
+/// whether the row was inserted.
+fn register_entry_rows(
+    conn: &rusqlite::Connection,
+    cache_key: &str,
+    meta: &EntryMeta,
+) -> Result<bool> {
+    let total_size: u64 = meta.files.iter().map(|f| f.size).sum();
+    let inserted = conn.execute(
+        "INSERT OR IGNORE INTO entries (cache_key, crate_name, crate_type, profile, num_features, size, content_hash, metadata_hash, compile_time_ms, key_schema, committed, durable, compile_time_backfilled) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, 0, 1)",
+        params![
+            cache_key,
+            meta.crate_name,
+            meta.crate_types.join(","),
+            meta.profile,
+            meta.features.len() as i64,
+            total_size as i64,
+            compute_content_hash(&meta.files),
+            compute_metadata_hash(meta),
+            meta.compile_time_ms as i64,
+            meta.key_schema
+        ],
+    )?;
+    if inserted == 0 {
+        return Ok(false);
+    }
+    // As in the batch import: a mapping without an entry row.
+    release_entry_blob_refs(conn, cache_key)?;
+    // One reference per *file*, not per unique hash: `remove_entry` decrements
+    // once per `meta.files` element, so an entry listing the same hash twice
+    // must hold two references or removal would drop it below zero.
+    for file in &meta.files {
+        let added = conn.execute(
+            "INSERT OR IGNORE INTO blobs (hash, size, refcount) VALUES (?1, ?2, 1)",
+            params![file.hash, file.size as i64],
+        )?;
+        if added == 0 {
+            conn.execute(
+                "UPDATE blobs SET refcount = refcount + 1 WHERE hash = ?1",
+                params![file.hash],
+            )?;
+        }
+    }
+    record_entry_blobs(conn, cache_key, &meta.files)?;
+    Ok(true)
 }
 
 /// Give back every blob reference `cache_key`'s current mapping holds, then
@@ -3846,80 +3912,39 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
     /// Register one entry dir's rows. Returns the number of blob references
     /// registered, or `None` when the entry is not fully present on disk.
     fn rebuild_one_entry(&self, cache_key: &str, entry_dir: &Path) -> Result<Option<usize>> {
-        let meta_path = entry_dir.join("meta.json");
-        if !meta_path.is_file() {
+        let Some(meta) = self.servable_entry_meta(entry_dir) else {
             return Ok(None);
-        }
-        let content = fs::read_to_string(&meta_path).context("reading entry meta.json")?;
-        let meta: EntryMeta = deser_json::from_str(&content).context("parsing entry meta.json")?;
-
-        // Validate the whole entry before writing anything, so a half-present
-        // entry never lands as a row that would resolve to a missing blob.
-        for file in &meta.files {
-            if !kache_format::is_blob_hash(&file.hash)
-                || !kache_format::is_safe_stored_artifact_name(&file.name)
-            {
-                return Ok(None);
-            }
-            let blob = self.blob_path(&file.hash);
-            match fs::metadata(&blob) {
-                Ok(m) if m.len() == file.size => {}
-                // Present but the wrong length, or absent: either way this entry
-                // cannot be served, so do not advertise it.
-                _ => return Ok(None),
-            }
-        }
-
-        let total_size: u64 = meta.files.iter().map(|f| f.size).sum();
-        let content_hash = compute_content_hash(&meta.files);
-        let metadata_hash = compute_metadata_hash(&meta);
-        let crate_type_str = meta.crate_types.join(",");
-        let num_features = meta.features.len() as i64;
-
+        };
         let tx = self.db.unchecked_transaction()?;
-        // Claim the entry row first. If it is already there, a concurrent or
-        // earlier rebuild owns this entry's refcounts and we must not add more.
-        let inserted = tx.execute(
-            "INSERT OR IGNORE INTO entries (cache_key, crate_name, crate_type, profile, num_features, size, content_hash, metadata_hash, compile_time_ms, key_schema, committed, durable, compile_time_backfilled) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, 0, 1)",
-            params![
-                cache_key,
-                meta.crate_name,
-                crate_type_str,
-                meta.profile,
-                num_features,
-                total_size as i64,
-                content_hash,
-                metadata_hash,
-                meta.compile_time_ms as i64,
-                meta.key_schema
-            ],
-        )?;
-        if inserted == 0 {
-            tx.commit()?;
-            return Ok(None);
-        }
-        // As in the batch import: a mapping without an entry row.
-        release_entry_blob_refs(&tx, cache_key)?;
-
-        // One reference per *file*, not per unique hash: `remove_entry` decrements
-        // once per `meta.files` element, so an entry listing the same hash twice
-        // must hold two references or removal would drop it below zero.
-        for file in &meta.files {
-            let added = tx.execute(
-                "INSERT OR IGNORE INTO blobs (hash, size, refcount) VALUES (?1, ?2, 1)",
-                params![file.hash, file.size as i64],
-            )?;
-            if added == 0 {
-                tx.execute(
-                    "UPDATE blobs SET refcount = refcount + 1 WHERE hash = ?1",
-                    params![file.hash],
-                )?;
-            }
-        }
-        record_entry_blobs(&tx, cache_key, &meta.files)?;
+        let inserted = register_entry_rows(&tx, cache_key, &meta)?;
         tx.commit()?;
+        Ok(inserted.then_some(meta.files.len()))
+    }
 
-        Ok(Some(meta.files.len()))
+    /// The entry dir's `meta.json` when it parses and every blob it names is
+    /// present at its recorded size; `None` when the entry cannot be served.
+    fn servable_entry_meta(&self, entry_dir: &Path) -> Option<EntryMeta> {
+        let meta_path = entry_dir.join("meta.json");
+        let meta: EntryMeta = match fs::read_to_string(&meta_path)
+            .context("reading entry meta.json")
+            .and_then(|content| {
+                deser_json::from_str(&content).context("parsing entry meta.json")
+            }) {
+            Ok(meta) => meta,
+            Err(error) => {
+                log::debug!("entry {} is unservable: {error:#}", entry_dir.display());
+                return None;
+            }
+        };
+        meta.files
+            .iter()
+            .all(|file| {
+                kache_format::is_blob_hash(&file.hash)
+                    && kache_format::is_safe_stored_artifact_name(&file.name)
+                    && fs::metadata(self.blob_path(&file.hash))
+                        .is_ok_and(|blob| blob.len() == file.size)
+            })
+            .then_some(meta)
     }
 
     /// Look up cache keys for the given crate names (most recent per crate).
@@ -4400,6 +4425,87 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         Ok(stats)
     }
 
+    /// Give entry dirs whose `meta.json` has no row their rows back, or remove
+    /// them when they cannot be served. A put killed between its `meta.json`
+    /// rename and its commit leaves such a dir, and so does an index rebuild
+    /// that skipped an entry. Only dirs whose `meta.json` is older than
+    /// `min_age` are considered, at most `cap` per call. The caller holds
+    /// `gc.lock`.
+    ///
+    /// A put renames `meta.json` into place while it holds the SQLite write
+    /// lock and commits under that same lock, so under `BEGIN IMMEDIATE` a
+    /// rowless `meta.json` belongs to no put in progress. Blobs are unlinked
+    /// only under that lock as well, so the blob check here holds until the
+    /// rows commit.
+    pub fn sweep_stranded_entries(
+        &self,
+        min_age: Duration,
+        cap: usize,
+    ) -> Result<StrandedEntrySweepStats> {
+        self.refuse_write("sweep stranded entries")?;
+        let mut stats = StrandedEntrySweepStats::default();
+        let store_dir = self.config.store_dir();
+        let Ok(names) = fs::read_dir(&store_dir) else {
+            return Ok(stats);
+        };
+        let live: std::collections::HashSet<String> = self
+            .db
+            .prepare("SELECT cache_key FROM entries")?
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let now = std::time::SystemTime::now();
+        let candidates: Vec<String> = names
+            .flatten()
+            .filter_map(|name| name.file_name().into_string().ok())
+            .filter(|key| kache_format::is_valid_cache_key(key) && !live.contains(key))
+            .filter(|key| {
+                fs::metadata(store_dir.join(key).join("meta.json"))
+                    .and_then(|meta| meta.modified())
+                    .ok()
+                    .and_then(|modified| now.duration_since(modified).ok())
+                    .is_some_and(|age| age >= min_age)
+            })
+            .take(cap)
+            .collect();
+        if candidates.is_empty() {
+            return Ok(stats);
+        }
+        self.db.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<()> {
+            for key in &candidates {
+                let entry_dir = store_dir.join(key);
+                match self.servable_entry_meta(&entry_dir) {
+                    Some(meta) => {
+                        if register_entry_rows(&self.db, key, &meta)? {
+                            stats.readopted += 1;
+                        }
+                    }
+                    None => {
+                        let indexed = self.db.query_row(
+                            "SELECT EXISTS(SELECT 1 FROM entries WHERE cache_key = ?1)",
+                            params![key],
+                            |row| row.get::<_, bool>(0),
+                        )?;
+                        if !indexed && fs::remove_dir_all(&entry_dir).is_ok() {
+                            stats.removed += 1;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.db.execute_batch("COMMIT")?;
+                Ok(stats)
+            }
+            Err(error) => {
+                let _ = self.db.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
     /// The per-key structures nothing else bounds: stale key lock files,
     /// unused input predictions and old file hash rows. The caller holds `gc.lock`. A pass that fails
     /// is logged and counts as zero; the next sweep tries again.
@@ -4412,6 +4518,12 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             .unwrap_or_else(|error| {
                 log::warn!("gc: key lock sweep failed: {error:#}");
                 KeyLockSweepStats::default()
+            });
+        let stranded = self
+            .sweep_stranded_entries(STRANDED_ENTRY_GRACE, KEY_LOCK_SWEEP_CAP)
+            .unwrap_or_else(|error| {
+                log::warn!("gc: stranded entry sweep failed: {error:#}");
+                StrandedEntrySweepStats::default()
             });
         let predictions_pruned = self
             .file_hash_cache()
@@ -4438,6 +4550,8 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             key_locks_remaining: locks.remaining(),
             predictions_pruned,
             file_hashes_pruned,
+            stranded_entries_readopted: stranded.readopted,
+            stranded_entries_removed: stranded.removed,
         }
     }
 

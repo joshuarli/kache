@@ -2777,7 +2777,7 @@ pub fn run_gc_local(config: &Config, mode: GcMode) -> Result<crate::store::GcSta
     combined.housekeeping = Some(housekeeping);
     if verbose {
         println!(
-            "Housekeeping: removed {} ({} remain), {}, {}.",
+            "Housekeeping: removed {} ({} remain), {}, {}; re-adopted {}, removed {}.",
             term::counted(
                 housekeeping.key_locks_removed as u64,
                 "stale key lock",
@@ -2793,6 +2793,16 @@ pub fn run_gc_local(config: &Config, mode: GcMode) -> Result<crate::store::GcSta
                 housekeeping.file_hashes_pruned as u64,
                 "old file hash",
                 "old file hashes"
+            ),
+            term::counted(
+                housekeeping.stranded_entries_readopted as u64,
+                "stranded entry",
+                "stranded entries"
+            ),
+            term::counted(
+                housekeeping.stranded_entries_removed as u64,
+                "unservable stranded entry",
+                "unservable stranded entries"
             ),
         );
     }
