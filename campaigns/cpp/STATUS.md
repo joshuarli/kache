@@ -535,7 +535,17 @@ its header revert from 8.69x to 1.41x. **Losses now, ranked:**
    is 6.6x (127 ms), so the first compile after a daemon stop pays for
    starting the daemon. A phase trace puts kache's own work for such a hit
    near 3 ms. The rest is outside it (client start, daemon round trip,
-   process exit) and needs a profile on a quiet host.
+   process exit).
+   Timestamps across the client and the daemon put 2.6 to 6.6 ms of a
+   9 ms hit between the client's connect and the daemon's accept. The
+   accept loop slept 5 ms whenever nothing was pending. It now waits in
+   `poll()` on the listener (`perf(daemon): accept a connection when it
+   arrives, not after a 5 ms sleep`), and a warm single-unit hit went from
+   14.2 ms to 7.8 ms (hyperfine, loaded host). The worker's own 2.7 ms and
+   about 1 ms of protocol round trips remain. Timing kache under hyperfine
+   needs `env -u HYPERFINE_ITERATION -u
+   HYPERFINE_RANDOMIZED_ENVIRONMENT_OFFSET`: the compiler probe is keyed
+   on the whole environment (KACH-29).
 2. Header edit, 1.18x on tiny C and 1.24x on zlib: the miss path.
 3. Cold C++ and LLVM, 1.09x to 1.11x; tiny-C cold now beats ccache (0.79x).
 

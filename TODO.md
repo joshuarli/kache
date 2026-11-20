@@ -1,5 +1,5 @@
 Prefix: KACH
-Next: 29
+Next: 30
 
 ### KACH-26 · P1 · Reach ccache-level local C/C++ compatibility
 
@@ -10,6 +10,15 @@ Next: 29
 - **Scope:** Response files and flags, invalidation, equivalent-preprocessing reuse, complete output sets, conditional PCH/module support, host integration, local reliability, and measured performance. Remote storage stays on the later roadmap.
 - **Coordination:** KACH-21 and KACH-27 closed when the Linux gates became required (PR #50). KACH-22 (mutants in no gate) stays open. Evidence lives in the campaign ledger.
 - **Done when:** Every final acceptance criterion in the plan passes on the same integrated revision; safe passthrough, missing tools, and unexecuted lanes do not count as cached parity.
+
+### KACH-29 · P3 · A C/C++ compiler probe is keyed on the whole environment
+
+- **Area:** Performance
+- **Where:** `src/probe/cache.rs` (`probe_key_for`, `fingerprint_env`)
+- **Problem:** The `cc -###` probe record is keyed on every environment variable except `KACHE_*`. A variable that changes per invocation therefore reruns the probe (about 30 ms) on every hit and writes one more record under `probes/`, which nothing prunes. Under hyperfine (`HYPERFINE_ITERATION`), a warm hit took 42 ms instead of 14, and 68 runs left 68 records. Builds that export a per-job counter or a timestamp pay the same.
+- **Recommendation:** Key the probe on the variables the driver reads (`SDKROOT`, `DEVELOPER_DIR`, `MACOSX_DEPLOYMENT_TARGET`, `COMPILER_PATH`, `GCC_EXEC_PREFIX`, the include and library path variables, `PATH` for tool lookup). An allowlist must be proven complete against both drivers' documentation, or it miskeys. A cheaper step is to prune probe records in GC.
+- **Fix with:** a test that varies an unrelated variable and keeps one probe record, and one per listed variable that rekeys.
+- **Effort:** M
 
 ### KACH-22 · P3 · Changed-line mutation testing runs in no gate
 
