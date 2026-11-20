@@ -211,8 +211,45 @@ fn unsupported_family(case: &Case, toolchain: &Toolchain) -> Option<String> {
     Some(format!("case exercises {}; {} is {}", wanted.join("/"), toolchain.name, family.as_str()))
 }
 
+fn unsupported_requirements(
+    case: &Case,
+    toolchain: &Toolchain,
+    state: &Path,
+    system_path: &std::ffi::OsStr,
+) -> Result<Option<String>> {
+    for argv in &case.requires {
+        let driver = if argv[0] == "{cc}" { &toolchain.cc } else { &toolchain.cxx };
+        let scratch = tempfile::tempdir_in(state)?;
+        let output = std::process::Command::new(driver)
+            .args(&argv[1..])
+            .env_clear()
+            .env("PATH", system_path)
+            .env("HOME", scratch.path())
+            .env("TMPDIR", scratch.path())
+            .env("LC_ALL", "C")
+            .current_dir(scratch.path())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .with_context(|| format!("running capability probe {argv:?}"))?;
+        anyhow::ensure!(output.status.code().is_some(), "capability probe {argv:?} terminated by signal");
+        if !output.status.success() {
+            return Ok(Some(format!(
+                "compiler rejected capability probe {argv:?}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+    }
+    Ok(None)
+}
+
 fn run_case(case: &Case, profile: Profile, ctx: &ArmContext<'_>, run: &mut CaseRun) -> Result<()> {
     std::fs::create_dir_all(ctx.state)?;
+    if let Some(reason) = unsupported_requirements(case, ctx.toolchain, ctx.state, ctx.system_path)? {
+        run.verdict = Verdict::UnsupportedByCompiler;
+        run.blocked = Some(reason);
+        run.expected_rows = 0;
+        return Ok(());
+    }
     let fixture = {
         std::fs::create_dir_all(ctx.fixture)?;
         std::fs::canonicalize(ctx.fixture)?
@@ -407,5 +444,27 @@ reuse = "miss"
         assert_eq!(expected_verdict(Control::DisabledInvalidation), Verdict::KacheWrongOutput);
         assert_eq!(expected_verdict(Control::CacheDisabled), Verdict::KacheMissedReuse);
         assert_eq!(expected_verdict(Control::ReferenceFailure), Verdict::HarnessError);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn capability_probes_select_the_driver_and_only_skip_rejected_requirements() {
+        let root = tempfile::tempdir().unwrap();
+        let path = std::ffi::OsStr::new("/usr/bin:/bin");
+        let mut c = case("a", "blocking", "");
+        let mut tc = Toolchain {
+            name: "cc".into(), family: None, cc_name: "cc".into(), cxx_name: "c++".into(),
+            cc: "/usr/bin/true".into(), cxx: "/usr/bin/false".into(),
+        };
+        assert!(unsupported_requirements(&c, &tc, root.path(), path).unwrap().is_none());
+        c.requires = vec![vec!["{cc}".into(), "-a-feature".into()]];
+        assert!(unsupported_requirements(&c, &tc, root.path(), path).unwrap().is_none());
+        c.requires[0][0] = "{cxx}".into();
+        assert!(unsupported_requirements(&c, &tc, root.path(), path).unwrap().unwrap().contains("compiler rejected capability probe"));
+        tc.cxx = root.path().join("missing-compiler");
+        assert!(unsupported_requirements(&c, &tc, root.path(), path).is_err());
+        tc.cxx = "/bin/sh".into();
+        c.requires[0] = vec!["{cxx}".into(), "-c".into(), "kill -TERM $$".into()];
+        assert!(unsupported_requirements(&c, &tc, root.path(), path).is_err());
     }
 }

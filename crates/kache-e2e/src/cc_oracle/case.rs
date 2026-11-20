@@ -204,6 +204,8 @@ struct CaseFile {
     os: Vec<String>,
     #[deser(default)]
     families: Vec<Family>,
+    #[deser(default)]
+    requires: Vec<Vec<String>>,
     profiles: Vec<Profile>,
     #[deser(default)]
     outputs: Vec<String>,
@@ -227,6 +229,8 @@ pub struct Case {
     pub os: Vec<String>,
     /// Empty means every family.
     pub families: Vec<Family>,
+    /// Raw compiler capability probes, run before any arm or fault injection.
+    pub requires: Vec<Vec<String>>,
     pub profiles: Vec<Profile>,
     pub outputs: Vec<String>,
     /// Files the compiler writes with different bytes on every run, such as
@@ -272,6 +276,12 @@ pub fn parse(id: &str, text: &str, source_dir: PathBuf) -> Result<Case> {
     ensure!(!file.profiles.is_empty(), "case {id}: profiles is empty");
     ensure!(!file.compile.is_empty(), "case {id}: no [[compile]]");
     ensure!(!file.step.is_empty(), "case {id}: no [[step]]");
+    for argv in &file.requires {
+        ensure!(
+            argv.first().is_some_and(|a| a == "{cc}" || a == "{cxx}"),
+            "case {id}: requires argv must start with {{cc}} or {{cxx}}"
+        );
+    }
     ensure!(
         file.step[0].reuse == Reuse::Miss,
         "case {id}: the first step runs against an empty cache, so it must declare reuse = \"miss\""
@@ -314,6 +324,7 @@ pub fn parse(id: &str, text: &str, source_dir: PathBuf) -> Result<Case> {
         cohort: file.cohort,
         os: file.os,
         families: file.families,
+        requires: file.requires,
         profiles: file.profiles,
         outputs: file.outputs,
         unstable: file.unstable,
@@ -378,6 +389,7 @@ action = [{ op = "delete-outputs" }, { op = "write", path = "a.h", content = "x"
     #[test]
     fn parses_actions_and_defaults() {
         let case = parse("c", MINIMAL, PathBuf::from("s")).unwrap();
+        assert!(case.requires.is_empty());
         assert_eq!(case.cohort, Cohort::Blocking);
         assert_eq!(case.steps[0].status, 0);
         assert_eq!(case.steps[1].reuse, Reuse::Hit);
@@ -395,6 +407,16 @@ action = [{ op = "delete-outputs" }, { op = "write", path = "a.h", content = "x"
         let switched = MINIMAL.replacen("reuse = \"hit\"\n", "reuse = \"hit\"\nprofile = \"reproducible\"\n", 1);
         let case = parse("c", &switched, PathBuf::from("s")).unwrap();
         assert_eq!(case.steps[1].profile_or(Profile::Transparent), Profile::Reproducible);
+    }
+
+    #[test]
+    fn capability_probes_require_a_raw_compiler_driver() {
+        let with = |requires: &str| format!("requires = {requires}\n{MINIMAL}");
+        let c = parse("c", &with(r#"[["{cxx}", "-feature"]]"#), PathBuf::new()).unwrap();
+        assert_eq!(c.requires, vec![vec!["{cxx}", "-feature"]]);
+        for invalid in ["[[]]", r#"[["clang", "-feature"]]"#, r#"[["{fixture}/cc"]]"#] {
+            assert!(parse("c", &with(invalid), PathBuf::new()).is_err());
+        }
     }
 
     #[test]

@@ -85,6 +85,11 @@ Each compile in each step gets one verdict. Checks run in this order:
 A case limited to some `families` reports `UNSUPPORTED_BY_COMPILER` for a
 toolchain whose `--version` banner names another family. That verdict does
 not fail the gate, but a run in which every case was unsupported does.
+Cases may also declare `requires`: explicit raw compiler capability probes run
+with empty stdin in isolated scratch directories, before any arm or negative
+control. A rejected probe reports `UNSUPPORTED_BY_COMPILER` with its stderr;
+spawn errors or termination by signal remain harness errors. Successful probes
+leave all case steps and verdict checks unchanged, including raw status errors.
 
 `CCACHE_WRONG_OUTPUT` records where a ccache arm differs from `raw`. It does
 not fail the gate. A run fails if any compile gets a failing verdict, a toolchain
@@ -112,6 +117,7 @@ summary = "what the case proves"
 cohort = "blocking"            # or "open": a known gap, run by cc-oracle-full
 os = ["macos"]                 # optional; empty means every host
 families = ["clang"]           # optional; empty means every compiler family
+requires = [["{cxx}", "-ftrivial-auto-var-init=zero", "-x", "c++", "-fsyntax-only", "-"]]
 profiles = ["transparent", "reproducible"]
 outputs = ["unit.o", "unit.d"] # removed by delete-outputs; checked by omit-sidecar
 env = { CPATH = "{fixture}/inc" }  # every arm; may not set harness, KACHE_* or CCACHE_* variables

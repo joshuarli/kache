@@ -1,6 +1,7 @@
 summary = "Chromium's official codegen flags (null-check, overflow, ident, member pointers, auto-var-init, module name) cache"
 cohort = "blocking"
 families = ["clang"]
+requires = [["{cxx}", "-ftrivial-auto-var-init=zero", "-x", "c++", "-fsyntax-only", "-"]]
 profiles = ["transparent", "reproducible"]
 outputs = ["u.o"]
 
