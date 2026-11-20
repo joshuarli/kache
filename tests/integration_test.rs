@@ -10,6 +10,10 @@ fn run_kache_cc(project: &Path, cache_dir: &Path, args: &[&str]) {
 }
 
 fn run_kache_cc_from(cwd: &Path, cache_dir: &Path, args: &[&str]) {
+    run_kache_cc_with_env(cwd, cache_dir, args, &[]);
+}
+
+fn run_kache_cc_with_env(cwd: &Path, cache_dir: &Path, args: &[&str], env: &[(&str, &Path)]) {
     settle_writes(&[cwd]);
     let event_path = cache_dir.join("events.jsonl");
     let read_events = || match std::fs::read_to_string(&event_path) {
@@ -26,6 +30,7 @@ fn run_kache_cc_from(cwd: &Path, cache_dir: &Path, args: &[&str]) {
     .args(args)
     .current_dir(cwd)
     .env("KACHE_LOG", "kache=debug")
+    .envs(env.iter().copied())
     .output()
     .expect("failed to run kache cc");
 
@@ -3752,6 +3757,44 @@ fn test_cc_direct_key_compiles_once_without_a_preprocess() {
     assert_last_cc_event(&report, "local_hit", 0);
     assert_last_cc_preprocessor_runs(&report, 0);
     assert_cc_report_counts(&report, 2, 2);
+}
+
+/// A base dir spelled through `..` gives a memo's inputs that spelling
+/// back, while the preprocessor reports the `-I` one. A hit must still skip
+/// the preprocessor.
+#[test]
+fn test_cc_memo_hits_without_a_preprocess_under_a_dot_dot_base_dir() {
+    build_kache();
+
+    let project = TempDir::new().unwrap();
+    let root = std::fs::canonicalize(project.path()).unwrap();
+    let cache_dir = TempDir::new().unwrap();
+    let _cache_dir_daemon = common::DaemonGuard::new(kache_binary(), cache_dir.path());
+    let build = root.join("build");
+    std::fs::create_dir_all(root.join("inc/sub")).unwrap();
+    std::fs::create_dir_all(&build).unwrap();
+    std::fs::write(root.join("inc/sub/value.h"), "#define VALUE 7\n").unwrap();
+    std::fs::write(
+        root.join("foo.c"),
+        "#include \"sub/value.h\"\nint value(void) { return VALUE; }\n",
+    )
+    .unwrap();
+    let include = format!("-I{}", root.join("inc").display());
+    let source = root.join("foo.c").display().to_string();
+    let args = ["cc", "-O0", "-g0", &include, "-c", &source, "-o", "foo.o"];
+    let base = build.join("..");
+    let env = [("KACHE_BASE_DIR", base.as_path())];
+
+    run_kache_cc_with_env(&build, cache_dir.path(), &args, &env);
+    let report = kache_report(cache_dir.path());
+    assert_last_cc_event(&report, "miss", 1);
+
+    std::fs::remove_file(build.join("foo.o")).unwrap();
+    run_kache_cc_with_env(&build, cache_dir.path(), &args, &env);
+    assert!(build.join("foo.o").exists());
+    let report = kache_report(cache_dir.path());
+    assert_last_cc_event(&report, "local_hit", 0);
+    assert_last_cc_preprocessor_runs(&report, 0);
 }
 
 /// A caller that asks for a complete depfile gets it from the same compile

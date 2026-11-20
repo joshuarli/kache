@@ -10364,3 +10364,31 @@ fn header_probe_resolution_is_reused_by_content_and_redone_on_change() {
     fs::write(&header, "#if __has_include(<two.h>)\n#endif\n").unwrap();
     assert_eq!(probed(&crate::cache_key::FileHasher::persistent(&db)), ["two.h"]);
 }
+
+/// A base dir spelled through `..` gives a memo's inputs that spelling when
+/// they are unmapped, while the preprocessor reports the `-I` spelling. Both
+/// name one header, so the include resolution they describe must agree, or
+/// every memo hit under such a base dir preprocesses again.
+#[test]
+fn shadowing_digest_is_independent_of_a_dot_dot_base_dir_spelling() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(temp.path()).unwrap();
+    let (parsed, source, include) = probing_unit(&root, "int x;\n");
+    fs::create_dir_all(include.join("sub")).unwrap();
+    fs::create_dir_all(root.join("build")).unwrap();
+    let header = include.join("sub/h.h");
+    fs::write(&header, "int h;\n").unwrap();
+    let base = root.join("build/..");
+    let maps = cc_prefix_maps_cfg(&parsed, &root, Some(&base), None, &[]);
+    let dotted = base.join(header.strip_prefix(&root).unwrap());
+    let digest = |inputs: &[PathBuf]| {
+        let names =
+            cc_shadowing_names(&parsed, inputs, &maps, &crate::cache_key::FileHasher::new())
+                .unwrap();
+        digest_cc_shadowing_names(&parsed, &names).unwrap()
+    };
+    assert_eq!(
+        digest(&[source.clone(), dotted]),
+        digest(&[source, header])
+    );
+}
