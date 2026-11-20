@@ -626,7 +626,15 @@ fn local_unqualified_cold_seed_resets_learning_so_the_next_build_can_store() {
 
     // Eviction removes the exact artifact while preserving its learned key.
     // Unchanged inputs cannot qualify this cold compile as an adaptive seed.
-    fs::remove_dir_all(cache.path().join("store")).unwrap();
+    let evicted = hermetic_command(
+        kache_binary(),
+        cache.path(),
+        Some(&project.path().join("missing-kache.toml")),
+    )
+    .args(["clean", "--cache", "--all", "-y"])
+    .output()
+    .unwrap();
+    assert!(evicted.status.success(), "{}", String::from_utf8_lossy(&evicted.stderr));
     let unqualified = build();
     assert_passthrough(&unqualified, "adaptive seed");
     assert_eq!(unqualified["compiler_runs"], 1, "event: {unqualified:#?}");

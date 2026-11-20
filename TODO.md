@@ -11,14 +11,6 @@ Next: 31
 - **Coordination:** KACH-21 and KACH-27 closed when the Linux gates became required (PR #50). KACH-22 (mutants in no gate) stays open. Evidence lives in the campaign ledger.
 - **Done when:** Every final acceptance criterion in the plan passes on the same integrated revision; safe passthrough, missing tools, and unexecuted lanes do not count as cached parity.
 
-### KACH-30 · P3 · An adaptive test removes the store under its own running daemon
-
-- **Area:** Tests
-- **Where:** `tests/adaptive_incremental_test.rs` (`local_unqualified_cold_seed_resets_learning_so_the_next_build_can_store`, the `remove_dir_all(cache.path().join("store"))` call)
-- **Problem:** The test simulates eviction with `remove_dir_all` on the store while its `DaemonGuard` daemon runs. `store/` also holds that daemon's sockets, lock files and `index.db`, so the daemon can write into it mid-removal. Once in a full `make check` (2026-11-19) it panicked with `DirectoryNotEmpty`; it passed 3 of 3 reruns alone. This is a test race, not a store one: kache's own eviction never removes the store directory.
-- **Recommendation:** Evict the entry the way kache does (`kache clean --cache --all -y`, or remove only `store/<key>` and its row) instead of removing `store/`.
-- **Fix with:** a loop that runs the test until it fails, run before and after the change.
-
 ### KACH-29 · P3 · A C/C++ compiler probe is keyed on the whole environment
 
 - **Area:** Performance
