@@ -1862,6 +1862,7 @@ fn accept_loop(
 
         match listener.accept() {
             Ok((stream, _)) => {
+                kache_ipc::mark("da accepted");
                 if stream.set_nonblocking(false).is_err() {
                     continue;
                 }

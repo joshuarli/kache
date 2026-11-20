@@ -337,7 +337,8 @@ pub(super) fn handle(
     daemon: &Arc<Daemon>,
     lifecycle: &Arc<Lifecycle>,
 ) -> Result<()> {
-    stream.set_read_timeout(Some(PREPARE_POLL))?;
+kache_ipc::mark("d0 handle");
+        stream.set_read_timeout(Some(PREPARE_POLL))?;
     let client_pid = request.client_pid;
     let client_trust = matches!(
         request.channels,
@@ -377,7 +378,8 @@ pub(super) fn handle(
             );
         }
     };
-    let channel = match DescriptorChannel::new() {
+kache_ipc::mark("d1 permit");
+        let channel = match DescriptorChannel::new() {
         Ok(channel) => channel,
         Err(error) => {
             return write_reply(
@@ -395,7 +397,8 @@ pub(super) fn handle(
             descriptors: Some(channel.ticket.clone()),
         },
     )?;
-    let expected = 3 + usize::from(prepared.terminal) + 2 + prepared.originals.len();
+kache_ipc::mark("d2 ready-sent");
+        let expected = 3 + usize::from(prepared.terminal) + 2 + prepared.originals.len();
     let deadline = Instant::now() + PREPARE_TIMEOUT;
     let descriptors = loop {
         if !lifecycle.accepting_calls() {
@@ -452,12 +455,14 @@ pub(super) fn handle(
             anyhow::bail!("descriptor receive timed out after {PREPARE_TIMEOUT:?}");
         }
     };
-    drop(channel);
+kache_ipc::mark("d3 fds");
+        drop(channel);
     let cancellation = Cancellation::default();
     let _cancel = CancelOnDrop(cancellation.clone());
     let (entry, executable, args, context) =
         prepared.receive(descriptors, cancellation.clone(), Arc::clone(daemon))?;
-    write_reply(stream, &ExecutionReply::Prepared)?;
+kache_ipc::mark("d4 received");
+        write_reply(stream, &ExecutionReply::Prepared)?;
     let mut frame = Vec::new();
     let commit = loop {
         if !lifecycle.accepting_calls() {
@@ -479,7 +484,8 @@ pub(super) fn handle(
             Err(error) => return Err(error.into()),
         }
     };
-    let _: ExecutionCommand = deser_json::from_str(&commit)?;
+kache_ipc::mark("d5 commit");
+        let _: ExecutionCommand = deser_json::from_str(&commit)?;
     anyhow::ensure!(
         peer_may_delegate(stream, client_pid, trusted_pipeline),
         "compiler process isolation changed before execution"
@@ -544,7 +550,8 @@ pub(super) fn handle(
             return Ok(());
         }
     }
-    let result = worker.join();
+kache_ipc::mark("d6 worker-done");
+        let result = worker.join();
     let reply = match result {
         Ok(Ok(Ok(exit_code))) => ExecutionReply::Complete { exit_code },
         Ok(Ok(Err(error))) => ExecutionReply::Failed {

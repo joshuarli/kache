@@ -5,6 +5,7 @@ use std::process::Command;
 /// Run the thin compiler client, or replace it with the companion CLI engine.
 pub fn run(version: &str) -> Result<i32> {
     let started_at = std::time::Instant::now();
+    kache_ipc::mark("c0 start");
     let args = std::env::args_os().collect::<Vec<_>>();
     anyhow::ensure!(
         args.get(1)
@@ -46,9 +47,11 @@ pub fn run(version: &str) -> Result<i32> {
                     client_version: version,
                 };
                 let socket = config.socket_path();
+    kache_ipc::mark("c1 prepared");
                 if let Some(exit) =
                     execution.try_execute_with_trust(&socket, config.trust_daemon_execution)?
                 {
+                    kache_ipc::mark("c6 done");
                     return Ok(exit);
                 }
             }

@@ -361,3 +361,11 @@ pub mod descriptors;
 pub mod jobserver;
 
 pub mod execution;
+
+pub fn mark(label: &str) {
+    use std::io::Write;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros();
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/josh/d/kache/.work/tmp/timing.log") {
+        let _ = writeln!(f, "{} {} {}", std::process::id(), now, label);
+    }
+}

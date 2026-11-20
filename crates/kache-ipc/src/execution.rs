@@ -53,12 +53,14 @@ fn exchange(
         (None, None)
     };
     let stream = Connection::connect(socket)?;
+    crate::mark("c2 connected");
     write_message(
         &mut &stream,
         &kache_protocol::Request::ExecuteV1(Box::new(request.clone())),
     )?;
     let mut reader = std::io::BufReader::new(&stream);
     let ready = read_reply(&mut reader)?;
+    crate::mark("c3 ready");
     {
         let ticket = match ready {
             ExecutionReply::Ready {
@@ -100,7 +102,8 @@ fn exchange(
     // closes. Prepared confirms the daemon has installed its own descriptors.
     drop(broker_files);
 
-    stream.prepare_commit()?;
+crate::mark("c4 prepared-reply");
+        stream.prepare_commit()?;
     send_commit(&mut &stream, committed).context("sending compiler Commit")?;
     ensure!(
         matches!(
@@ -122,7 +125,8 @@ fn exchange(
             }
             continue;
         }
-        return match read_reply(&mut reader).context("waiting for compiler completion")? {
+crate::mark("c5 awaiting-complete");
+            return match read_reply(&mut reader).context("waiting for compiler completion")? {
             ExecutionReply::Complete { exit_code } => Ok(exit_code),
             ExecutionReply::Failed { message } => bail!("{message}"),
             reply => bail!("invalid compiler completion: {reply:?}"),
