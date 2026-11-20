@@ -40,7 +40,8 @@ Engineering work still open (not provisioning):
   token-pasted header probe stays an open case.
 - CCP-05: sidecars under `-S` pass through.
 - CCP-06: implicit modules and module production pass through.
-- CCP-07: the cc-crate fixture, Chromium, Meson and Autotools launchers.
+- CCP-07: the cc-crate fixture, Chromium and Meson launchers; the Autotools
+  fixture has local Linux glibc coverage, with macOS/musl cells still unverified.
 - CCP-08: compiler replacement, C/C++ driver selection and profile
   switches against a populated cache now have oracle cases, and concurrent
   same-key and different-key compiles an integration test
@@ -95,6 +96,12 @@ Engineering work still open (not provisioning):
   different `OUT_DIR` paths, took 38 local hits and linked. It was an
   informal probe, not a fixture.
 
+- Autotools/libtool: `make cc-project-autotools TOOLCHAINS="gcc clang cc"`
+  passes on Ubuntu 22.04 x86_64 (GCC 11.4, clang 14), 2026-11-20. The bounded
+  fixture covers prefix launchers and PATH shims, PIC/non-PIC objects and
+  depfiles, cold/warm, incremental header edit/revert and relocation. See CCP-07
+  below; CI provisioning and other host cells remain open.
+
 Provisioning, not engineering:
 
 - A quiet benchmark host. The M1 is shared with other sessions' container
@@ -147,7 +154,7 @@ Provisioning, not engineering:
 | CCP-04 | LIMIT | CCP-02 | Comment-only reuse is declined: comment text and width are observable (see "CCP-04 finding"). ccache's reuse is wrong output when a comment changes width before code (`cc-eqp-column-significance`) and when a same-width reword changes GCC's fallthrough warning (`cc-eqp-fallthrough-comment`, blocking, ccache wrong in both modes). `cc-eqp-comment-only` stays open as the recorded gap. |
 | CCP-05 | RUNNING | CCP-02, CCP-03 | `.gcno`, `.dwo` and `.dia` sidecars cached (PR #52); `cc-out-gcno` (GCC and clang), `cc-out-split-dwarf`, `cc-out-serialized-diagnostics` blocking. See "CCP-05 sidecars" below. Diagnostic formatting keyed per entry (`cc-out-diagnostics-format*`). Diagnostics-bearing entries replay only under their own color setting; empty diagnostics serve every setting (`cc-out-diagnostics-color-reuse`, `-color-cross`, `-source-escapes` blocking). GCC `-fdiagnostics-format=json-file` cached as a sidecar (`cc-out-diagnostics-json-file`, blocking); SARIF outputs refused for good (see "CCP-05 GCC diagnostic files"). Open: sidecars under `-S`. |
 | CCP-06 | RUNNING | CCP-02, CCP-03, CCP-05 | clang PCH builds and `-include-pch` consumers cached by default (`cc-pch-clang-use`, `cc-pch-clang-define-variants` blocking); see "CCP-06 PCH" below. Clang explicit module consumers (`-fmodule-file=`, `-fprebuilt-module-path=`) cached; `cc-module-fmodule-file`, `cc-module-body-edit`, `cc-module-prebuilt-path`, `cc-module-add-remove` blocking on Linux clang 23; see "CCP-06 modules" below. Implicit PCH (GCC `<name>.gch` through `#include`/`-include`, clang's driver `-include` → `.pch`) keyed by every candidate; `cc-pch-gcc-include`, `cc-pch-gcc-leading-include`, `cc-pch-gcc-directory`, `cc-pch-gcc-skipped-text`, `cc-pch-clang-implicit` blocking; see "CCP-06 implicit PCH". Open: implicit modules, module production. |
-| CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`, `cc-host-universal-objects`, `cc-host-universal-slice-headers` (universal objects keyed slice by slice: the driver refuses `-E` with several `-arch`, and a compile's depfile lists only the last slice's headers). `-Xarch_<arch>` operands keyed per slice (`cc-host-xarch`, blocking): each slice is re-parsed with its own operands, and dropping the other slices' operands is what separates them (keeping all fails `edit-x86_64-header` with `KACHE_WRONG_OUTPUT`). `-Xarch_*` outside a universal compile, or naming no built slice, is refused. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM 21.1.8 subset (`make cc-project-llvm`: `llvm-tblgen` and `LLVMCore`, CMake + Ninja, kache as compiler launcher, TableGen-generated headers in the build tree) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23; the image needs `apk add python3` for LLVM's configure), 2026-11-19: 377 objects byte-identical across raw, cold and warm kache, warm build 377 local hits and no compiles, warm `llvm-tblgen` output identical to raw. Autotools/libtool, 2026-11-20, informal probe on expat 2.7.1 (M1 Apple clang 21, `CC="kache cc"`, transparent profile). All 20 objects were byte-identical across raw, cold and warm kache. libtool's Darwin shared-object compiles (`-fno-common -DPIC`) passed through as an unsupported flag until `-f[no-]common` was keyed (`cc-flag-fcommon`). After that, a warm rebuild took 20/20 local hits, and only link steps passed through. cc-crate fixture, Chromium and Meson launchers not started; Autotools has no fixture yet. |
+| CCP-07 | RUNNING | CCP-03..CCP-06 | Blocking `cc-host-objc`, `cc-host-objcxx`, `cc-host-universal-objects`, `cc-host-universal-slice-headers` (universal objects keyed slice by slice: the driver refuses `-E` with several `-arch`, and a compile's depfile lists only the last slice's headers). `-Xarch_<arch>` operands keyed per slice (`cc-host-xarch`, blocking): each slice is re-parsed with its own operands, and dropping the other slices' operands is what separates them (keeping all fails `edit-x86_64-header` with `KACHE_WRONG_OUTPUT`). `-Xarch_*` outside a universal compile, or naming no built slice, is refused. zlib 1.3.2 (`make cc-project-zlib`) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23), 2026-11-18. LLVM 21.1.8 subset (`make cc-project-llvm`: `llvm-tblgen` and `LLVMCore`, CMake + Ninja, kache as compiler launcher, TableGen-generated headers in the build tree) passes on M1 Apple clang 21 and the L4 image (GCC 15, clang 23; the image needs `apk add python3` for LLVM's configure), 2026-11-19: 377 objects byte-identical across raw, cold and warm kache, warm build 377 local hits and no compiles, warm `llvm-tblgen` output identical to raw. Autotools/libtool, 2026-11-20, informal probe on expat 2.7.1 (M1 Apple clang 21, `CC="kache cc"`, transparent profile). All 20 objects were byte-identical across raw, cold and warm kache. libtool's Darwin shared-object compiles (`-fno-common -DPIC`) passed through as an unsupported flag until `-f[no-]common` was keyed (`cc-flag-fcommon`). After that, a warm rebuild took 20/20 local hits, and only link steps passed through. cc-crate fixture, Chromium and Meson launchers not started; Autotools now has a local glibc fixture (`make cc-project-autotools`, GCC 11/clang 14; see below); other host cells remain unverified. |
 | CCP-08 | RUNNING | CCP-01 | Store-fault cases (`cc-rel-store-*`), broker exit race fix (PR #32), C/C++ hits verify blob hashes by default (PR #46), the non-local cache advisory left compiler stderr (PR #44). Identity cases (2026-11-19, blocking): `cc-input-compiler-replaced` (a driver at the same path that changes only code generation), `cc-input-driver-mode` (C vs C++ driver), `cc-policy-profile-switch` (transparent ↔ reproducible against a populated cache, every arm following the step's profile). Wrapper selection (shim vs `kache cc`) shares one entry. Open: user key config, controlled hash/compile/publication races, concurrency and eviction. |
 | CCP-09 | RUNNING | CCP-02..CCP-08 | `make cc-bench` (`kache-cc-bench`): raw/ccache/kache over a tiny-C corpus (48 units, `-j1`), a header-heavy C++ corpus (12 units), pinned zlib and the pinned LLVM subset; scenarios cold, output-cleaned warm, settled and immediate source/header edits and reverts, relocated tree, and a single-unit compile after the kache daemon stops and at steady state. Untimed shim validation first; timed pairs admitted only when counters and objects match it. Estimator corrected to a log-space t-interval (lock.toml `uncertainty_correction`). See "CCP-09 baseline" below. |
 
@@ -250,6 +257,25 @@ Findings:
   ignores `-isysroot`, so the sysroot case passes both.
 
 ## CCP-03..CCP-08 progress
+
+**CCP-07 Autotools/libtool fixture (2026-11-20).**
+`make cc-project-autotools` runs the checked-in
+[`test-projects/cc-autotools`](../../test-projects/cc-autotools/README.md)
+through raw and kache builds. Local Ubuntu 22.04 x86_64 evidence: GCC 11.4,
+clang 14 and system `cc`, each with a prefix launcher and compiler-name PATH
+shim; Autoconf 2.71, Automake 1.16.5 and Libtool 2.4.6. Configure probes use
+the selected CC; libtool builds a shared/static library and linked test program.
+Three objects (main plus PIC/non-PIC library units), one `.lo` descriptor and
+two depfiles match raw byte for byte. Automake's depcomp rules use
+`-MD -MP -MF`; deleting outputs/depfiles still restores them. Incremental header
+edits compile current values; reverts and relocation restore. Each of six
+compiler/launcher combinations records 3 cold misses, 3 edit misses and 3 hits
+each for output-cleaned warm, revert and relocation, with no warm codegen.
+Default path mapping is enabled; the transparent escape hatch disables
+cross-root sharing by design. No production defect found. Disabling kache only
+for the warm phase makes the lane fail its 3-hit requirement. This is opt-in:
+CI integration needs Autoconf/Automake/Libtool and Python provisioning in the
+chosen cells; no workflow/image changed. macOS, musl and ARM64 remain unverified.
 
 **Wrong-output findings and their disposition:**
 
@@ -829,9 +855,10 @@ host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
       the older diagnostics (restore round trips, store open, descriptor
       handoff, config load) are to be re-ranked from fresh evidence, not
       assumed.
-   4. Next compatibility gap: Autotools/libtool launchers (CCP-07). This is
-      the most common real C build shape not yet exercised. zlib, LLVM and
-      cc-rs build scripts already cache fully.
+   4. Autotools/libtool launchers (CCP-07) now have a bounded local glibc
+      fixture (`make cc-project-autotools`); provision and run other host
+      cells before calling the matrix complete. Meson launchers remain open.
+      zlib, LLVM and cc-rs build scripts already cache fully.
    5. KACH-29: key the compiler probe on the variables the driver reads.
 4. All campaign work runs in isolated worktrees under `.work/wt/`
    (gitignored via `.git/info/exclude`). Evidence needed afterwards lives in
