@@ -324,12 +324,16 @@ fn capture(command: &mut Command, io: Option<ChildIo>) -> io::Result<Output> {
     let mut child = spawn(command, false, io)?;
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
+    let cancellation = current();
     std::thread::scope(|scope| {
         let running = Arc::clone(&child.running);
+        let out_cancellation = cancellation.clone();
         let out = scope.spawn(move || {
             let mut bytes = Vec::new();
             let result = match stdout.as_mut() {
-                Some(pipe) => pipe.read_to_end(&mut bytes).map(|_| bytes),
+                Some(pipe) => {
+                    read_output(pipe, &mut bytes, out_cancellation.as_ref()).map(|_| bytes)
+                }
                 None => Ok(bytes),
             };
             if result.is_err() {
@@ -342,7 +346,7 @@ fn capture(command: &mut Command, io: Option<ChildIo>) -> io::Result<Output> {
         });
         let mut err = Vec::new();
         let err_result = match stderr.as_mut() {
-            Some(pipe) => pipe.read_to_end(&mut err),
+            Some(pipe) => read_output(pipe, &mut err, cancellation.as_ref()),
             None => Ok(0),
         };
         if err_result.is_err() {
@@ -358,6 +362,43 @@ fn capture(command: &mut Command, io: Option<ChildIo>) -> io::Result<Output> {
             stderr: err,
         })
     })
+}
+
+fn read_output(
+    pipe: &mut (impl Read + std::os::fd::AsRawFd),
+    bytes: &mut Vec<u8>,
+    cancellation: Option<&Cancellation>,
+) -> io::Result<usize> {
+    let Some(cancellation) = cancellation else {
+        return pipe.read_to_end(bytes);
+    };
+    let mut buffer = [0; 8192];
+    let mut total = 0;
+    loop {
+        let mut fd = libc::pollfd {
+            fd: pipe.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&mut fd, 1, 50) };
+        if ready < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        if ready > 0 {
+            let read = pipe.read(&mut buffer)?;
+            if read == 0 {
+                return Ok(total);
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+            total += read;
+        } else if cancellation.0.cancelled.load(Ordering::Acquire) {
+            return Ok(total);
+        }
+    }
 }
 
 pub(crate) fn status(command: &mut Command) -> io::Result<ExitStatus> {
@@ -493,6 +534,48 @@ mod tests {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", script]).env("PATH", env!("PATH"));
         command
+    }
+
+    #[test]
+    fn captured_output_reads_bytes_and_empty_eof() {
+        use std::io::Write;
+        for contents in [b"compiler output".as_slice(), b""] {
+            let (mut reader, mut writer) = std::os::unix::net::UnixStream::pair().unwrap();
+            writer.write_all(contents).unwrap();
+            drop(writer);
+            let mut bytes = Vec::new();
+            assert_eq!(
+                read_output(&mut reader, &mut bytes, Some(&Cancellation::default())).unwrap(),
+                contents.len()
+            );
+            assert_eq!(bytes, contents);
+        }
+    }
+
+    #[test]
+    fn captured_output_cancellation_does_not_wait_for_inherited_writers() {
+        let (mut reader, _writer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+        let start = std::time::Instant::now();
+        assert_eq!(
+            read_output(&mut reader, &mut Vec::new(), Some(&cancellation)).unwrap(),
+            0
+        );
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn captured_output_propagates_read_errors() {
+        let mut directory = std::fs::File::open(".").unwrap();
+        assert!(
+            read_output(
+                &mut directory,
+                &mut Vec::new(),
+                Some(&Cancellation::default())
+            )
+            .is_err()
+        );
     }
 
     #[test]
