@@ -10426,3 +10426,56 @@ fn memo_key_follows_the_compiler_found_not_how_it_was_spelled() {
     assert_eq!(bare, key(dir.path().join("memo-cc").display().to_string()));
     assert_ne!(bare, key("memo-c++".to_string()));
 }
+
+#[test]
+fn a_header_scan_parsed_once_is_not_read_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let header = dir.path().join("probe.h");
+    std::fs::write(
+        &header,
+        format!(
+            "#if __has_include(<{}/absent.h>)\n#endif\n",
+            dir.path().display()
+        ),
+    )
+    .unwrap();
+    let inputs = vec![header.clone()];
+    let file_hasher = crate::cache_key::FileHasher::new();
+    let contents = file_hasher.cc_content_hashes(&inputs).unwrap();
+    let first = cc_resolve_read_set_probes(&inputs, &contents, "", &file_hasher).unwrap();
+    assert_eq!(first.inputs.len(), 1, "the header's probe was not resolved");
+
+    std::fs::remove_file(&header).unwrap();
+    let again = cc_resolve_read_set_probes(
+        &inputs,
+        &contents,
+        "",
+        &crate::cache_key::FileHasher::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        deser_json::to_string(&again).unwrap(),
+        deser_json::to_string(&first).unwrap()
+    );
+}
+
+#[test]
+fn the_header_scan_cache_starts_over_at_its_budget() {
+    let mut cache = CcHeaderScanCache {
+        scans: Default::default(),
+        bytes: 0,
+    };
+    let scan = || std::sync::Arc::new(None);
+    cache.insert("a".into(), scan(), 6, 20);
+    cache.insert("b".into(), scan(), 6, 20);
+    assert_eq!(cache.bytes, 12);
+    cache.insert("b".into(), scan(), 6, 20);
+    assert_eq!(cache.bytes, 12, "a scan kept again is not counted twice");
+    assert_eq!(cache.scans.len(), 2);
+    cache.insert("c".into(), scan(), 8, 20);
+    assert_eq!(cache.bytes, 20, "a scan that fits the budget exactly is kept");
+    cache.insert("d".into(), scan(), 1, 20);
+    assert_eq!(cache.bytes, 1);
+    assert!(cache.scans.contains_key("d"));
+    assert!(!cache.scans.contains_key("a"));
+}

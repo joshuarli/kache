@@ -6682,15 +6682,76 @@ fn cc_probe_read_set(contents: &[String], definitions: &str) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-/// Scan every input (memoised by content) and resolve the probes each makes
-/// against the aliases all of them and the command line define.
-fn cc_resolve_read_set_probes(
+/// A header's probe scan, parsed. `None` is a header whose probes cannot be
+/// read from its literal text.
+type CcParsedHeaderScan = std::sync::Arc<Option<CcHeaderProbeScan>>;
+
+/// Parsed scans by content hash, kept for the life of the process. A scan
+/// depends on the header's bytes alone, and the store holds the macOS SDK's
+/// as megabytes of JSON: parsing them again was most of the include check on
+/// every memo miss in the daemon.
+struct CcHeaderScanCache {
+    scans: rustc_hash::FxHashMap<String, CcParsedHeaderScan>,
+    bytes: usize,
+}
+
+impl CcHeaderScanCache {
+    /// Keep `scan`, whose serialized form is `len` bytes, starting over
+    /// first when it would take the cache past `budget`.
+    fn insert(&mut self, content: String, scan: CcParsedHeaderScan, len: usize, budget: usize) {
+        if self.bytes + len > budget {
+            self.scans.clear();
+            self.bytes = 0;
+        }
+        if self.scans.insert(content, scan).is_none() {
+            self.bytes += len;
+        }
+    }
+}
+
+/// Serialized size of the scans [`CcHeaderScanCache`] holds before it starts
+/// over.
+const CC_HEADER_SCAN_CACHE_BYTES: usize = 32 << 20;
+
+fn cc_header_scan_cache() -> &'static std::sync::Mutex<CcHeaderScanCache> {
+    static CACHE: OnceLock<std::sync::Mutex<CcHeaderScanCache>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        std::sync::Mutex::new(CcHeaderScanCache {
+            scans: Default::default(),
+            bytes: 0,
+        })
+    })
+}
+
+/// The parsed probe scan of each input, whose content hash is in
+/// `contents`: from memory, else from the store's scan table, else scanned.
+fn cc_parsed_header_scans(
     read_inputs: &[PathBuf],
     contents: &[String],
-    definitions: &str,
     file_hasher: &crate::cache_key::FileHasher<'_>,
-) -> Result<CcReadSetProbes> {
-    let scans = file_hasher.cc_header_scans(read_inputs, CC_HEADER_SCAN_VERSION, &|path| {
+) -> Result<Vec<CcParsedHeaderScan>> {
+    let mut scans = {
+        let cache = cc_header_scan_cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        contents
+            .iter()
+            .map(|content| cache.scans.get(content).cloned())
+            .collect::<Vec<_>>()
+    };
+    let missing = scans
+        .iter()
+        .enumerate()
+        .filter_map(|(index, scan)| scan.is_none().then_some(index))
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(scans.into_iter().flatten().collect());
+    }
+    let paths = missing
+        .iter()
+        .map(|&index| read_inputs[index].clone())
+        .collect::<Vec<_>>();
+    let serialized = file_hasher.cc_header_scans(&paths, CC_HEADER_SCAN_VERSION, &|path| {
         let bytes = fs::read(path)
             .with_context(|| format!("reading header availability input {}", path.display()))?;
         let probes = cc_header_probe_scan(&cc_splice_lines(&bytes));
@@ -6699,16 +6760,40 @@ fn cc_resolve_read_set_probes(
             deser_json::to_string(&probes)?,
         ))
     })?;
-    let scans = scans
+    let parsed = serialized
         .iter()
-        .map(|scan| deser_json::from_str::<Option<CcHeaderProbeScan>>(scan))
+        .map(|scan| deser_json::from_str::<Option<CcHeaderProbeScan>>(scan).map(std::sync::Arc::new))
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut cache = cc_header_scan_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for ((index, scan), text) in missing.into_iter().zip(parsed).zip(&serialized) {
+        cache.insert(
+            contents[index].clone(),
+            std::sync::Arc::clone(&scan),
+            text.len(),
+            CC_HEADER_SCAN_CACHE_BYTES,
+        );
+        scans[index] = Some(scan);
+    }
+    Ok(scans.into_iter().flatten().collect())
+}
+
+/// Scan every input (memoised by content) and resolve the probes each makes
+/// against the aliases all of them and the command line define.
+fn cc_resolve_read_set_probes(
+    read_inputs: &[PathBuf],
+    contents: &[String],
+    definitions: &str,
+    file_hasher: &crate::cache_key::FileHasher<'_>,
+) -> Result<CcReadSetProbes> {
+    let scans = cc_parsed_header_scans(read_inputs, contents, file_hasher)?;
     let argument_scan = cc_header_probe_scan(&cc_splice_lines(definitions.as_bytes()))
         .context("cc: unresolved header availability probe in command-line definitions")?;
     let all_scans = || {
         scans
             .iter()
-            .flatten()
+            .filter_map(|scan| scan.as_ref().as_ref())
             .chain(std::iter::once(&argument_scan))
     };
     let aliases = cc_header_probe_aliases(all_scans());
@@ -6723,7 +6808,11 @@ fn cc_resolve_read_set_probes(
     };
     let mut seen = HashSet::new();
     for ((input, content), scan) in read_inputs.iter().zip(contents).zip(scans) {
-        let Some(probes) = scan.and_then(|scan| cc_resolve_header_probes(&scan, &aliases)) else {
+        let Some(probes) = scan
+            .as_ref()
+            .as_ref()
+            .and_then(|scan| cc_resolve_header_probes(scan, &aliases))
+        else {
             anyhow::bail!(
                 "cc: a header availability probe (__has_include) in {} cannot be resolved \
                  from literal source text",
