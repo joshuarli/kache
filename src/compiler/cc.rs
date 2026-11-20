@@ -3347,7 +3347,7 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec {
         matcher: Matcher::Regex(concat!(
             r"-f(?:no-)?(?:",
-            "associative-math|asynchronous-unwind-tables|cxx-exceptions|data-sections|",
+            "associative-math|asynchronous-unwind-tables|common|cxx-exceptions|data-sections|",
             "fast-math|finite-math-only|freestanding|function-sections|math-errno|",
             "merge-all-constants|omit-frame-pointer|reciprocal-math|rounding-math|",
             "semantic-interposition|signaling-nans|signed-zeros|strict-aliasing|",
@@ -3355,7 +3355,7 @@ pub static CC_FLAGS: &[FlagSpec] = &[
             ")",
         )),
         class: FlagClass::CapturedByProbe,
-        source: "#114/#245/#418/#422/#426/#580/#856 + 0.20 nightly — codegen knobs, both polarities, resolved into -cc1 tokens. One sorted stem per knob covers -f<stem> AND -fno-<stem> (prevents the missed-polarity passthrough class). unroll-loops / asynchronous-unwind-tables from lance/Firefox passthroughs. cxx-exceptions / freestanding from Firefox Windows nightly.",
+        source: "#114/#245/#418/#422/#426/#580/#856 + 0.20 nightly — codegen knobs, both polarities, resolved into -cc1 tokens. One sorted stem per knob covers -f<stem> AND -fno-<stem> (prevents the missed-polarity passthrough class). unroll-loops / asynchronous-unwind-tables from lance/Firefox passthroughs. common: libtool adds -fno-common to every Darwin shared-object compile (expat 2.7.1); clang forwards -fcommon to -cc1 and drops its default -fno-common, GCC forwards both (verified -###). cxx-exceptions / freestanding from Firefox Windows nightly.",
         dialect: None,
     },
     FlagSpec {
