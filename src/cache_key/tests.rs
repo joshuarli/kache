@@ -6979,7 +6979,7 @@ fn native_linker_side_files_fail_closed() {
         "rustc".to_string(),
         "src/lib.rs".to_string(),
         "-C".to_string(),
-        "link-arg=-Wl,-order_file,/tmp/order.txt".to_string(),
+        "link-arg=-Wl,-sectorder,__TEXT,__text,/tmp/order.txt".to_string(),
     ])
     .unwrap();
     assert!(native_linker_side_files_are_unmodeled(&parsed));
@@ -7145,7 +7145,7 @@ fn native_linker_side_files_fail_closed() {
             "-l",
             "static=foo",
             "-C",
-            "link-arg=-Wl,-order_file,/tmp/order.txt",
+            "link-arg=-Wl,-sectorder,__TEXT,__text,/tmp/order.txt",
         ],
     ))
     .unwrap();
@@ -18202,4 +18202,91 @@ fn cc_preprocess_memo_finds_an_earlier_read_set_after_a_revert() {
     assert_eq!(found(&FileHasher::persistent(&db)), Some(before));
     std::fs::write(&header, "#define VALUE 3\n").unwrap();
     assert_eq!(found(&FileHasher::persistent(&db)), None);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn linker_script_content_changes_key() {
+    let _lock = key_test_lock();
+    let tree = native_tree();
+    let file = tree.elsewhere.join("script.ld");
+    let flag = format!("-Clink-arg=-Wl,--version-script={}", file.display());
+    let (before, after) = keys_around_rewrite(&unit_args("bin", &tree.deps, &[&flag]), &file);
+    assert_ne!(before, after);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn unknown_linker_file_changes_key() {
+    let _lock = key_test_lock();
+    let tree = native_tree();
+    let file = tree.elsewhere.join("unknown.data");
+    let flag = format!("-Clink-arg=-Wl,--unknown-option,{}", file.display());
+    let (before, after) = keys_around_rewrite(&unit_args("bin", &tree.deps, &[&flag]), &file);
+    assert_ne!(before, after);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn linker_file_option_spellings_change_key() {
+    let _lock = key_test_lock();
+    let tree = native_tree();
+    let file = tree.elsewhere.join("linker-input.txt");
+    let name = file.display();
+    for flag in [
+        format!("-Clink-arg=-Wl,-exported_symbols_list,{name}"),
+        format!("-Clink-arg=-Wl,-unexported_symbols_list,{name}"),
+        format!("-Clink-arg=-Wl,-order_file,{name}"),
+        format!("-Clink-arg=-Wl,-sectcreate,__DATA,__note,{name}"),
+        format!("-Clink-args=-force_load {name}"),
+        format!("-Clink-arg=-Wl,-T,{name}"),
+        format!("-Clink-arg=-T{name}"),
+        format!("-Clink-arg=-Wl,--script={name}"),
+        format!("-Clink-arg=-Wl,--dynamic-list={name}"),
+        format!("-Clink-arg=-Wl,--retain-symbols-file,{name}"),
+        format!("-Clink-arg=-Wl,--unknown={name}"),
+    ] {
+        let (before, after) = keys_around_rewrite(&unit_args("bin", &tree.deps, &[&flag]), &file);
+        assert_ne!(before, after, "{flag}");
+    }
+}
+
+#[cfg(not(windows))]
+#[test]
+fn linker_script_resolves_through_search_path() {
+    let _lock = key_test_lock();
+    let tree = native_tree();
+    let file = tree.elsewhere.join("script.ld");
+    let search = format!("-Lnative={}", tree.elsewhere.display());
+    let flag = "-Clink-arg=-Tscript.ld";
+    let (before, after) = keys_around_rewrite(&unit_args("bin", &tree.deps, &[&search, flag]), &file);
+    assert_ne!(before, after);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn linker_segment_address_options_are_not_script_files() {
+    let env = InvocationEnv::capture();
+    for flag in ["-Wl,-Ttext,0x1000", "-Wl,-Tdata=0x2000", "-Wl,-Tbss=0x3000", "-Ttext-segment=0x4000"] {
+        assert!(unix_link_arg_inputs("link-arg", flag, &env).unwrap().files.is_empty(), "{flag}");
+    }
+}
+
+#[cfg(not(windows))]
+#[test]
+fn linker_filelist_and_members_change_key() {
+    let _lock = key_test_lock();
+    let tree = native_tree();
+    let list = tree.elsewhere.join("files.txt");
+    let member = tree.elsewhere.join("member.o");
+    std::fs::write(&list, "member.o\n").unwrap();
+    let flag = format!("-Clink-args=-filelist {},{}", list.display(), tree.elsewhere.display());
+    let args = unit_args("bin", &tree.deps, &[&flag]);
+    let (before, after) = keys_around_rewrite(&args, &member);
+    assert_ne!(before, after);
+    std::fs::write(tree.elsewhere.join("other.o"), b"v2 native bytes, different").unwrap();
+    std::fs::write(&list, "other.o\n").unwrap();
+    assert_ne!(after, key_of_flags(&args));
+    std::fs::write(&list, "missing.o\n").unwrap();
+    assert!(try_key_of_flags(&args).is_err());
 }

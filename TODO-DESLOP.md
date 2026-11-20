@@ -9,15 +9,6 @@ Not started.
 
 ## Tickets
 
-### DSLP-89 · P1 · Cache key omits linker input files named by -C link-arg (stale binary on hit)
-
-- **Area:** cache key · linker inputs
-- **Where:** src/cache_key.rs: link_token_names_input_file, unix_link_arg_inputs, linker_value_has_unmodeled_file, native_linker_side_files_are_unmodeled
-- **Problem:** A binary linked with -C link-arg=-Wl,-sectcreate,__DATA,__note,FILE or -Wl,-exported_symbols_list,FILE is keyed on the argument string only; editing FILE and rebuilding restores the stale artifact. Reproduced at aa8df06 on macOS arm64 with the built kache as rustc wrapper and an isolated cache: with syms.txt = _alpha the binary exports _alpha; after changing it to _beta, direct rustc exports _beta, kache hits and still exports _alpha (nm -gU). Likewise -sectcreate with a data file: v2 content built directly, v1 content restored from cache. Only .lib .a .obj .o .res .def .exp .manifest operands are hashed, and the fail-closed list covers map, order and response files only; -sectcreate, -exported_symbols_list, -unexported_symbols_list, -T, --version-script, --dynamic-list and -filelist fall through. Linux linker scripts (-Wl,-T,script, -Tlink.x via -L) take the same path but were not run. Details: docs/deslop-diagnose.md.
-- **Recommendation:** Hash the operand file of each such option (resolve -T names through -L dirs) or fail closed like map files; add a tests/cache_key_underkeying_test.rs case that changes the file and expects a miss, proven red before the fix, and a unit test for each option spelling.
-- **Fix with:** root-cause
-- **Effort:** M
-
 ### DSLP-3 · P2 · Types: crates/kache-config (1/28)
 
 - **Area:** deslop · types
