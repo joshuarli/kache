@@ -138,6 +138,8 @@ fn record_gc_run_keeps_only_the_last_run() {
             key_locks_remaining: 30,
             predictions_pruned: 40,
             file_hashes_pruned: 50,
+            stranded_entries_readopted: 60,
+            stranded_entries_removed: 70,
         }),
         ..Default::default()
     };
