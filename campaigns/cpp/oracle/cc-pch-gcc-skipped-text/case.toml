@@ -1,0 +1,60 @@
+summary = "GCC loads pch/h.h.gch for an #include that follows text skipped by #if 0: the skipped text is not the main file's first token. The .gch (VALUE 1) differs from the textual header (VALUE 2) that -E reads, so a .gch appearing, replaced or removed changes the object while the source and header bytes stay the same (CCP-06)"
+cohort = "blocking"
+families = ["gcc"]
+profiles = ["transparent", "reproducible"]
+outputs = ["v.o"]
+unstable = ["built/one.h.gch", "built/three.h.gch"]
+ccache_config = { sloppiness = "pch_defines,time_macros" }
+
+[[compile]]
+argv = ["{cc}", "-g", "-O1", "-x", "c-header", "one/h.h", "-o", "built/one.h.gch"]
+source = "one/h.h"
+reuse = "any"
+
+[[compile]]
+argv = ["{cc}", "-g", "-O1", "-x", "c-header", "three/h.h", "-o", "built/three.h.gch"]
+source = "three/h.h"
+reuse = "any"
+
+[[compile]]
+argv = ["{cc}", "-g", "-O1", "-Ipch", "-Iinc", "-c", "v.c", "-o", "v.o"]
+source = "v.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "warm"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "gch-appears"
+reuse = "miss"
+action = [{ op = "symlink", path = "pch/h.h.gch", target = "../built/one.h.gch" }]
+
+[[step]]
+name = "gch-appears-warm"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "gch-replaced"
+reuse = "miss"
+action = [{ op = "symlink", path = "pch/h.h.gch", target = "../built/three.h.gch" }]
+
+[[step]]
+name = "gch-replaced-warm"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "gch-removed"
+reuse = "hit"
+action = [{ op = "remove", path = "pch/h.h.gch" }]
+
+[[step]]
+name = "gch-removed-warm"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
