@@ -602,6 +602,7 @@ dependencies = [
  "kache-fs",
  "kache-log",
  "lexopt",
+ "libc",
  "log",
  "rustc-hash",
  "tempfile",

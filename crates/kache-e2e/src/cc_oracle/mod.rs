@@ -230,7 +230,7 @@ fn run_case(case: &Case, profile: Profile, ctx: &ArmContext<'_>, run: &mut CaseR
     for (s, step) in case.steps.iter().enumerate() {
         for (c, compile) in case.compiles.iter().enumerate() {
             let obs = |arm: Arm| &arms[&arm].observations[s][c];
-            let effective = exec::effective_args(&compile.argv, profile, &fixture);
+            let effective = exec::effective_args(&compile.argv, step.profile_or(profile), &fixture);
             let passthrough = exec::effective_args(&compile.argv, Profile::Transparent, &fixture);
             let judgement = judge::judge(&Row {
                 reuse: step.reuse_for(compile),
@@ -243,6 +243,7 @@ fn run_case(case: &Case, profile: Profile, ctx: &ArmContext<'_>, run: &mut CaseR
                 kache: obs(Arm::Kache),
                 effective_argv: &effective,
                 passthrough_argv: &passthrough,
+                driver_args: compile.driver_args,
             });
             run.rows.push(RowResult {
                 step: step.name.clone(),

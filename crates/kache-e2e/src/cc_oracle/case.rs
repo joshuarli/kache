@@ -81,11 +81,15 @@ pub enum Reuse {
 pub enum Action {
     /// Create or replace a file. `keep_mtime` restores the previous
     /// modification time so only the content distinguishes the edit.
+    /// `{cc}` and `{cxx}` in `content` expand to the observation shims, so a
+    /// fixture driver script can stand in for a compiler at a fixed path.
     Write {
         path: String,
         content: String,
         #[deser(default)]
         keep_mtime: bool,
+        #[deser(default)]
+        executable: bool,
     },
     /// Write a sibling temporary file and rename it over `path`, so the
     /// file gets a new inode as editors and code generators produce.
@@ -155,6 +159,11 @@ pub struct Compile {
     /// `any` for a GCC precompiled header that kache may restore or rebuild.
     #[deser(default)]
     pub reuse: Option<Reuse>,
+    /// How many arguments a `{fixture}/` driver script inserts before the
+    /// case's own, so the harness can compare the rest with the effective
+    /// command.
+    #[deser(default)]
+    pub driver_args: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -168,6 +177,16 @@ pub struct Step {
     /// means the reference arm failed, not that kache matched it.
     #[deser(default)]
     pub status: i32,
+    /// Run this step under another profile, in every arm: a policy switch
+    /// against a cache the earlier steps populated.
+    #[deser(default)]
+    pub profile: Option<Profile>,
+}
+
+impl Step {
+    pub fn profile_or(&self, run: Profile) -> Profile {
+        self.profile.unwrap_or(run)
+    }
 }
 
 impl Step {
@@ -271,8 +290,8 @@ pub fn parse(id: &str, text: &str, source_dir: PathBuf) -> Result<Case> {
     }
     for compile in &file.compile {
         ensure!(
-            compile.argv.first().is_some_and(|a| a == "{cc}" || a == "{cxx}"),
-            "case {id}: argv must start with {{cc}} or {{cxx}}"
+            compile.argv.first().is_some_and(|a| a == "{cc}" || a == "{cxx}" || a.starts_with("{fixture}/")),
+            "case {id}: argv must start with {{cc}}, {{cxx}} or a {{fixture}}/ driver"
         );
         ensure!(
             std::iter::once(&compile.source)
@@ -371,6 +390,22 @@ action = [{ op = "delete-outputs" }, { op = "write", path = "a.h", content = "x"
         ));
         assert!(case.applies_to_os("linux"));
         assert_eq!(case.steps[1].reuse_for(&case.compiles[0]), Reuse::Hit);
+        assert_eq!(case.compiles[0].driver_args, 0);
+        assert_eq!(case.steps[1].profile_or(Profile::Transparent), Profile::Transparent);
+        let switched = MINIMAL.replacen("reuse = \"hit\"\n", "reuse = \"hit\"\nprofile = \"reproducible\"\n", 1);
+        let case = parse("c", &switched, PathBuf::from("s")).unwrap();
+        assert_eq!(case.steps[1].profile_or(Profile::Transparent), Profile::Reproducible);
+    }
+
+    #[test]
+    fn a_fixture_driver_may_replace_the_toolchain_driver() {
+        let text = MINIMAL
+            .replace("argv = [\"{cc}\", ", "argv = [\"{fixture}/bin/cc\", ")
+            .replace("source = \"a.c\"\n", "source = \"a.c\"\ndriver_args = 1\n");
+        let case = parse("c", &text, PathBuf::from("s")).unwrap();
+        assert_eq!(case.compiles[0].driver_args, 1);
+        let other = MINIMAL.replace("argv = [\"{cc}\", ", "argv = [\"/usr/bin/cc\", ");
+        assert!(parse("c", &other, PathBuf::from("s")).is_err(), "only fixture drivers stand in for the toolchain");
     }
 
     #[test]

@@ -195,7 +195,12 @@ pair_escalation_rule = "increase from 5 to at most 10 only to resolve a concrete
 seed = 20261117
 order = "randomized interleaved invocation order per pair, seeded with `seed`"
 estimator = "paired per-pair ratios kache/ccache (and kache/raw where the plan says raw); report the geomean ratio per workload plus per-pair spread"
-uncertainty = "two-sided 95% t-interval on the paired ratios (df = n - 1)"
+uncertainty = "two-sided 95% t-interval on the natural logs of the paired ratios (df = n - 1), transformed back with exp; the geomean is exp(mean log ratio), so the interval brackets the same quantity"
+# Correction 2026-11-19, before any timing result existed: the line above
+# read "t-interval on the paired ratios", which describes the arithmetic
+# mean, not the geomean the estimator reports. Implemented in
+# crates/kache-e2e/src/cc_bench/stats.rs.
+uncertainty_correction = "2026-11-19: t-interval moved from raw ratios to log ratios to match the geomean estimator"
 admission = "a run is admitted only if (a) the untimed instrumented replay validated compiler activity/reuse for the same commands, (b) input/configuration digests match the timed run, (c) instrumentation was disabled for timing, (d) cache counters retained. Workload mismatch invalidates the sample."
 sample_retention = "retain all admitted samples; exclude only documented preparation/measurement failures, ruled identically for all arms"
 reporting = "wall, CPU, peak memory, cache/artifact bytes, compiler executions, time-weighted reuse; per named project/corpus and per primary lane, not just a global average; tiny single units additionally in absolute milliseconds"

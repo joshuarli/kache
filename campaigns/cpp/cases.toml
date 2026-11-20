@@ -201,7 +201,7 @@ summary = "same path, different compiler binary content invalidates"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "direct.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-wrapper-selection"
@@ -219,7 +219,7 @@ summary = "gcc vs g++ vs clang vs clang++ driver mode changes are keyed"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "base.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-specs-file"
@@ -327,7 +327,7 @@ summary = "switching transparent ↔ reproducible against populated caches rekey
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-depfile-escape"

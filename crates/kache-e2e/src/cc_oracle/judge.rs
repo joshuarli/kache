@@ -113,6 +113,8 @@ pub struct Row<'a> {
     /// The case's own arguments. Kache may also run these unchanged when it
     /// passes the compile through.
     pub passthrough_argv: &'a [String],
+    /// Leading arguments a fixture driver script adds before the case's own.
+    pub driver_args: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -212,6 +214,7 @@ fn kache_verdict(row: &Row<'_>, ccache: Verdict) -> (Verdict, Vec<String>) {
     let expand = |args: &[String]| expand_response_files(args, &row.kache.response_files);
     let (effective_expanded, passthrough_expanded) = (expand(row.effective_argv), expand(row.passthrough_argv));
     for argv in &row.kache.executions.codegen_argv {
+        let argv = &argv[row.driver_args.min(argv.len())..].to_vec();
         let effective = without_dependency_capture(argv);
         let keyed = effective == row.effective_argv || effective == effective_expanded;
         let passthrough = argv.as_slice() == row.passthrough_argv || *argv == passthrough_expanded;
@@ -367,6 +370,7 @@ mod tests {
             kache,
             effective_argv: &effective,
             passthrough_argv: &effective,
+            driver_args: 0,
         })
     }
 
@@ -413,6 +417,7 @@ mod tests {
             kache: &raw,
             effective_argv: &effective,
             passthrough_argv: &effective,
+            driver_args: 0,
         });
         assert_eq!(judgement.verdict, Verdict::CompilerNondeterminism);
     }
@@ -529,6 +534,7 @@ mod tests {
                 kache,
                 effective_argv: &reproducible,
                 passthrough_argv: &case_args,
+                driver_args: 0,
             })
             .verdict
         };
@@ -558,6 +564,7 @@ mod tests {
                 kache,
                 effective_argv: &reproducible,
                 passthrough_argv: &case_args,
+                driver_args: 0,
             })
             .verdict
         };
@@ -586,6 +593,7 @@ mod tests {
                 kache,
                 effective_argv: &with_file,
                 passthrough_argv: &with_file,
+                driver_args: 0,
             })
             .verdict
         };

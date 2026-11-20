@@ -18,6 +18,10 @@ name = "kache-cc-oracle"
 path = "src/bin/kache-cc-oracle.rs"
 
 [[bin]]
+name = "kache-cc-bench"
+path = "src/bin/kache-cc-bench.rs"
+
+[[bin]]
 name = "e2e-fallback"
 path = "src/bin/e2e-fallback.rs"
 
@@ -35,6 +39,7 @@ blake3 = "1"
 kache-core = { version = "2.0.0-rc.2", path = "../kache-core" }
 indexmap = "2"
 lexopt = "0.3"
+libc = "0.2"
 deser = { version = "0.10.2", features = ["derive", "indexmap"] }
 deser-json = "0.10.2"
 deser-value = "0.10.2"

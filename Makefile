@@ -17,7 +17,7 @@ endif
 
 .PHONY: help build test check test-ci release verify-release lint \
   client-crates-check test-resource-guard-check pr mutants-diff \
-  e2e e2e-negative-control cc-oracle-tools cc-oracle cc-oracle-full cc-oracle-negative-control cc-project-zlib cc-project-llvm cc-gcov-roundtrip \
+  e2e e2e-negative-control cc-oracle-tools cc-oracle cc-oracle-full cc-oracle-negative-control cc-project-zlib cc-project-llvm cc-gcov-roundtrip cc-bench \
   bench bench-retry bench-trace bench-sccache bench-mbx bench-pr \
   bench-short test-bench-short test-bench-edit-loop bench-contention test-bench-contention \
   perf-gate-local trace-phases bump release-tag crates-status \
@@ -72,6 +72,7 @@ help:
 	@echo "cc-project-zlib [TOOLCHAINS=cc]  pinned zlib raw vs kache per toolchain: identical objects, warm compiles nothing"
 	@echo "cc-project-llvm [TOOLCHAINS=cc]  pinned LLVM subset raw vs kache per toolchain: identical objects, warm compiles nothing"
 	@echo "cc-gcov-roundtrip [TOOLCHAINS=cc] [GCOV=]  kache-restored coverage objects report like raw ones"
+	@echo "cc-bench [TOOLCHAINS=cc] [BENCH_ARGS=]  raw/ccache/kache timing under the locked protocol (validates first)"
 	@echo "bench [PROFILE=] [ARGS=] list bench profiles, or cold/warm a profile (ARGS passes through)"
 	@echo "bench-retry/-trace/-sccache/-mbx  bench variants; PROFILE selects, ARGS passes through"
 	@echo "bench-pr                 one Kache side of hk, eza and aube"
@@ -190,6 +191,13 @@ cc-gcov-roundtrip: cc-oracle-tools
 	  echo "== cc-gcov-roundtrip $$tc"; \
 	  ./scripts/cc-gcov-roundtrip.sh ./target/release/kache .work/tmp/cc-gcov-roundtrip $$tc || exit 1; \
 	done
+
+CC_BENCH_OUT ?= .work/tmp/cc-bench
+BENCH_ARGS ?=
+cc-bench: cc-oracle-tools
+	cargo build --release -p kache-e2e --bin kache-cc-bench
+	ccache="$$(./scripts/fetch-ccache.sh $(CC_ORACLE_CCACHE_DIR) ./target/release/kache-cc-oracle)" && \
+	  ./scripts/cc-bench.sh ./target/release/kache-cc-bench ./target/release/kache "$$ccache" $(CC_BENCH_OUT) "$(TOOLCHAINS)" $(BENCH_ARGS)
 
 cc-oracle-negative-control: cc-oracle-tools
 	@for control in $(CC_ORACLE_CONTROLS); do \

@@ -72,8 +72,8 @@ jobs:
         run: make cc-oracle
       - name: C/C++ oracle negative controls
         run: make cc-oracle-negative-control
-      - name: Upload oracle reports on failure
-        if: failure()
+      - name: Upload oracle reports
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cc-oracle-macos-${{ github.run_id }}
@@ -138,8 +138,8 @@ jobs:
             sh -ec '
               make cc-oracle cc-oracle-negative-control TOOLCHAINS="gcc clang"
             '
-      - name: Upload oracle reports on failure
-        if: failure()
+      - name: Upload oracle reports
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cc-oracle-musl-${{ matrix.arch }}-${{ github.run_id }}
@@ -198,8 +198,8 @@ jobs:
         run: make cc-oracle TOOLCHAINS="gcc clang"
       - name: C/C++ oracle negative controls
         run: make cc-oracle-negative-control TOOLCHAINS="gcc clang"
-      - name: Upload oracle reports on failure
-        if: failure()
+      - name: Upload oracle reports
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cc-oracle-glibc-${{ matrix.arch }}-${{ github.run_id }}
