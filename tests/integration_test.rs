@@ -3980,6 +3980,61 @@ fn test_cc_direct_key_binds_a_root_spelling_object_to_its_checkout() {
 /// and race to key, compile and publish one entry, the other half share
 /// another. Every caller must get the compiler's own object for its unit,
 /// none another unit's, and the entries left must serve hits.
+/// A compiler-named shim on PATH (what `kache init` installs) and the
+/// `kache cc` launcher reach the same compiler, so they share one entry, and
+/// both give the compiler's own object.
+#[cfg(unix)]
+#[test]
+fn test_cc_a_compiler_shim_and_the_launcher_share_one_entry() {
+    build_kache();
+
+    let project = TempDir::new().unwrap();
+    let cache_dir = TempDir::new().unwrap();
+    let _cache_dir_daemon = common::DaemonGuard::new(kache_binary(), cache_dir.path());
+    let shims = project.path().join("shims");
+    std::fs::create_dir_all(&shims).unwrap();
+    std::fs::write(shims.join(".kache-shims"), "").unwrap();
+    std::os::unix::fs::symlink(kache_binary(), shims.join("cc")).unwrap();
+    let src = project.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("foo.c"), "int value(void) { return 7; }\n").unwrap();
+    settle_writes(&[&src]);
+    let path = std::env::join_paths([shims.as_path(), Path::new("/usr/bin"), Path::new("/bin")]).unwrap();
+    let args = ["-O0", "-g0", "-c", "foo.c", "-o", "foo.o"];
+    let status = std::process::Command::new("/usr/bin/cc")
+        .args(["-O0", "-g0", "-c", "foo.c", "-o", "raw.o"])
+        .current_dir(&src)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let raw = std::fs::read(src.join("raw.o")).unwrap();
+
+    let mut events = 0;
+    for (via_shim, result) in [(true, "miss"), (false, "local_hit"), (true, "local_hit")] {
+        let _ = std::fs::remove_file(src.join("foo.o"));
+        let mut command = if via_shim {
+            hermetic_command(shims.join("cc"), cache_dir.path(), Some(&isolated_config_path(cache_dir.path())))
+        } else {
+            let mut command = hermetic_command(kache_binary(), cache_dir.path(), Some(&isolated_config_path(cache_dir.path())));
+            command.arg("cc");
+            command
+        };
+        let output = command.args(args).env("PATH", &path).current_dir(&src).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(std::fs::read(src.join("foo.o")).unwrap(), raw, "shim: {via_shim}");
+        events += 1;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let report = loop {
+            let report = kache_report(cache_dir.path());
+            if report["all_events"].as_seq().unwrap().len() >= events || std::time::Instant::now() > deadline {
+                break report;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        assert_last_cc_event(&report, result, u64::from(result == "miss"));
+    }
+}
+
 #[test]
 fn test_cc_concurrent_compiles_each_get_the_compilers_object() {
     build_kache();

@@ -517,7 +517,12 @@ fn run_main() -> Result<()> {
 
     if is_wrapper {
         if let Some(env_args) = env_args {
-            return run_wrapper_mode(&env_args[1..]);
+            let args = compiler::shim::launcher_args_for(
+                &env_args[1..],
+                &invocation::InvocationEnv::capture(),
+                platform::frontend_executable().ok().as_deref(),
+            );
+            return run_wrapper_mode(&args);
         }
         anyhow::bail!(
             "compiler wrapper arguments contain non-UTF-8 bytes and cannot be cached safely"
@@ -1154,7 +1159,7 @@ fn run_original_compiler_invocation(
             .context("missing compiler shim arguments")?
             .map_err(anyhow::Error::msg)?
     } else {
-        args[1..].to_vec()
+        compiler::shim::launcher_args_for(&args[1..], &context.env, Some(executable))
     };
     run_compiler_invocation(&rewritten, context)
 }
