@@ -4,24 +4,22 @@
 
 ## Verification
 
-- `make test`: workspace library and integration tests; cold 132.64s, warm
-  52.31s on the busy Ground host, both stopped at 11 checkout-local TMPDIR
-  failures; see TODO-DESLOP.md. Costs are observations, not benchmarks.
-- `make lint`: workspace all-target clippy, 47.89s on the same host.
-- `make check`: pre-PR gate; also checks client crates and resource guards.
-- CLI flags and exit codes: `tests/cli_commands_test.rs` (including
-  `argument_errors_exit_two`); wrapper invocation: `tests/integration_test.rs`
-  (`test_wrapper_hello_world`, `test_rust_restored_outputs_allow_build_without_wrapper`).
-- Cache key: `tests/cache_key_underkeying_test.rs`; on-disk store integrity and
-  concurrent writers: `crates/kache-store/src/store/tests.rs`.
+- PR CI runs `make test` (`ci.yml`; Linux musl in the builder image) and `make lint` (`lint.yml`). Costs on a busy
+  M-series host (load 15-25), observations only: `make test` cold 644s, warm 492s (4,853 passed, 38 ignored);
+  `make lint` 33s. Use the system `TMPDIR` and no `KACHE_CACHE_DIR`: a checkout-local `TMPDIR` fails 11 tests, an
+  exported `KACHE_CACHE_DIR` fails one (DSLP-88). `make check` is the pre-PR gate.
+- CLI flags and exit codes: `tests/cli_commands_test.rs` (`argument_errors_exit_two`); wrapper invocation:
+  `tests/integration_test.rs` (`test_wrapper_hello_world`, `test_rust_restored_outputs_allow_build_without_wrapper`).
+- Cache key (a wrong hit silently serves a stale artifact): `tests/cache_key_underkeying_test.rs`, `src/cache_key/tests.rs`.
+- On-disk store format, integrity, concurrent writers: `crates/kache-store/src/store/tests.rs`; entry schema in `crates/kache-format`.
 - Wrapper/daemon wire protocol: `crates/kache-protocol/src/execution.rs`
-  (`native_strings_round_trip_without_loss_and_reject_nuls` and
-  `execution_diagnostics_reject_legacy_and_foreign_protocols`).
-- Performance workload: `make perf-gate-local` compares HEAD with its merge base;
-  `make bench-short PROJECT=<project>` exercises cold and warm builds.
-- Components: top-level `src` modules, compiler, cache key and wrapper; the
-  workspace crates; integration tests; scripts, launcher, scenarios, fixture
-  projects, build/CI and documentation. Bounded scopes are in TODO-DESLOP.md.
+  (`native_strings_round_trip_without_loss_and_reject_nuls`, `execution_diagnostics_reject_legacy_and_foreign_protocols`).
+- Performance workload: `make perf-gate-local` (HEAD against its merge base) and `make bench-short PROJECT=<project>`
+  (cold and warm builds); neither ran in Ground.
+- No vendored trees. `cargo-llvm-cov` and `cargo-mutants` are not installed on the Ground host (DSLP-87).
+- Components, one deslop slice each (about 5k to 19k lines; scopes in `TODO-DESLOP.md`): `crates/kache-config`,
+  `kache-e2e` (2), `kache-fs`, `kache-store` (3), the small `crates/kache-*`, top-level `src` module groups,
+  `src/cache_key`, `src/compiler`, `src/wrapper`, `src/cli`, `tests` (2), `scripts`, `test-projects`, build and docs.
 
 ## C/C++ parity campaign
 
