@@ -4225,6 +4225,49 @@ fn doctor_probe_restores_a_rust_library_without_touching_the_configured_store() 
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn doctor_probe_stops_its_daemon_and_ignores_the_configured_socket() {
+    let e = env();
+    let program = e.home.join("kache-doctor-probe-frontend");
+    std::fs::copy(kache_bin(), &program).unwrap();
+    let engine = e.home.join("kache-engine");
+    std::fs::copy(kache_engine_bin(), &engine).unwrap();
+    let socket = e.cache.join("configured.sock");
+    let rustup_home = std::env::var_os("RUSTUP_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| kache_fs::home_dir().unwrap().join(".rustup"));
+    let output = kache_as(&program, &e.home, &e.cache)
+        .env("RUSTUP_HOME", rustup_home)
+        .env("KACHE_SOCKET_PATH", &socket)
+        .args(["--json", "doctor", "--probe"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output);
+    let body: deser_value::Value = deser_json::from_slice(&output.stdout).unwrap();
+    let check = body["checks"]
+        .as_seq()
+        .unwrap()
+        .iter()
+        .find(|check| check["label"] == "Cache probe")
+        .unwrap();
+    assert_eq!(check["pass"], true, "{check:?}");
+    assert!(
+        !socket.with_extension("run.lock").exists(),
+        "the probe's daemon must not take over the configured socket"
+    );
+    let survivors = std::process::Command::new("pgrep")
+        .arg("-f")
+        .arg(&engine)
+        .output()
+        .unwrap();
+    assert!(
+        survivors.stdout.is_empty(),
+        "the probe left a daemon running: {}",
+        String::from_utf8_lossy(&survivors.stdout)
+    );
+}
+
 #[test]
 fn doctor_probe_reports_a_missing_compiler_without_polluting_json() {
     let e = env();
