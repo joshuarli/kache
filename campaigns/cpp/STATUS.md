@@ -13,7 +13,7 @@ plan: [C_CPP_PARITY_CAMPAIGN.md](../../C_CPP_PARITY_CAMPAIGN.md); tracking
 entry: KACH-26 in [TODO.md](../../TODO.md). Groundwork branch:
 `feat/ccp00-campaign-groundwork`.
 
-## Current state (reconciled 2026-11-19 against the code)
+## Current state (reconciled 2026-11-20 against the code, main `aa8df06a`)
 
 Counts are taken from the files, not carried forward:
 `grep '^status = ' campaigns/cpp/cases.toml | sort | uniq -c` and
@@ -77,14 +77,34 @@ Engineering work still open (not provisioning):
   is a miss until GC housekeeping finds it an hour later. GC gives it its
   rows back when every blob is present at its recorded size, and removes it
   otherwise (`stranded_entry_sweep_readopts_servable_entries_and_removes_the_rest`).
-- CCP-09: a quiet-host rerun of the baseline. The provisional runs below
-  rank losses but were timed under load. The largest loss now is the
-  per-hit fixed cost on small units.
+- CCP-09: `kache-cc-bench --acceptance` (#80, #81) applies the locked
+  rules. It requires five complete admitted pairs, adds up to ten only while
+  an interval crosses its target, and turns an ineligible host away. It also
+  records provenance and each arm's declared environment. The first
+  acceptance attempt at `aa8df06a` (M1, Apple clang 21; tiny C, C++
+  headers, zlib) was **INELIGIBLE** for every workload, with 1 complete pair
+  each: [report.json](reports/2026-11-20-m1-aa8df06a/report.json),
+  [report.md](reports/2026-11-20-m1-aa8df06a/report.md). Unrelated
+  processes used 0.37 to 6.9 cores per replay, chiefly macOS
+  `softwareupdated`, an OrbStack VM and another session's benchmark. No
+  current-head acceptance verdict exists. Its single-pair ratios are
+  diagnostics only. The loaded-host tables under "CCP-09 baseline" predate
+  #74/#75 and the acceptance mode.
+- Real workloads: zlib and the LLVM subset cache fully (CCP-07). cc-rs build
+  scripts also do. A probe on 2026-11-20 used `CC="kache cc"`, no Rust
+  wrapper, and `zstd-sys`, bundled `libsqlite3-sys` and `blake3`. Its first
+  build missed 38 C compiles, and a second build in a fresh target dir, with
+  different `OUT_DIR` paths, took 38 local hits and linked. It was an
+  informal probe, not a fixture.
 
 Provisioning, not engineering:
 
-- A quiet benchmark host: the M1 is shared with other builds, so timing
-  verdicts wait for one (the runner itself is done and validated).
+- A quiet benchmark host. The M1 is shared with other sessions' container
+  and benchmark work, and the acceptance preflight rejects it while that
+  runs. It is retried only on a quiet preflight, never as repeated timing
+  under load. No native Linux host other than the OrbStack VM on this same
+  M1 is available, so L1/L2 acceptance cells are missing; the CI runners are
+  shared VMs and do not qualify either.
 - M1 standalone LLVM clang: not installed on this host, and no authorized
   setup installs it (`brew install llvm` would change the host). Missing
   cell: M1 × standalone LLVM, every oracle and bench run. Apple clang 21
@@ -477,6 +497,11 @@ gap rather than being counted toward parity.
 
 ## CCP-09 baseline
 
+Everything in this section is **older diagnostics**. The runs were made in
+diagnostic mode on a loaded host, before the acceptance mode and before
+#74/#75. They rank losses historically and are not acceptance evidence.
+Current-head results are under "Current state".
+
 **Method.** `make cc-bench TOOLCHAINS=...` fetches and verifies the pinned
 archives (untimed), then for each workload replays every arm untimed
 through compiler shims that log one line per execution. That replay
@@ -768,23 +793,36 @@ host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
 
 1. Read this ledger, [lock.toml](lock.toml), [cases.toml](cases.toml) and
    the plan. Run `git fetch` and check the open PRs.
-2. Verify every kache change with all of:
-   - `make check`;
-   - `make cc-oracle cc-oracle-negative-control` on macOS;
-   - the same in the L4 image, with `TOOLCHAINS="gcc clang"
-     CC_ORACLE_OUT=/tmp/cc-oracle` (see the session 2026-11-19 note);
-     after syncing a scratch copy with `rsync -a`, touch its `.rs` files:
-     rsync keeps the source's older mtimes, so a copy that last built a
-     hand-applied mutation keeps the mutated binary (2026-11-19: a stale
-     binary failed `cc-module-prebuilt-path` until rebuilt);
-   - `PATH=/opt/homebrew/bin:$PATH make e2e`.
-3. Next work, in priority order (owner direction, 2026-11-19): run the
-   first timed `make cc-bench` baseline on a quiet host; rank uncached
-   compiler-seconds, warm overhead, cold overhead and edit/revert misses
-   from it and fix the largest measured losses; close CCP-08's identity and
-   race gaps; then lower-frequency features. A comment-equivalence lexer or
-   more GCC SARIF/JSON support waits for a correctness need or a measured
-   workload.
+2. Verify by the tiers in [AGENTS.md](../../AGENTS.md#verification-tiers):
+   the regression while iterating; `make check`, plus `make cc-oracle
+   CASE=ID` for the cases a C/C++ keying, restore, output or diagnostic
+   change affects, before `gh pr create`; CI on the PR (the oracle and its
+   negative controls on macOS and four Linux cells, `e2e`, Linux musl
+   workspace tests) before merging. Full runs (`make cc-oracle-full`, the
+   project checks, `make cc-bench`) only on request. To reproduce a Linux
+   cell locally, use the L4 image with `TOOLCHAINS="gcc clang"`; after an
+   `rsync -a` into a scratch copy, touch its `.rs` files, since rsync
+   keeps older mtimes and a copy that built a hand-applied mutation keeps
+   the mutated binary. `make e2e` on this host needs
+   `PATH=/opt/homebrew/bin:$PATH`.
+3. Ranked next actions (2026-11-20):
+   1. Acceptance baseline on M1 once its preflight is quiet:
+      `make cc-bench TOOLCHAINS=cc BENCH_ARGS="--acceptance --workload
+      corpus-c-tiny --workload corpus-cxx-headers --workload zlib"`, then
+      `--workload llvm-subset` alone. Commit `report.json` under
+      `reports/<date>-<lane>-<rev>/` and link it from Current state.
+   2. The same on a quiet native Linux host (L1 GCC/Clang, L2 ARM64) when
+      one exists. Missing cells stay listed; they do not block M1.
+   3. From that report, rank losses by wall time and avoidable compiler
+      work, and profile the one or two largest. For small-unit warm hits,
+      profile the whole client, daemon and restore path. Candidates from
+      the older diagnostics (restore round trips, store open, descriptor
+      handoff, config load) are to be re-ranked from fresh evidence, not
+      assumed.
+   4. Next compatibility gap: Autotools/libtool launchers (CCP-07). This is
+      the most common real C build shape not yet exercised. zlib, LLVM and
+      cc-rs build scripts already cache fully.
+   5. KACH-29: key the compiler probe on the variables the driver reads.
 4. All campaign work runs in isolated worktrees under `.work/wt/`
    (gitignored via `.git/info/exclude`). Evidence needed afterwards lives in
    CI runs (90-day retention) or in committed cases and scripts.
