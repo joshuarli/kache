@@ -5871,10 +5871,15 @@ fn cc_preprocess_memo_key_as(
     let compiler_metadata = std::fs::metadata(&compiler_path).ok()?;
     let mut hasher = blake3::Hasher::new();
     fold_cc_memo_field(&mut hasher, b"schema", schema);
+    // The name alone: it selects the driver mode, and `compiler-path` below
+    // says which binary it found, so `cc` and `/usr/bin/cc` share a memo.
+    let compiler_name = Path::new(&parsed.program)
+        .file_name()
+        .unwrap_or(OsStr::new(&parsed.program));
     fold_cc_memo_field(
         &mut hasher,
         b"compiler-program",
-        crate::cache_key::env_os_key_bytes(OsStr::new(&parsed.program)).as_slice(),
+        crate::cache_key::env_os_key_bytes(compiler_name).as_slice(),
     );
     fold_cc_memo_field(
         &mut hasher,

@@ -2283,12 +2283,72 @@ pub(crate) mod shim {
         rewritten.extend_from_slice(&argv[1..]);
         Some(Ok(rewritten))
     }
+
+    /// A launcher argv (`cc -c x.c` from `kache cc -c x.c`) whose bare
+    /// compiler name PATH resolves to a kache shim, with that name replaced by
+    /// the real compiler behind the shim, as the shim itself would run it.
+    /// Unchanged when PATH already finds a real compiler.
+    pub(crate) fn launcher_args_for(
+        args: &[String],
+        env: &super::InvocationEnv,
+        executable: Option<&Path>,
+    ) -> Vec<String> {
+        let mut rewritten = args.to_vec();
+        let Some(program) = args.first() else {
+            return rewritten;
+        };
+        if Path::new(program).components().count() != 1 || !invoked_as_compiler_for(program, env) {
+            return rewritten;
+        }
+        let paths = env.var_os("PATH").unwrap_or_default();
+        let paths = std::env::split_paths(&paths)
+            .filter_map(|path| env.resolve(&path))
+            .collect::<Vec<_>>();
+        if let Some(real) = resolve_real_compiler_on(program, &paths, executable)
+            && env.resolve_program(Path::new(program)).as_deref() != Some(real.as_path())
+            && let Some(real) = real.to_str()
+        {
+            rewritten[0] = real.to_owned();
+        }
+        rewritten
+    }
 }
 
 #[cfg(test)]
 mod shim_tests {
     use super::shim::*;
     use std::path::{Path, PathBuf};
+
+    /// `kache cc` with kache's shims first on PATH runs, and keys, the real
+    /// `cc` behind them; without shims, and for a path, argv is unchanged.
+    #[cfg(unix)]
+    #[test]
+    fn a_launcher_compiler_name_resolves_past_kache_shims() {
+        let root = tempfile::tempdir().unwrap();
+        let (shims, real) = (root.path().join("shims"), root.path().join("real"));
+        for dir in [&shims, &real] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let kache = root.path().join("kache");
+        kache_fs::testutil::write_executable(&kache, "#!/bin/sh\n");
+        kache_fs::testutil::write_executable(&real.join("cc"), "#!/bin/sh\n");
+        std::fs::write(shims.join(kache_shims::farm::MARKER), "").unwrap();
+        std::os::unix::fs::symlink(&kache, shims.join("cc")).unwrap();
+        let args = |program: &str, path: &[&Path]| {
+            let env = super::InvocationEnv::from_parts(
+                [("PATH", std::env::join_paths(path).unwrap())],
+                Some(root.path().to_path_buf()),
+                None,
+                root.path().to_path_buf(),
+            );
+            launcher_args_for(&[program.to_owned(), "-c".to_owned()], &env, Some(&kache))
+        };
+        let real_cc = real.join("cc").display().to_string();
+        assert_eq!(args("cc", &[&shims, &real]), [real_cc.as_str(), "-c"]);
+        assert_eq!(args("cc", &[&real]), ["cc", "-c"]);
+        let shim_cc = shims.join("cc").display().to_string();
+        assert_eq!(args(&shim_cc, &[&shims, &real]), [shim_cc.as_str(), "-c"]);
+    }
 
     #[test]
     fn compiler_shaped_argv0_is_recognized_but_kache_itself_is_not() {

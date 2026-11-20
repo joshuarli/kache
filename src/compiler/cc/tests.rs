@@ -10403,3 +10403,26 @@ fn shadowing_digest_is_independent_of_a_dot_dot_base_dir_spelling() {
         digest(&[source, header])
     );
 }
+
+/// A compiler named bare and found on PATH is the compiler its absolute
+/// path names: a `cc` shim resolves `/usr/bin/cc`, `kache cc` keeps `cc`,
+/// and the two must find one another's read sets. The name itself still
+/// keys, since it selects the driver mode.
+#[cfg(unix)]
+#[test]
+fn memo_key_follows_the_compiler_found_not_how_it_was_spelled() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = std::env::current_exe().unwrap();
+    for name in ["memo-cc", "memo-c++"] {
+        std::os::unix::fs::symlink(&exe, dir.path().join(name)).unwrap();
+    }
+    let key = |program: String| {
+        let mut parsed =
+            CcArgs::parse(&[program, "-c".to_string(), "memo-source.c".to_string()]).unwrap();
+        parsed.invocation_env.set("PATH", dir.path().to_str().unwrap());
+        cc_preprocess_memo_key(&parsed, &[], "test compiler version").unwrap()
+    };
+    let bare = key("memo-cc".to_string());
+    assert_eq!(bare, key(dir.path().join("memo-cc").display().to_string()));
+    assert_ne!(bare, key("memo-c++".to_string()));
+}

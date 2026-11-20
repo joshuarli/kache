@@ -1,5 +1,5 @@
 Prefix: KACH
-Next: 30
+Next: 31
 
 ### KACH-26 · P1 · Reach ccache-level local C/C++ compatibility
 
@@ -10,6 +10,14 @@ Next: 30
 - **Scope:** Response files and flags, invalidation, equivalent-preprocessing reuse, complete output sets, conditional PCH/module support, host integration, local reliability, and measured performance. Remote storage stays on the later roadmap.
 - **Coordination:** KACH-21 and KACH-27 closed when the Linux gates became required (PR #50). KACH-22 (mutants in no gate) stays open. Evidence lives in the campaign ledger.
 - **Done when:** Every final acceptance criterion in the plan passes on the same integrated revision; safe passthrough, missing tools, and unexecuted lanes do not count as cached parity.
+
+### KACH-30 · P3 · An adaptive test removes the store while a write may still land in it
+
+- **Area:** Tests
+- **Where:** `tests/adaptive_incremental_test.rs` (`local_unqualified_cold_seed_resets_learning_so_the_next_build_can_store`, the `remove_dir_all(cache.path().join("store"))` call)
+- **Problem:** The test simulates eviction with `remove_dir_all` on the store right after a build returns. Once in a full `make check` (2026-11-19) it panicked with `DirectoryNotEmpty`: something wrote into the store while the directory was being removed. It passed 3 of 3 reruns on its own. Either the build returns before its publication settles, or a background task outlives it. The first means eviction can race a build's publication, which is an open CCP-08 item.
+- **Recommendation:** Find the writer (the event log and the store's last entry at failure) before changing the test. If it is a background publication, wait for it, or evict through kache's own GC, which takes the store's locks.
+- **Fix with:** a loop that runs the test until it fails, run before and after the change.
 
 ### KACH-29 · P3 · A C/C++ compiler probe is keyed on the whole environment
 
