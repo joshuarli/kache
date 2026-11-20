@@ -2651,3 +2651,24 @@ fn test_send_request_to_nonexistent_socket() {
 }
 
 
+
+#[test]
+fn accept_wait_returns_when_a_connection_arrives_not_at_its_timeout() {
+    let root = tempfile::tempdir_in("/tmp").unwrap();
+    let path = root.path().join("sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let started = Instant::now();
+    await_connection(&listener, Duration::from_millis(50));
+    assert!(started.elapsed() >= Duration::from_millis(40));
+
+    let _client = UnixStream::connect(&path).unwrap();
+    let started = Instant::now();
+    await_connection(&listener, Duration::from_secs(30));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "a pending connection must end the wait"
+    );
+    listener.accept().unwrap();
+}

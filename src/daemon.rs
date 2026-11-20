@@ -1805,6 +1805,24 @@ fn accept_backoff(error: &std::io::Error) -> Option<Duration> {
 /// open forever.
 const CONNECTION_HANDLER_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The longest the accept loop goes without rechecking shutdown and idleness.
+const ACCEPT_WAKE: Duration = Duration::from_millis(5);
+
+/// Wait until `listener` has a connection to accept or `timeout` passes.
+fn await_connection(listener: &std::os::unix::net::UnixListener, timeout: Duration) {
+    use std::os::fd::AsRawFd;
+    let mut fds = [libc::pollfd {
+        fd: listener.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    }];
+    let timeout_ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
+    // SAFETY: `fds` is a valid array of one pollfd for the duration of the call.
+    if unsafe { libc::poll(fds.as_mut_ptr(), 1, timeout_ms) } < 0 {
+        std::thread::sleep(timeout);
+    }
+}
+
 fn accept_loop(
     listener: &std::os::unix::net::UnixListener,
     daemon: &Arc<Daemon>,
@@ -1887,7 +1905,7 @@ fn accept_loop(
             Err(error)
                 if error.kind() == std::io::ErrorKind::WouldBlock =>
             {
-                std::thread::sleep(Duration::from_millis(5));
+                await_connection(listener, ACCEPT_WAKE);
             }
             Err(error) => {
                 log::warn!("accept error: {e}", e = error);
