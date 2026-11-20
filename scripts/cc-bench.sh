@@ -23,7 +23,10 @@ fetch https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/llvm
   "$inputs/llvm-project-21.1.8.src.tar.xz" "$llvm_sha"
 status=0
 for tc in $toolchains; do
+  code=0
   "$bench" --kache "$kache" --ccache "$ccache" --toolchain "$tc" --out "$out/$tc" \
-    --zlib-archive "$inputs/zlib-1.3.2.tar.gz" --llvm-archive "$inputs/llvm-project-21.1.8.src.tar.xz" "$@" || status=1
+    --zlib-archive "$inputs/zlib-1.3.2.tar.gz" --llvm-archive "$inputs/llvm-project-21.1.8.src.tar.xz" "$@" || code=$?
+  # Keep the worst result: acceptance exits 3 for an ineligible host.
+  if [ "$code" -gt "$status" ]; then status=$code; fi
 done
 exit $status
