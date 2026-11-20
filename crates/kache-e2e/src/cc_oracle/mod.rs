@@ -452,9 +452,13 @@ reuse = "miss"
         let root = tempfile::tempdir().unwrap();
         let path = std::ffi::OsStr::new("/usr/bin:/bin");
         let mut c = case("a", "blocking", "");
+        let cc = root.path().join("cc");
+        let cxx = root.path().join("cxx");
+        kache_fs::testutil::write_executable(&cc, "#!/bin/sh\nexit 0\n");
+        kache_fs::testutil::write_executable(&cxx, "#!/bin/sh\nexit 1\n");
         let mut tc = Toolchain {
             name: "cc".into(), family: None, cc_name: "cc".into(), cxx_name: "c++".into(),
-            cc: "/usr/bin/true".into(), cxx: "/usr/bin/false".into(),
+            cc, cxx,
         };
         assert!(unsupported_requirements(&c, &tc, root.path(), path).unwrap().is_none());
         c.requires = vec![vec!["{cc}".into(), "-a-feature".into()]];
