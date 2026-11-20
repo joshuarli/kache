@@ -92,7 +92,7 @@ fn parse(argv: &[OsString]) -> Result<Option<Config>, String> {
         archives: Archives::default(),
         jobs: std::thread::available_parallelism().map_or(4, |n| n.get()),
         meter: std::env::current_exe().map_err(|e| e.to_string())?,
-        path: std::env::var("PATH").unwrap_or_default(),
+        path: cc_bench::declared_path(&std::env::var_os("PATH").unwrap_or_default()),
     };
     let mut parser = lexopt::Parser::from_args(argv.iter().skip(1));
     let value = |p: &mut lexopt::Parser, flag: &str| -> Result<String, String> {

@@ -70,7 +70,7 @@ pub struct Config {
     pub jobs: usize,
     /// This binary, re-run as the per-build resource meter.
     pub meter: PathBuf,
-    /// `PATH` for every arm: the one this runner was started with, recorded.
+    /// `PATH` for every arm, from [`declared_path`].
     pub path: String,
 }
 
@@ -162,8 +162,8 @@ pub struct RatioRow {
 #[derive(Debug, Clone, Serialize)]
 pub struct Acceptance {
     pub complete_pairs: usize,
-    /// Every timed build ran with unrelated processes below
-    /// [`activity::MAX_UNRELATED_CORES`].
+    /// Across every timed replay's builds, unrelated processes stayed at or
+    /// below [`activity::MAX_UNRELATED_CORES`].
     pub eligible: bool,
     pub verdict: AcceptanceVerdict,
     pub reasons: Vec<String>,
@@ -721,6 +721,32 @@ pub fn run(cfg: &Config) -> Result<Report> {
     Ok(report)
 }
 
+/// Tools the workloads run by name besides the compilers.
+const TOOLS: [&str; 6] = ["make", "cmake", "ninja", "tar", "xz", "python3"];
+
+/// `PATH` for every arm: the directory where `inherited` first finds each of
+/// [`TOOLS`], then the system directories. The arms do not search the caller's
+/// whole `PATH`, so a stray tool there cannot change a build, and the report
+/// records only the directories the tools live in.
+pub fn declared_path(inherited: &std::ffi::OsStr) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for tool in TOOLS {
+        let found = std::env::split_paths(inherited).find(|dir| {
+            std::fs::metadata(dir.join(tool)).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        });
+        if let Some(dir) = found.filter(|dir| !dirs.contains(dir)) {
+            dirs.push(dir);
+        }
+    }
+    for system in ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] {
+        if !dirs.iter().any(|d| d == Path::new(system)) {
+            dirs.push(system.into());
+        }
+    }
+    std::env::join_paths(dirs).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
 /// Unrelated activity over a few seconds before anything is timed, so a busy
 /// host is turned away before a long run rather than after it.
 fn preflight(cfg: &Config) -> Option<activity::Activity> {
@@ -748,7 +774,22 @@ fn needs_another_pair(workload: &Workload, timed: &[Replay]) -> bool {
 
 /// Every timed observation's activity was read and was quiet.
 fn replays_eligible(timed: &[Replay]) -> bool {
-    timed.iter().flat_map(|r| &r.observations).all(|o| o.activity.as_ref().is_some_and(|a| a.eligible))
+    timed.iter().all(|r| replay_unrelated_cores(r).is_some_and(|cores| cores <= activity::MAX_UNRELATED_CORES))
+}
+
+/// Unrelated CPU over a replay's timed builds taken together. A warm build
+/// lasts a fraction of a second, where the file-system and log daemons
+/// reacting to the build's own writes would read as most of a core, so
+/// one build alone is too short a window to judge. `None` when any build's
+/// activity could not be read.
+fn replay_unrelated_cores(replay: &Replay) -> Option<f64> {
+    let (mut cpu_ms, mut wall_ms) = (0u64, 0.0);
+    for activity in replay.observations.iter().map(|o| o.activity.as_ref()) {
+        let activity = activity?;
+        cpu_ms += activity.unrelated_cpu_ms;
+        wall_ms += activity.wall_ms;
+    }
+    (wall_ms > 0.0).then_some(cpu_ms as f64 / wall_ms)
 }
 
 fn accept(
@@ -967,7 +1008,7 @@ pub fn markdown(report: &Report) -> String {
             s.push_str(&format!(
                 "Most unrelated activity around one timed build: {:.2} cores{}.\n\n",
                 a.unrelated_cores,
-                a.busiest.first().map_or(String::new(), |b| format!(", busiest `{}`", b.command))
+                a.busiest.first().map_or(String::new(), |b| format!(", busiest `{}`", b.name))
             ));
         }
         if !w.validation_failures.is_empty() {
@@ -1107,7 +1148,7 @@ mod tests {
 
     #[test]
     fn busy_or_unreadable_activity_is_ineligible_whatever_the_timings() {
-        let busy = activity::Activity { unrelated_cores: 2.0, eligible: false, ..quiet() };
+        let busy = activity::Activity { unrelated_cpu_ms: 10_000, unrelated_cores: 2.0, eligible: false, ..quiet() };
         assert_eq!(verdict(&[100.0, 101.0, 99.0, 100.5, 100.2], Some(busy)), AcceptanceVerdict::Ineligible);
         assert_eq!(verdict(&[100.0, 101.0, 99.0, 100.5, 100.2], None), AcceptanceVerdict::Ineligible);
         let t = timed(&[100.0, 101.0, 99.0, 100.5, 100.2], Some(quiet()));
@@ -1116,10 +1157,44 @@ mod tests {
     }
 
     #[test]
+    fn eligibility_is_judged_over_a_replays_builds_together() {
+        let mut t = timed(&[100.0, 101.0, 99.0, 100.5, 100.2], Some(quiet()));
+        // One short build at 0.8 cores among quiet ones is not heavy work.
+        t[0].observations[1].activity = Some(activity::Activity { wall_ms: 300.0, unrelated_cpu_ms: 240, unrelated_cores: 0.8, eligible: false, ..quiet() });
+        assert!(replays_eligible(&t));
+        for o in &mut t[0].observations {
+            o.activity = Some(activity::Activity { unrelated_cpu_ms: 4000, unrelated_cores: 0.8, eligible: false, ..quiet() });
+        }
+        assert!(!replays_eligible(&t));
+        t[0].observations[0].activity = None;
+        assert!(replay_unrelated_cores(&t[0]).is_none());
+    }
+
+    #[test]
     fn more_pairs_only_while_short_of_five_or_a_target_is_crossed() {
         assert!(needs_another_pair(&workload(), &timed(&[100.0; 4], Some(quiet()))));
         assert!(!needs_another_pair(&workload(), &timed(&[100.0, 101.0, 99.0, 100.5, 100.2], Some(quiet()))));
         assert!(needs_another_pair(&workload(), &timed(&[100.0, 130.0, 105.0, 125.0, 110.0], Some(quiet()))));
+    }
+
+    #[test]
+    fn the_declared_path_holds_only_tool_and_system_directories() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let (tools, other) = (temp.path().join("tools"), temp.path().join("private-stuff"));
+        for dir in [&tools, &other] {
+            std::fs::create_dir(dir).unwrap();
+        }
+        for tool in ["ninja", "cmake"] {
+            std::fs::write(tools.join(tool), "").unwrap();
+            std::fs::set_permissions(tools.join(tool), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(other.join("make"), "").unwrap();
+        let inherited = std::env::join_paths([&other, &tools, &PathBuf::from("/usr/bin")]).unwrap();
+        let path = declared_path(&inherited);
+        assert!(path.split(':').any(|d| d == tools.display().to_string()), "{path}");
+        assert!(!path.contains("private-stuff"), "a non-executable `make` is not a tool: {path}");
+        assert_eq!(path.matches("/usr/bin").count(), 1, "{path}");
     }
 
     #[test]
