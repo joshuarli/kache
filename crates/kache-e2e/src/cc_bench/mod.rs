@@ -162,8 +162,8 @@ pub struct RatioRow {
 #[derive(Debug, Clone, Serialize)]
 pub struct Acceptance {
     pub complete_pairs: usize,
-    /// Every timed build ran with unrelated processes below
-    /// [`activity::MAX_UNRELATED_CORES`].
+    /// Across every timed replay's builds, unrelated processes stayed at or
+    /// below [`activity::MAX_UNRELATED_CORES`].
     pub eligible: bool,
     pub verdict: AcceptanceVerdict,
     pub reasons: Vec<String>,
@@ -748,7 +748,22 @@ fn needs_another_pair(workload: &Workload, timed: &[Replay]) -> bool {
 
 /// Every timed observation's activity was read and was quiet.
 fn replays_eligible(timed: &[Replay]) -> bool {
-    timed.iter().flat_map(|r| &r.observations).all(|o| o.activity.as_ref().is_some_and(|a| a.eligible))
+    timed.iter().all(|r| replay_unrelated_cores(r).is_some_and(|cores| cores <= activity::MAX_UNRELATED_CORES))
+}
+
+/// Unrelated CPU over a replay's timed builds taken together. A warm build
+/// lasts a fraction of a second, where the file-system and log daemons
+/// reacting to the build's own writes would read as most of a core, so
+/// one build alone is too short a window to judge. `None` when any build's
+/// activity could not be read.
+fn replay_unrelated_cores(replay: &Replay) -> Option<f64> {
+    let (mut cpu_ms, mut wall_ms) = (0u64, 0.0);
+    for activity in replay.observations.iter().map(|o| o.activity.as_ref()) {
+        let activity = activity?;
+        cpu_ms += activity.unrelated_cpu_ms;
+        wall_ms += activity.wall_ms;
+    }
+    (wall_ms > 0.0).then_some(cpu_ms as f64 / wall_ms)
 }
 
 fn accept(
@@ -1107,12 +1122,26 @@ mod tests {
 
     #[test]
     fn busy_or_unreadable_activity_is_ineligible_whatever_the_timings() {
-        let busy = activity::Activity { unrelated_cores: 2.0, eligible: false, ..quiet() };
+        let busy = activity::Activity { unrelated_cpu_ms: 10_000, unrelated_cores: 2.0, eligible: false, ..quiet() };
         assert_eq!(verdict(&[100.0, 101.0, 99.0, 100.5, 100.2], Some(busy)), AcceptanceVerdict::Ineligible);
         assert_eq!(verdict(&[100.0, 101.0, 99.0, 100.5, 100.2], None), AcceptanceVerdict::Ineligible);
         let t = timed(&[100.0, 101.0, 99.0, 100.5, 100.2], Some(quiet()));
         let loud = activity::Activity { eligible: false, ..quiet() };
         assert_eq!(accept(&workload(), &[], &t, &ratios(&workload(), &t), Some(&loud)).verdict, AcceptanceVerdict::Ineligible);
+    }
+
+    #[test]
+    fn eligibility_is_judged_over_a_replays_builds_together() {
+        let mut t = timed(&[100.0, 101.0, 99.0, 100.5, 100.2], Some(quiet()));
+        // One short build at 0.8 cores among quiet ones is not heavy work.
+        t[0].observations[1].activity = Some(activity::Activity { wall_ms: 300.0, unrelated_cpu_ms: 240, unrelated_cores: 0.8, eligible: false, ..quiet() });
+        assert!(replays_eligible(&t));
+        for o in &mut t[0].observations {
+            o.activity = Some(activity::Activity { unrelated_cpu_ms: 4000, unrelated_cores: 0.8, eligible: false, ..quiet() });
+        }
+        assert!(!replays_eligible(&t));
+        t[0].observations[0].activity = None;
+        assert!(replay_unrelated_cores(&t[0]).is_none());
     }
 
     #[test]
