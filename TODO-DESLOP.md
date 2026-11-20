@@ -1,5 +1,5 @@
 Prefix: DSLP
-Next: 89
+Next: 91
 
 Deslop campaign backlog ([plan](https://github.com/laputa-systems/stuff/blob/main/docs/campaigns/deslop.md), tier D). One agent works this file with the `deslop` skill: take the lowest-numbered open ticket whose area does not start with `Needs owner ·`. After DSLP-5, work the open P1 and P2 findings, then fill in `## Report` below.
 
@@ -9,13 +9,13 @@ Not started.
 
 ## Tickets
 
-### DSLP-2 · P2 · Diagnose: ultrareview into this backlog
+### DSLP-89 · P1 · Cache key omits linker input files named by -C link-arg (stale binary on hit)
 
-- **Area:** deslop · diagnose
-- **Where:** whole repository
-- **Problem:** No review has ranked this repository's risks for the deslop pass.
-- **Recommendation:** Run the deslop Diagnose step. Accept: the diff touches only docs, comments, and this file, and every finding names its Fix with.
-- **Fix with:** deslop
+- **Area:** cache key · linker inputs
+- **Where:** src/cache_key.rs: link_token_names_input_file, unix_link_arg_inputs, linker_value_has_unmodeled_file, native_linker_side_files_are_unmodeled
+- **Problem:** A binary linked with -C link-arg=-Wl,-sectcreate,__DATA,__note,FILE or -Wl,-exported_symbols_list,FILE is keyed on the argument string only; editing FILE and rebuilding restores the stale artifact. Reproduced at aa8df06 on macOS arm64 with the built kache as rustc wrapper and an isolated cache: with syms.txt = _alpha the binary exports _alpha; after changing it to _beta, direct rustc exports _beta, kache hits and still exports _alpha (nm -gU). Likewise -sectcreate with a data file: v2 content built directly, v1 content restored from cache. Only .lib .a .obj .o .res .def .exp .manifest operands are hashed, and the fail-closed list covers map, order and response files only; -sectcreate, -exported_symbols_list, -unexported_symbols_list, -T, --version-script, --dynamic-list and -filelist fall through. Linux linker scripts (-Wl,-T,script, -Tlink.x via -L) take the same path but were not run. Details: docs/deslop-diagnose.md.
+- **Recommendation:** Hash the operand file of each such option (resolve -T names through -L dirs) or fail closed like map files; add a tests/cache_key_underkeying_test.rs case that changes the file and expects a miss, proven red before the fix, and a unit test for each option spelling.
+- **Fix with:** root-cause
 - **Effort:** M
 
 ### DSLP-3 · P2 · Types: crates/kache-config (1/28)
@@ -791,3 +791,13 @@ Not started.
 - **Recommendation:** Provide the approved tools in the execution environment, then run the scoped coverage and mutation work in the component tickets.
 - **Fix with:** deslop
 - **Effort:** S
+
+### DSLP-90 · P4 · import_downloaded_entry follows symlinks in a downloaded entry (latent, no caller)
+
+- **Area:** Needs owner · remote storage
+- **Where:** crates/kache-store/src/store.rs: import_downloaded_entry, move_verified_blob, set_blob_readonly
+- **Problem:** An entry directory holding artifact -> /outside/file whose bytes match the claimed hash passes validation (is_file and fs::metadata follow links); the blob is then renamed in as a symlink and set_permissions makes the outside file read-only. Reproduced against the library with a scratch crate under .work/tmp: blob_is_symlink=true, outside_mode=444 from 0644. No production code calls import_downloaded_entry or import_restored_entry (tests only) and AGENTS.md defers remote storage, so it is latent. Details: docs/deslop-diagnose.md.
+- **Recommendation:** Owner decision: delete the unused import path in the dead-code pass, or before a remote layer returns check symlink_metadata is a regular file and open the blob without following links. Leave the code until decided.
+- **Fix with:** os-boundaries
+- **Effort:** S
+
