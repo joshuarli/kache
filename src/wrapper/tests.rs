@@ -2532,6 +2532,61 @@ fn replay_cached_diagnostics_writes_nonempty_and_skips_empty() {
 }
 
 #[test]
+fn a_cc_hit_whose_blob_goes_before_restore_leaves_every_output_and_recompiles() {
+    use crate::compiler::cc::{CC_DEPINFO_STORE_NAME, CC_OBJECT_STORE_NAME};
+    for evicted in [CC_OBJECT_STORE_NAME, CC_DEPINFO_STORE_NAME] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&test_config(dir.path().join("cache"))).unwrap();
+        let object = dir.path().join("unit.o");
+        let depfile = dir.path().join("unit.d");
+        let cached_object = dir.path().join("cached.o");
+        let cached_depfile = dir.path().join("cached.d");
+        std::fs::write(&cached_object, b"cached object").unwrap();
+        std::fs::write(&cached_depfile, b"unit.o: unit.c\n").unwrap();
+        std::fs::write(&object, b"original object").unwrap();
+        std::fs::write(&depfile, b"original depfile").unwrap();
+        store
+            .put(
+                "evicted-before-restore",
+                "unit",
+                &[],
+                &[],
+                "",
+                "",
+                &[
+                    (cached_object, CC_OBJECT_STORE_NAME.into()),
+                    (cached_depfile, CC_DEPINFO_STORE_NAME.into()),
+                ],
+                "",
+                "",
+            )
+            .unwrap();
+        let meta = store.get("evicted-before-restore").unwrap().unwrap();
+        let parsed = crate::compiler::cc::CcArgs::parse(&s(&[
+            "cc",
+            "-c",
+            dir.path().join("unit.c").to_str().unwrap(),
+            "-o",
+            object.to_str().unwrap(),
+            "-MD",
+            "-MF",
+            depfile.to_str().unwrap(),
+        ]))
+        .unwrap();
+        let hash = &meta.files.iter().find(|file| file.name == evicted).unwrap().hash;
+        std::fs::remove_file(store.blob_path(hash)).unwrap();
+
+        let error = restore_cc_hit(&store, &parsed, meta).unwrap_err();
+        assert!(
+            error.downcast_ref::<PartialCcRestore>().is_none(),
+            "{evicted}: a restore that published nothing must be recompiled: {error:#}"
+        );
+        assert_eq!(std::fs::read(&object).unwrap(), b"original object", "{evicted}");
+        assert_eq!(std::fs::read(&depfile).unwrap(), b"original depfile", "{evicted}");
+    }
+}
+
+#[test]
 fn cc_hit_validates_both_diagnostic_streams_before_restoring_outputs() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&test_config(dir.path().join("cache"))).unwrap();

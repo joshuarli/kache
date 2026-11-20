@@ -4135,3 +4135,183 @@ fn test_cc_concurrent_compiles_each_get_the_compilers_object() {
         assert_eq!(&std::fs::read(project.path().join(&output)).unwrap(), object);
     }
 }
+
+/// `kache clean --cache --all` empties the store without the idle grace that
+/// keeps eviction off recently used entries. Compiles racing it must each get
+/// the compiler's own object and no diagnostics: an entry removed between its
+/// lookup and its restore is recompiled, never restored in part.
+#[test]
+fn test_cc_compiles_racing_a_store_clear_get_the_compilers_object() {
+    build_kache();
+
+    let project = TempDir::new().unwrap();
+    let cache_dir = TempDir::new().unwrap();
+    let _cache_dir_daemon = common::DaemonGuard::new(kache_binary(), cache_dir.path());
+    const UNITS: usize = 4;
+    const ROUNDS: usize = 6;
+    const COMPILERS: usize = 2;
+    for unit in 0..UNITS {
+        std::fs::write(
+            project.path().join(format!("u{unit}.c")),
+            format!("#include <stdio.h>\nint value{unit}(void) {{ return {unit}; }}\n"),
+        )
+        .unwrap();
+    }
+    settle_writes(&[project.path()]);
+    let raw = (0..UNITS)
+        .map(|unit| {
+            let output = format!("raw-{unit}.o");
+            let status = std::process::Command::new("cc")
+                .args(["-O0", "-g0", "-c", &format!("u{unit}.c"), "-o", &output])
+                .current_dir(project.path())
+                .status()
+                .unwrap();
+            assert!(status.success());
+            std::fs::read(project.path().join(output)).unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    let kache = |args: &[&str]| {
+        let output = hermetic_command(
+            kache_binary(),
+            cache_dir.path(),
+            Some(&isolated_config_path(cache_dir.path())),
+        )
+        .args(args)
+        .current_dir(project.path())
+        .output()
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "kache {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    };
+    let compiling = std::sync::atomic::AtomicUsize::new(COMPILERS);
+    let clears = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|threads| {
+        threads.spawn(|| {
+            while compiling.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                kache(&["clean", "--cache", "--all", "-y"]);
+                clears.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        for compiler in 0..COMPILERS {
+            let (raw, kache, compiling, project) = (&raw, &kache, &compiling, project.path());
+            threads.spawn(move || {
+                for round in 0..ROUNDS {
+                    for (unit, object) in raw.iter().enumerate() {
+                        let output = format!("c{compiler}-r{round}-u{unit}.o");
+                        let source = format!("u{unit}.c");
+                        let result =
+                            kache(&["cc", "-O0", "-g0", "-c", &source, "-o", &output]);
+                        assert!(
+                            result.stderr.is_empty(),
+                            "{output}: {}",
+                            String::from_utf8_lossy(&result.stderr)
+                        );
+                        assert!(
+                            std::fs::read(project.join(&output)).unwrap() == *object,
+                            "{output} is not the compiler's object for {source}"
+                        );
+                    }
+                }
+                compiling.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            });
+        }
+    });
+    assert!(clears.into_inner() >= 2, "the store was not cleared during the build");
+}
+
+/// A build that kills `kache cc` while its compiler runs must not leave that
+/// compile running, nor an object from it. The next compile of the unit must
+/// not wait on anything the killed one claimed and must get the compiler's
+/// object.
+#[test]
+#[cfg(unix)]
+fn test_cc_a_killed_compile_does_not_hold_up_the_next() {
+    use std::os::unix::fs::PermissionsExt;
+    build_kache();
+
+    let project = TempDir::new().unwrap();
+    let cache_dir = TempDir::new().unwrap();
+    let _cache_dir_daemon = common::DaemonGuard::new(kache_binary(), cache_dir.path());
+    const HELD: std::time::Duration = std::time::Duration::from_secs(20);
+    let slow = project.path().join("slow");
+    let started = project.path().join("started");
+    let bin = project.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let compiler = bin.join("cc");
+    std::fs::write(
+        &compiler,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in\n  *\" -E \"*|*-###*) ;;\n  *\" unit.c \"*) if [ -f '{slow}' ]; then echo $$ > '{started}'; sleep {held}; fi ;;\nesac\nexec cc \"$@\"\n",
+            slow = slow.display(),
+            started = started.display(),
+            held = HELD.as_secs(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(project.path().join("unit.c"), "int value(void) { return 3; }\n").unwrap();
+    let status = std::process::Command::new("cc")
+        .args(["-O0", "-g0", "-c", "unit.c", "-o", "raw.o"])
+        .current_dir(project.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let raw = std::fs::read(project.path().join("raw.o")).unwrap();
+    settle_writes(&[project.path()]);
+
+    let compile = |output: &str| {
+        let mut command = hermetic_command(
+            kache_binary(),
+            cache_dir.path(),
+            Some(&isolated_config_path(cache_dir.path())),
+        );
+        command
+            .arg(&compiler)
+            .args(["-O0", "-g0", "-c", "unit.c", "-o", output])
+            .current_dir(project.path());
+        command
+    };
+    std::fs::write(&slow, "").unwrap();
+    let mut killed = compile("killed.o").spawn().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !started.exists() {
+        assert!(std::time::Instant::now() < deadline, "the compiler never started");
+        assert!(killed.try_wait().unwrap().is_none(), "kache exited before the compiler ran");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    killed.kill().unwrap();
+    killed.wait().unwrap();
+    std::fs::remove_file(&slow).unwrap();
+    let pid = std::fs::read_to_string(&started).unwrap();
+    let alive = || {
+        std::process::Command::new("kill")
+            .args(["-0", pid.trim()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while alive() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let orphaned = alive();
+    if orphaned {
+        let _ = std::process::Command::new("kill").args(["-9", pid.trim()]).status();
+    }
+    assert!(!orphaned, "the compiler outlived the killed kache");
+    assert!(!project.path().join("killed.o").exists());
+
+    let begun = std::time::Instant::now();
+    let next = compile("next.o").output().unwrap();
+    let took = begun.elapsed();
+    assert!(next.status.success(), "{}", String::from_utf8_lossy(&next.stderr));
+    assert!(next.stderr.is_empty(), "{}", String::from_utf8_lossy(&next.stderr));
+    assert!(took < HELD / 2, "the next compile waited {took:?} on the killed one");
+    assert_eq!(std::fs::read(project.path().join("next.o")).unwrap(), raw);
+}
