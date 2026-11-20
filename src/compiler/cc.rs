@@ -5705,23 +5705,6 @@ fn fold_cc_memo_field(hasher: &mut blake3::Hasher, label: &[u8], value: &[u8]) {
     );
 }
 
-/// Environment variables that cannot change a preprocessor expansion and do
-/// change between two otherwise identical invocations. Checked before the
-/// allow list below, so a name matching both stays out.
-const CC_MEMO_VOLATILE_ENV: &[&str] = &[
-    // Shell bookkeeping, rewritten per command.
-    "_",
-    "OLDPWD",
-    "PWD",
-    "SHLVL",
-    // Build-driver parallelism: `--jobserver-fds=3,5` names this run's fds.
-    "CARGO_MAKEFLAGS",
-    "MAKEFLAGS",
-    "MFLAGS",
-    "MAKELEVEL",
-    "NUM_JOBS",
-];
-
 /// Environment variables the preprocessor reads, by the GCC, Clang and MSVC
 /// documentation. Names are matched exactly; [`cc_memo_env_pattern_is_keyed`]
 /// widens this to families of names.
@@ -5802,7 +5785,9 @@ fn cc_memo_env_is_keyed(name: &OsStr) -> bool {
     let Some(name) = name.to_str() else {
         return false;
     };
-    if name.starts_with("KACHE_") || CC_MEMO_VOLATILE_ENV.contains(&name) {
+    // Checked before the allow list below: `MAKEFLAGS` would otherwise match
+    // its `*FLAGS` family.
+    if name.starts_with("KACHE_") || crate::invocation::PER_COMMAND_ENV.contains(&name) {
         return false;
     }
     // `DEP_<links>_<KEY>` is Cargo's `links` metadata for build scripts. No

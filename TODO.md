@@ -23,7 +23,7 @@ Next: 31
 
 - **Area:** Performance
 - **Where:** `src/probe/cache.rs` (`probe_key_for`, `fingerprint_env`)
-- **Problem:** The `cc -###` probe record is keyed on every environment variable except `KACHE_*`. A variable that changes per invocation therefore reruns the probe (about 30 ms) on every hit and writes one more record under `probes/`, which nothing prunes. Under hyperfine (`HYPERFINE_ITERATION`), a warm hit took 42 ms instead of 14, and 68 runs left 68 records. Builds that export a per-job counter or a timestamp pay the same.
+- **Problem:** The `cc -###` probe record is keyed on every environment variable except `KACHE_*` and the per-command shell and build-driver variables (`PER_COMMAND_ENV`: `_`, `SHLVL`, `MAKEFLAGS`, …). Any other variable that changes per invocation therefore reruns the probe (about 30 ms) on every hit and writes one more record under `probes/`, which nothing prunes. Under hyperfine (`HYPERFINE_ITERATION`), a warm hit took 42 ms instead of 14, and 68 runs left 68 records. Builds that export a per-job counter or a timestamp pay the same.
 - **Recommendation:** Key the probe on the variables the driver reads (`SDKROOT`, `DEVELOPER_DIR`, `MACOSX_DEPLOYMENT_TARGET`, `COMPILER_PATH`, `GCC_EXEC_PREFIX`, the include and library path variables, `PATH` for tool lookup). An allowlist must be proven complete against both drivers' documentation, or it miskeys. A cheaper step is to prune probe records in GC.
 - **Fix with:** a test that varies an unrelated variable and keeps one probe record, and one per listed variable that rekeys.
 - **Effort:** M

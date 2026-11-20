@@ -176,10 +176,14 @@ fn fingerprint_env(vars: impl Iterator<Item = (String, String)>) -> String {
 /// controls and so must stay out of the probe key.
 ///
 /// This excludes kache-internal variables (`KACHE_*`) which configure kache
-/// or tests, as well as Windows' hidden cmd.exe bookkeeping variables whose
-/// names begin with `=` (`=C:`, `=ExitCode`, …).
+/// or tests, Windows' hidden cmd.exe bookkeeping variables whose names begin
+/// with `=` (`=C:`, `=ExitCode`, …), and the per-command shell and build
+/// driver variables of [`crate::invocation::PER_COMMAND_ENV`]. `PWD` stays
+/// keyed: clang can take its debug compilation directory from it.
 fn is_volatile_env_name(name: &str) -> bool {
-    name.starts_with('=') || name.starts_with("KACHE_")
+    name.starts_with('=')
+        || name.starts_with("KACHE_")
+        || crate::invocation::PER_COMMAND_ENV.contains(&name)
 }
 
 /// Load a probe record by key, or `None` on any miss: file absent,
@@ -418,9 +422,30 @@ mod tests {
         assert!(is_volatile_env_name("KACHE_FAMILY_PROBE_ACTIVE"));
         assert!(is_volatile_env_name("KACHE_CACHE_DIR"));
         assert!(is_volatile_env_name("KACHE_CONFIG"));
+        assert!(is_volatile_env_name("MAKEFLAGS"));
+        assert!(is_volatile_env_name("SHLVL"));
+        assert!(!is_volatile_env_name("PWD"));
         assert!(!is_volatile_env_name("PATH"));
         assert!(!is_volatile_env_name("SDKROOT"));
         assert!(!is_volatile_env_name("A=B"));
+    }
+
+    #[test]
+    fn a_new_make_run_reuses_the_probe() {
+        let compiler = NamedTempFile::new().unwrap();
+        let request = req(compiler.path().to_str().unwrap());
+        let run = |fifo: &str, level: &str| {
+            [
+                ("PATH".to_string(), "/bin".to_string()),
+                ("MAKEFLAGS".to_string(), format!(" -j8 --jobserver-auth=fifo:{fifo}")),
+                ("MAKELEVEL".to_string(), level.to_string()),
+                ("SHLVL".to_string(), level.to_string()),
+            ]
+        };
+        let first = probe_key_with_env("cc", &request, run("/tmp/GMfifo1", "1").into_iter());
+        let second = probe_key_with_env("cc", &request, run("/tmp/GMfifo2", "2").into_iter());
+        assert_eq!(first, second);
+        assert!(first.is_some());
     }
 
     #[test]
