@@ -47,8 +47,9 @@ Engineering work still open (not provisioning):
   (`test_cc_concurrent_compiles_each_get_the_compilers_object`). Open:
   wrapper selection (shim name vs `kache cc`), eviction racing a build,
   interrupted publication, stale locks.
-- CCP-09: a quiet-host rerun of the baseline; the provisional one (below)
-  ranks losses but was timed under load.
+- CCP-09: a quiet-host rerun of the baseline. The provisional runs below
+  rank losses but were timed under load. The largest loss now is the
+  per-hit fixed cost on small units.
 
 Provisioning, not engineering:
 
@@ -501,6 +502,42 @@ logs:**
 Uncached compiler-seconds by reason: the only refusals in the timed
 workloads are zlib's two link steps per build (`cc link mode`, which
 ccache does not cache either).
+
+**Rerun after fixes 1 and 2, 2026-11-19 (macOS, provisional).** The same host
+and protocol ran kache at ae7ee3e1 (PR #62: the canonical probe order, the
+recent read sets, and a per-read-set record of header-probe resolution that
+stops each hit parsing megabytes of SDK header scans). It also included the
+`KACHE_BASE_DIR` `..` fix (`fix(cc): name memo inputs by their mapped
+spelling in the shadowing digest`, KACH-28). The 1-minute load was 1.7 to 13
+on the small workloads and 8 to 34 on LLVM. The LLVM run admitted 3 pairs: two
+kache replays counted one or two hits short because the event log trailed
+the build, and were rejected. `fix(cc-bench): wait for the events validation
+recorded before counting` removes that race. No warm, revert or relocated
+hit ran the preprocessor.
+
+| scenario | tiny C | C++ headers | zlib | LLVM subset |
+|---|---|---|---|---|
+| cold | 0.79 (0.77..0.81) | 1.11 (1.08..1.15) | 1.07 (0.84..1.36) | 1.09 (0.97..1.22) |
+| warm | 2.12 (1.92..2.35) | 1.09 (1.02..1.18) | 1.87 (1.71..2.04) | 1.15 (1.12..1.18) |
+| edit source, settled | 0.91 (0.72..1.14) | 0.97 (0.94..0.99) | 1.11 (0.76..1.63) | 1.13 (0.97..1.31) |
+| revert source, settled | 1.56 (1.29..1.88) | 1.36 (1.12..1.64) | 1.17 (0.94..1.48) | 1.20 (1.01..1.44) |
+| edit header, settled | 1.18 (1.13..1.23) | 1.07 (1.06..1.08) | 1.24 (1.12..1.36) | 1.05 (1.03..1.07) |
+| revert header, settled | 1.93 (1.57..2.37) | 1.33 (1.23..1.43) | 1.55 (1.39..1.72) | 1.41 (1.07..1.87) |
+| relocated | 2.22 (1.86..2.64) | 2.48 (2.35..2.61) | 2.02 (1.89..2.17) | not relocatable |
+
+LLVM's warm build went from 5.98x to 1.15x ccache (14.0 s to 2.66 s), and
+its header revert from 8.69x to 1.41x. **Losses now, ranked:**
+
+1. Per-hit fixed cost on small units: a tiny-C warm build loses 0.26 s
+   over 48 hits, about 5 ms a hit (kache 9.8 ms, ccache 4.4 ms), and
+   relocated and revert builds pay the same. A single-unit compile at
+   steady state is 1.85x ccache (38.7 ms to 17.2 ms). After a daemon stop it
+   is 6.6x (127 ms), so the first compile after a daemon stop pays for
+   starting the daemon. A phase trace puts kache's own work for such a hit
+   near 3 ms. The rest is outside it (client start, daemon round trip,
+   process exit) and needs a profile on a quiet host.
+2. Header edit, 1.18x on tiny C and 1.24x on zlib: the miss path.
+3. Cold C++ and LLVM, 1.09x to 1.11x; tiny-C cold now beats ccache (0.79x).
 
 ## Open gaps and blockers
 

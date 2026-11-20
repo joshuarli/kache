@@ -11,15 +11,6 @@ Next: 29
 - **Coordination:** KACH-21 and KACH-27 closed when the Linux gates became required (PR #50). KACH-22 (mutants in no gate) stays open. Evidence lives in the campaign ledger.
 - **Done when:** Every final acceptance criterion in the plan passes on the same integrated revision; safe passthrough, missing tools, and unexecuted lanes do not count as cached parity.
 
-### KACH-28 · P3 · A KACHE_BASE_DIR spelled with `..` makes every C/C++ memo miss
-
-- **Area:** Compiler compatibility, performance
-- **Where:** `src/compiler/cc.rs` (`cc_prefix_maps_cfg`, `cc_unmapped_path_candidates`, `cc_shadowing_names`)
-- **Problem:** With `KACHE_BASE_DIR=<build>/..`, the prefix maps hold both the `..` spelling and the canonical one. A memo's inputs unmap to the `..` spelling, which no `-I` directory is a prefix of, so the include-resolution digest a memo is checked against never equals the recorded one and every hit preprocesses (seen on the LLVM subset, 2026-11-19). Hits stay correct.
-- **Recommendation:** Unmap memo inputs to the spelling the include directories use, or prefer the canonical root when unmapping. Do not normalize `..` lexically: through a symlink it names another directory.
-- **Fix with:** a cc test that records a memo under a `..` base dir and hits it without preprocessing.
-- **Effort:** S
-
 ### KACH-22 · P3 · Changed-line mutation testing runs in no gate
 
 - **Area:** Tests
