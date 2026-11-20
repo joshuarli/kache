@@ -9,6 +9,7 @@
 //! whose counters or objects differ from the validated ones is not admitted.
 //! Preparation (unpacking, configure, CMake) happens outside the timer.
 
+pub mod activity;
 pub mod stats;
 pub mod workload;
 
@@ -30,6 +31,8 @@ const MAKE_TICK: Duration = Duration::from_millis(1100);
 /// How long a timed replay waits for the events its validation recorded,
 /// outside the timer: on a loaded host the log trails the build by seconds.
 const EVENT_DEADLINE: Duration = Duration::from_secs(60);
+/// The whole ccache configuration each ccache arm reads; kache's is empty.
+const CCACHE_CONF: &str = "max_size = 20G\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[deser(rename_all = "snake_case")]
@@ -60,10 +63,27 @@ pub struct Config {
     pub pairs: usize,
     pub seed: u64,
     pub validate_only: bool,
+    /// Acceptance: at least five complete admitted pairs on an eligible host,
+    /// more only while a target's interval crosses it.
+    pub acceptance: bool,
     pub archives: Archives,
     pub jobs: usize,
     /// This binary, re-run as the per-build resource meter.
     pub meter: PathBuf,
+    /// `PATH` for every arm: the one this runner was started with, recorded.
+    pub path: String,
+}
+
+impl Config {
+    /// Whether a process command line belongs to the benchmark: its output
+    /// tree, the launchers, or the kache daemon beside the kache binary.
+    pub fn is_ours(&self, command: &str) -> bool {
+        let kache_dir = self.kache.parent().map(|d| d.display().to_string());
+        [Some(self.out.display().to_string()), Some(self.ccache.display().to_string()), kache_dir]
+            .into_iter()
+            .flatten()
+            .any(|prefix| !prefix.is_empty() && command.contains(&prefix))
+    }
 }
 
 /// One timed (or validating) scenario of one replay.
@@ -81,6 +101,11 @@ pub struct Observation {
     pub object_count: usize,
     /// Host load across the timed build.
     pub load: crate::bench_host::PhaseLoad,
+    /// The build command, as run.
+    pub command: String,
+    /// What unrelated processes used around the build; `None` when `ps`
+    /// could not be read.
+    pub activity: Option<activity::Activity>,
 }
 
 /// Cache results a scenario recorded: kache's event log, ccache's stats.
@@ -111,6 +136,11 @@ pub struct Replay {
 pub struct WorkloadReport {
     pub workload: String,
     pub units: usize,
+    /// blake3 of the pinned archive, or of the generated corpus sources.
+    pub input_digest: Option<String>,
+    /// The whole environment each arm's commands ran with.
+    pub environments: BTreeMap<String, Vec<(String, String)>>,
+    pub acceptance: Option<Acceptance>,
     pub validation: Vec<Replay>,
     pub validation_failures: Vec<String>,
     pub timed: Vec<Replay>,
@@ -128,8 +158,61 @@ pub struct RatioRow {
     pub other_median_ms: Option<f64>,
 }
 
+/// A workload's acceptance result.
+#[derive(Debug, Clone, Serialize)]
+pub struct Acceptance {
+    pub complete_pairs: usize,
+    /// Every timed build ran with unrelated processes below
+    /// [`activity::MAX_UNRELATED_CORES`].
+    pub eligible: bool,
+    pub verdict: AcceptanceVerdict,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[deser(rename_all = "snake_case")]
+pub enum AcceptanceVerdict {
+    Pass,
+    Fail,
+    Inconclusive,
+    Undersampled,
+    Ineligible,
+}
+
+impl AcceptanceVerdict {
+    pub fn label(self) -> &'static str {
+        match self {
+            AcceptanceVerdict::Pass => "PASS",
+            AcceptanceVerdict::Fail => "FAIL",
+            AcceptanceVerdict::Inconclusive => "INCONCLUSIVE",
+            AcceptanceVerdict::Undersampled => "UNDERSAMPLED",
+            AcceptanceVerdict::Ineligible => "INELIGIBLE",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Provenance {
+    pub source_revision: Option<String>,
+    pub source_dirty: Option<bool>,
+    /// blake3 of each binary the arms ran.
+    pub binaries: BTreeMap<String, String>,
+    /// The configuration files the arms read, by name, with their contents.
+    pub configuration: BTreeMap<String, String>,
+}
+
+/// `cpu_ms` and `max_rss_kib` come from `getrusage(RUSAGE_CHILDREN)` in the
+/// meter: the build's own process tree. The kache daemon was already running
+/// and is not in it.
+pub const RESOURCE_ACCOUNTING: &str = "child-process accounting: cpu_ms and max_rss_kib cover the build's process tree only and omit the already-running kache daemon";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Report {
+    pub mode: &'static str,
+    pub resource_accounting: &'static str,
+    pub provenance: Provenance,
+    /// Unrelated activity before any workload ran.
+    pub preflight: Option<activity::Activity>,
     pub toolchain: String,
     pub compiler: String,
     pub kache: String,
@@ -176,7 +259,10 @@ fn arm_setup(cfg: &Config, arm: Arm, root: &Path, tree: &Path, compiler_dir: Opt
     // other arms get the same effective flags and environment.
     let aligned = vec![format!("-ffile-prefix-map={}=/kache/base-dir", tree.display())];
     let base_dir = tree.parent().unwrap().display().to_string();
+    // The whole environment: every spawn clears its inherited one, so no
+    // CCACHE_*, KACHE_*, CFLAGS or verification toggle leaks into an arm.
     let mut env = vec![
+        ("PATH".to_string(), cfg.path.clone()),
         ("LC_ALL".to_string(), "C".to_string()),
         ("HOME".to_string(), state.join("home").display().to_string()),
         ("TMPDIR".to_string(), state.join("tmp").display().to_string()),
@@ -194,6 +280,7 @@ fn arm_setup(cfg: &Config, arm: Arm, root: &Path, tree: &Path, compiler_dir: Opt
             env.push(("KACHE_CACHE_DIR".into(), store.display().to_string()));
             env.push(("KACHE_CONFIG".into(), state.join("kache.toml").display().to_string()));
             env.push(("KACHE_BASE_DIR".into(), tree.display().to_string()));
+            env.push(("KACHE_HOST_CONFIG".into(), String::new()));
             (Some(cfg.kache.clone()), Vec::new())
         }
     };
@@ -246,6 +333,7 @@ fn retarget(setup: &ArmSetup, from: &Path, to: &Path) -> ArmSetup {
 fn measure(meter: &Path, command: Command, env: &[(String, String)], log: Option<&Path>) -> Result<(f64, f64, u64)> {
     let report = tempfile::NamedTempFile::new()?;
     let mut metered = Command::new(meter);
+    metered.env_clear();
     metered.arg("--meter").arg(report.path()).arg("--").arg(command.get_program()).args(command.get_args());
     if let Some(dir) = command.get_current_dir() {
         metered.current_dir(dir);
@@ -310,6 +398,7 @@ fn counters(arm: Arm, cfg: &Config, setup: &ArmSetup) -> Result<Counters> {
         Arm::Ccache => {
             let output = Command::new(&cfg.ccache)
                 .arg("--print-stats")
+                .env_clear()
                 .envs(setup.env.iter().map(|(k, v)| (k, v)))
                 .output()?;
             let text = String::from_utf8_lossy(&output.stdout);
@@ -415,12 +504,12 @@ fn replay(
     for sub in ["store", "home", "tmp"] {
         std::fs::create_dir_all(state.join(sub))?;
     }
-    std::fs::write(state.join("ccache.conf"), "max_size = 20G\n")?;
+    std::fs::write(state.join("ccache.conf"), CCACHE_CONF)?;
     std::fs::write(state.join("kache.toml"), "")?;
     let log = shims.map(|_| state.join("exec.log"));
     let kache_daemon = |verb: &str| -> Result<()> {
         if arm == Arm::Kache {
-            Command::new(&cfg.kache).args(["daemon", verb]).envs(setup.env.iter().map(|(k, v)| (k, v))).output()?;
+            Command::new(&cfg.kache).args(["daemon", verb]).env_clear().envs(setup.env.iter().map(|(k, v)| (k, v))).output()?;
         }
         Ok(())
     };
@@ -480,9 +569,14 @@ fn replay(
             std::fs::write(log, "")?;
         }
         let before = counters(arm, cfg, &setup)?;
+        let command_line = format!("{command:?}");
+        let activity_start = activity::Snapshot::take();
         let load_start = crate::bench_host::LoadSample::take();
         let (wall_ms, cpu_ms, max_rss_kib) = measure(&cfg.meter, command, &current.env, log.as_deref())?;
         let load = crate::bench_host::PhaseLoad::between(&load_start, &crate::bench_host::LoadSample::take());
+        let activity = activity_start
+            .zip(activity::Snapshot::take())
+            .map(|(start, end)| start.until(&end, |c| cfg.is_ours(c), cpu_ms.round() as u64));
         if arm == Arm::Kache {
             await_quiet_event_log(&setup.store.join("events.jsonl"));
         }
@@ -505,6 +599,8 @@ fn replay(
             objects,
             object_count,
             load,
+            command: command_line,
+            activity,
         });
     }
     kache_daemon("stop")?;
@@ -553,7 +649,13 @@ pub fn run(cfg: &Config) -> Result<Report> {
     };
     std::fs::create_dir_all(&cfg.out)?;
     let out = std::fs::canonicalize(&cfg.out)?;
+    let cfg = &Config { out: out.clone(), ..cfg.clone() };
+    let preflight = preflight(cfg);
     let mut report = Report {
+        mode: if cfg.acceptance { "acceptance" } else { "diagnostic" },
+        resource_accounting: RESOURCE_ACCOUNTING,
+        provenance: provenance(cfg, &tc),
+        preflight: preflight.clone(),
         toolchain: cfg.toolchain.clone(),
         compiler: version(&tc.cc),
         kache: version(&cfg.kache),
@@ -575,8 +677,14 @@ pub fn run(cfg: &Config) -> Result<Report> {
             .collect::<Result<Vec<_>>>()?;
         let validation_failures = validate(&validation);
         let mut timed = Vec::new();
-        if validation_failures.is_empty() && !cfg.validate_only {
-            for pair in 0..cfg.pairs {
+        let host_quiet = !cfg.acceptance || preflight.as_ref().is_some_and(|a| a.eligible);
+        if validation_failures.is_empty() && !cfg.validate_only && host_quiet {
+            let limit = if cfg.acceptance { stats::MAX_PAIRS } else { cfg.pairs };
+            for pair in 0..limit {
+                // A busy host cannot reach acceptance, so stop timing on it.
+                if cfg.acceptance && (!needs_another_pair(&workload, &timed) || !replays_eligible(&timed)) {
+                    break;
+                }
                 let mut order = Arm::ALL;
                 rng.shuffle(&mut order);
                 eprintln!("=> {} pair {} ({})", workload.name, pair + 1, order.map(Arm::as_str).join(", "));
@@ -590,9 +698,20 @@ pub fn run(cfg: &Config) -> Result<Report> {
             }
         }
         let ratios = ratios(&workload, &timed);
+        let acceptance = cfg.acceptance.then(|| accept(&workload, &validation_failures, &timed, &ratios, preflight.as_ref()));
+        let environments = Arm::ALL
+            .iter()
+            .map(|&arm| {
+                let setup = arm_setup(cfg, arm, &root, &root.join("tree"), None, &tc.cc, &tc.cxx);
+                (arm.as_str().to_string(), setup.env)
+            })
+            .collect();
         report.workloads.push(WorkloadReport {
             workload: workload.name.to_string(),
             units: workload.units,
+            input_digest: input_digest(&workload, &cfg.archives, &root.join("tree")),
+            environments,
+            acceptance,
             validation,
             validation_failures,
             timed,
@@ -600,6 +719,149 @@ pub fn run(cfg: &Config) -> Result<Report> {
         });
     }
     Ok(report)
+}
+
+/// Unrelated activity over a few seconds before anything is timed, so a busy
+/// host is turned away before a long run rather than after it.
+fn preflight(cfg: &Config) -> Option<activity::Activity> {
+    let start = activity::Snapshot::take()?;
+    std::thread::sleep(Duration::from_secs(5));
+    Some(start.until(&activity::Snapshot::take()?, |c| cfg.is_ours(c), 0))
+}
+
+/// Pairs whose three arms were all admitted.
+fn complete_pairs(timed: &[Replay]) -> BTreeMap<usize, BTreeMap<Arm, &Replay>> {
+    let mut pairs: BTreeMap<usize, BTreeMap<Arm, &Replay>> = BTreeMap::new();
+    for r in timed.iter().filter(|r| r.admitted) {
+        pairs.entry(r.pair.unwrap()).or_default().insert(r.arm, r);
+    }
+    pairs.retain(|_, p| p.len() == Arm::ALL.len());
+    pairs
+}
+
+/// Acceptance runs another pair until five are complete, then only while a
+/// target's interval still crosses it.
+fn needs_another_pair(workload: &Workload, timed: &[Replay]) -> bool {
+    complete_pairs(timed).len() < stats::MIN_PAIRS
+        || ratios(workload, timed).iter().any(|r| r.verdict == Some(stats::Verdict::Inconclusive))
+}
+
+/// Every timed observation's activity was read and was quiet.
+fn replays_eligible(timed: &[Replay]) -> bool {
+    timed.iter().flat_map(|r| &r.observations).all(|o| o.activity.as_ref().is_some_and(|a| a.eligible))
+}
+
+fn accept(
+    workload: &Workload,
+    validation_failures: &[String],
+    timed: &[Replay],
+    ratios: &[RatioRow],
+    preflight: Option<&activity::Activity>,
+) -> Acceptance {
+    let complete_pairs = complete_pairs(timed).len();
+    let eligible = preflight.is_some_and(|a| a.eligible) && !timed.is_empty() && replays_eligible(timed);
+    let mut reasons = Vec::new();
+    if !validation_failures.is_empty() {
+        reasons.push(format!("{} validation failures", validation_failures.len()));
+    }
+    if !eligible {
+        reasons.push(format!(
+            "host ineligible: unrelated processes above {} cores, or activity unreadable",
+            activity::MAX_UNRELATED_CORES
+        ));
+    }
+    if complete_pairs < stats::MIN_PAIRS {
+        reasons.push(format!("{complete_pairs} complete admitted pairs, {} required", stats::MIN_PAIRS));
+    }
+    let targeted: Vec<&RatioRow> = ratios.iter().filter(|r| r.target.is_some()).collect();
+    for row in &targeted {
+        if row.verdict != Some(stats::Verdict::Pass) {
+            reasons.push(format!(
+                "{} vs {}: {:?} (geomean {:.3}, target {})",
+                row.scenario,
+                row.against.as_str(),
+                row.verdict,
+                row.summary.geomean,
+                row.target.unwrap()
+            ));
+        }
+    }
+    let expected = scenarios(workload)
+        .iter()
+        .flat_map(|s| [Arm::Ccache, Arm::Raw].map(|a| target_for(s, a)))
+        .filter(Option::is_some)
+        .count();
+    let verdict = if !eligible {
+        AcceptanceVerdict::Ineligible
+    } else if !validation_failures.is_empty() || complete_pairs < stats::MIN_PAIRS || targeted.len() < expected {
+        AcceptanceVerdict::Undersampled
+    } else if targeted.iter().any(|r| r.verdict == Some(stats::Verdict::Fail)) {
+        AcceptanceVerdict::Fail
+    } else if targeted.iter().all(|r| r.verdict == Some(stats::Verdict::Pass)) {
+        AcceptanceVerdict::Pass
+    } else {
+        AcceptanceVerdict::Inconclusive
+    };
+    Acceptance { complete_pairs, eligible, verdict, reasons }
+}
+
+fn digest_file(path: &Path) -> Option<String> {
+    std::fs::read(path).ok().map(|bytes| blake3::hash(&bytes).to_hex().to_string())
+}
+
+/// The pinned archive's digest, or for a generated corpus the digest of its
+/// sources as prepared.
+fn input_digest(workload: &Workload, archives: &Archives, tree: &Path) -> Option<String> {
+    match workload.kind {
+        workload::Kind::Zlib => archives.zlib.as_deref().and_then(digest_file),
+        workload::Kind::Llvm => archives.llvm.as_deref().and_then(digest_file),
+        workload::Kind::CorpusC | workload::Kind::CorpusCxx => {
+            let mut names: Vec<PathBuf> = std::fs::read_dir(tree)
+                .ok()?
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| ["c", "h", "cpp", "hpp"].iter().any(|x| e == *x)) || p.ends_with("Makefile"))
+                .collect();
+            names.sort();
+            let mut hasher = blake3::Hasher::new();
+            for path in names {
+                hasher.update(path.file_name()?.as_encoded_bytes());
+                hasher.update(b"\0");
+                hasher.update(blake3::hash(&std::fs::read(&path).ok()?).as_bytes());
+            }
+            Some(hasher.finalize().to_hex().to_string())
+        }
+    }
+}
+
+fn provenance(cfg: &Config, tc: &crate::cc_oracle::exec::Toolchain) -> Provenance {
+    let git = |args: &[&str]| {
+        Command::new("git").args(args).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    let engine = cfg.kache.with_file_name("kache-engine");
+    let binaries = [
+        ("kache", cfg.kache.clone()),
+        ("kache-engine", engine),
+        ("ccache", cfg.ccache.clone()),
+        ("cc", tc.cc.clone()),
+        ("cxx", tc.cxx.clone()),
+        ("kache-cc-bench", cfg.meter.clone()),
+    ]
+    .into_iter()
+    .filter_map(|(name, path)| {
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        digest_file(&path).map(|d| (name.to_string(), format!("{} {d}", path.display())))
+    })
+    .collect();
+    Provenance {
+        source_revision: git(&["rev-parse", "HEAD"]),
+        source_dirty: git(&["status", "--porcelain", "--untracked-files=no"]).map(|s| !s.is_empty()),
+        binaries,
+        configuration: [("kache.toml", ""), ("ccache.conf", CCACHE_CONF), ("KACHE_HOST_CONFIG", "")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    }
 }
 
 /// A timed replay is admitted only if its counters and objects are the
@@ -635,11 +897,8 @@ fn target_for(scenario: &str, against: Arm) -> Option<f64> {
 
 fn ratios(workload: &Workload, timed: &[Replay]) -> Vec<RatioRow> {
     let mut rows = Vec::new();
-    let pairs: BTreeMap<usize, BTreeMap<Arm, &Replay>> = timed.iter().filter(|r| r.admitted).fold(BTreeMap::new(), |mut m, r| {
-        m.entry(r.pair.unwrap()).or_default().insert(r.arm, r);
-        m
-    });
-    let complete: Vec<&BTreeMap<Arm, &Replay>> = pairs.values().filter(|p| p.len() == 3).collect();
+    let pairs = complete_pairs(timed);
+    let complete: Vec<&BTreeMap<Arm, &Replay>> = pairs.values().collect();
     for scenario in scenarios(workload) {
         for against in [Arm::Ccache, Arm::Raw] {
             let wall = |arm: Arm| -> Vec<f64> {
@@ -668,8 +927,11 @@ fn ratios(workload: &Workload, timed: &[Replay]) -> Vec<RatioRow> {
 /// The human summary written beside `report.json`.
 pub fn markdown(report: &Report) -> String {
     let mut s = format!(
-        "# cc-bench {}\n\n- compiler: {}\n- kache: {}\n- ccache: {}\n- host: {} {} CPUs, {}\n- jobs: {}, seed: {}\n\n",
+        "# cc-bench {} ({})\n\n- source: {}{}\n- compiler: {}\n- kache: {}\n- ccache: {}\n- host: {} {} CPUs, {}\n- jobs: {}, seed: {}\n- CPU and RSS: {}\n{}\n",
         report.toolchain,
+        report.mode,
+        report.provenance.source_revision.as_deref().unwrap_or("unknown revision"),
+        if report.provenance.source_dirty == Some(true) { " (with uncommitted changes)" } else { "" },
         report.compiler,
         report.kache,
         report.ccache,
@@ -677,10 +939,37 @@ pub fn markdown(report: &Report) -> String {
         report.host.logical_cpus.map_or("?".into(), |n| n.to_string()),
         report.host.os,
         report.jobs,
-        report.seed
+        report.seed,
+        RESOURCE_ACCOUNTING,
+        report.preflight.as_ref().map_or("- preflight: host activity unreadable\n".to_string(), |a| format!(
+            "- preflight: unrelated processes used {:.2} cores over {:.1} s ({})\n",
+            a.unrelated_cores,
+            a.wall_ms / 1000.0,
+            if a.eligible { "eligible" } else { "ineligible" }
+        ))
     );
     for w in &report.workloads {
         s.push_str(&format!("## {}\n\n", w.workload));
+        if let Some(a) = &w.acceptance {
+            s.push_str(&format!("Acceptance: **{}** with {} complete admitted pairs.\n\n", a.verdict.label(), a.complete_pairs));
+            for reason in &a.reasons {
+                s.push_str(&format!("- {reason}\n"));
+            }
+            s.push('\n');
+        }
+        let busiest = w
+            .timed
+            .iter()
+            .flat_map(|r| &r.observations)
+            .filter_map(|o| o.activity.as_ref())
+            .max_by(|a, b| a.unrelated_cores.total_cmp(&b.unrelated_cores));
+        if let Some(a) = busiest {
+            s.push_str(&format!(
+                "Most unrelated activity around one timed build: {:.2} cores{}.\n\n",
+                a.unrelated_cores,
+                a.busiest.first().map_or(String::new(), |b| format!(", busiest `{}`", b.command))
+            ));
+        }
         if !w.validation_failures.is_empty() {
             s.push_str("Validation FAILED; nothing was timed:\n\n");
             for f in &w.validation_failures {
@@ -737,4 +1026,129 @@ pub fn markdown(report: &Report) -> String {
         s.push('\n');
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workload() -> Workload {
+        workload::all().into_iter().find(|w| w.name == "zlib").unwrap()
+    }
+
+    fn quiet() -> activity::Activity {
+        activity::Activity {
+            wall_ms: 5000.0,
+            unrelated_cpu_ms: 0,
+            unrelated_system_cpu_ms: Some(0),
+            unrelated_process_cpu_ms: 0,
+            unrelated_cores: 0.0,
+            busiest: Vec::new(),
+            eligible: true,
+        }
+    }
+
+    /// Timed replays where kache takes `kache_ms` of each pair's per-scenario
+    /// times and the other arms 100 ms.
+    fn timed(kache_ms: &[f64], activity: Option<activity::Activity>) -> Vec<Replay> {
+        let mut replays = Vec::new();
+        for (pair, &k) in kache_ms.iter().enumerate() {
+            for arm in Arm::ALL {
+                let observations = scenarios(&workload())
+                    .into_iter()
+                    .map(|scenario| Observation {
+                        scenario: scenario.to_string(),
+                        wall_ms: if arm == Arm::Kache { k } else { 100.0 },
+                        cpu_ms: 0.0,
+                        max_rss_kib: 0,
+                        codegen: None,
+                        counters: Counters::default(),
+                        objects: String::new(),
+                        object_count: 1,
+                        load: Default::default(),
+                        command: String::new(),
+                        activity: activity.clone(),
+                    })
+                    .collect();
+                replays.push(Replay { arm, pair: Some(pair), admitted: true, rejection: None, store_bytes: 0, observations });
+            }
+        }
+        replays
+    }
+
+    fn verdict(kache_ms: &[f64], activity: Option<activity::Activity>) -> AcceptanceVerdict {
+        let t = timed(kache_ms, activity);
+        accept(&workload(), &[], &t, &ratios(&workload(), &t), Some(&quiet())).verdict
+    }
+
+    #[test]
+    fn five_quiet_pairs_under_target_pass() {
+        assert_eq!(verdict(&[100.0, 101.0, 99.0, 100.5, 100.2], Some(quiet())), AcceptanceVerdict::Pass);
+    }
+
+    #[test]
+    fn four_pairs_are_undersampled_even_when_fast() {
+        assert_eq!(verdict(&[90.0, 91.0, 90.5, 90.2], Some(quiet())), AcceptanceVerdict::Undersampled);
+    }
+
+    #[test]
+    fn a_rejected_arm_leaves_its_pair_incomplete() {
+        let mut t = timed(&[100.0, 101.0, 99.0, 100.5, 100.2], Some(quiet()));
+        t[0].admitted = false;
+        let a = accept(&workload(), &[], &t, &ratios(&workload(), &t), Some(&quiet()));
+        assert_eq!((a.verdict, a.complete_pairs), (AcceptanceVerdict::Undersampled, 4));
+    }
+
+    #[test]
+    fn a_clear_miss_fails_and_a_crossing_interval_is_inconclusive() {
+        assert_eq!(verdict(&[150.0, 151.0, 149.0, 150.5, 150.2], Some(quiet())), AcceptanceVerdict::Fail);
+        assert_eq!(verdict(&[100.0, 130.0, 105.0, 125.0, 110.0], Some(quiet())), AcceptanceVerdict::Inconclusive);
+    }
+
+    #[test]
+    fn busy_or_unreadable_activity_is_ineligible_whatever_the_timings() {
+        let busy = activity::Activity { unrelated_cores: 2.0, eligible: false, ..quiet() };
+        assert_eq!(verdict(&[100.0, 101.0, 99.0, 100.5, 100.2], Some(busy)), AcceptanceVerdict::Ineligible);
+        assert_eq!(verdict(&[100.0, 101.0, 99.0, 100.5, 100.2], None), AcceptanceVerdict::Ineligible);
+        let t = timed(&[100.0, 101.0, 99.0, 100.5, 100.2], Some(quiet()));
+        let loud = activity::Activity { eligible: false, ..quiet() };
+        assert_eq!(accept(&workload(), &[], &t, &ratios(&workload(), &t), Some(&loud)).verdict, AcceptanceVerdict::Ineligible);
+    }
+
+    #[test]
+    fn more_pairs_only_while_short_of_five_or_a_target_is_crossed() {
+        assert!(needs_another_pair(&workload(), &timed(&[100.0; 4], Some(quiet()))));
+        assert!(!needs_another_pair(&workload(), &timed(&[100.0, 101.0, 99.0, 100.5, 100.2], Some(quiet()))));
+        assert!(needs_another_pair(&workload(), &timed(&[100.0, 130.0, 105.0, 125.0, 110.0], Some(quiet()))));
+    }
+
+    #[test]
+    fn every_arm_environment_is_declared_whole() {
+        let cfg = Config {
+            kache: "/opt/k/kache".into(),
+            ccache: "/opt/c/ccache".into(),
+            toolchain: "cc".into(),
+            out: "/out".into(),
+            workloads: Vec::new(),
+            pairs: 5,
+            seed: 1,
+            validate_only: false,
+            acceptance: true,
+            archives: Archives::default(),
+            jobs: 1,
+            meter: "/opt/k/kache-cc-bench".into(),
+            path: "/usr/bin:/bin".into(),
+        };
+        for arm in Arm::ALL {
+            let setup = arm_setup(&cfg, arm, Path::new("/out/w"), Path::new("/out/w/tree"), None, Path::new("/usr/bin/cc"), Path::new("/usr/bin/c++"));
+            let names: Vec<&str> = setup.env.iter().map(|(k, _)| k.as_str()).collect();
+            assert!(names.contains(&"PATH") && names.contains(&"HOME") && names.contains(&"TMPDIR"), "{arm:?} {names:?}");
+            assert_eq!(setup.env.iter().find(|(k, _)| k == "PATH").unwrap().1, "/usr/bin:/bin");
+        }
+        let kache = arm_setup(&cfg, Arm::Kache, Path::new("/out/w"), Path::new("/out/w/tree"), None, Path::new("/usr/bin/cc"), Path::new("/usr/bin/c++"));
+        assert!(kache.env.iter().any(|(k, v)| k == "KACHE_HOST_CONFIG" && v.is_empty()));
+        assert!(cfg.is_ours("/opt/k/kache-engine daemon run"));
+        assert!(cfg.is_ours("make -C /out/w/tree"));
+        assert!(!cfg.is_ours("/usr/bin/indexer"));
+    }
 }

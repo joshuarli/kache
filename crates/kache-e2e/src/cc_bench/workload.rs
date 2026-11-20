@@ -212,8 +212,11 @@ fn outputs(tree: &Path) -> Result<Vec<PathBuf>> {
     Ok(found)
 }
 
+/// Run `command` with exactly `env` plus the variables it set itself.
 fn run(command: &mut Command, env: &[(String, String)]) -> Result<()> {
-    command.envs(env.iter().map(|(k, v)| (k, v)));
+    let own: Vec<(std::ffi::OsString, std::ffi::OsString)> =
+        command.get_envs().filter_map(|(k, v)| v.map(|v| (k.to_owned(), v.to_owned()))).collect();
+    command.env_clear().envs(env.iter().map(|(k, v)| (k, v))).envs(own);
     let output = command.output().with_context(|| format!("running {command:?}"))?;
     if !output.status.success() {
         bail!(

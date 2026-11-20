@@ -8,6 +8,11 @@ use deser::Serialize;
 /// Two-sided 95% Student t quantiles for df = 1..=9, the locked 5..=10 pairs.
 const T_975: [f64; 9] = [12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262];
 
+/// `[perf_estimator] min_valid_pairs` and `max_valid_pairs` in
+/// `campaigns/cpp/lock.toml`.
+pub const MIN_PAIRS: usize = 5;
+pub const MAX_PAIRS: usize = 10;
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RatioSummary {
     pub pairs: usize,
