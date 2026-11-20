@@ -4735,8 +4735,9 @@ fn unix_link_arguments(args: &RustcArgs) -> Result<LinkArgInputs> {
     let mut inputs = LinkArgInputs::default();
     for (key, value) in &args.codegen_opts {
         if let ("link-arg" | "link-args", Some(value)) = (key.as_str(), value.as_deref()) {
-            let parsed = unix_link_arg_inputs(key, value)?;
+            let parsed = unix_link_arg_inputs(key, value, args.invocation_env())?;
             inputs.files.extend(parsed.files);
+            inputs.filelists.extend(parsed.filelists);
             inputs.dirs.extend(parsed.dirs);
             inputs.libs.extend(parsed.libs);
         }
@@ -4905,13 +4906,42 @@ fn fold_native_link_inputs<H: KeyFold>(
     } else {
         LinkArgInputs::default()
     };
-    for path in link_arguments
-        .dirs
-        .iter_mut()
-        .chain(&mut link_arguments.files)
-    {
+    for (list, directory) in &link_arguments.filelists {
+        let list = file_hasher.resolve_path(list)?;
+        let content = std::fs::read_to_string(&list)
+            .with_context(|| format!("reading linker file list {}", list.display()))?;
+        anyhow::ensure!(!content.contains('\r'), "invalid linker file list entry");
+        let directory = directory.as_ref().map(|dir| file_hasher.resolve_path(dir)).transpose()?;
+        link_arguments.files.push(list);
+        for entry in content.lines() {
+            anyhow::ensure!(!entry.is_empty(), "invalid linker file list entry");
+            let path = Path::new(entry);
+            link_arguments.files.push(match &directory {
+                Some(dir) => dir.join(path),
+                None => path.to_path_buf(),
+            });
+        }
+    }
+    for path in &mut link_arguments.dirs {
         *path = file_hasher.resolve_path(path)?;
     }
+    let mut searched_files = Vec::new();
+    for path in &mut link_arguments.files {
+        let resolved = file_hasher.resolve_path(path)?;
+        if !path.is_absolute() && !resolved.is_file() {
+            let candidates = link_arguments.dirs.iter().chain(search.native)
+                .map(|dir| file_hasher.resolve_path(&dir.join(&*path)))
+                .collect::<Result<Vec<_>>>()?;
+            let mut found = candidates.into_iter().filter(|candidate| candidate.is_file());
+            if let Some(first) = found.next() {
+                *path = first;
+                searched_files.extend(found);
+                continue;
+            }
+        }
+        *path = resolved;
+    }
+    link_arguments.files.extend(searched_files);
     let spelled_oso_root = crate::compiler::rustc::oso_prefix_root_for_key(args)
         .and_then(|path| args.resolve_invocation_path(&path));
     let oso_root = spelled_oso_root
@@ -5252,7 +5282,6 @@ fn linker_value_has_unmodeled_file(value: &str, apple_target: bool) -> bool {
             "-map"
                 | "-Map"
                 | "--Map"
-                | "-order_file"
                 | "-sectorder"
                 | "--symbol-ordering-file"
                 | "--call-graph-ordering-file"
@@ -10834,6 +10863,7 @@ fn ends_with_ignore_ascii_case(token: &str, suffix: &str) -> bool {
 pub(crate) struct LinkArgInputs {
     /// Linker inputs named by path, in argument order.
     pub files: Vec<PathBuf>,
+    filelists: Vec<(PathBuf, Option<PathBuf>)>,
     /// `-L` search directories, in argument order.
     pub dirs: Vec<PathBuf>,
     /// `-l` libraries as `(name, verbatim)`, in argument order. `-l:file`
@@ -10841,20 +10871,7 @@ pub(crate) struct LinkArgInputs {
     pub libs: Vec<(String, bool)>,
 }
 
-/// Parse one `link-arg` or `link-args` value (`key`) for a Unix link.
-///
-/// A `link-arg` is one driver argument and `link-args` splits on whitespace;
-/// a `-Wl,` argument carries comma-separated linker tokens. A token that names
-/// an input file by extension (see [`link_token_names_input_file`]), bare or
-/// as the value of a `--option=value`, must be an absolute path, so the key
-/// can hash the file the linker reads. The value of an option that names an
-/// output or a pattern is skipped (see [`takes_non_input_value`]). `-L<dir>`
-/// and `-L <dir>` add a search directory; any other search-path spelling
-/// (`-L=`, `--library-path`, a dangling `-L`) is an error rather than a
-/// directory we would not search. `-l<name>`, `-l <name>`, `--library=<name>`,
-/// `--library <name>` and ld64's `-hidden-l<name>` and its kin (see
-/// [`ld64_library_option`]) add a library for the caller to resolve.
-pub(crate) fn unix_link_arg_inputs(key: &str, value: &str) -> Result<LinkArgInputs> {
+fn unix_link_arg_inputs(key: &str, value: &str, env: &InvocationEnv) -> Result<LinkArgInputs> {
     let arguments: Vec<&str> = if key == "link-args" {
         value.split_whitespace().collect()
     } else {
@@ -10875,7 +10892,28 @@ pub(crate) fn unix_link_arg_inputs(key: &str, value: &str) -> Result<LinkArgInpu
             .with_context(|| format!("`{option}` without a value in linker argument {value:?}"))
     };
     while let Some(token) = tokens.next() {
-        if token == "-L" {
+        let (option, attached) = token.split_once('=').map_or((token, None), |(option, value)| (option, Some(value)));
+        if option == "-filelist" {
+            let operand = value_of(token, attached.or_else(|| tokens.next()))?;
+            let (list, directory) = operand.split_once(',').map_or((operand.as_str(), None), |(list, dir)| (list, Some(PathBuf::from(dir))));
+            anyhow::ensure!(!list.is_empty() && directory.as_ref().is_none_or(|dir| !dir.as_os_str().is_empty()), "invalid linker file list");
+            inputs.filelists.push((PathBuf::from(list), directory));
+        } else if let Some(skip) = linker_file_option(option) {
+            for _ in 0..skip {
+                value_of(token, tokens.next())?;
+            }
+            let operand = value_of(token, attached.or_else(|| tokens.next()))?;
+            inputs.files.push(PathBuf::from(operand));
+        } else if ["-Ttext", "-Tdata", "-Tbss", "-Trodata-segment", "-Tldata-segment"]
+            .iter()
+            .any(|prefix| token.starts_with(prefix))
+        {
+            if matches!(token, "-Ttext" | "-Tdata" | "-Tbss" | "-Ttext-segment" | "-Trodata-segment" | "-Tldata-segment") {
+                tokens.next();
+            }
+        } else if let Some(script) = token.strip_prefix("-T").filter(|name| !name.is_empty()) {
+            inputs.files.push(PathBuf::from(script));
+        } else if token == "-L" {
             inputs
                 .dirs
                 .push(PathBuf::from(value_of(token, tokens.next())?));
@@ -10901,19 +10939,33 @@ pub(crate) fn unix_link_arg_inputs(key: &str, value: &str) -> Result<LinkArgInpu
                 tokens.next();
             }
         } else {
-            let operand = match token.strip_prefix("--") {
-                Some(_) => token.split_once('=').map_or(token, |(_, value)| value),
-                None => token,
-            };
+            let operand = token.split_once('=').map_or(token, |(_, value)| value);
+            let path = Path::new(operand);
             if link_token_names_input_file(operand) {
-                if !Path::new(operand).is_absolute() {
+                if !path.is_absolute() {
                     bail!("linker input {operand:?} is not an absolute path");
                 }
-                inputs.files.push(PathBuf::from(operand));
+                inputs.files.push(path.to_path_buf());
+            } else if env.resolve(path).is_some_and(|resolved| resolved.is_file()) {
+                inputs.files.push(path.to_path_buf());
             }
         }
     }
     Ok(inputs)
+}
+
+fn linker_file_option(option: &str) -> Option<usize> {
+    match option {
+        "-sectcreate" => Some(2),
+        "-exported_symbols_list" | "-unexported_symbols_list" | "-reexported_symbols_list"
+        | "-order_file" | "-force_load"
+        | "-reexport_library" | "-weak_library" | "-upward_library" | "-lazy_library"
+        | "-bundle_loader" | "-dylib_file" | "-exported_symbols_order"
+        | "-T" | "--script" | "--version-script" | "--dynamic-list"
+        | "--retain-symbols-file" | "--just-symbols"
+        | "--exclude-libs-file" => Some(0),
+        _ => None,
+    }
 }
 
 /// The name an ld64 `-<modifier>-l<name>` option asks for: `man ld` says each

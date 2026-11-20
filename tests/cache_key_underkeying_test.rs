@@ -1107,3 +1107,68 @@ fn option_env_presence_changes_cached_behavior() {
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+fn ld64_input_regression(kind: u8) {
+    build_kache();
+    let root = TempDir::new().unwrap();
+    let cache = root.path().join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    let _daemon = common::DaemonGuard::new(kache_binary(), &cache);
+    let source = root.path().join("main.rs");
+    let input = root.path().join("input.txt");
+    let binary = root.path().join("program");
+    std::fs::write(&source, "#[no_mangle] pub extern \"C\" fn alpha() {}\n#[no_mangle] pub extern \"C\" fn beta() {}\nfn main() { alpha(); beta(); }\n").unwrap();
+    let flag = if kind == 1 {
+        format!("-Clink-arg=-Wl,-sectcreate,__DATA,__note,{}", input.display())
+    } else if kind == 2 {
+        format!("-Clink-arg=-Wl,-alias_list,{}", input.display())
+    } else {
+        format!("-Clink-arg=-Wl,-exported_symbols_list,{}", input.display())
+    };
+    let config = isolated_config_path(&cache);
+    std::fs::write(&config, format!("[cache]\nlocal_only = true\nignore_env = true\ncache_executables = true\nlocal_store = {}\nruntime_dir = {}\n", toml_path(&cache), toml_path(&cache))).unwrap();
+    let compile = |cached: bool| {
+        let mut cmd = hermetic_command(if cached { kache_binary() } else { PathBuf::from(rustc_path()) }, &cache, Some(&config));
+        if cached { cmd.arg(rustc_path()); }
+        let output = cmd.arg(&source).args(["--crate-name", "ld_input", "-o"]).arg(&binary).arg("-Clink-dead-code=yes").arg(&flag).current_dir(root.path()).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let output = if kind == 1 {
+            std::process::Command::new("otool").args(["-s", "__DATA", "__note"]).arg(&binary).output().unwrap()
+        } else {
+            std::process::Command::new("nm").arg("-gU").arg(&binary).output().unwrap()
+        };
+        assert!(output.status.success());
+        if kind == 2 {
+            String::from_utf8(output.stdout).unwrap().lines()
+                .filter(|line| line.contains("_alias_"))
+                .collect::<Vec<_>>().join("\n").into_bytes()
+        } else {
+            output.stdout
+        }
+    };
+    std::fs::write(&input, if kind == 1 { "first-note" } else if kind == 2 { "_alpha _alias_first\n" } else { "_alpha\n" }).unwrap();
+    common::settle_writes(&[root.path()]);
+    let before = compile(true);
+    assert_eq!(compile(true), before);
+    assert_eq!(compiled_hit_counts(&cache), (1, 1));
+    std::fs::write(&input, if kind == 1 { "other-note" } else if kind == 2 { "_alpha _alias_other\n" } else { "_beta\n" }).unwrap();
+    common::settle_writes(&[root.path()]);
+    let expected = compile(false);
+    assert_ne!(before, expected);
+    let actual = compile(true);
+    assert_eq!(actual, expected, "changed linker input must not restore stale output");
+    assert_eq!(compiled_hit_counts(&cache), (2, 1));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn exported_symbols_file_change_misses() { ld64_input_regression(0); }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sectcreate_file_change_misses() { ld64_input_regression(1); }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn unknown_file_option_change_misses() { ld64_input_regression(2); }
