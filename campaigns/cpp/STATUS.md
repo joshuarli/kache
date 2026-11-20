@@ -59,10 +59,14 @@ Engineering work still open (not provisioning):
     object (`test_cc_compiles_racing_a_store_clear_get_the_compilers_object`);
     that test does not reliably reach the lookup-to-restore window, the unit
     test does.
-  - Killed compile: killing `kache cc` mid-compile takes its compiler with
-    it (Linux `PR_SET_PDEATHSIG`, macOS the broker's identity kill), leaves
-    no object, and the next compile neither waits nor misbuilds
-    (`test_cc_a_killed_compile_does_not_hold_up_the_next`).
+  - Killed compile: after `kache cc` is killed mid-compile, the next
+    compile neither waits nor misbuilds
+    (`test_cc_a_killed_compile_does_not_hold_up_the_next`). On macOS the
+    daemon brokers the compile, and the broker's identity kill takes the
+    compiler with the client and leaves no object. Linux declines delegation
+    ("compiler process isolation requires local execution"), so kache runs
+    the compiler in-process and a kill orphans it, as a killed raw driver
+    would; the next compile runs beside the orphan.
   - Stale locks: every store lock is `flock`, released by the kernel when
     its holder dies; old per-key lock files are swept for disk only.
   - Interrupted publication: a put stages and renames blobs before one

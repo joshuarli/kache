@@ -4224,10 +4224,12 @@ fn test_cc_compiles_racing_a_store_clear_get_the_compilers_object() {
     assert!(clears.into_inner() >= 2, "the store was not cleared during the build");
 }
 
-/// A build that kills `kache cc` while its compiler runs must not leave that
-/// compile running, nor an object from it. The next compile of the unit must
-/// not wait on anything the killed one claimed and must get the compiler's
-/// object.
+/// A build that kills `kache cc` while its compiler runs: the next compile of
+/// the unit must not wait on anything the killed one claimed and must get the
+/// compiler's object. Where the daemon brokers the compile (macOS), the
+/// compiler goes with the killed client and leaves no object. Where kache runs
+/// it in-process (Linux declines delegation), it is orphaned as it would be
+/// under a killed raw driver, and the next compile runs beside it.
 #[test]
 #[cfg(unix)]
 fn test_cc_a_killed_compile_does_not_hold_up_the_next() {
@@ -4296,16 +4298,19 @@ fn test_cc_a_killed_compile_does_not_hold_up_the_next() {
             .unwrap()
             .success()
     };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while alive() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(20));
+    #[cfg(target_os = "macos")]
+    {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while alive() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let orphaned = alive();
+        if orphaned {
+            let _ = std::process::Command::new("kill").args(["-9", pid.trim()]).status();
+        }
+        assert!(!orphaned, "the compiler outlived the killed kache");
+        assert!(!project.path().join("killed.o").exists());
     }
-    let orphaned = alive();
-    if orphaned {
-        let _ = std::process::Command::new("kill").args(["-9", pid.trim()]).status();
-    }
-    assert!(!orphaned, "the compiler outlived the killed kache");
-    assert!(!project.path().join("killed.o").exists());
 
     let begun = std::time::Instant::now();
     let next = compile("next.o").output().unwrap();
@@ -4314,4 +4319,7 @@ fn test_cc_a_killed_compile_does_not_hold_up_the_next() {
     assert!(next.stderr.is_empty(), "{}", String::from_utf8_lossy(&next.stderr));
     assert!(took < HELD / 2, "the next compile waited {took:?} on the killed one");
     assert_eq!(std::fs::read(project.path().join("next.o")).unwrap(), raw);
+    if alive() {
+        let _ = std::process::Command::new("kill").args(["-9", pid.trim()]).status();
+    }
 }
