@@ -38,10 +38,44 @@ fn probe() -> Result<()> {
             "auto_recover_min_free_bytes": 0,
         }}))?,
     )?;
+    let exe = crate::platform::frontend_executable().context("locating the running frontend")?;
+    let compiled = compile_twice(&exe, root, &config, &cache, &output);
+    let mut stop = probe_command(&exe, "daemon", root, &config);
+    stop.arg("stop");
+    let stopped = run(&mut stop, &root.join("daemon-stop.log"), Duration::from_secs(40))
+        .context("stopping the probe's daemon");
+    compiled.and(stopped)
+}
+
+/// `kache <subcommand>` confined to the probe's configuration, so neither its
+/// compilations nor the daemon they start reach the configured store or socket.
+fn probe_command(exe: &Path, subcommand: &str, root: &Path, config: &Path) -> Command {
+    let mut command = crate::platform::self_command(exe, subcommand);
+    command
+        .current_dir(root)
+        .env("KACHE_CONFIG", config)
+        .env("KACHE_HOST_CONFIG", "")
+        .env("KACHE_LOG", "off")
+        .env("KACHE_LOG_FILE_PATH", root.join("probe.log"))
+        .env("TMPDIR", root)
+        .env("TMP", root)
+        .env("TEMP", root)
+        .env_remove("KACHE_LOG_FILE")
+        .env_remove("KACHE_SOCKET_PATH")
+        .env_remove("KACHE_ACTIVE");
+    command
+}
+
+fn compile_twice(
+    exe: &Path,
+    root: &Path,
+    config: &Path,
+    cache: &Path,
+    output: &Path,
+) -> Result<()> {
     let source = root.join("lib.rs");
     fs::write(&source, "pub fn answer() -> u32 { 42 }\n")?;
-    let exe = crate::platform::frontend_executable().context("locating the running frontend")?;
-    let mut command = crate::platform::self_command(&exe, "rustc");
+    let mut command = probe_command(exe, "rustc", root, config);
     command
         .args([
             "--crate-name",
@@ -52,18 +86,8 @@ fn probe() -> Result<()> {
             "--emit=link,dep-info",
             "--out-dir",
         ])
-        .arg(&output)
+        .arg(output)
         .arg(&source)
-        .current_dir(root)
-        .env("KACHE_CONFIG", &config)
-        .env("KACHE_HOST_CONFIG", "")
-        .env("KACHE_LOG", "off")
-        .env("KACHE_LOG_FILE_PATH", root.join("probe.log"))
-        .env("TMPDIR", root)
-        .env("TMP", root)
-        .env("TEMP", root)
-        .env_remove("KACHE_LOG_FILE")
-        .env_remove("KACHE_ACTIVE")
         .env_remove("RUSTC_WRAPPER")
         .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
         .env_remove("OUT_DIR")
@@ -92,8 +116,8 @@ fn probe() -> Result<()> {
         first.store_error
     );
     let expected = fs::read(output.join("libkache_doctor_probe.rlib"))?;
-    fs::remove_dir_all(&output)?;
-    fs::create_dir_all(&output)?;
+    fs::remove_dir_all(output)?;
+    fs::create_dir_all(output)?;
     run(&mut command, &log, Duration::from_secs(30)).context("second Rust compilation")?;
     let events = crate::events::read_events(&cache.join("events.jsonl"))?;
     let second = events
