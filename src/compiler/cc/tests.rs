@@ -2573,6 +2573,44 @@ fn refuses_modules() {
 }
 
 #[test]
+fn recorded_switches_key_the_literal_invocation() {
+    let key = |cwd: &str, args: &[&str], maps: &[CcPrefixMap]| {
+        let env = InvocationEnv::from_parts([("PATH", "")], Some(PathBuf::from(cwd)), None, PathBuf::from(cwd));
+        let parsed = CcArgs::parse_for(&s(args), &env).unwrap();
+        assert!(parsed.refuse_reasons(&[]).is_empty());
+        assert!(!cc_direct_key_shape_ok(&parsed));
+        cc_raw_flags_for_key(&parsed, maps)
+    };
+    let args = ["clang", "-frecord-gcc-switches", "-Ia", "-c", "u.c", "-o", "a.o"];
+    let original = key("/a", &args, &[]);
+    assert_eq!(original, key("/a", &args, &[]));
+    for changed in [
+        ["clang", "-frecord-gcc-switches", "-Ib", "-c", "u.c", "-o", "a.o"],
+        ["clang", "-frecord-gcc-switches", "-Ia", "-c", "u.c", "-o", "b.o"],
+        ["clang", "-frecord-gcc-switches", "-Ia", "-c", "./u.c", "-o", "a.o"],
+    ] {
+        assert_ne!(original, key("/a", &changed, &[]));
+    }
+    assert_ne!(original, key("/b", &args, &[]));
+    assert_ne!(original, key("/a", &args, &[CcPrefixMap { from: "/a".into(), to: "/mapped".into() }]));
+    let plain = CcArgs::parse(&s(&["clang", "-Ia", "-c", "u.c", "-o", "a.o"])).unwrap();
+    assert!(cc_raw_flags_for_key(&plain, &[]).is_empty());
+    assert!(cc_direct_key_shape_ok(&plain));
+}
+
+#[test]
+fn sanitizer_coverage_lists_are_raw_keyed() {
+    for flag in ["-fsanitize-coverage=trace-pc", "-fsanitize-coverage=trace-pc-guard", "-fsanitize-coverage=inline-8bit-counters,pc-table,trace-cmp"] {
+        let parsed = CcArgs::parse(&s(&["clang", flag, "-fsanitize=fuzzer-no-link", "-c", "u.c", "-o", "u.o"])).unwrap();
+        assert!(parsed.refuse_reasons(&[]).is_empty());
+        assert_eq!(cc_raw_flags_for_key(&parsed, &[]), vec![flag.as_bytes().to_vec(), b"-fsanitize=fuzzer-no-link".to_vec()]);
+    }
+    for flag in ["-fsanitize-coverage=", "-fsanitize-coverage=trace-cmp,", "-fsanitize-coverage=trace-loads"] {
+        assert!(!refuse_descriptions(&["clang", flag, "-c", "u.c", "-o", "u.o"]).is_empty());
+    }
+}
+
+#[test]
 fn refuses_output_to_stdout() {
     let descs = refuse_descriptions(&["cc", "-c", "foo.c", "-o", "-"]);
     assert!(
@@ -2592,7 +2630,7 @@ fn refuses_flags_unclassified_in_cc_flags_table() {
         // unmodeled -f… / -m… codegen flags. (-ffast-math / -fno-finite-math-only
         // / -mrecip= are now CapturedByProbe — modeled from the Firefox bench — so
         // they are deliberately NOT here; these remain genuinely unmodeled.)
-        "-fsanitize-coverage=trace-pc",
+        "-fsanitize-coverage=trace-loads",
         "-fno-pic",
         "-mtune=skylake",
         // unmodeled optimization / debug variants
@@ -4252,7 +4290,7 @@ fn refuse_reason_names_the_rejected_flags() {
         "-o",
         "foo.o",
         "-mtune=skylake",
-        "-fsanitize-coverage=trace-pc",
+        "-fsanitize-coverage=trace-loads",
     ]);
     let detail = descs
         .iter()
@@ -4263,7 +4301,7 @@ fn refuse_reason_names_the_rejected_flags() {
         "reason should name the flag: {detail}"
     );
     assert!(
-        detail.contains("-fsanitize-coverage=trace-pc"),
+        detail.contains("-fsanitize-coverage=trace-loads"),
         "reason should name every rejected flag: {detail}"
     );
 }

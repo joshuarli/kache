@@ -321,6 +321,33 @@ ccache.suite = "profiling_clang.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-flag-record-gcc-switches"
+package = "CCP-03"
+summary = "recorded argv preserves include/output paths and prefix maps"
+profiles = ["both"]
+compilers = ["gcc", "clang", "apple-clang"]
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-sanitize-coverage"
+package = "CCP-03"
+summary = "trace-pc and trace-cmp instrumentation restores exact objects"
+profiles = ["both"]
+compilers = ["gcc", "clang", "apple-clang"]
+ccache.suite = "sanitize.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-sanitize-coverage-clang"
+package = "CCP-03"
+summary = "Clang guard/counter/pc-table instrumentation and fuzzer-no-link combinations"
+profiles = ["both"]
+compilers = ["clang", "apple-clang"]
+ccache.suite = "sanitize.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-input-pgo-profile"
 package = "CCP-02"
 summary = "-fprofile-use / -fauto-profile content change invalidates (keyed by file content, not spelling)"

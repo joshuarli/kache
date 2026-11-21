@@ -1337,6 +1337,10 @@ impl CcArgs {
         })
     }
 
+    fn records_switches(&self) -> bool {
+        self.rest.iter().any(|arg| arg == "-frecord-gcc-switches")
+    }
+
     /// Split DWARF: the object names its `.dwo` as the output was spelled.
     fn splits_dwarf(&self) -> bool {
         self.rest.iter().any(|arg| arg == "-gsplit-dwarf")
@@ -3350,6 +3354,8 @@ fn parse_define(s: &str) -> (String, Option<String>) {
 /// the safety signal: a flag kache has never seen could miscache,
 /// so the conservative default is to passthrough.
 pub static CC_FLAGS: &[FlagSpec] = &[
+    FlagSpec { matcher: Matcher::Regex(r"-fsanitize-coverage=(trace-pc|trace-pc-guard|inline-8bit-counters|pc-table|trace-cmp)(,(trace-pc|trace-pc-guard|inline-8bit-counters|pc-table|trace-cmp))*"), class: FlagClass::RawKeyed, source: "argv-only sanitizer instrumentation, including fuzzer-no-link combinations; other modes remain unmodeled", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-frecord-gcc-switches"), class: FlagClass::RawKeyed, source: "Clang records input/output/include paths and prefix-map operands; key the full literal argv, cwd and injected maps, bind to this checkout, and disable private dependency capture", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fno-delete-null-pointer-checks"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fno-strict-overflow"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fno-ident"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
@@ -5157,6 +5163,9 @@ fn cc_supported_mllvm_value(value: &str) -> bool {
 fn cc_raw_flags_for_key(parsed: &CcArgs, prefix_maps: &[CcPrefixMap]) -> Vec<Vec<u8>> {
     let dialect = parsed.family.dialect();
     let mut flags = Vec::new();
+    if parsed.records_switches() {
+        flags.push(format!("recorded.argv.v1={:?}", (&parsed.program, &parsed.rest, parsed.invocation_env.cwd(), file_prefix_map_args(prefix_maps))).into_bytes());
+    }
     let mut args = parsed.rest.iter();
     while let Some(arg) = args.next() {
         if arg == "-mllvm" || arg.starts_with("-Xarch_") {
@@ -8498,6 +8507,7 @@ pub(crate) fn cc_direct_key_eligible(parsed: &CcArgs) -> bool {
 /// read set, so it keeps the classic path.
 fn cc_direct_key_shape_ok(parsed: &CcArgs) -> bool {
     parsed.family.dialect() == Dialect::Gnu
+        && !parsed.records_switches()
         && parsed.mode == CompileMode::Compile
         && parsed.sources.len() == 1
         && parsed
@@ -9903,7 +9913,7 @@ impl CcCompiler {
         );
         // PCH and coverage outputs can record absolute paths that prefix maps
         // do not rewrite, even when the preprocessor expansion is portable.
-        if parsed.mode == CompileMode::Precompile || parsed.coverage_instrumented() {
+        if parsed.mode == CompileMode::Precompile || parsed.coverage_instrumented() || parsed.records_switches() {
             self.key_path_bound.set(true);
         }
         // A read set whose object spells a checkout root is keyed to that

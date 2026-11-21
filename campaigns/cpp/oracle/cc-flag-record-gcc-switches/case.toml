@@ -1,0 +1,39 @@
+summary = "Recorded compiler switches retain literal include/output and prefix-map operands; private dependency-capture paths must never enter the object"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+requires = [["{cc}", "-frecord-gcc-switches", "-x", "c", "-c", "-", "-o", "probe.o"]]
+outputs = ["a.o", "b.o"]
+
+[[compile]]
+argv = ["{cc}", "-frecord-gcc-switches", "@args.rsp", "-c", "u.c"]
+source = "u.c"
+also_names = ["@args.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "include-change"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "args.rsp", content = "-Ib -o a.o\n" }]
+
+[[step]]
+name = "object-change"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "args.rsp", content = "-Ib -o b.o\n" }]
+
+[[step]]
+name = "prefix-map-change"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "args.rsp", content = "-Ib -o b.o -ffile-prefix-map=/unmatched=/mapped\n" }]
+
+[[step]]
+name = "restore-variant"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
