@@ -8,11 +8,12 @@
 //!   macOS) less the build's own metered CPU and the benchmark's long-lived
 //!   processes (the kache daemon). This sees short-lived processes, such as
 //!   a parallel compile's, that no process listing catches.
-//! - the CPU time `ps` reports for each process outside the benchmark, which
-//!   names the busiest ones.
+//! - per-process CPU time (`/proc/<pid>/stat` on Linux, `ps` elsewhere),
+//!   which names the busiest processes outside the benchmark.
 
 use deser::Serialize;
 use std::collections::BTreeMap;
+#[cfg(not(target_os = "linux"))]
 use std::process::Command;
 use std::time::Instant;
 
@@ -26,6 +27,8 @@ const TOP: usize = 5;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Process {
     pub cpu_ms: u64,
+    /// Linux start time in ticks since boot, independent of the command name.
+    pub start_time: Option<u64>,
     /// The whole command line, used only to tell the benchmark's processes
     /// apart; it never reaches the report.
     pub command: String,
@@ -60,7 +63,7 @@ pub struct Activity {
     /// Host busy time less the build's and the benchmark's own CPU; `None`
     /// where the host counters cannot be read.
     pub unrelated_system_cpu_ms: Option<u64>,
-    /// The sum over processes `ps` lists outside the benchmark.
+    /// The sum over sampled processes outside the benchmark.
     pub unrelated_process_cpu_ms: u64,
     pub unrelated_cores: f64,
     pub busiest: Vec<Busy>,
@@ -68,17 +71,36 @@ pub struct Activity {
 }
 
 impl Snapshot {
-    /// `None` when `ps` cannot be run or read: the host's activity is then
-    /// unknown, which acceptance treats as ineligible.
+    /// Unreadable host activity is unknown and ineligible for acceptance.
     pub fn take() -> Option<Self> {
-        let output = Command::new("ps").args(["-A", "-o", "pid=,time=,command="]).env_clear().env("LC_ALL", "C").output().ok()?;
-        let names = Command::new("ps").args(["-A", "-o", "pid=,comm="]).env_clear().env("LC_ALL", "C").output().ok()?;
-        (output.status.success() && names.status.success()).then(|| Snapshot {
-            at: Instant::now(),
-            processes: parse_ps(&String::from_utf8_lossy(&output.stdout)),
-            system_busy_ms: system_busy_ms(),
-            names: parse_names(&String::from_utf8_lossy(&names.stdout)),
-        })
+        #[cfg(target_os = "linux")]
+        let (processes, names) = {
+            let mut processes = BTreeMap::new();
+            let mut names = BTreeMap::new();
+            for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+                let Some(pid) = entry.file_name().to_str().and_then(|name| name.parse().ok()) else {
+                    continue;
+                };
+                if let Some((process, name)) = linux_process(pid) {
+                    processes.insert(pid, process);
+                    names.insert(pid, name);
+                }
+            }
+            if processes.is_empty() {
+                return None;
+            }
+            (processes, names)
+        };
+        #[cfg(not(target_os = "linux"))]
+        let (processes, names) = {
+            let output = Command::new("ps").args(["-A", "-o", "pid=,time=,command="]).env_clear().env("LC_ALL", "C").output().ok()?;
+            let names = Command::new("ps").args(["-A", "-o", "pid=,comm="]).env_clear().env("LC_ALL", "C").output().ok()?;
+            if !output.status.success() || !names.status.success() {
+                return None;
+            }
+            (parse_ps(&String::from_utf8_lossy(&output.stdout)), parse_names(&String::from_utf8_lossy(&names.stdout)))
+        };
+        Some(Snapshot { at: Instant::now(), processes, system_busy_ms: system_busy_ms(), names })
     }
 
     /// Activity between `self` and `later`. This process, every process for
@@ -90,7 +112,15 @@ impl Snapshot {
         let mut own_ms = 0;
         let mut busy = Vec::new();
         for (pid, process) in &later.processes {
-            let before = self.processes.get(pid).filter(|p| p.command == process.command).map_or(0, |p| p.cpu_ms);
+            let before = self
+                .processes
+                .get(pid)
+                .filter(|p| match (p.start_time, process.start_time) {
+                    (Some(before), Some(after)) => before == after,
+                    (None, None) => p.command == process.command,
+                    _ => false,
+                })
+                .map_or(0, |p| p.cpu_ms);
             let cpu_ms = process.cpu_ms.saturating_sub(before);
             if *pid == me || ours(&process.command) {
                 own_ms += cpu_ms;
@@ -122,6 +152,35 @@ impl Snapshot {
 /// Clock ticks per second in both host counters: Linux `USER_HZ` and the
 /// Mach CPU load ticks are both 100 Hz.
 const TICK_MS: u64 = 10;
+
+#[cfg(target_os = "linux")]
+fn linux_process(pid: u32) -> Option<(Process, String)> {
+    let root = std::path::PathBuf::from(format!("/proc/{pid}"));
+    let before = std::fs::read_to_string(root.join("stat")).ok()?;
+    let (_, _, start_time) = parse_linux_stat(&before)?;
+    let command = std::fs::read(root.join("cmdline")).ok()?;
+    let after = std::fs::read_to_string(root.join("stat")).ok()?;
+    let (name, cpu_ms, after_start_time) = parse_linux_stat(&after)?;
+    // Keep the identity, CPU counter and command from one process lifetime.
+    if start_time != after_start_time {
+        return None;
+    }
+    let command = String::from_utf8_lossy(&command).split_terminator('\0').collect::<Vec<_>>().join(" ");
+    let command = if command.is_empty() { format!("[{name}]") } else { command };
+    Some((Process { cpu_ms, start_time: Some(start_time), command }, name.rsplit('/').next()?.to_string()))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_linux_stat(text: &str) -> Option<(&str, u64, u64)> {
+    let (head, rest) = text.rsplit_once(") ")?;
+    let (_, name) = head.split_once('(')?;
+    let mut fields = rest.split_whitespace();
+    // Fields 14/15 (CPU) and 22 (start), after the parenthesized comm.
+    let user: u64 = fields.nth(11)?.parse().ok()?;
+    let system: u64 = fields.next()?.parse().ok()?;
+    let start_time = fields.nth(6)?.parse().ok()?;
+    Some((name, user.checked_add(system)?.checked_mul(TICK_MS)?, start_time))
+}
 
 #[cfg(target_os = "linux")]
 fn system_busy_ms() -> Option<u64> {
@@ -166,6 +225,7 @@ fn system_busy_ms() -> Option<u64> {
 
 /// `ps -o pid=,time=,command=` output. `time` is `[[dd-]hh:]mm:ss[.cc]`:
 /// procps prints whole seconds, macOS prints hundredths.
+#[cfg(any(not(target_os = "linux"), test))]
 pub fn parse_ps(text: &str) -> BTreeMap<u32, Process> {
     text.lines()
         .filter_map(|line| {
@@ -173,12 +233,13 @@ pub fn parse_ps(text: &str) -> BTreeMap<u32, Process> {
             let pid = fields.next()?.parse().ok()?;
             let cpu_ms = parse_cpu_time(fields.next()?)?;
             let command = fields.collect::<Vec<_>>().join(" ");
-            Some((pid, Process { cpu_ms, command }))
+            Some((pid, Process { cpu_ms, start_time: None, command }))
         })
         .collect()
 }
 
 /// `ps -o pid=,comm=` output, reduced to each executable's file name.
+#[cfg(any(not(target_os = "linux"), test))]
 pub fn parse_names(text: &str) -> BTreeMap<u32, String> {
     text.lines()
         .filter_map(|line| {
@@ -190,6 +251,7 @@ pub fn parse_names(text: &str) -> BTreeMap<u32, String> {
         .collect()
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn parse_cpu_time(text: &str) -> Option<u64> {
     let (days, clock) = match text.split_once('-') {
         Some((days, clock)) => (days.parse::<u64>().ok()?, clock),
@@ -216,8 +278,12 @@ mod tests {
     }
 
     fn snapshot(at: Instant, text: &str) -> Snapshot {
-        let names = parse_ps(text).into_iter().map(|(pid, p)| (pid, p.command.split(' ').next().unwrap().rsplit('/').next().unwrap().to_string())).collect();
-        Snapshot { at, processes: parse_ps(text), system_busy_ms: None, names }
+        let mut processes = parse_ps(text);
+        for (pid, process) in &mut processes {
+            process.start_time = Some(u64::from(*pid));
+        }
+        let names = processes.iter().map(|(pid, p)| (*pid, p.command.split(' ').next().unwrap().rsplit('/').next().unwrap().to_string())).collect();
+        Snapshot { at, processes, system_busy_ms: None, names }
     }
 
     #[test]
@@ -263,10 +329,11 @@ mod tests {
     fn activity_counts_only_unrelated_processes_and_new_ones_in_full() {
         let start = Instant::now();
         let before = snapshot(start, "  10 0:10.00 /usr/bin/indexer --all\n  20 0:01.00 /bench/kache-engine daemon run\n  30 0:05.00 old-name\n");
-        let after = snapshot(
+        let mut after = snapshot(
             start + std::time::Duration::from_secs(10),
             "  10 0:14.00 /usr/bin/indexer --all\n  20 0:09.00 /bench/kache-engine daemon run\n  30 0:01.00 reused-pid\n  40 0:02.00 /usr/bin/newcomer\n",
         );
+        after.processes.get_mut(&30).unwrap().start_time = Some(31);
         let activity = before.until(&after, |command| command.starts_with("/bench/"), 0);
         assert_eq!(activity.unrelated_cpu_ms, 4000 + 1000 + 2000);
         assert!((activity.unrelated_cores - 0.7).abs() < 0.01, "{activity:?}");
@@ -283,5 +350,90 @@ mod tests {
         let activity = before.until(&after, |_| false, 0);
         assert!(activity.eligible, "{activity:?}");
         assert_eq!(activity.busiest.len(), 1);
+    }
+
+    #[test]
+    fn renamed_process_keeps_its_cpu_baseline() {
+        let start = Instant::now();
+        let before = snapshot(start, "1009580 00:00:01 [kworker/u16:4-writeback]");
+        let after = snapshot(start + std::time::Duration::from_millis(100), "1009580 00:00:01 [kworker/u16:4-ext4-rsv-conversion]");
+        let activity = before.until(&after, |_| false, 0);
+        assert_eq!(activity.unrelated_cpu_ms, 0);
+        assert!(activity.eligible, "{activity:?}");
+        assert!(activity.busiest.is_empty());
+    }
+
+    #[test]
+    fn reused_pid_with_the_same_command_counts_its_new_counter_in_full() {
+        let start = Instant::now();
+        let before = snapshot(start, "30 00:00:05 /usr/bin/worker");
+        for time in ["00:00:01", "00:00:08"] {
+            let mut after = snapshot(start + std::time::Duration::from_secs(1), &format!("30 {time} /usr/bin/worker"));
+            after.processes.get_mut(&30).unwrap().start_time = Some(31);
+            let activity = before.until(&after, |_| false, 0);
+            let expected = parse_cpu_time(time).unwrap();
+            assert_eq!(activity.unrelated_cpu_ms, expected);
+            assert_eq!(activity.busiest[0].cpu_ms, expected);
+            assert!(!activity.eligible);
+        }
+    }
+
+    #[test]
+    fn renamed_own_process_only_subtracts_its_interval_cpu() {
+        let start = Instant::now();
+        let mut before = snapshot(start, "20 00:00:10 /bench/worker old");
+        let mut after = snapshot(start + std::time::Duration::from_secs(1), "20 00:00:11 /bench/worker new");
+        before.system_busy_ms = Some(100_000);
+        after.system_busy_ms = Some(102_000);
+        let activity = before.until(&after, |c| c.starts_with("/bench/"), 0);
+        assert_eq!(activity.unrelated_system_cpu_ms, Some(1000));
+        assert_eq!(activity.unrelated_cpu_ms, 1000);
+        assert!(!activity.eligible);
+    }
+
+    #[test]
+    fn empty_process_snapshots_have_no_process_cpu() {
+        let start = Instant::now();
+        let before = snapshot(start, "");
+        let after = snapshot(start + std::time::Duration::from_secs(1), "");
+        let activity = before.until(&after, |_| false, 0);
+        assert_eq!(activity.unrelated_cpu_ms, 0);
+        assert!(activity.busiest.is_empty());
+        assert!(activity.eligible);
+    }
+
+    #[test]
+    fn unknown_start_times_keep_the_conservative_command_fallback() {
+        let start = Instant::now();
+        for (before_time, after_time, command, expected) in
+            [(None, None, "/usr/bin/worker", 1000), (None, None, "/usr/bin/replacement", 2000), (Some(30), None, "/usr/bin/worker", 2000), (None, Some(30), "/usr/bin/worker", 2000)]
+        {
+            let mut before = snapshot(start, "30 00:00:01 /usr/bin/worker");
+            let mut after = snapshot(start + std::time::Duration::from_secs(1), &format!("30 00:00:02 {command}"));
+            before.processes.get_mut(&30).unwrap().start_time = before_time;
+            after.processes.get_mut(&30).unwrap().start_time = after_time;
+            assert_eq!(before.until(&after, |_| false, 0).unrelated_cpu_ms, expected);
+        }
+    }
+
+    #[test]
+    fn linux_stat_uses_cpu_and_start_time_after_a_parenthesized_command() {
+        let stat = "42 (worker ) tricky (name)) R 1 2 3 4 5 6 7 8 9 10 123 456 0 0 0 0 0 0 789 0";
+        assert_eq!(parse_linux_stat(stat), Some(("worker ) tricky (name)", 5790, 789)));
+        for invalid in [String::new(), "42 (worker) R".to_string(), stat.replace("123", "bad"), stat.replace("789", "bad"), stat.replace("123", &u64::MAX.to_string())] {
+            assert_eq!(parse_linux_stat(&invalid), None, "{invalid}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_snapshot_records_current_process_start_time() {
+        let snapshot = Snapshot::take().unwrap();
+        let pid = std::process::id();
+        let process = &snapshot.processes[&pid];
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        assert_eq!(process.start_time, Some(parse_linux_stat(&stat).unwrap().2));
+        assert!(!process.command.is_empty());
+        assert!(!snapshot.names[&pid].is_empty());
     }
 }
