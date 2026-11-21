@@ -1912,7 +1912,7 @@ fn cc_passthrough(
         parsed
             .invocation_env
             .command(&parsed.program)?
-            .args(&parsed.rest),
+            .args(parsed.execution_args()),
     )
     .with_context(|| format!("executing {}", parsed.program))?;
     Ok(PassthroughOutput {
