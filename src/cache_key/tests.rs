@@ -5969,6 +5969,60 @@ fn clippy_identity_follows_version_config_and_lint_arguments() {
     assert!(with_args.contains("CLIPPY_ARGS=-Dclippy::all"));
 }
 
+#[cfg(unix)]
+#[test]
+fn clippy_lint_arguments_key_a_clippy_chain_and_no_other_compile() {
+    let _lock = key_test_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("lib.rs");
+    std::fs::write(&source, "pub fn value() {}\n").unwrap();
+    let driver = dir.path().join("clippy-driver");
+    kache_fs::testutil::write_executable(
+        &driver,
+        "#!/bin/sh\necho 'clippy 0.1.98 (abc 2026-09-01)'\n",
+    );
+    let rustc = dir.path().join("rustc");
+    kache_fs::testutil::write_executable(
+        &rustc,
+        "#!/bin/sh\necho 'rustc 1.101.0-nightly (c1070d693)'\n",
+    );
+    let argv = |launcher: &[&Path]| {
+        let mut argv: Vec<String> = launcher.iter().map(|p| p.display().to_string()).collect();
+        argv.extend(
+            ["--crate-name", "mxcrate"]
+                .map(String::from)
+                .into_iter()
+                .chain([source.display().to_string()])
+                .chain(["--crate-type", "lib", "--edition=2021"].map(String::from)),
+        );
+        argv
+    };
+    let chain = argv(&[&driver, &rustc]);
+    let plain = argv(&[&rustc]);
+    let key = |argv: &[String], env: &KeyEnv| {
+        provide_dep_info(
+            DepInfo {
+                source_files: vec![source.clone()],
+                env_deps: vec![],
+            },
+            None,
+        );
+        key_with(argv, env)
+    };
+    let with = |argv: &[String], lint_args: &str| key(argv, &env_with("CLIPPY_ARGS", lint_args));
+    let without = |argv: &[String]| key(argv, &KeyEnv::default());
+
+    let denied = with(&chain, "-Dclippy::all");
+    assert_eq!(denied, with(&chain, "-Dclippy::all"), "the key is deterministic");
+    assert_ne!(denied, without(&chain), "lint arguments change what clippy prints");
+    assert_ne!(denied, with(&chain, "-Wclippy::pedantic"));
+    assert_eq!(
+        with(&plain, "-Dclippy::all"),
+        without(&plain),
+        "a plain rustc compile never reads clippy's environment"
+    );
+}
+
 #[test]
 fn tool_version_cache_path_is_a_named_file_in_the_cache_dir() {
     let _lock = key_test_lock();
