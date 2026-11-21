@@ -1119,13 +1119,42 @@ fn cc_time_macro_scan_uses_one_expansion_for_an_ordinary_native_unit() {
     };
     let cold = compile();
     assert_eq!(cold["result"], "miss", "{cold:?}");
-    assert_eq!(cold["preprocessor_runs"], 1, "{cold:?}");
+    assert_eq!(cold["preprocessor_runs"], 1, "{cold:?}\n{}", cc_time_macro_scan_diagnostics(&root, &compiler));
     let object = fs::read(root.join("unit.o")).unwrap();
     fs::remove_file(root.join("unit.o")).unwrap();
     let warm = compile();
     assert_eq!(warm["result"], "local_hit", "{warm:?}");
     assert_eq!(warm["preprocessor_runs"], 0, "{warm:?}");
     assert_eq!(fs::read(root.join("unit.o")).unwrap(), object);
+}
+
+fn cc_time_macro_scan_diagnostics(root: &std::path::Path, compiler: &std::path::Path) -> String {
+    let mut details = String::new();
+    if let Ok(entries) = fs::read_dir(root.join("cache/probes")) {
+        for entry in entries.flatten() {
+            if let Ok(record) = fs::read_to_string(entry.path()) {
+                details.push_str(&format!("probe: {record}\n"));
+            }
+        }
+    }
+    for args in [
+        &["-###", "-c", "unit.c"][..],
+        &["-E", "-H", "-MD", "-MF", "diagnostic.d", "unit.c"][..],
+    ] {
+        let output = Command::new(compiler).current_dir(root).args(args).output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        details.push_str(&format!("{args:?}: {}\n{stderr}\n", output.status));
+        for line in stderr.lines().filter(|line| line.starts_with('.')) {
+            let path = line.trim_start_matches('.').trim();
+            if let Ok(bytes) = fs::read(root.join(path)) {
+                let hazards: Vec<_> = ["__DATE__", "__TIME__", "__TIMESTAMP__", "##", "%:", "??", "\\"]
+                    .into_iter().filter(|needle| bytes.windows(needle.len()).any(|w| w == needle.as_bytes())).collect();
+                details.push_str(&format!("header: {path}, hazards: {hazards:?}\n"));
+            }
+        }
+    }
+    details.push_str(&format!("dependencies: {:?}\n", fs::read_to_string(root.join("diagnostic.d"))));
+    details
 }
 
 #[test]
