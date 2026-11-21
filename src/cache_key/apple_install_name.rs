@@ -21,7 +21,7 @@ pub(super) fn read(path: &Path) -> Result<String> {
         let mut bytes = vec![0; 32];
         file.read_exact(&mut bytes)?;
         let (header, word) = layout(&bytes)?;
-        let commands = word(&bytes[20..24]) as usize;
+        let commands = word(&bytes[20..24])? as usize;
         ensure!(
             commands <= MAX_HEADER - header,
             "Mach-O load commands exceed parser limit"
@@ -100,11 +100,12 @@ fn stub(text: &str) -> Result<String> {
     Ok(value.to_owned())
 }
 
-type Word = fn(&[u8]) -> u32;
+type Word = fn(&[u8]) -> Result<u32>;
 
+#[deny(clippy::unwrap_used)]
 fn layout(bytes: &[u8]) -> Result<(usize, Word)> {
-    let little = |bytes: &[u8]| u32::from_le_bytes(bytes.try_into().unwrap());
-    let big = |bytes: &[u8]| u32::from_be_bytes(bytes.try_into().unwrap());
+    let little = |bytes: &[u8]| Ok(u32::from_le_bytes(bytes.try_into()?));
+    let big = |bytes: &[u8]| Ok(u32::from_be_bytes(bytes.try_into()?));
     match bytes.get(..4) {
         Some([0xce, 0xfa, 0xed, 0xfe]) => Ok((28, little)),
         Some([0xcf, 0xfa, 0xed, 0xfe]) => Ok((32, little)),
@@ -117,9 +118,9 @@ fn layout(bytes: &[u8]) -> Result<(usize, Word)> {
 fn macho(bytes: &[u8]) -> Result<String> {
     let (header, word) = layout(bytes)?;
     ensure!(bytes.len() >= header, "truncated Mach-O header");
-    ensure!(word(&bytes[12..16]) == 6, "Mach-O input is not a dylib");
-    let count = word(&bytes[16..20]) as usize;
-    let size = word(&bytes[20..24]) as usize;
+    ensure!(word(&bytes[12..16])? == 6, "Mach-O input is not a dylib");
+    let count = word(&bytes[16..20])? as usize;
+    let size = word(&bytes[20..24])? as usize;
     ensure!(
         size <= MAX_HEADER - header && count <= size / 8,
         "invalid Mach-O command bounds"
@@ -133,8 +134,8 @@ fn macho(bytes: &[u8]) -> Result<String> {
         let command = commands
             .get(offset..offset + 8)
             .context("truncated Mach-O load command")?;
-        let kind = word(&command[..4]);
-        let length = word(&command[4..8]) as usize;
+        let kind = word(&command[..4])?;
+        let length = word(&command[4..8])? as usize;
         ensure!(
             length >= 8 && length <= commands.len() - offset,
             "invalid Mach-O command size"
@@ -145,7 +146,7 @@ fn macho(bytes: &[u8]) -> Result<String> {
                 name.is_none() && length >= 24,
                 "invalid LC_ID_DYLIB command"
             );
-            let start = word(&command[8..12]) as usize;
+            let start = word(&command[8..12])? as usize;
             ensure!(
                 start >= 24 && start < length,
                 "invalid LC_ID_DYLIB name offset"
@@ -224,6 +225,20 @@ pub(super) mod tests {
         assert!(stub("--- !tapi-tbd\nexports: []\n").is_err());
         assert!(stub("--- !tapi-tbd\ninstall-name: /a\n\"install-name\": /b\n").is_err());
         assert!(stub("--- !tapi-tbd\ninstall-name: /a\n\"install\\u002dname\": /b\n").is_err());
+    }
+
+    #[test]
+    fn word_readers_reject_wrong_widths() {
+        for big in [false, true] {
+            for wide in [false, true] {
+                let bytes = dylib("/a", big, wide);
+                let (_, word) = layout(&bytes).unwrap();
+                assert!(matches!(word(&[0; 4]), Ok(0)));
+                for length in [0, 1, 2, 3, 5] {
+                    assert!(word(&[0; 5][..length]).is_err(), "{length}");
+                }
+            }
+        }
     }
 
     #[test]
