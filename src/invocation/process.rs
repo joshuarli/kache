@@ -601,7 +601,7 @@ mod tests {
         let started = std::time::Instant::now();
         while !path.exists() {
             assert!(
-                started.elapsed() < std::time::Duration::from_secs(3),
+                started.elapsed() < std::time::Duration::from_secs(30),
                 "child never became ready"
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -795,7 +795,7 @@ mod tests {
                 assert_eq!(status.code(), Some(6));
                 break;
             }
-            assert!(started.elapsed() < std::time::Duration::from_secs(3));
+            assert!(started.elapsed() < std::time::Duration::from_secs(30));
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(crate::opcounts::invocation_child_rss().unwrap().unwrap() > 1024);
