@@ -810,12 +810,10 @@ fn rejects_companion_tools_and_malformed_versions() {
     }
 }
 
+// Apple's /usr/bin/cc re-dispatches on argv[0] via xcode-select.
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn recognizes_unknown_wrapper_via_probe() {
-    if cfg!(target_os = "macos") {
-        return; // Apple's /usr/bin/cc re-dispatches on argv[0] via xcode-select
-    }
-
     let _lock = crate::config::config_path_lock();
     let temp = tempfile::TempDir::new().unwrap();
     // Find a compiler on the system PATH to copy.
