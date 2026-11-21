@@ -1,5 +1,5 @@
 Prefix: DSLP
-Next: 102
+Next: 103
 
 Deslop campaign backlog ([plan](https://github.com/laputa-systems/stuff/blob/main/docs/campaigns/deslop.md), tier D). One agent works this file with the `deslop` skill: take the lowest-numbered open ticket whose area does not start with `Needs owner ·`. After DSLP-5, work the open P1 and P2 findings, then fill in `## Report` below.
 
@@ -8,15 +8,6 @@ Deslop campaign backlog ([plan](https://github.com/laputa-systems/stuff/blob/mai
 Not started.
 
 ## Tickets
-
-### DSLP-5 · P2 · Dead code: crates/kache-config (1/28)
-
-- **Area:** deslop · dead code
-- **Where:** crates/kache-config
-- **Problem:** Run applicable dead-code tools and inspect entry points, registrations and consumers before cuts. Scope contains approximately 5564 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: findings clean or reasoned allowlist, walk-backs ticketed Needs owner; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
 
 ### DSLP-6 · P2 · Types: crates/kache-e2e bench, cc oracle, daemon (2/28)
 
@@ -639,6 +630,15 @@ Not started.
 - **Fix with:** os-boundaries
 - **Effort:** S
 
+### DSLP-102 · P3 · Decide whether to retire unconsumed kache-config convenience APIs
+
+- **Area:** Needs owner · public API retirement
+- **Where:** crates/kache-config/src/config.rs: EnvOverrides and Config::cache_dir_for_path
+- **Problem:** DSLP-5 found no repository production callers of EnvOverrides or Config::cache_dir_for_path. EnvOverrides::detect is exercised only by config::tests::test_env_overrides_detect; cache_dir_for_path has no repository callers. Both remain publicly exported from the publishable kache-config library, so local non-use does not prove that deleting them preserves supported external consumers. The dead-code tools are clean because these exports are reachable public API.
+- **Recommendation:** Owner to establish the supported external API/consumer policy before approving a removal. If retirement is approved, delete the exports, implementations and any tests solely covering them together; otherwise document their supported consumers. No API was removed in DSLP-5; evidence is in docs/deslop-kache-config-dead-code.md.
+- **Fix with:** delete
+- **Effort:** S
+
 ### DSLP-94 · P4 · Small typing and dead-code leftovers from the args, extra inputs, daemon and incremental pass
 
 - **Area:** Types · dead code
@@ -656,4 +656,3 @@ Not started.
 - **Recommendation:** Confirm consumers then remove Cross.toml and the empty features table; fix the README link and the case count; drop the stale AGENTS.md gap.
 - **Fix with:** dead-code-archaeology
 - **Effort:** S
-
