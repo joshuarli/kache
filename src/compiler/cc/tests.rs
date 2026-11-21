@@ -2384,6 +2384,65 @@ fn report_outputs_key_literal_paths_and_restore_each_role() {
 }
 
 #[test]
+fn listing_sources_must_be_tracked_and_memos_literal() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let env = InvocationEnv::from_parts([("SOURCE_DATE_EPOCH", "1")], Some(root.clone()), None, root.clone());
+    let program = std::env::current_exe().unwrap();
+    let parse = |flags: &[&str]| {
+        let mut args = vec![program.to_string_lossy().into_owned()];
+        args.extend(s(&["-g", "-c", "u.c", "-o", "u.o"]));
+        args.extend(s(flags));
+        CcArgs::parse_for(&args, &env).unwrap()
+    };
+    let plain = parse(&[]);
+    for flag in ["-Wa,-adhln", "-Wa,-adhln=listing.txt"] {
+        let parsed = parse(&[flag]);
+        let inputs = vec![root.join("u.c")];
+        for text in ["", "# 0 \"<built-in>\"\n# 1 \"u.c\"\nint u;\n"] {
+            cc_check_listing_inputs(&parsed, text.as_bytes(), &inputs).unwrap();
+        }
+        for text in ["# 1 \"orig.y\"\nint u;\n", "#line 1 \"<built-in>\"\nint u;\n", "# 1 \"u.c\"\n.file 2 \"orig.y\"\n", "# 1 \"u.c\"\nasm(\".fi\" \"le 2 \\\"orig.y\\\"\");\n"] {
+            assert!(cc_check_listing_inputs(&parsed, text.as_bytes(), &inputs).is_err(), "{text}");
+            cc_check_listing_inputs(&plain, text.as_bytes(), &inputs).unwrap();
+        }
+        cc_check_listing_inputs(&parsed, b"# 1 \"orig.y\"\nint u;\n", &[root.join("orig.y")]).unwrap();
+        let key = cc_preprocess_memo_key(&parsed, &[], "test").unwrap();
+        assert_ne!(key, cc_preprocess_memo_key(&plain, &[], "test").unwrap());
+        let mut changed = parsed.clone();
+        *changed.rest.iter_mut().find(|arg| *arg == "u.o").unwrap() = "elsewhere.o".into();
+        assert_ne!(key, cc_preprocess_memo_key(&changed, &[], "test").unwrap());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn real_probe_refuses_untracked_listing_sources() {
+    let _lock = crate::test_support::process_state_test_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let env = InvocationEnv::from_parts(std::env::vars_os(), Some(root.clone()), None, root.clone());
+    let source = root.join("u.c");
+    let outside = root.join("orig.y");
+    for flag in ["-Wa,-adhln", "-Wa,-adhln=listing.txt"] {
+        let parsed = CcArgs::parse_for(&s(&["cc", "-g", flag, "-c", "u.c", "-o", "u.o"]), &env).unwrap();
+        let probe = || preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new_for(&env), None);
+        for text in ["int u;\n", "\n"] {
+            fs::write(&source, text).unwrap();
+            probe().unwrap();
+        }
+        fs::write(&source, "#line 1 \"orig.y\"\nint u;\n").unwrap();
+        let error = probe().unwrap_err().to_string();
+        assert!(error.contains("outside the read set"), "{error}");
+        fs::write(&outside, "/* NEW */\n").unwrap();
+        let error = probe().unwrap_err().to_string();
+        assert!(error.contains("outside the read set"), "{error}");
+        fs::write(&source, "#include \"orig.y\"\n#line 1 \"orig.y\"\nint u;\n").unwrap();
+        probe().unwrap();
+    }
+}
+
+#[test]
 fn report_outputs_refuse_unproven_shapes() {
     use crate::probe::ProbedFamily;
     for flags in [

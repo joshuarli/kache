@@ -366,6 +366,15 @@ ccache.suite = "base.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-out-gcc-listing-line-target"
+package = "CCP-05"
+summary = "GAS high-level listing #line targets outside dependency capture must pass through after edits"
+profiles = ["both"]
+compilers = ["gcc"]
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-input-pgo-profile"
 package = "CCP-02"
 summary = "-fprofile-use / -fauto-profile content change invalidates (keyed by file content, not spelling)"
