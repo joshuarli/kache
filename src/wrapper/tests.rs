@@ -654,6 +654,7 @@ fn volume_route_path_cc_uses_output_parent() {
         invocation_env: crate::invocation::InvocationEnv::capture(),
         program: "cc".into(),
         rest: Vec::new(),
+        response_file_digests: Vec::new(),
         sources: vec![PathBuf::from("a.c")],
         output: Some(PathBuf::from("/mnt/biglake/build/a.o")),
         mode: crate::compiler::cc::CompileMode::Compile,

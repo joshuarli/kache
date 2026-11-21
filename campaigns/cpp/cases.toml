@@ -582,6 +582,15 @@ ccache.suite = "unittest/test_argprocessing.cpp"
 status = "oracle"
 
 [[case]]
+id = "cc-rsp-nested-cwd"
+package = "CCP-03"
+summary = "nested response paths resolve from cwd and every inner file is keyed"
+profiles = ["both"]
+compilers = ["gcc", "clang"]
+ccache.suite = "unittest/test_argprocessing.cpp"
+status = "oracle"
+
+[[case]]
 id = "cc-rsp-empty"
 package = "CCP-03"
 summary = "empty response file is accepted and keyed"
