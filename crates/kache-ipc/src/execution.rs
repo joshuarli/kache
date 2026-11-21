@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result, bail, ensure};
 use kache_protocol::execution::{
-    EXECUTION_VERSION, ExecutionCommand, ExecutionReply, ExecutionRequest,
+    EXECUTION_VERSION, ExecutionChannels, ExecutionCommand, ExecutionReply, ExecutionRequest,
 };
 use std::io::{BufRead, Read, Write};
 use std::os::fd::{AsFd, BorrowedFd};
@@ -43,14 +43,12 @@ fn exchange(
     descriptors: &[BorrowedFd<'_>],
     committed: &mut bool,
 ) -> Result<i32> {
-    let (mut unix_client, broker_files) = if matches!(
-        request.channels,
-        kache_protocol::execution::ExecutionChannels::UnixClient { .. }
-    ) {
-        let (client, files) = unix_client::Client::prepare(request, descriptors)?;
-        (Some(client), Some(files))
-    } else {
-        (None, None)
+    let (mut unix_client, broker_files) = match request.channels {
+        ExecutionChannels::UnixClient { terminal, .. } => {
+            let (client, files) = unix_client::Client::prepare(request, descriptors)?;
+            (Some(client), Some((files, terminal)))
+        }
+        ExecutionChannels::Unix { .. } => (None, None),
     };
     let stream = Connection::connect(socket)?;
     write_message(
@@ -74,16 +72,9 @@ fn exchange(
         datagram.connect(endpoint)?;
         let files = {
             let mut files = descriptors.to_vec();
-            if let Some(broker_files) = &broker_files {
-                let kache_protocol::execution::ExecutionChannels::UnixClient { terminal, .. } =
-                    request.channels
-                else {
-                    unreachable!()
-                };
-                files.splice(
-                    3 + usize::from(terminal)..3 + usize::from(terminal),
-                    broker_files.iter().map(AsFd::as_fd),
-                );
+            if let Some((broker_files, terminal)) = &broker_files {
+                let at = 3 + usize::from(*terminal);
+                files.splice(at..at, broker_files.iter().map(AsFd::as_fd));
             }
             files
         };
