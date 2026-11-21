@@ -1332,7 +1332,7 @@ pub fn why_miss(config: &Config, crate_name: &str, json: bool) -> Result<()> {
         .collect();
 
     // ── Find last entry miss ───────────────────────────────────────────
-    let last_miss = crate_events.iter().rev().find(|e| {
+    let last_miss = crate_events.iter().enumerate().rev().find(|(_, e)| {
         matches!(
             e.result,
             events::EventResult::Dup | events::EventResult::Miss
@@ -1342,7 +1342,7 @@ pub fn why_miss(config: &Config, crate_name: &str, json: bool) -> Result<()> {
     // last miss means the crate is not cached now, whatever that miss stored.
     let latest_uncached = latest_uncached_compile(&crate_events);
 
-    if last_miss.is_none() {
+    let Some((last_miss_index, miss)) = last_miss else {
         if json {
             #[derive(deser::Serialize)]
             struct Body<'a> {
@@ -1388,13 +1388,8 @@ pub fn why_miss(config: &Config, crate_name: &str, json: bool) -> Result<()> {
             println!("{line}");
         }
         return Ok(());
-    }
+    };
 
-    let miss = last_miss.unwrap();
-    let last_miss_index = crate_events
-        .iter()
-        .position(|event| std::ptr::eq(*event, *miss))
-        .expect("last miss came from crate_events");
     let prior_same_key_miss = last_miss_index > 0 && !miss.cache_key.is_empty() && {
         let previous = crate_events[last_miss_index - 1];
         previous.cache_key == miss.cache_key
