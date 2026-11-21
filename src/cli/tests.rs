@@ -2022,6 +2022,19 @@ fn test_cargo_wrapper_edit_already_set() {
     assert!(matches!(plan, CargoWrapperPlan::AlreadySet));
 }
 
+#[test]
+fn test_cargo_wrapper_edit_accepts_a_wrapper_named_kache() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[build]\nrustc-wrapper = \".local/lib/cargo-kache/kache\"\n").unwrap();
+    assert!(matches!(plan_cargo_wrapper_edit(&path).unwrap(), CargoWrapperPlan::AlreadySet));
+    std::fs::write(&path, "[build]\nrustc-wrapper = \"/opt/kache-tools/not-kache\"\n").unwrap();
+    assert_eq!(
+        plan_cargo_wrapper_edit(&path).unwrap(),
+        CargoWrapperPlan::Replace("/opt/kache-tools/not-kache".into())
+    );
+}
+
 // The planner's Replace / AddUnderBuild / AppendSection arms are reached by
 // reading a real config file (the apply tests above build those plans by
 // hand). Drive each shape through the file-reading path, then apply the

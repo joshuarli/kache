@@ -5688,6 +5688,13 @@ pub(crate) enum CargoWrapperPlan {
     AlreadySet,
 }
 
+/// A `rustc-wrapper` whose file name is `kache`, such as a dotfiles shim that
+/// runs kache when it is installed. cc-rs reuses such a wrapper for C, so init
+/// keeps it instead of rewriting a config it may not own.
+fn is_kache_named_wrapper(wrapper: &str) -> bool {
+    std::path::Path::new(wrapper).file_name() == Some(std::ffi::OsStr::new("kache"))
+}
+
 pub(crate) fn plan_cargo_wrapper_edit(path: &std::path::Path) -> Result<CargoWrapperPlan> {
     if !path.exists() {
         return Ok(CargoWrapperPlan::Create);
@@ -5701,7 +5708,7 @@ pub(crate) fn plan_cargo_wrapper_edit(path: &std::path::Path) -> Result<CargoWra
         .and_then(|b| b.get("rustc-wrapper"))
         .and_then(|v| v.as_str());
     match current {
-        Some("kache") => Ok(CargoWrapperPlan::AlreadySet),
+        Some(wrapper) if is_kache_named_wrapper(wrapper) => Ok(CargoWrapperPlan::AlreadySet),
         Some(other) => Ok(CargoWrapperPlan::Replace(other.to_string())),
         None if parsed.get("build").is_some() => Ok(CargoWrapperPlan::AddUnderBuild),
         None => Ok(CargoWrapperPlan::AppendSection),
