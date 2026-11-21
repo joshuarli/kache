@@ -6,6 +6,8 @@
 //! `$XDG_CACHE_HOME` when absolute; macOS uses `~/Library/Caches`;
 //! Windows asks the shell for the profile and local-app-data folders.
 
+#![deny(clippy::cast_sign_loss)]
+
 use std::path::PathBuf;
 
 /// The current user's home directory: `$HOME` on unix (falling back to
@@ -56,12 +58,8 @@ mod imp {
         // Safety: `storage` has `capacity` allocated bytes, so the buffer
         // pointer is valid for `getpwuid_r` to fill; the entry's `pw_dir`
         // points into that buffer and is copied out before it drops.
-        let capacity = unsafe {
-            match libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) {
-                undersized if undersized < 0 => 512usize,
-                sized => sized as usize,
-            }
-        };
+        let capacity =
+            usize::try_from(unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) }).unwrap_or(512);
         let mut storage = Vec::with_capacity(capacity);
         let mut entry: libc::passwd = unsafe { mem::zeroed() };
         let mut found = ptr::null_mut();
