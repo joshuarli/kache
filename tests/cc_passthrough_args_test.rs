@@ -289,6 +289,12 @@ fn exchanged_header_contents_compile_current_output_and_keep_checkout_hits() {
                 fs::write(clone.join("b.h"), header(expected)).unwrap();
             }
             let _ = fs::remove_file(clone.join("unit.o"));
+            let event_path = cache.join("events.jsonl");
+            let previous_events = match fs::read_to_string(&event_path) {
+                Ok(events) => events.lines().count(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+                Err(error) => panic!("reading {}: {error}", event_path.display()),
+            };
             let compiled = cacheable_cc_command(&clone)
                 .args(["cc", "-c", "unit.c", "-o", "unit.o"])
                 .env("HOME", root.join("home"))
@@ -317,9 +323,17 @@ fn exchanged_header_contents_compile_current_output_and_keep_checkout_hits() {
                 "{phase}: exchanging header contents must compile their current meaning \
                  (discovery={discovery})"
             );
-            let events = fs::read_to_string(cache.join("events.jsonl")).unwrap();
-            let event: deser_value::Value =
-                deser_json::from_str(events.lines().last().unwrap()).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let event: deser_value::Value = loop {
+                if let Ok(events) = fs::read_to_string(&event_path)
+                    && events.ends_with('\n')
+                    && let Some(line) = events.lines().nth(previous_events)
+                {
+                    break deser_json::from_str(line).unwrap();
+                }
+                assert!(std::time::Instant::now() < deadline, "{phase}: event not published");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            };
             assert_eq!(event["result"], result, "{phase}: {event:?}");
         }
     }
