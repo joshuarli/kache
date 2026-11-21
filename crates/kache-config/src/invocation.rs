@@ -381,4 +381,24 @@ mod tests {
         assert_eq!(env.var_os("VALUE").unwrap().as_bytes(), &[0xff, b'x']);
         assert_eq!(env.var("VALUE"), Err(VarError::NotUnicode(value)));
     }
+
+    #[test]
+    fn a_later_duplicate_wins_and_set_replaces_every_earlier_entry() {
+        let mut env = InvocationEnv::from_parts(
+            [("A", "first"), ("B", "kept"), ("A", "second")],
+            Some("/work".into()),
+            None,
+            "/tmp".into(),
+        );
+        assert_eq!(env.var("A").unwrap(), "second");
+        env.set("A", "third");
+        assert_eq!(env.var("A").unwrap(), "third");
+        let names: Vec<_> = env
+            .vars_os()
+            .filter(|(key, _)| key == "A")
+            .map(|(_, value)| value)
+            .collect();
+        assert_eq!(names, vec![OsString::from("third")]);
+        assert_eq!(env.var("B").unwrap(), "kept");
+    }
 }
