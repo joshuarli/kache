@@ -16,6 +16,7 @@ pub mod workload;
 use anyhow::{Context, Result, bail};
 use deser::Serialize;
 use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -227,6 +228,81 @@ struct ArmSetup {
     compiler: CompilerCmd,
     env: Vec<(String, String)>,
     store: PathBuf,
+    runtime: PathBuf,
+}
+
+struct ArmPaths<'a> {
+    root: &'a Path,
+    runtime: &'a Path,
+}
+
+fn arm_runtimes() -> Result<BTreeMap<Arm, tempfile::TempDir>> {
+    Arm::ALL.into_iter().map(|arm| {
+        let runtime = tempfile::Builder::new().prefix("kache-cc-")
+            .permissions(std::fs::Permissions::from_mode(0o700)).tempdir_in("/tmp")
+            .context("creating a short private benchmark runtime")?;
+        Ok((arm, runtime))
+    }).collect()
+}
+
+fn daemon_command(kache: &Path, setup: &ArmSetup, args: &[&str]) -> Result<std::process::Output> {
+    let output = Command::new(kache).args(args).env_clear()
+        .envs(setup.env.iter().map(|(k, v)| (k, v))).output()
+        .with_context(|| format!("launching kache {}", args.join(" ")))?;
+    anyhow::ensure!(output.status.success(),
+        "kache {} failed ({}) with runtime {}\nstdout: {}\nstderr: {}",
+        args.join(" "), output.status, setup.runtime.display(),
+        String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    Ok(output)
+}
+
+fn require_daemon_ready(kache: &Path, setup: &ArmSetup) -> Result<()> {
+    let output = daemon_command(kache, setup, &["--json", "daemon", "status"])?;
+    let data: deser_value::Value = deser_json::from_slice(&output.stdout)
+        .context("reading benchmark daemon readiness")?;
+    anyhow::ensure!(data["success"].as_bool() == Some(true)
+        && data["daemon_running"].as_bool() == Some(true)
+        && data["daemon_version"].as_str().is_some()
+        && data["daemon_version"] == data["version"]
+        && data["daemon_epoch"].as_u64().is_some()
+        && data["daemon_epoch"] == data["epoch"],
+        "benchmark daemon is not ready with the current build at {}: {}",
+        setup.runtime.display(), String::from_utf8_lossy(&output.stdout));
+    Ok(())
+}
+
+struct ReplayDaemon<'a> {
+    kache: &'a Path,
+    setup: &'a ArmSetup,
+    armed: bool,
+}
+
+impl ReplayDaemon<'_> {
+    fn start(&self) -> Result<()> {
+        daemon_command(self.kache, self.setup, &["daemon", "start"])?;
+        require_daemon_ready(self.kache, self.setup)
+    }
+
+    fn stop(&self) -> Result<()> {
+        daemon_command(self.kache, self.setup, &["daemon", "stop"])?;
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<()> {
+        self.stop()?;
+        self.armed = false;
+        std::fs::copy(self.setup.runtime.join("events.jsonl"), self.setup.store.join("events.jsonl"))
+            .context("preserving benchmark events after daemon shutdown")?;
+        Ok(())
+    }
+}
+
+impl Drop for ReplayDaemon<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.stop();
+        }
+    }
 }
 
 /// The scenario names in replay order, for a workload.
@@ -250,8 +326,8 @@ pub fn scenarios(workload: &Workload) -> Vec<&'static str> {
     names
 }
 
-fn arm_setup(cfg: &Config, arm: Arm, root: &Path, tree: &Path, compiler_dir: Option<&Path>, cc: &Path, cxx: &Path) -> ArmSetup {
-    let state = root.join("state").join(arm.as_str());
+fn arm_setup(cfg: &Config, arm: Arm, paths: &ArmPaths<'_>, tree: &Path, compiler_dir: Option<&Path>, cc: &Path, cxx: &Path) -> ArmSetup {
+    let state = paths.root.join("state").join(arm.as_str());
     let store = state.join("store");
     let cc = compiler_dir.map_or_else(|| cc.to_path_buf(), |dir| dir.join(cc.file_name().unwrap()));
     let cxx = compiler_dir.map_or_else(|| cxx.to_path_buf(), |dir| dir.join(cxx.file_name().unwrap()));
@@ -278,6 +354,7 @@ fn arm_setup(cfg: &Config, arm: Arm, root: &Path, tree: &Path, compiler_dir: Opt
         }
         Arm::Kache => {
             env.push(("KACHE_CACHE_DIR".into(), store.display().to_string()));
+            env.push(("KACHE_RUNTIME_DIR".into(), paths.runtime.display().to_string()));
             env.push(("KACHE_CONFIG".into(), state.join("kache.toml").display().to_string()));
             env.push(("KACHE_BASE_DIR".into(), tree.display().to_string()));
             env.push(("KACHE_HOST_CONFIG".into(), String::new()));
@@ -304,6 +381,7 @@ fn arm_setup(cfg: &Config, arm: Arm, root: &Path, tree: &Path, compiler_dir: Opt
         },
         env,
         store,
+        runtime: paths.runtime.to_path_buf(),
     }
 }
 
@@ -325,6 +403,7 @@ fn retarget(setup: &ArmSetup, from: &Path, to: &Path) -> ArmSetup {
             .map(|(k, v)| (k.clone(), if k == "KACHE_BASE_DIR" { swap(v) } else { v.clone() }))
             .collect(),
         store: setup.store.clone(),
+        runtime: setup.runtime.clone(),
     }
 }
 
@@ -378,7 +457,7 @@ fn counters(arm: Arm, cfg: &Config, setup: &ArmSetup) -> Result<Counters> {
         Arm::Raw => Ok(Counters::default()),
         Arm::Kache => {
             let mut c = Counters::default();
-            let Ok(text) = std::fs::read_to_string(setup.store.join("events.jsonl")) else {
+            let Ok(text) = std::fs::read_to_string(setup.runtime.join("events.jsonl")) else {
                 return Ok(c);
             };
             for line in text.lines().filter(|l| !l.contains("CMakeScratch") && !l.contains("\"crate_name\":\"ztest")) {
@@ -489,14 +568,24 @@ fn replay(
     cfg: &Config,
     workload: &Workload,
     arm: Arm,
-    root: &Path,
+    paths: &ArmPaths<'_>,
     shims: Option<&Path>,
     tc: &crate::cc_oracle::exec::Toolchain,
     validated: Option<&Replay>,
 ) -> Result<Replay> {
+    let root = paths.root;
+    let runtime = paths.runtime;
     let tree = root.join("tree");
     let moved = root.join("moved");
-    let setup = arm_setup(cfg, arm, root, &tree, shims, &tc.cc, &tc.cxx);
+    let setup = arm_setup(cfg, arm, paths, &tree, shims, &tc.cc, &tc.cxx);
+    for entry in std::fs::read_dir(runtime)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
     let state = setup.store.parent().unwrap().to_path_buf();
     if state.exists() {
         std::fs::remove_dir_all(&state)?;
@@ -507,18 +596,18 @@ fn replay(
     std::fs::write(state.join("ccache.conf"), CCACHE_CONF)?;
     std::fs::write(state.join("kache.toml"), "")?;
     let log = shims.map(|_| state.join("exec.log"));
-    let kache_daemon = |verb: &str| -> Result<()> {
-        if arm == Arm::Kache {
-            Command::new(&cfg.kache).args(["daemon", verb]).env_clear().envs(setup.env.iter().map(|(k, v)| (k, v))).output()?;
-        }
-        Ok(())
+    let daemon = match arm {
+        Arm::Kache => Some(ReplayDaemon { kache: &cfg.kache, setup: &setup, armed: true }),
+        _ => None,
     };
+    if let Some(daemon) = &daemon {
+        daemon.start().context("benchmark daemon preflight failed")?;
+    }
     let mut env = setup.env.clone();
     if let Some(log) = &log {
         env.push(("CC_ORACLE_LOG".into(), log.display().to_string()));
     }
     workload.prepare(&tree, &setup.compiler, &cfg.archives, &env, cfg.jobs)?;
-    kache_daemon("start")?;
     let (source, header) = workload.edit_targets();
     let original_source = std::fs::read(tree.join(source))?;
     let original_header = std::fs::read(tree.join(header))?;
@@ -541,8 +630,8 @@ fn replay(
                 workload.build(&moved, &relocated.compiler, cfg.jobs)
             }
             "unit-daemon-start" | "unit-steady" => {
-                if name == "unit-daemon-start" {
-                    kache_daemon("stop")?;
+                if name == "unit-daemon-start" && let Some(daemon) = &daemon {
+                    daemon.stop()?;
                 }
                 let (command, object) = workload.single_unit(&tree, &setup.compiler).unwrap();
                 std::fs::remove_file(object)?;
@@ -578,7 +667,8 @@ fn replay(
             .zip(activity::Snapshot::take())
             .map(|(start, end)| start.until(&end, |c| cfg.is_ours(c), cpu_ms.round() as u64));
         if arm == Arm::Kache {
-            await_quiet_event_log(&setup.store.join("events.jsonl"));
+            require_daemon_ready(&cfg.kache, &setup)?;
+            await_quiet_event_log(&setup.runtime.join("events.jsonl"));
         }
         let mut after = counters(arm, cfg, &setup)?;
         if let Some(expected) = validated.and_then(|v| v.observations.iter().find(|o| o.scenario == name)) {
@@ -603,7 +693,9 @@ fn replay(
             activity,
         });
     }
-    kache_daemon("stop")?;
+    if let Some(daemon) = daemon {
+        daemon.finish()?;
+    }
     let store_bytes = crate::disk_usage::measure(&setup.store, &[]).cache_bytes;
     Ok(Replay { arm, pair: None, admitted: true, rejection: None, store_bytes, observations })
 }
@@ -668,12 +760,13 @@ pub fn run(cfg: &Config) -> Result<Report> {
     let mut rng = stats::Rng::new(cfg.seed);
     for workload in workload::all().into_iter().filter(|w| cfg.workloads.is_empty() || cfg.workloads.iter().any(|n| n == w.name)) {
         let root = out.join(workload.name);
+        let runtimes = arm_runtimes()?;
         let shims = root.join("shims");
         write_shims(&shims, &tc)?;
         eprintln!("=> {} validation", workload.name);
         let validation = Arm::ALL
             .iter()
-            .map(|&arm| replay(cfg, &workload, arm, &root, Some(&shims), &tc, None))
+            .map(|&arm| replay(cfg, &workload, arm, &ArmPaths { root: &root, runtime: runtimes[&arm].path() }, Some(&shims), &tc, None))
             .collect::<Result<Vec<_>>>()?;
         let validation_failures = validate(&validation);
         let mut timed = Vec::new();
@@ -690,7 +783,7 @@ pub fn run(cfg: &Config) -> Result<Report> {
                 eprintln!("=> {} pair {} ({})", workload.name, pair + 1, order.map(Arm::as_str).join(", "));
                 for arm in order {
                     let validated = validation.iter().find(|v| v.arm == arm);
-                    let mut r = replay(cfg, &workload, arm, &root, None, &tc, validated)?;
+                    let mut r = replay(cfg, &workload, arm, &ArmPaths { root: &root, runtime: runtimes[&arm].path() }, None, &tc, validated)?;
                     r.pair = Some(pair);
                     admit(&mut r, &validation);
                     timed.push(r);
@@ -702,7 +795,7 @@ pub fn run(cfg: &Config) -> Result<Report> {
         let environments = Arm::ALL
             .iter()
             .map(|&arm| {
-                let setup = arm_setup(cfg, arm, &root, &root.join("tree"), None, &tc.cc, &tc.cxx);
+                let setup = arm_setup(cfg, arm, &ArmPaths { root: &root, runtime: runtimes[&arm].path() }, &root.join("tree"), None, &tc.cc, &tc.cxx);
                 (arm.as_str().to_string(), setup.env)
             })
             .collect();
@@ -1073,6 +1166,114 @@ pub fn markdown(report: &Report) -> String {
 mod tests {
     use super::*;
 
+    fn daemon_config(kache: &Path) -> Config {
+        Config {
+            kache: kache.to_path_buf(),
+            ccache: "/unused/ccache".into(),
+            toolchain: "cc".into(),
+            out: "/unused/out".into(),
+            workloads: vec!["corpus-cxx-headers".into()],
+            pairs: 5,
+            seed: 1,
+            validate_only: false,
+            acceptance: false,
+            archives: Archives::default(),
+            jobs: 4,
+            meter: "/unused/meter".into(),
+            path: "/usr/bin:/bin".into(),
+        }
+    }
+
+    fn fake_daemon(root: &Path, start: &str, status: &str) -> PathBuf {
+        let executable = root.join("kache");
+        std::fs::write(&executable, format!(
+            "#!/bin/sh\ncase \"$1 $2\" in\n'daemon start') {start} ;;\n'daemon stop') printf stopped > \"$KACHE_RUNTIME_DIR/stopped\" ;;\n'--json daemon') printf '%s' '{status}' ;;\nesac\n"
+        )).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        executable
+    }
+
+    #[test]
+    fn runtimes_are_short_private_and_isolated() {
+        let runtimes = arm_runtimes().unwrap();
+        let mut paths = std::collections::BTreeSet::new();
+        for runtime in runtimes.values() {
+            assert!(paths.insert(runtime.path().to_path_buf()));
+            assert!(runtime.path().join("daemon.sock").as_os_str().len() < 80);
+            assert_eq!(std::fs::metadata(runtime.path()).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+        assert_eq!(paths.len(), Arm::ALL.len());
+    }
+
+    #[test]
+    fn failed_start_or_readiness_aborts_replay_before_preparation() {
+        let cases = [
+            ("printf 'socket path is too long' >&2; exit 42", "", "42", "socket path is too long"),
+            (":", "", "reading benchmark daemon readiness", ""),
+            (":", "not-json", "reading benchmark daemon readiness", ""),
+            (":", r#"{"success":true,"daemon_running":false}"#, "not ready", ""),
+        ];
+        for (start, status, expected, stderr) in cases {
+            let dir = tempfile::tempdir_in("/tmp").unwrap();
+            let kache = fake_daemon(dir.path(), start, status);
+            let cfg = daemon_config(&kache);
+            let runtime = tempfile::tempdir_in("/tmp").unwrap();
+            let root = dir.path().join("workload");
+            let tc = crate::cc_oracle::exec::Toolchain {
+                name: "unused".into(), family: None, cc_name: "cc".into(), cxx_name: "c++".into(),
+                cc: "/unused/cc".into(), cxx: "/unused/c++".into(),
+            };
+            let workload = workload::all().into_iter().find(|w| w.name == "corpus-cxx-headers").unwrap();
+            let error = replay(&cfg, &workload, Arm::Kache,
+                &ArmPaths { root: &root, runtime: runtime.path() }, None, &tc, None).unwrap_err();
+            let error = format!("{error:#}");
+            assert!(error.contains("benchmark daemon preflight failed"), "{error}");
+            assert!(error.contains(expected) && error.contains(stderr), "{error}");
+            assert!(!root.join("tree/common.hpp").exists());
+            assert_eq!(std::fs::read_to_string(runtime.path().join("stopped")).unwrap(), "stopped");
+        }
+    }
+
+    #[test]
+    fn readiness_requires_a_reply_from_the_current_daemon_build() {
+        for (status, ready) in [
+            (r#"{"success":true,"daemon_running":true,"version":"v","daemon_version":"v","epoch":7,"daemon_epoch":7}"#, true),
+            (r#"{"success":true,"daemon_running":true}"#, false),
+            (r#"{"success":true,"daemon_running":true,"version":"v","daemon_version":"old","epoch":7,"daemon_epoch":7}"#, false),
+            (r#"{"success":true,"daemon_running":true,"version":"v","daemon_version":"v","epoch":7,"daemon_epoch":6}"#, false),
+        ] {
+            let dir = tempfile::tempdir_in("/tmp").unwrap();
+            let kache = fake_daemon(dir.path(), ":", status);
+            let cfg = daemon_config(&kache);
+            let setup = arm_setup(&cfg, Arm::Kache,
+                &ArmPaths { root: dir.path(), runtime: dir.path() }, dir.path(), None, Path::new("/unused/cc"), Path::new("/unused/c++"));
+            assert_eq!(require_daemon_ready(&kache, &setup).is_ok(), ready, "{status}");
+        }
+    }
+
+    #[test]
+    fn relocated_replays_count_runtime_events_and_preserve_them_after_shutdown() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let runtime = tempfile::tempdir_in("/tmp").unwrap();
+        let kache = fake_daemon(dir.path(), ":", "");
+        let cfg = daemon_config(&kache);
+        let tree = dir.path().join("tree");
+        let setup = arm_setup(&cfg, Arm::Kache,
+            &ArmPaths { root: dir.path(), runtime: runtime.path() }, &tree, None, Path::new("/unused/cc"), Path::new("/unused/c++"));
+        std::fs::create_dir_all(&setup.store).unwrap();
+        assert_eq!(counters(Arm::Kache, &cfg, &setup).unwrap().total(), 0);
+        let events = "{\"result\":\"local_hit\"}\n{\"result\":\"miss\"}\n";
+        std::fs::write(runtime.path().join("events.jsonl"), events).unwrap();
+        let moved = retarget(&setup, &tree, &dir.path().join("moved"));
+        assert_eq!(moved.runtime, setup.runtime);
+        assert_eq!(moved.store, setup.store);
+        assert_eq!(moved.env.iter().find(|(k, _)| k == "KACHE_RUNTIME_DIR"), setup.env.iter().find(|(k, _)| k == "KACHE_RUNTIME_DIR"));
+        let counts = counters(Arm::Kache, &cfg, &moved).unwrap();
+        assert_eq!((counts.hits, counts.misses, counts.other), (1, 1, 0));
+        ReplayDaemon { kache: &kache, setup: &setup, armed: true }.finish().unwrap();
+        assert_eq!(std::fs::read_to_string(setup.store.join("events.jsonl")).unwrap(), events);
+    }
+
     fn workload() -> Workload {
         workload::all().into_iter().find(|w| w.name == "zlib").unwrap()
     }
@@ -1215,12 +1416,12 @@ mod tests {
             path: "/usr/bin:/bin".into(),
         };
         for arm in Arm::ALL {
-            let setup = arm_setup(&cfg, arm, Path::new("/out/w"), Path::new("/out/w/tree"), None, Path::new("/usr/bin/cc"), Path::new("/usr/bin/c++"));
+            let setup = arm_setup(&cfg, arm, &ArmPaths { root: Path::new("/out/w"), runtime: Path::new("/tmp/runtime") }, Path::new("/out/w/tree"), None, Path::new("/usr/bin/cc"), Path::new("/usr/bin/c++"));
             let names: Vec<&str> = setup.env.iter().map(|(k, _)| k.as_str()).collect();
             assert!(names.contains(&"PATH") && names.contains(&"HOME") && names.contains(&"TMPDIR"), "{arm:?} {names:?}");
             assert_eq!(setup.env.iter().find(|(k, _)| k == "PATH").unwrap().1, "/usr/bin:/bin");
         }
-        let kache = arm_setup(&cfg, Arm::Kache, Path::new("/out/w"), Path::new("/out/w/tree"), None, Path::new("/usr/bin/cc"), Path::new("/usr/bin/c++"));
+        let kache = arm_setup(&cfg, Arm::Kache, &ArmPaths { root: Path::new("/out/w"), runtime: Path::new("/tmp/runtime") }, Path::new("/out/w/tree"), None, Path::new("/usr/bin/cc"), Path::new("/usr/bin/c++"));
         assert!(kache.env.iter().any(|(k, v)| k == "KACHE_HOST_CONFIG" && v.is_empty()));
         assert!(cfg.is_ours("/opt/k/kache-engine daemon run"));
         assert!(cfg.is_ours("make -C /out/w/tree"));
