@@ -1,0 +1,59 @@
+summary = "Clang LLVM bitcode and text preserve literal source names and restore exact bytes, including LTO variants"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+families = ["clang"]
+outputs = ["u.bc", "u.ll", "thin.bc", "full.ll"]
+
+[[compile]]
+argv = ["{cc}", "-emit-llvm", "-c", "@source.rsp"]
+source = "u.c"
+also_names = ["@source.rsp", "./u.c"]
+
+[[compile]]
+argv = ["{cc}", "-emit-llvm", "-S", "@source.rsp"]
+source = "u.c"
+also_names = ["@source.rsp", "./u.c"]
+
+[[compile]]
+argv = ["{cc}", "-emit-llvm", "-flto=thin", "-c", "@source.rsp", "-o", "thin.bc"]
+source = "u.c"
+also_names = ["@source.rsp", "./u.c"]
+
+[[compile]]
+argv = ["{cc}", "-emit-llvm", "-flto", "-S", "@source.rsp", "-o", "full.ll"]
+source = "u.c"
+also_names = ["@source.rsp", "./u.c"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "literal-source-change"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "source.rsp", content = "./u.c\n" }]
+
+[[step]]
+name = "source-edit"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "u.c", content = "int answer(void) { return 43; }\n" }]
+
+[[step]]
+name = "restore-edit"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "empty-source"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "u.c", content = "" }]
+
+[[step]]
+name = "restore-empty"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

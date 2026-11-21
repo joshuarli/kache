@@ -273,7 +273,7 @@ pub struct CcArgs {
     pub language_override: Option<String>,
     /// Detected compiler driver family (selects the flag dialect).
     pub family: ToolFamily,
-    pub(crate) wp_dependency_family: Option<crate::probe::ProbedFamily>,
+    pub(crate) probed_family: Option<crate::probe::ProbedFamily>,
     /// Path ownership captured at parse time for portable dependency sidecars.
     pub(crate) depinfo_roots: Vec<(PathBuf, String, u8)>,
     /// clang's `--serialize-diagnostics <path>` output.
@@ -782,8 +782,8 @@ impl CcArgs {
             .context("cc invocation missing argv[0]")?;
 
         let family = ToolFamily::detect(program, rest);
-        let wp_dependency_family = if family.dialect() == Dialect::Gnu
-            && rest.iter().any(|arg| arg.starts_with("-Wp,"))
+        let probed_family = if family.dialect() == Dialect::Gnu
+            && rest.iter().any(|arg| arg.starts_with("-Wp,") || arg == "-emit-llvm")
         {
             crate::probe::probe_compiler_family_for(program, env)
         } else {
@@ -806,7 +806,7 @@ impl CcArgs {
             depinfo: None,
             language_override: None,
             family,
-            wp_dependency_family,
+            probed_family,
             depinfo_roots: Vec::new(),
             serialize_diagnostics: None,
             include_pch: None,
@@ -886,6 +886,14 @@ impl CcArgs {
     pub fn refuse_reasons(&self, extra_allowlist_flags: &[String]) -> Vec<RefuseReason> {
         let mut reasons = Vec::new();
 
+        if self.emits_llvm()
+            && (self.probed_family != Some(crate::probe::ProbedFamily::Clang)
+                || !matches!(self.mode, CompileMode::Compile | CompileMode::Assemble)
+                || self.is_universal())
+        {
+            reasons.push(RefuseReason::Unsupported("cc LLVM emission requires a verified single-target Clang -c or -S invocation — not yet"));
+        }
+
         if self.rest.iter().any(|arg| arg.starts_with("-Wp,"))
             && cc_wp_dependency_spec(self).is_none()
         {
@@ -930,7 +938,7 @@ impl CcArgs {
             // the expansion is the artifact. `-o -` is still refused below.
             CompileMode::Preprocess => {}
             // `-S` to a named file is a single-output compile like `-c`.
-            CompileMode::Assemble if self.output.is_some() && self.family.dialect() == Dialect::Gnu => {}
+            CompileMode::Assemble if (self.output.is_some() || self.emits_llvm()) && self.family.dialect() == Dialect::Gnu => {}
             CompileMode::Assemble => reasons.push(RefuseReason::Unsupported(
                 "cc assembly mode -S without -o — not yet",
             )),
@@ -1190,6 +1198,8 @@ impl CcArgs {
         let stem = self.sources.first()?.file_stem()?;
         let ext = match self.family.dialect() {
             Dialect::Cl => "obj",
+            Dialect::Gnu if self.emits_llvm() && self.mode == CompileMode::Assemble => "ll",
+            Dialect::Gnu if self.emits_llvm() => "bc",
             Dialect::Gnu => "o",
         };
         Some(PathBuf::from(format!("{}.{ext}", stem.to_string_lossy())))
@@ -1341,6 +1351,10 @@ impl CcArgs {
         self.rest.iter().any(|arg| arg == "-frecord-gcc-switches")
     }
 
+    fn emits_llvm(&self) -> bool {
+        self.rest.iter().any(|arg| arg == "-emit-llvm")
+    }
+
     /// Split DWARF: the object names its `.dwo` as the output was spelled.
     fn splits_dwarf(&self) -> bool {
         self.rest.iter().any(|arg| arg == "-gsplit-dwarf")
@@ -1356,6 +1370,8 @@ impl CcArgs {
     pub(crate) fn compiler_output_paths(&self) -> Vec<PathBuf> {
         let ext = match (self.mode, self.family.dialect()) {
             (CompileMode::Compile, Dialect::Cl) => "obj",
+            (CompileMode::Compile, Dialect::Gnu) if self.emits_llvm() => "bc",
+            (CompileMode::Assemble, Dialect::Gnu) if self.emits_llvm() => "ll",
             (CompileMode::Compile, Dialect::Gnu) => "o",
             (CompileMode::Assemble, _) => "s",
             (CompileMode::Precompile, _) => {
@@ -1888,7 +1904,7 @@ fn cc_wp_dependency_spec(parsed: &CcArgs) -> Option<DepInfoSpec> {
     if parsed.family.dialect() != Dialect::Gnu || parsed.mode != CompileMode::Compile {
         return None;
     }
-    let family = parsed.wp_dependency_family?;
+    let family = parsed.probed_family?;
     let mut wp = None;
     let mut idx = 0;
     while idx < parsed.rest.len() {
@@ -1974,7 +1990,7 @@ fn build_preprocess_args(parsed: &CcArgs) -> Vec<String> {
                     continue;
                 }
                 match arg.as_str() {
-                    "-c" | "-S" | "-P" => {}
+                    "-c" | "-S" | "-P" | "-emit-llvm" => {}
                     "-o" | "-MF" | "-MT" | "-MQ" | "--serialize-diagnostics"
                     | "-serialize-diagnostics" => {
                         iter.next(); // also drop the flag's value
@@ -3361,6 +3377,7 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Exact("-fno-ident"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fno-lifetime-dse"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-flto"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-emit-llvm"), class: FlagClass::RawKeyed, source: "verified Clang -c/-S only; source_filename and textual ModuleID retain literal input spelling, so key argv/cwd/maps and bind to the checkout; disable private dependency capture; LTO flags retain their existing raw keying; universal and other modes refuse", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Regex(r"-flto=(thin|full)"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fsplit-lto-unit"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fwhole-program-vtables"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
@@ -5163,7 +5180,7 @@ fn cc_supported_mllvm_value(value: &str) -> bool {
 fn cc_raw_flags_for_key(parsed: &CcArgs, prefix_maps: &[CcPrefixMap]) -> Vec<Vec<u8>> {
     let dialect = parsed.family.dialect();
     let mut flags = Vec::new();
-    if parsed.records_switches() {
+    if parsed.records_switches() || parsed.emits_llvm() {
         flags.push(format!("recorded.argv.v1={:?}", (&parsed.program, &parsed.rest, parsed.invocation_env.cwd(), file_prefix_map_args(prefix_maps))).into_bytes());
     }
     let mut args = parsed.rest.iter();
@@ -8508,6 +8525,7 @@ pub(crate) fn cc_direct_key_eligible(parsed: &CcArgs) -> bool {
 fn cc_direct_key_shape_ok(parsed: &CcArgs) -> bool {
     parsed.family.dialect() == Dialect::Gnu
         && !parsed.records_switches()
+        && !parsed.emits_llvm()
         && parsed.mode == CompileMode::Compile
         && parsed.sources.len() == 1
         && parsed
@@ -9913,7 +9931,7 @@ impl CcCompiler {
         );
         // PCH and coverage outputs can record absolute paths that prefix maps
         // do not rewrite, even when the preprocessor expansion is portable.
-        if parsed.mode == CompileMode::Precompile || parsed.coverage_instrumented() || parsed.records_switches() {
+        if parsed.mode == CompileMode::Precompile || parsed.coverage_instrumented() || parsed.records_switches() || parsed.emits_llvm() {
             self.key_path_bound.set(true);
         }
         // A read set whose object spells a checkout root is keyed to that
@@ -10208,6 +10226,7 @@ impl CcCompiler {
         // takes its real destination from the current invocation
         // (kunobi-ninja/kache#655).
         let discovers_outputs = matches!(parsed.mode, CompileMode::Compile)
+            || (parsed.emits_llvm() && parsed.mode == CompileMode::Assemble)
             || (matches!(
                 parsed.mode,
                 CompileMode::Preprocess | CompileMode::Assemble | CompileMode::Precompile
