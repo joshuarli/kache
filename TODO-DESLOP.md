@@ -9,15 +9,6 @@ Not started.
 
 ## Tickets
 
-### DSLP-6 · P2 · Types: crates/kache-e2e bench, cc oracle, daemon (2/28)
-
-- **Area:** deslop · types
-- **Where:** crates/kache-e2e/src/assertions.rs, crates/kache-e2e/src/bench_host.rs, crates/kache-e2e/src/bench_otlp.rs, crates/kache-e2e/src/bench_profile.rs, crates/kache-e2e/src/bench_runner/tests.rs, crates/kache-e2e/src/bench_runner.rs, crates/kache-e2e/src/bin/e2e-fallback.rs, crates/kache-e2e/src/bin/kache-cc-bench.rs, crates/kache-e2e/src/bin/kache-cc-oracle.rs, crates/kache-e2e/src/bin/kache-cc.rs, crates/kache-e2e/src/bin/kache-cxx.rs, crates/kache-e2e/src/bin/kache-scenario.rs, crates/kache-e2e/src/cc_bench/activity.rs, crates/kache-e2e/src/cc_bench/mod.rs, crates/kache-e2e/src/cc_bench/stats.rs, crates/kache-e2e/src/cc_bench/workload.rs, crates/kache-e2e/src/cc_bench_cli.rs, crates/kache-e2e/src/cc_oracle/case.rs, crates/kache-e2e/src/cc_oracle/exec.rs, crates/kache-e2e/src/cc_oracle/gcov.rs, crates/kache-e2e/src/cc_oracle/judge.rs, crates/kache-e2e/src/cc_oracle/mod.rs, crates/kache-e2e/src/cc_oracle/pin.rs, crates/kache-e2e/src/cc_oracle/report.rs, crates/kache-e2e/src/cc_oracle_cli.rs, crates/kache-e2e/src/daemon.rs, crates/kache-e2e/src/disk_usage.rs
-- **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope contains approximately 18845 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
 ### DSLP-7 · P2 · Types: crates/kache-e2e fixture and scenario runners (3/28)
 
 - **Area:** deslop · types
