@@ -1739,7 +1739,7 @@ fn test_cc_existing_readonly_hardlink_output_matches_selected_compiler() {
 fn test_cc_dev_null_output_is_passthrough_and_preserved() {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
-    if unsafe { libc::geteuid() } == 0 {
+    if common::running_as_root() {
         eprintln!("skipping /dev/null regression as root");
         return;
     }

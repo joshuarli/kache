@@ -317,7 +317,7 @@ fn alias_markers(tree: &Path) -> Vec<PathBuf> {
 #[test]
 fn units_that_bake_an_empty_out_dir_hit_in_another_checkout() {
     // As root nothing is aliased: the mode bits would not stop root's writes.
-    if unsafe { libc::geteuid() } == 0 {
+    if common::running_as_root() {
         eprintln!("skipping the OUT_DIR alias test as root");
         return;
     }
@@ -607,7 +607,7 @@ pub fn expand(_input: TokenStream) -> TokenStream {{
 /// and denies the alias, so the rebuild the hint asks for can write.
 #[test]
 fn a_failed_rederivation_hints_and_denies_the_alias() {
-    if unsafe { libc::geteuid() } == 0 {
+    if common::running_as_root() {
         eprintln!("skipping the OUT_DIR alias test as root");
         return;
     }
