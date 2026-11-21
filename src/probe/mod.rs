@@ -370,7 +370,8 @@ fn run_family_probe_for(program: &str, env: &InvocationEnv) -> Result<Option<Pro
         }
         let _ = tx.send(buf);
     });
-    let probe_timeout = std::env::var("KACHE_PROBE_TIMEOUT_MS")
+    let probe_timeout = env
+        .var("KACHE_PROBE_TIMEOUT_MS")
         .ok()
         .and_then(|ms| ms.parse::<u64>().ok())
         .map(Duration::from_millis)
@@ -1470,6 +1471,29 @@ esac
             run_family_probe_for(program.to_str().unwrap(), &env),
             Err(())
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn family_probe_deadline_comes_from_the_clients_environment() {
+        let root = tempfile::tempdir().unwrap();
+        let program = root.path().join("probe");
+        kache_fs::testutil::write_executable(
+            &program,
+            "#!/bin/sh\nprintf KACHE_PROBE_GNU\nexec 1>&-\nexec sleep 3\n",
+        );
+        let env = InvocationEnv::from_parts(
+            [("PATH", env!("PATH")), ("KACHE_PROBE_TIMEOUT_MS", "200")],
+            Some(root.path().to_owned()),
+            None,
+            root.path().to_owned(),
+        );
+        let started = std::time::Instant::now();
+        assert_eq!(
+            run_family_probe_for(program.to_str().unwrap(), &env),
+            Err(())
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
     }
 
     #[cfg(unix)]
