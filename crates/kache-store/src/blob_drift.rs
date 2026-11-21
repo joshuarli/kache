@@ -1,5 +1,7 @@
 //! A SQL-only probe for disagreement between `blobs` and `entry_blobs`.
 
+#![deny(clippy::cast_sign_loss)]
+
 use rusqlite::Connection;
 
 /// Disagreement between the two derived blob tables, read without touching
@@ -58,7 +60,8 @@ const MAPPING_SIDE: &str = "
 /// The probe for any connection to the index, including read-only ones.
 pub fn blob_refcount_drift(db: &Connection) -> rusqlite::Result<BlobRefcountDrift> {
     let count = |row: &rusqlite::Row<'_>, column: usize| -> rusqlite::Result<u64> {
-        row.get::<_, i64>(column).map(|value| value.max(0) as u64)
+        row.get::<_, i64>(column)
+            .map(|value| u64::try_from(value).unwrap_or(0))
     };
     let mut drift = db.query_row(BLOB_SIDE, [], |row| {
         Ok(BlobRefcountDrift {
