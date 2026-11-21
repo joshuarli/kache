@@ -66,6 +66,70 @@ fn leading_language_options_do_not_add_raw_key_material() {
 }
 
 #[test]
+fn cc_time_macro_scan_fails_closed_on_hidden_identifiers_and_pastes() {
+    for bytes in [
+        b"__DATE__".as_slice(), b"__TIME__", b"__TIMESTAMP__",
+        b"#define JOIN(a,b) a##b", b"a%:%:b", b"??=define X 1",
+        b"__TI\\\nME__", b"__TI\\ \r\nME__", b"__T\\u0049ME__",
+        b"non-ascii: \xff", b"binary\0input",
+    ] {
+        assert!(cc_may_reference_time_macro(bytes), "{bytes:?}");
+    }
+    for bytes in [b"".as_slice(), b"int value;", b"#define COMMON_SCALE 3\n"] {
+        assert!(!cc_may_reference_time_macro(bytes), "{bytes:?}");
+    }
+}
+
+#[test]
+fn cc_time_macro_scan_requires_a_complete_readable_native_read_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let env = InvocationEnv::from_parts([("PATH", "/usr/bin:/bin")], Some(root.into()), None, root.into());
+    let parsed = CcArgs::parse_for(&s(&["cc", "-c", "unit.c"]), &env).unwrap();
+    let mut driver = crate::probe::ResolvedConfig {
+        native_driver: true,
+        schema_version: crate::probe::PROBE_SCHEMA_VERSION,
+        prober: "cc".into(),
+        compiler_name: "cc".into(),
+        version_line: "clang version 14".into(),
+        resolved_tokens: Some(Vec::new()),
+        host_version_line: None,
+    };
+    let hasher = crate::cache_key::FileHasher::new();
+    let dep = root.join("inputs.d");
+    let scan = |driver: &crate::probe::ResolvedConfig| {
+        cc_time_macro_free_inputs(&parsed, Some(driver), Some(&dep), &hasher)
+    };
+    assert!(scan(&driver).is_none());
+    fs::write(&dep, "out: unit.c value.h\n").unwrap();
+    fs::write(root.join("unit.c"), "#include \"value.h\"\nint x;\n").unwrap();
+    assert!(scan(&driver).is_none());
+    fs::write(root.join("value.h"), "#define VALUE 42\n").unwrap();
+    assert_eq!(scan(&driver).unwrap().len(), 2);
+    driver.resolved_tokens = Some(s(&["-fdebug-compilation-dir=<path>", "-D", "VALUE=42"]));
+    assert_eq!(scan(&driver).unwrap().len(), 2);
+    driver.native_driver = false;
+    assert!(scan(&driver).is_none());
+    driver.native_driver = true;
+    for args in [
+        s(&["-DVALUE=__TIME__"]), s(&["-D", "VALUE=<path>"]),
+        s(&["-include-pch", "value.pch"]), s(&["-imacros", "value.h"]),
+        s(&["-fmodules"]), s(&["-fplugin=plugin.so"]), s(&["-Xclang", "-load"]),
+        s(&["-specs=driver.specs"]), s(&["-finput-charset=UTF-7"]), s(&["@flags.rsp"]),
+    ] {
+        driver.resolved_tokens = Some(args);
+        assert!(scan(&driver).is_none(), "{:?}", driver.resolved_tokens);
+    }
+    driver.resolved_tokens = None;
+    assert!(scan(&driver).is_none());
+    driver.resolved_tokens = Some(Vec::new());
+    fs::write(&dep, "out: value.h\n").unwrap();
+    assert!(scan(&driver).is_none());
+    fs::write(&dep, "invalid dependency data").unwrap();
+    assert!(scan(&driver).is_none());
+}
+
+#[test]
 fn header_availability_uses_each_clients_relative_paths_and_include_environment() {
     let root = tempfile::tempdir().unwrap();
     let mut clients = Vec::new();
@@ -191,7 +255,7 @@ fi
         assert_eq!(parsed.sources, vec![PathBuf::from("unit.c")]);
         let maps = cc_prefix_maps(&parsed, &[]);
         let expansion =
-            preprocess_hash(&parsed, &maps, &crate::cache_key::FileHasher::new()).unwrap();
+            preprocess_hash(&parsed, &maps, &crate::cache_key::FileHasher::new(), None).unwrap();
         let token = env.var("CLIENT_TOKEN").unwrap();
         let epoch = env.var("SOURCE_DATE_EPOCH").unwrap();
         assert_eq!(
@@ -5292,7 +5356,7 @@ fn preprocess_hash_bails_on_empty_stdout() {
     // it is a safe non-cache, the conservative trade-off.)
     let parsed = CcArgs::parse(&s(&["true", "-c", "a.c"])).unwrap();
     let err =
-        preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new()).unwrap_err();
+        preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new(), None).unwrap_err();
     assert!(err.to_string().contains("no output"), "got: {err}");
 }
 
@@ -5343,7 +5407,7 @@ fn real_probe_separates_file_macro_from_literal_roots() {
         let parsed = CcArgs::parse(&args).unwrap();
         let maps = cc_prefix_maps_for(&parsed, &root);
         let hasher = crate::cache_key::FileHasher::persistent(&root.join("idx.sqlite"));
-        let hashed = preprocess_hash(&parsed, &maps, &hasher).unwrap();
+        let hashed = preprocess_hash(&parsed, &maps, &hasher, None).unwrap();
         (tree, hashed)
     };
 
@@ -5709,7 +5773,7 @@ fn real_probe_refuses_a_directive_behind_a_delimited_escape() {
     )
     .unwrap();
     let parsed = CcArgs::parse(&s(&["cc", "-c", source.to_str().unwrap(), "-o", "out.o"])).unwrap();
-    let refused = preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new())
+    let refused = preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new(), None)
         .unwrap_err()
         .to_string();
     assert!(refused.contains(".incbin"), "{refused}");
@@ -5832,7 +5896,7 @@ fn real_probe_refuses_sources_that_incbin_a_file() {
     std::fs::write(dir.path().join("payload.bin"), "one").unwrap();
     let probe = |source: String| {
         let parsed = CcArgs::parse(&s(&["cc", "-c", source.as_str(), "-o", "out.o"])).unwrap();
-        preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new())
+        preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new(), None)
     };
 
     let asm = write(

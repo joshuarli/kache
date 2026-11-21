@@ -49,7 +49,7 @@ use crate::invocation::process::CommandExt as _;
 use anyhow::{Context, Result};
 use regex_lite::Regex;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{ErrorKind, Write};
@@ -2634,7 +2634,7 @@ fn preprocess_universal_hash(
     let mut fingerprints: Vec<crate::cache_key::CcPreprocessMemoInput> = Vec::new();
     let mut path_bound = false;
     for arch in parsed.arch_slices() {
-        let slice = preprocess_hash(&parsed.single_slice(&arch)?, prefix_maps, file_hasher)?;
+        let slice = preprocess_hash(&parsed.single_slice(&arch)?, prefix_maps, file_hasher, None)?;
         let inputs = slice
             .fingerprints
             .with_context(|| format!("cc: the {arch} slice gave no read set to key"))?;
@@ -2977,10 +2977,69 @@ fn cc_implicit_pch_key(
     Ok((!fields.is_empty()).then(|| fields.join("\x1f")))
 }
 
+fn cc_may_reference_time_macro(bytes: &[u8]) -> bool {
+    // Escapes, trigraphs and digraphs can hide an identifier or paste operator.
+    bytes.iter().any(|b| !b.is_ascii() || matches!(b, 0 | b'\\'))
+        || [b"__DATE__".as_slice(), b"__TIME__", b"__TIMESTAMP__", b"##", b"%:", b"??"]
+            .iter()
+            .any(|needle| memchr::memmem::find(bytes, needle).is_some())
+}
+
+fn cc_time_macro_free_inputs(
+    parsed: &CcArgs,
+    resolved: Option<&crate::probe::ResolvedConfig>,
+    dep_path: Option<&Path>,
+    file_hasher: &crate::cache_key::FileHasher<'_>,
+) -> Option<BTreeMap<PathBuf, String>> {
+    let resolved = resolved.filter(|driver| driver.native_driver)?;
+    let tokens = resolved.resolved_tokens.as_ref()?;
+    let elided_macro = tokens.iter().enumerate().any(|(index, arg)| {
+        (arg.starts_with("-D") || (index > 0 && tokens[index - 1] == "-D"))
+            && arg.contains('<')
+    });
+    if parsed.family.dialect() != Dialect::Gnu
+        || parsed.mode == CompileMode::Precompile
+        || parsed.sources.is_empty()
+        || parsed.include_pch.is_some()
+        || elided_macro
+        || parsed.rest.iter().chain(tokens).any(|arg| {
+            cc_may_reference_time_macro(arg.as_bytes()) || arg.starts_with('@')
+                || [
+                    "-fmodule", "-fprebuilt-module", "-include", "-imacros", "-fpch",
+                    "-fplugin", "-plugin", "-load", "-specs", "--specs",
+                    "-finput-charset", "-traditional", "-Xclang", "-Xpreprocessor", "-Wp,",
+                    "-add-plugin", "-wrapper",
+                ].iter().any(|prefix| arg.starts_with(prefix))
+        })
+    {
+        return None;
+    }
+    let cwd = parsed.invocation_env.cwd()?;
+    let dependencies = parse_preprocess_dependencies(&fs::read_to_string(dep_path?).ok()?, cwd).ok()?;
+    if !parsed.sources.iter().all(|source| {
+        parsed.invocation_env.resolve(source).is_some_and(|source| dependencies.contains(&source))
+    }) {
+        return None;
+    }
+    let mut scanned = BTreeMap::new();
+    for path in dependencies {
+        let bytes = fs::read(&path).ok()?;
+        if cc_may_reference_time_macro(&bytes) {
+            return None;
+        }
+        scanned.insert(path, blake3::hash(&bytes).to_hex().to_string());
+    }
+    if cc_implicit_pch_key(parsed, file_hasher).ok()?.is_some() {
+        return None;
+    }
+    Some(scanned)
+}
+
 fn preprocess_hash(
     parsed: &CcArgs,
     prefix_maps: &[CcPrefixMap],
     file_hasher: &crate::cache_key::FileHasher<'_>,
+    resolved: Option<&crate::probe::ResolvedConfig>,
 ) -> Result<PreprocessHash> {
     let pp_args = key_preprocess_args(parsed, prefix_maps);
     let dep_temp = match tempfile::Builder::new()
@@ -3018,6 +3077,7 @@ fn preprocess_hash(
             .with_context(|| format!("running preprocessor `{}`", parsed.program))
     };
     let mut output = run(&pp_args)?;
+    let captured_dependencies = output.status.success();
     if !output.status.success() && dep_path.is_some() {
         // An otherwise supported compiler may not implement the private
         // dependency flags. Preserve the existing cache-key behavior and just
@@ -3047,7 +3107,13 @@ fn preprocess_hash(
         // nothing → passthrough.
         anyhow::bail!("cc -E key probe produced no output");
     }
-    if !cc_source_date_epoch_is_pinned(parsed) {
+    let unpinned = !cc_source_date_epoch_is_pinned(parsed);
+    let time_macro_free = unpinned.then(|| {
+        cc_time_macro_free_inputs(
+            parsed, resolved, dep_path.as_deref().filter(|_| captured_dependencies), file_hasher,
+        )
+    }).flatten();
+    if unpinned && time_macro_free.is_none() {
         let check_args = compose_cc_args(
             &pp_args,
             vec![
@@ -3110,6 +3176,16 @@ fn preprocess_hash(
             }
         }
     });
+    if let Some(scanned) = time_macro_free {
+        anyhow::ensure!(
+            fingerprints.as_ref().is_some_and(|inputs| {
+                inputs.len() == scanned.len() && inputs.iter().all(|input| {
+                    scanned.get(Path::new(input.local_path())) == Some(&input.content)
+                })
+            }),
+            "cc: inputs changed during the time macro scan"
+        );
+    }
     Ok(PreprocessHash {
         hash,
         fingerprints,
@@ -9578,7 +9654,7 @@ impl CcCompiler {
             let preprocessed = if parsed.is_universal() {
                 preprocess_universal_hash(parsed, &prefix_maps, ctx.file_hasher)?
             } else {
-                preprocess_hash(parsed, &prefix_maps, ctx.file_hasher)?
+                preprocess_hash(parsed, &prefix_maps, ctx.file_hasher, Some(&resolved))?
             };
             self.key_path_bound.set(preprocessed.path_bound);
             let read_inputs = preprocessed.fingerprints.as_ref().map(|inputs| {

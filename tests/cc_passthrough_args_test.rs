@@ -1002,8 +1002,130 @@ fn cc_ignoring_source_date_epoch_does_not_restore_a_stale_time() {
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
-        assert_eq!(last_cc_event(&root)["result"], expected);
+        let event = last_cc_event(&root);
+        assert_eq!(event["result"], expected);
+        if expected == "miss" {
+            assert_eq!(event["preprocessor_runs"], 2, "{event:?}");
+        }
     }
+}
+
+fn unpinned_cc_driver(root: &std::path::Path) -> std::path::PathBuf {
+    fs::write(root.join("driver.c"), r#"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    unsetenv("SOURCE_DATE_EPOCH");
+    int probing = 0;
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "-###") || !strcmp(argv[i], "--version")) probing = 1;
+    if (!probing && access("fail-deps.txt", F_OK) == 0) {
+        for (int i = 1; i + 1 < argc; i++) {
+            if (!strcmp(argv[i], "-MF")) {
+                FILE *deps = fopen(argv[i + 1], "w");
+                if (!deps) return 2;
+                fputs("out: unit.c\n", deps);
+                fclose(deps);
+                return 1;
+            }
+        }
+    }
+    FILE *clock = probing ? NULL : fopen("clock.txt", "r");
+    char value[32], definitions[3][128];
+    char *args[argc + 5];
+    int n = 0;
+    args[n++] = "cc";
+    if (clock) {
+        if (fscanf(clock, "%31s", value) != 1) return 2;
+        fclose(clock);
+        const char *names[] = {"__DATE__", "__TIME__", "__TIMESTAMP__"};
+        args[n++] = "-Wno-builtin-macro-redefined";
+        for (int i = 0; i < 3; i++) {
+            snprintf(definitions[i], sizeof definitions[i], "-D%s=\"%s\"", names[i], value);
+            args[n++] = definitions[i];
+        }
+    }
+    for (int i = 1; i < argc; i++) args[n++] = argv[i];
+    args[n] = NULL;
+    execvp(args[0], args);
+    return 127;
+}
+"#).unwrap();
+    let compiler = root.join("cc");
+    let output = Command::new("cc").current_dir(root)
+        .args(["driver.c", "-o", "cc"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    compiler
+}
+
+#[test]
+fn cc_time_macro_scan_preserves_volatile_direct_header_and_command_line_inputs() {
+    let cases: &[(&str, &str, &str, &[&str])] = &[
+        ("date", "const char value[] = __DATE__;\n", "", &[]),
+        ("time", "const char value[] = __TIME__;\n", "", &[]),
+        ("timestamp", "const char value[] = __TIMESTAMP__;\n", "", &[]),
+        ("paste", "#include \"value.h\"\nconst char value[] = VALUE;\n",
+         "#define CAT_(a,b) a##b\n#define CAT(a,b) CAT_(a,b)\n#define VALUE CAT(__TI,ME__)\n", &[]),
+        ("define", "const char value[] = VALUE;\n", "", &["-DVALUE=__TIME__"]),
+        ("response", "const char value[] = VALUE;\n", "", &["@flags.rsp"]),
+        ("forced", "const char value[] = VALUE;\n", "#define VALUE __TIME__\n", &["-include", "value.h"]),
+        ("spliced", "const char value[] = __TI\\\nME__;\n", "", &[]),
+        ("partial-deps", "#include \"value.h\"\nconst char value[] = VALUE;\n",
+         "#define VALUE __TIME__\n", &[]),
+    ];
+    for (name, source, header, args) in cases {
+        let dir = FixtureDir::new();
+        let root = dir.path().canonicalize().unwrap();
+        fs::write(root.join("kache.toml"), "").unwrap();
+        fs::write(root.join("unit.c"), source).unwrap();
+        fs::write(root.join("value.h"), header).unwrap();
+        fs::write(root.join("flags.rsp"), "-DVALUE=__TIME__\n").unwrap();
+        if *name == "partial-deps" {
+            fs::write(root.join("fail-deps.txt"), "").unwrap();
+        }
+        let compiler = unpinned_cc_driver(&root);
+        let mut objects = Vec::new();
+        for clock in ["one", "two"] {
+            fs::write(root.join("clock.txt"), clock).unwrap();
+            let output = cacheable_cc_command(&root).arg(&compiler)
+                .args(["-c", "unit.c", "-o", "unit.o"]).args(*args)
+                .env("KACHE_CC_PATH_NORMALIZE", "0").output().unwrap();
+            assert!(output.status.success(), "{name}: {output:?}");
+            objects.push(fs::read(root.join("unit.o")).unwrap());
+        }
+        assert_ne!(objects[0], objects[1], "{name}: a stale object was restored");
+        let event = last_cc_event(&root);
+        assert_eq!(event["result"], "passthrough", "{name}: {event:?}");
+        let expected_runs = if *name == "partial-deps" { 3 } else { 2 };
+        assert_eq!(event["preprocessor_runs"], expected_runs, "{name}: {event:?}");
+    }
+}
+
+#[test]
+fn cc_time_macro_scan_uses_one_expansion_for_an_ordinary_native_unit() {
+    let dir = FixtureDir::new();
+    let root = dir.path().canonicalize().unwrap();
+    fs::write(root.join("kache.toml"), "").unwrap();
+    fs::write(root.join("unit.c"), "#include \"value.h\"\nint value = VALUE;\n").unwrap();
+    fs::write(root.join("value.h"), "#define VALUE 42\n").unwrap();
+    let compiler = unpinned_cc_driver(&root);
+    let compile = || {
+        let output = cacheable_cc_command(&root).arg(&compiler)
+            .args(["-c", "unit.c", "-o", "unit.o"]).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        last_cc_event(&root)
+    };
+    let cold = compile();
+    assert_eq!(cold["result"], "miss", "{cold:?}");
+    assert_eq!(cold["preprocessor_runs"], 1, "{cold:?}");
+    let object = fs::read(root.join("unit.o")).unwrap();
+    fs::remove_file(root.join("unit.o")).unwrap();
+    let warm = compile();
+    assert_eq!(warm["result"], "local_hit", "{warm:?}");
+    assert_eq!(warm["preprocessor_runs"], 0, "{warm:?}");
+    assert_eq!(fs::read(root.join("unit.o")).unwrap(), object);
 }
 
 #[test]
