@@ -71,9 +71,9 @@ fn tokenize(line: &str) -> Vec<String> {
         while let Some(c) = chars.next() {
             match c {
                 '"' => break,
-                '\\' => match chars.peek() {
-                    Some('"') | Some('\\') => tok.push(chars.next().unwrap()),
-                    _ => tok.push('\\'),
+                '\\' => match chars.next_if(|next| matches!(next, '"' | '\\')) {
+                    Some(escaped) => tok.push(escaped),
+                    None => tok.push('\\'),
                 },
                 _ => tok.push(c),
             }
@@ -291,9 +291,9 @@ fn tokenize_gnu(line: &str) -> Vec<String> {
             while let Some(c) = chars.next() {
                 match c {
                     '"' => break,
-                    '\\' => match chars.peek() {
-                        Some('"') | Some('\\') => cur.push(chars.next().unwrap()),
-                        _ => cur.push('\\'),
+                    '\\' => match chars.next_if(|next| matches!(next, '"' | '\\')) {
+                        Some(escaped) => cur.push(escaped),
+                        None => cur.push('\\'),
                     },
                     _ => cur.push(c),
                 }
