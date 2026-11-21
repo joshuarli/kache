@@ -54,15 +54,6 @@ Not started.
 - **Fix with:** deslop
 - **Effort:** M
 
-### DSLP-11 · P2 · Types: crates/kache-store remaining modules (7/28)
-
-- **Area:** deslop · types
-- **Where:** crates/kache-store/src/store.rs, crates/kache-store/src/test_support.rs, crates/kache-store/src/workspace.rs, crates/kache-store/tests/byte_counters.rs, crates/kache-store/tests/staged_publication.rs, crates/kache-store/tests/thread_store_counters.rs
-- **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope contains approximately 7306 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
 ### DSLP-12 · P2 · Types: scripts (8/28)
 
 - **Area:** deslop · types
