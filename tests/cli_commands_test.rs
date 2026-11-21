@@ -15,7 +15,6 @@ use tempfile::TempDir;
 
 // Only the env plumbing is shared; this file drives the Cargo-built binary,
 // so the bootstrap helpers in `common` stay unused here.
-#[allow(dead_code)]
 mod common;
 use common::{hermetic_command, settle_writes, stop_daemon};
 

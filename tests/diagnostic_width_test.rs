@@ -5,7 +5,6 @@ use std::fs;
 use std::path::Path;
 use std::process::Output;
 
-#[allow(dead_code)]
 mod common;
 use common::{build_kache, hermetic_command, isolated_config_path, kache_binary};
 

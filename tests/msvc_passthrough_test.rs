@@ -3,7 +3,6 @@
 use std::fs;
 use std::process::Command;
 
-#[allow(dead_code)]
 mod common;
 
 #[test]

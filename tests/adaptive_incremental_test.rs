@@ -11,7 +11,6 @@ use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-#[allow(dead_code)]
 mod common;
 use common::{build_kache, hermetic_command};
 

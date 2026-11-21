@@ -21,7 +21,6 @@
 
 use std::fs;
 use std::path::PathBuf;
-#[allow(dead_code)]
 mod common;
 
 fn kache_binary() -> PathBuf {

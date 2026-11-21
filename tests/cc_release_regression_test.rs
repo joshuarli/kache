@@ -4,7 +4,6 @@
 use std::path::Path;
 use std::process::Command;
 
-#[allow(dead_code)]
 mod common;
 
 fn real_cc_regression(issue: &str) {

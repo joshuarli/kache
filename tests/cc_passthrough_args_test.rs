@@ -13,7 +13,6 @@
 use std::fs;
 use std::process::Command;
 
-#[allow(dead_code)]
 mod common;
 
 fn kache_binary() -> std::path::PathBuf {

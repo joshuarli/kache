@@ -1,6 +1,5 @@
 //! Cached metadata must remain writable when Cargo's fix driver bypasses kache.
 
-#[allow(dead_code)]
 mod common;
 
 use std::fs;

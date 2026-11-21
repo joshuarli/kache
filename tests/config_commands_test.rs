@@ -3,7 +3,6 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
-#[allow(dead_code)]
 mod common;
 
 fn run(root: &Path, args: &[&str]) -> Output {

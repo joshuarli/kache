@@ -15,7 +15,6 @@ use std::process::{Command, Output};
 use deser_value::Value;
 use tempfile::TempDir;
 
-#[allow(dead_code)]
 mod common;
 use common::{SCAN_MACRO, hermetic_command, kache_binary};
 
