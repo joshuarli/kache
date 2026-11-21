@@ -2245,7 +2245,7 @@ fn blob_ingest_defers_flushes() {
 #[test]
 fn deferred_durability_verifies_pending_hits_until_the_flush() {
     let _env_lock = crate::test_support::process_state_test_lock();
-    let _verify = EnvVarGuard::remove("KACHE_VERIFY_RESTORES");
+    let _verify = EnvVarGuard::remove(&_env_lock, "KACHE_VERIFY_RESTORES");
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
@@ -2329,7 +2329,7 @@ fn deferred_durability_verifies_pending_hits_until_the_flush() {
 #[test]
 fn deferred_durability_leaves_imported_entries_pending_until_the_flush() {
     let _env_lock = crate::test_support::process_state_test_lock();
-    let _verify = EnvVarGuard::remove("KACHE_VERIFY_RESTORES");
+    let _verify = EnvVarGuard::remove(&_env_lock, "KACHE_VERIFY_RESTORES");
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
@@ -2456,7 +2456,7 @@ fn deferred_imports_verify_shared_pending_blobs_without_syncing() {
 #[test]
 fn reimport_repairs_missing_pending_blobs_without_replacing_shared_winners() {
     let _env_lock = crate::test_support::process_state_test_lock();
-    let _verify = EnvVarGuard::remove("KACHE_VERIFY_RESTORES");
+    let _verify = EnvVarGuard::remove(&_env_lock, "KACHE_VERIFY_RESTORES");
     for batched in [false, true] {
         {
             let dir = tempfile::tempdir().unwrap();
@@ -3165,7 +3165,7 @@ fn durability_flush_keeps_failed_blob_and_metadata_syncs_retryable() {
 #[test]
 fn get_counts_hits_and_evicts_damaged_blobs() {
     let _env_lock = crate::test_support::process_state_test_lock();
-    let _verify = EnvVarGuard::remove("KACHE_VERIFY_RESTORES");
+    let _verify = EnvVarGuard::remove(&_env_lock, "KACHE_VERIFY_RESTORES");
     for damage in ["missing", "short", "long", "directory"] {
         let dir = tempfile::tempdir().unwrap();
         let config = test_config(dir.path());
@@ -3250,26 +3250,42 @@ fn test_config(dir: &Path) -> Config {
     }
 }
 
-struct EnvVarGuard {
+struct EnvVarGuard<'lock> {
     key: &'static str,
     previous: Option<std::ffi::OsString>,
+    _process_state: std::marker::PhantomData<&'lock crate::test_support::ProcessStateTestGuard>,
 }
 
-impl EnvVarGuard {
-    fn set(key: &'static str, value: &str) -> Self {
+impl<'lock> EnvVarGuard<'lock> {
+    fn set(
+        _process_state: &'lock crate::test_support::ProcessStateTestGuard,
+        key: &'static str,
+        value: &str,
+    ) -> Self {
         let previous = std::env::var_os(key);
         unsafe { std::env::set_var(key, value) };
-        Self { key, previous }
+        Self {
+            key,
+            previous,
+            _process_state: std::marker::PhantomData,
+        }
     }
 
-    fn remove(key: &'static str) -> Self {
+    fn remove(
+        _process_state: &'lock crate::test_support::ProcessStateTestGuard,
+        key: &'static str,
+    ) -> Self {
         let previous = std::env::var_os(key);
         unsafe { std::env::remove_var(key) };
-        Self { key, previous }
+        Self {
+            key,
+            previous,
+            _process_state: std::marker::PhantomData,
+        }
     }
 }
 
-impl Drop for EnvVarGuard {
+impl Drop for EnvVarGuard<'_> {
     fn drop(&mut self) {
         match &self.previous {
             Some(value) => unsafe { std::env::set_var(self.key, value) },
@@ -14069,7 +14085,7 @@ fn ro_put(store: &Store, src: &Path, key: &str, bytes: &[u8]) {
 #[test]
 fn read_only_store_serves_hits_and_writes_nothing() {
     let _env_lock = crate::test_support::process_state_test_lock();
-    let _verify = EnvVarGuard::set("KACHE_VERIFY_RESTORES", "always");
+    let _verify = EnvVarGuard::set(&_env_lock, "KACHE_VERIFY_RESTORES", "always");
     let dir = tempfile::tempdir().unwrap();
     let src = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
@@ -14298,7 +14314,7 @@ fn read_only_store_refuses_without_a_live_index_and_creates_nothing() {
 fn read_only_store_treats_a_truncated_blob_as_a_miss_and_evicts_nothing() {
     use std::os::unix::fs::PermissionsExt;
     let _env_lock = crate::test_support::process_state_test_lock();
-    let _verify = EnvVarGuard::remove("KACHE_VERIFY_RESTORES");
+    let _verify = EnvVarGuard::remove(&_env_lock, "KACHE_VERIFY_RESTORES");
     let dir = tempfile::tempdir().unwrap();
     let src = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
