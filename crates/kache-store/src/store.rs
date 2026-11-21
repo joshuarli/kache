@@ -2332,7 +2332,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
 
         let store = Self {
             policy: std::marker::PhantomData,
-            config: config.clone(),
+            config,
             options,
             db,
             eviction_pacing: (EVICTION_WRITE_SLICE, EVICTION_WRITE_PAUSE),
@@ -2958,7 +2958,6 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn put_with_compile_time_policy(
         &self,
         cache_key: &str,
