@@ -101,7 +101,7 @@ client-crates-check:
 test-resource-guard-check:
 	./scripts/test-with-test-resources.sh
 
-# Same changed-line mutants job CI runs. Docs-only diffs skip mutants.
+# Changed-line mutation testing after `check`. No workflow runs it. Docs-only diffs skip mutants.
 # BASE is the merge base, default `origin/main`.
 BASE ?= origin/main
 pr: check

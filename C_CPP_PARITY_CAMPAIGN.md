@@ -1,7 +1,7 @@
 # C/C++ parity campaign
 
-Progress lives in `campaigns/cpp/STATUS.md` once CCP-00 creates it; until then
-no package has started. This is an execution plan, not a compatibility claim.
+Progress lives in `campaigns/cpp/STATUS.md`. This is an execution plan, not a
+compatibility claim.
 Created 2026-11-17. Kache baseline:
 [4401c7a](https://github.com/joshuarli/kache/commit/4401c7a09498d2225ab22e7d1e74bef20211ca8f).
 Tracking entry: KACH-26 in [TODO.md](TODO.md).
