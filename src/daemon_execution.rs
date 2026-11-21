@@ -710,7 +710,7 @@ mod tests {
             [
                 ("KACHE_CONFIG", root.join("config.toml").into_os_string()),
                 ("KACHE_CACHE_DIR", root.join("cache").into_os_string()),
-                ("KACHE_RUNTIME_DIR", root.join("runtime").into_os_string()),
+                ("KACHE_RUNTIME_DIR", root.join("run").into_os_string()),
                 ("KACHE_DISABLED", "1".into()),
                 ("PATH", env!("PATH").into()),
                 ("CLIENT", name.into()),
