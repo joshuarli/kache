@@ -10866,7 +10866,7 @@ fn nested_response_files_use_cwd_and_key_every_file() {
     fs::write(root.join("inner.rsp"), "-O2 -O2\n").unwrap();
     fs::write(root.join("sub/outer.rsp"), "@inner.rsp @inner.rsp -c u.c -o u.o\n").unwrap();
     assert_eq!(parse().response_file_digests.len(), 3);
-    for bad in ["@inner.rsp", "@missing.rsp", "--rsp-quoting=windows", "--config=x.cfg", "\"\"", "a\r\nb", "x\0y"] {
+    for bad in ["@inner.rsp", "@missing.rsp", "--rsp-quoting=windows", "--config=x.cfg", "--", "\"\"", "a\r\nb", "x\0y"] {
         fs::write(root.join("inner.rsp"), bad).unwrap();
         assert!(!parse().refuse_reasons(&[]).is_empty(), "{bad:?}");
     }

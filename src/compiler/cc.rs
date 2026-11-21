@@ -241,9 +241,10 @@ pub struct CcArgs {
     pub(crate) invocation_env: InvocationEnv,
     /// argv[0] — the compiler binary path the wrapper was invoked as.
     pub program: String,
-    /// argv[1..] verbatim — preserved for passthrough / re-execution.
+    /// argv[1..] with supported response files expanded for parsing/keying.
     pub rest: Vec<String>,
     pub(crate) response_file_digests: Vec<String>,
+    pub(crate) original_args: Option<Vec<String>>,
 
     /// Source files (`.c`, `.cpp`, `.cc`, `.cxx`, `.m`, `.mm`).
     /// May be empty for link-only invocations or pure flag probes.
@@ -772,6 +773,10 @@ static CC_ARG_SPECS: &[CcArgSpec] = &[
 ];
 
 impl CcArgs {
+    pub(crate) fn execution_args(&self) -> &[String] {
+        self.original_args.as_deref().unwrap_or(&self.rest)
+    }
+
     #[cfg(test)]
     pub fn parse(args: &[String]) -> Result<Self> {
         Self::parse_for(args, &InvocationEnv::capture())
@@ -796,6 +801,7 @@ impl CcArgs {
             program: program.clone(),
             rest: rest.to_vec(),
             response_file_digests: Vec::new(),
+            original_args: None,
             sources: Vec::new(),
             output: None,
             mode: CompileMode::Link, // default: compile + link
@@ -9198,6 +9204,7 @@ impl Compiler for CcCompiler {
         let mut parsed = CcArgs::parse_for(expanded.as_ref().map(|value| value.0.as_slice()).unwrap_or(args), &self.invocation_env)?;
         if let Some((_, digests)) = expanded {
             parsed.response_file_digests = digests;
+            parsed.original_args = Some(args[1..].to_vec());
         }
         parsed.depinfo_roots =
             crate::path_normalizer::PathNormalizer::from_invocation(None, &self.invocation_env)
@@ -10189,7 +10196,7 @@ impl CcCompiler {
         let prefix_maps = cc_prefix_maps(parsed, &self.base_dirs);
         let mut appended = file_prefix_map_args(&prefix_maps);
         appended.extend(extra);
-        let args = compose_cc_args(&parsed.rest, appended);
+        let args = compose_cc_args(parsed.execution_args(), appended);
         command.args(&args);
         // Pin the same effective SOURCE_DATE_EPOCH the `-E` key probe used, so a
         // TU baking __DATE__/__TIME__ produces an object whose date
@@ -10320,7 +10327,7 @@ fn stage_cc_stdout_artifact(
 /// an empty quoted argument (GCC keeps it, Clang drops it), a backslash
 /// before a line break or at the end, and carriage returns. Both drivers
 /// resolve nested `@file` paths from cwd in GNU mode, not the containing file.
-/// Clang config/quoting overrides, cycles, excessive expansion, and missing
+/// Clang config/quoting overrides, hidden `--`, cycles, excessive expansion, and missing
 /// or non-UTF-8 files are refused.
 fn expand_cc_response_files(args: &[String], env: &InvocationEnv) -> Result<Vec<String>> {
     expand_cc_response_files_tracked(args, env).map(|value| value.0)
@@ -10367,7 +10374,8 @@ fn cc_args_with_response_files(args: &[String], env: &InvocationEnv) -> Option<(
         return None;
     }
     match expand_cc_response_files_tracked(rest, env) {
-        Ok((expanded, digests)) => Some((std::iter::once(program.clone()).chain(expanded).collect(), digests)),
+        Ok((expanded, digests)) if !expanded.iter().any(|arg| arg == "--") => Some((std::iter::once(program.clone()).chain(expanded).collect(), digests)),
+        Ok(_) => None,
         Err(error) => {
             log::debug!("cc response file not expanded: {error:#}");
             None
