@@ -1892,4 +1892,108 @@ mod tests {
         );
         assert!(!out.env.contains_key("CXX"));
     }
+
+    fn summary(hit_rate_pct: f64) -> crate::report::ReportSummary {
+        crate::report::ReportSummary {
+            hit_rate_pct,
+            total_crates: 10,
+            local_hits: 6,
+            dups: 1,
+            misses: 3,
+        }
+    }
+
+    fn warned(measurements: Vec<crate::result::Measurement>) -> Vec<String> {
+        measurements
+            .into_iter()
+            .filter(|m| m.warning.is_some())
+            .map(|m| m.name)
+            .collect()
+    }
+
+    #[test]
+    fn measurement_warnings_fire_strictly_beyond_their_thresholds() {
+        let spec: crate::scenario::MeasureSpec =
+            deser_toml::from_str("max_wall_s = 300\nmin_hit_rate_pct = 50.0\n").unwrap();
+        let run = |wall, rate| warned(super::phase_measurements(wall, &summary(rate), Some(&spec)));
+        assert!(run(300, 50.0).is_empty(), "the thresholds themselves are allowed");
+        assert_eq!(run(301, 50.0), ["wall_s"]);
+        assert_eq!(run(300, 49.9), ["hit_rate_pct"]);
+        assert!(warned(super::phase_measurements(9999, &summary(0.0), None)).is_empty());
+    }
+
+    #[test]
+    fn phase_measurements_report_counts_and_a_rate_rounded_to_one_decimal() {
+        let measurements = super::phase_measurements(12, &summary(33.333), None);
+        let value = |name: &str| {
+            measurements.iter().find(|m| m.name == name).unwrap().value.clone()
+        };
+        assert_eq!(value("wall_s"), deser_value::Value::from(12u64));
+        assert_eq!(value("total_crates"), deser_value::Value::from(10u64));
+        assert_eq!(value("hits"), deser_value::Value::from(6u64));
+        assert_eq!(value("dups"), deser_value::Value::from(1u64));
+        assert_eq!(value("misses"), deser_value::Value::from(3u64));
+        assert_eq!(value("hit_rate_pct"), deser_value::Value::from(33.3));
+    }
+
+    fn phase_result(name: &str, wall: u64) -> crate::result::PhaseResult {
+        crate::result::PhaseResult {
+            phase: name.into(),
+            status: "pass".into(),
+            build_wall_s: wall,
+            build_exit_code: 0,
+            verify: None,
+            kache_report: deser_value::Value::from(0),
+            measurements: vec![crate::result::Measurement::number("wall_s", wall, Some("s"))],
+            assertions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn speedup_is_cold_wall_over_phase_wall_and_warns_below_the_floor() {
+        let mut fixture = dummy_shim_fixture(false);
+        fixture.checks = deser_toml::from_str("[measure.warm]\nmin_speedup = 3.0\n").unwrap();
+        let mut phases = vec![
+            phase_result("cold", 60),
+            phase_result("warm", 30),
+            phase_result("noop", 0),
+        ];
+        super::add_speedup_measurements(&fixture, &mut phases);
+        let speedup = |index: usize| {
+            phases[index].measurements.iter().find(|m| m.name == "speedup_vs_cold")
+        };
+        assert!(speedup(0).is_none(), "cold is not compared with itself");
+        let warm = speedup(1).unwrap();
+        assert_eq!(warm.value, deser_value::Value::from(2.0));
+        assert_eq!(
+            warm.warning.as_deref(),
+            Some("speedup 2.00x < configured warning threshold 3.00x")
+        );
+        assert!(speedup(2).is_none(), "a zero-second phase has no ratio");
+
+        let mut without_cold = vec![phase_result("warm", 30)];
+        super::add_speedup_measurements(&fixture, &mut without_cold);
+        assert_eq!(without_cold[0].measurements.len(), 1);
+    }
+
+    #[test]
+    fn a_modification_replaces_every_occurrence_and_refuses_a_noop_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("value.txt");
+        std::fs::write(&file, "v1 and v1").unwrap();
+        let modify = crate::fixture::ModifySpec {
+            file: "value.txt".into(),
+            find: "v1".into(),
+            replace: "v2".into(),
+            expected_stdout_contains: Vec::new(),
+        };
+        super::apply_modification(dir.path(), &modify).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "v2 and v2");
+        let error = super::apply_modification(dir.path(), &modify).unwrap_err().to_string();
+        assert!(error.contains("not found"), "{error}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "v2 and v2");
+        let missing = crate::fixture::ModifySpec { file: "absent.txt".into(), ..modify };
+        let error = super::apply_modification(dir.path(), &missing).unwrap_err().to_string();
+        assert!(error.contains("reading") && error.contains("absent.txt"), "{error}");
+    }
 }

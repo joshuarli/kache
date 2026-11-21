@@ -3,7 +3,6 @@
 
 import argparse
 import contextlib
-import importlib.util
 import os
 import subprocess
 import sys

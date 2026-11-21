@@ -142,4 +142,31 @@ mod tests {
         assert_eq!(median(&[3.0, 1.0, 2.0]), Some(2.0));
         assert_eq!(median(&[4.0, 1.0, 2.0, 3.0]), Some(2.5));
     }
+
+    #[test]
+    fn the_verdict_boundaries_are_inclusive_for_pass_and_exclusive_for_fail() {
+        let summary = RatioSummary { pairs: 5, geomean: 1.0, ci95: Some([0.9, 1.1]) };
+        assert_eq!(verdict(&summary, 1.1), Verdict::Pass, "high == target passes");
+        assert_eq!(verdict(&summary, 1.0), Verdict::Inconclusive, "interval straddles the target");
+        assert_eq!(verdict(&summary, 0.9), Verdict::Inconclusive, "low == target is not a failure");
+        assert_eq!(verdict(&summary, 0.8999), Verdict::Fail);
+    }
+
+    #[test]
+    fn the_locked_stream_is_splitmix64() {
+        let mut rng = Rng::new(0);
+        assert_eq!(rng.next_u64(), 0xe220_a839_7b1d_cdaf);
+        assert_eq!(rng.next_u64(), 0x6e78_9e6a_a1b9_65f4);
+        assert_eq!(rng.next_u64(), 0x06c4_5d18_8009_454f);
+    }
+
+    #[test]
+    fn the_t_table_covers_exactly_two_to_ten_pairs() {
+        for n in 2..=10usize {
+            let logs = vec![1.1; n];
+            assert!(paired_ratio(&logs, &vec![1.0; n]).unwrap().ci95.is_some(), "{n} pairs");
+        }
+        assert!(paired_ratio(&[1.1; 11], &[1.0; 11]).unwrap().ci95.is_none(), "beyond the locked table");
+        assert_eq!((MIN_PAIRS, MAX_PAIRS), (5, 10));
+    }
 }

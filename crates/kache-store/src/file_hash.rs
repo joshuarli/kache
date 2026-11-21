@@ -1092,7 +1092,7 @@ mod tests {
         let moved = stamp("/moved.h", 1, 1);
         cache.put(&same, "h-same").unwrap();
         cache.put(&moved, "h-moved").unwrap();
-        let mut rewritten = moved.clone();
+        let mut rewritten = moved;
         rewritten.mtime_ns = 2;
         let absent = stamp("/absent.h", 1, 1);
 

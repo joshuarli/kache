@@ -15,4 +15,5 @@ categories = ["development-tools::debugging"]
 log = "0.4"
 
 [lints.rust]
+unsafe_code = "forbid"
 warnings = "deny"

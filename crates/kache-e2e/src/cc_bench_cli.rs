@@ -153,3 +153,136 @@ fn acceptance_exit(report: &cc_bench::Report) -> i32 {
         1
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cc_bench::{Acceptance, AcceptanceVerdict as V, Provenance, Report, WorkloadReport};
+    use std::collections::BTreeMap;
+
+    fn args(list: &[&str]) -> Vec<OsString> {
+        std::iter::once("kache-cc-bench").chain(list.iter().copied()).map(OsString::from).collect()
+    }
+
+    fn binaries() -> (tempfile::TempDir, [String; 4]) {
+        let dir = tempfile::tempdir().unwrap();
+        let kache = dir.path().join("kache");
+        let ccache = dir.path().join("ccache");
+        std::fs::write(&kache, "").unwrap();
+        std::fs::write(&ccache, "").unwrap();
+        let paths = [
+            "--kache".to_string(),
+            kache.to_str().unwrap().to_string(),
+            "--ccache".to_string(),
+            ccache.to_str().unwrap().to_string(),
+        ];
+        (dir, paths)
+    }
+
+    fn parse_with(extra: &[&str]) -> Result<Option<Config>, String> {
+        let (_dir, base) = binaries();
+        let mut list: Vec<&str> = base.iter().map(String::as_str).collect();
+        list.extend_from_slice(extra);
+        parse(&args(&list))
+    }
+
+    #[test]
+    fn defaults_take_five_diagnostic_pairs_and_canonical_binaries() {
+        let cfg = parse_with(&[]).unwrap().unwrap();
+        assert_eq!(cfg.pairs, 5);
+        assert_eq!(cfg.toolchain, "cc");
+        assert!(!cfg.acceptance && !cfg.validate_only);
+        assert!(cfg.workloads.is_empty());
+        assert!(cfg.kache.is_absolute() && cfg.kache.ends_with("kache"));
+        assert!(cfg.ccache.is_absolute() && cfg.ccache.ends_with("ccache"));
+    }
+
+    #[test]
+    fn help_and_every_malformed_command_line_are_distinguished() {
+        assert!(parse(&args(&["--help"])).unwrap().is_none());
+        assert!(parse(&args(&["-h"])).unwrap().is_none());
+        assert!(parse(&args(&[])).unwrap_err().contains("--kache and --ccache are required"));
+        assert!(parse(&args(&["--bogus"])).is_err());
+        assert!(parse(&args(&["--kache"])).unwrap_err().contains("--kache requires a value"));
+        assert!(parse_with(&["--pairs", "many"]).unwrap_err().contains("--pairs takes a number"));
+        assert!(parse_with(&["--workload", "no-such-workload"]).unwrap_err().contains("unknown --workload"));
+        assert!(
+            parse_with(&["--acceptance", "--validate-only"])
+                .unwrap_err()
+                .contains("cannot be combined with --validate-only")
+        );
+        let missing = parse(&args(&["--kache", "/no/such/kache", "--ccache", "/no/such/ccache"]));
+        assert!(missing.unwrap_err().starts_with("/no/such/kache"));
+    }
+
+    #[test]
+    fn the_pair_budget_is_five_to_ten_inclusive() {
+        for pairs in ["5", "10"] {
+            assert!(parse_with(&["--pairs", pairs]).unwrap().is_some(), "{pairs}");
+        }
+        for pairs in ["0", "4", "11"] {
+            assert!(parse_with(&["--pairs", pairs]).unwrap_err().contains("5..=10"), "{pairs}");
+        }
+    }
+
+    #[test]
+    fn usage_errors_exit_two_and_help_exits_zero() {
+        assert_eq!(main(args(&["--bogus"])), 2);
+        assert_eq!(main(args(&[])), 2);
+        assert_eq!(main(args(&["--help"])), 0);
+        assert_eq!(main(args(&["--meter", "report"])), 2);
+        assert_eq!(main(args(&["--meter", "report", "oops", "true"])), 2);
+    }
+
+    fn report(verdicts: &[Option<V>]) -> Report {
+        Report {
+            mode: "test",
+            resource_accounting: "",
+            provenance: Provenance {
+                source_revision: None,
+                source_dirty: None,
+                binaries: BTreeMap::new(),
+                configuration: BTreeMap::new(),
+            },
+            preflight: None,
+            toolchain: String::new(),
+            compiler: String::new(),
+            kache: String::new(),
+            ccache: String::new(),
+            host: Default::default(),
+            seed: 0,
+            jobs: 1,
+            workloads: verdicts
+                .iter()
+                .map(|verdict| WorkloadReport {
+                    workload: "w".into(),
+                    units: 0,
+                    input_digest: None,
+                    environments: BTreeMap::new(),
+                    acceptance: verdict.map(|verdict| Acceptance {
+                        complete_pairs: 5,
+                        eligible: verdict != V::Ineligible,
+                        verdict,
+                        reasons: Vec::new(),
+                    }),
+                    validation: Vec::new(),
+                    validation_failures: Vec::new(),
+                    timed: Vec::new(),
+                    ratios: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn acceptance_exits_zero_only_when_every_workload_passes() {
+        assert_eq!(acceptance_exit(&report(&[])), 1, "nothing was judged");
+        assert_eq!(acceptance_exit(&report(&[None])), 1, "no acceptance result");
+        assert_eq!(acceptance_exit(&report(&[Some(V::Pass), Some(V::Pass)])), 0);
+        assert_eq!(acceptance_exit(&report(&[Some(V::Pass), Some(V::Fail)])), 1);
+        assert_eq!(acceptance_exit(&report(&[Some(V::Inconclusive)])), 1);
+        assert_eq!(acceptance_exit(&report(&[Some(V::Undersampled)])), 1);
+        assert_eq!(acceptance_exit(&report(&[Some(V::Pass), Some(V::Ineligible)])), 3);
+        assert_eq!(acceptance_exit(&report(&[Some(V::Fail), Some(V::Ineligible)])), 3, "an ineligible host outranks a failure");
+    }
+}

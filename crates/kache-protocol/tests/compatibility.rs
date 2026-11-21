@@ -1,6 +1,6 @@
 use kache_protocol::{
-    CompileFinishedRequest, CompileStartedRequest, DaemonHealth, EffectiveConfig, HashFilesRequest,
-    TransferEvent,
+    CompileFinishedRequest, CompileStartedRequest, DaemonHealth, EffectiveConfig, GcRequest,
+    HashFilesRequest, PrestageRequest, Request, StatsRequest, TransferEvent,
 };
 use deser_value::{from_value, to_value, value};
 
@@ -85,4 +85,53 @@ fn complete_envelopes_keep_legacy_gc_shape() {
             "gc": {"max_age_hours": 12, "mode": "legacy"}
         })
     );
+}
+
+#[test]
+fn only_build_requests_keep_the_machine_busy_and_only_some_declare_a_release() {
+    let stats = |client_version: Option<&str>| StatsRequest {
+        include_entries: false,
+        include_summaries: false,
+        sort_by: None,
+        event_hours: None,
+        event_secs: None,
+        client_epoch: 0,
+        client_version: client_version.map(str::to_owned),
+    };
+    let started: CompileStartedRequest = from_value(&value!({
+        "crate_name": "example", "pid": 42, "started_at_ms": 123, "client_version": "2.0.0"
+    }))
+    .unwrap();
+    let gc = || GcRequest::automatic(1);
+    let probe = Request::ExecutionStatus {
+        client_pid: 7,
+        client_version: "2.0.0".into(),
+        trusted_pipeline: false,
+    };
+    let finished = CompileFinishedRequest {
+        pid: 42,
+        started_at_ms: 123,
+    };
+    let prestage = PrestageRequest {
+        target_dir: "/target".into(),
+    };
+    let hash_files = HashFilesRequest { files: Vec::new() };
+
+    for (request, busy, release) in [
+        (Request::Stats(stats(Some("2.0.0"))), false, Some("2.0.0")),
+        (Request::Stats(stats(None)), false, None),
+        (Request::CompileStarted(started), true, Some("2.0.0")),
+        (Request::CompileFinished(finished), true, None),
+        (Request::HashFiles(hash_files), true, None),
+        (Request::Prestage(prestage), true, None),
+        (Request::GcHint, true, None),
+        (Request::Gc(gc()), false, None),
+        (Request::GcV2(gc()), false, None),
+        (probe, false, None),
+        (Request::Health, false, None),
+        (Request::Shutdown, false, None),
+    ] {
+        assert_eq!(request.is_build_activity(), busy, "{request:?}");
+        assert_eq!(request.client_version(), release, "{request:?}");
+    }
 }

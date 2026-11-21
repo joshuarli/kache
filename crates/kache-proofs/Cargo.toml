@@ -12,4 +12,5 @@ rust-version = "1.93"
 coverage-owner = "kani"
 
 [lints.rust]
+unsafe_code = "forbid"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }

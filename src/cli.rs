@@ -1332,7 +1332,7 @@ pub fn why_miss(config: &Config, crate_name: &str, json: bool) -> Result<()> {
         .collect();
 
     // ── Find last entry miss ───────────────────────────────────────────
-    let last_miss = crate_events.iter().rev().find(|e| {
+    let last_miss = crate_events.iter().enumerate().rev().find(|(_, e)| {
         matches!(
             e.result,
             events::EventResult::Dup | events::EventResult::Miss
@@ -1342,7 +1342,7 @@ pub fn why_miss(config: &Config, crate_name: &str, json: bool) -> Result<()> {
     // last miss means the crate is not cached now, whatever that miss stored.
     let latest_uncached = latest_uncached_compile(&crate_events);
 
-    if last_miss.is_none() {
+    let Some((last_miss_index, miss)) = last_miss else {
         if json {
             #[derive(deser::Serialize)]
             struct Body<'a> {
@@ -1388,13 +1388,8 @@ pub fn why_miss(config: &Config, crate_name: &str, json: bool) -> Result<()> {
             println!("{line}");
         }
         return Ok(());
-    }
+    };
 
-    let miss = last_miss.unwrap();
-    let last_miss_index = crate_events
-        .iter()
-        .position(|event| std::ptr::eq(*event, *miss))
-        .expect("last miss came from crate_events");
     let prior_same_key_miss = last_miss_index > 0 && !miss.cache_key.is_empty() && {
         let previous = crate_events[last_miss_index - 1];
         previous.cache_key == miss.cache_key
@@ -4371,10 +4366,8 @@ pub fn doctor(
     json: bool,
 ) -> Result<()> {
     let home = kache_fs::home_dir().unwrap_or_default();
-    let (config, provenance) = crate::config::Config::load_with_provenance()
-        .map_or((None, None), |(config, provenance)| {
-            (Some(config), Some(provenance))
-        });
+    let loaded = crate::config::Config::load_with_provenance().ok();
+    let config = loaded.as_ref().map(|(config, _)| config);
 
     // The daemon is optional (see README): `kache doctor` shows its checks
     // for diagnostics but never counts them as issues. See #443.
@@ -4474,7 +4467,7 @@ pub fn doctor(
     });
 
     // 5. Cache directory
-    if let Some(ref cfg) = config {
+    if let Some(cfg) = config {
         let exists = cfg.cache_dir.exists();
         checks.push(Check {
             label: "Cache dir",
@@ -4627,7 +4620,7 @@ pub fn doctor(
     // into that wait below.
     let my_version = crate::VERSION;
     let mut healthy_daemon_reachable = false;
-    if let Some(ref cfg) = config {
+    if let Some((cfg, provenance)) = &loaded {
         let mut stats = crate::daemon::send_stats_request_without_restart(cfg, false).ok();
 
         let is_stale = |stats: &Option<crate::daemon::StatsResponse>| {
@@ -4653,7 +4646,7 @@ pub fn doctor(
         if let Some(stats) = &stats {
             checks.extend(doctor_daemon::checks(
                 cfg,
-                provenance.as_ref().expect("loaded config has provenance"),
+                provenance,
                 stats.effective_config.as_ref(),
             ));
         }
@@ -4869,7 +4862,7 @@ pub fn doctor(
         if fix {
             migrate(purge_sccache)?;
         }
-        if verify && let Some(ref cfg) = config {
+        if verify && let Some(cfg) = config {
             let outcome = self::verify(cfg, checksums, repair)?;
             if doctor_has_issues(outcome.unresolved_integrity_findings()) {
                 std::process::exit(1);
@@ -4940,7 +4933,7 @@ pub fn doctor(
     // part of that condition: they are reclaimable space, not wrong bytes,
     // and GC clears them without anyone's intervention.
     if verify {
-        if let Some(ref cfg) = config {
+        if let Some(cfg) = config {
             println!();
             let outcome = self::verify(cfg, checksums, repair)?;
             let unresolved = outcome.unresolved_integrity_findings();
@@ -6068,7 +6061,8 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
     // Asking runs the service manager, which --no-service must not touch.
     let service_available = !no_service && crate::service::login_service_available();
     let service_path = crate::service::service_file_path();
-    let service_installed = service_path.as_ref().is_some_and(|p| p.exists());
+    let installed_service_path = service_path.as_deref().filter(|p| p.exists());
+    let service_installed = installed_service_path.is_some();
     let service_problem = service_path
         .as_deref()
         .filter(|p| p.exists())
@@ -6220,10 +6214,10 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
         if !check {
             service_action_taken = install_login_service();
         }
-    } else if service_installed {
+    } else if let Some(path) = installed_service_path {
         println!(
             "  \x1b[32m✓\x1b[0m Login service: configured ({})",
-            service_path.as_ref().unwrap().display()
+            path.display()
         );
     } else {
         println!("  \x1b[33m→\x1b[0m Background service: start kache when you log in");

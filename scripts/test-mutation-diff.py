@@ -14,6 +14,8 @@ import unittest
 
 SCRIPT = Path(__file__).with_name("mutation-diff.py")
 spec = importlib.util.spec_from_file_location("mutation_diff", SCRIPT)
+if spec is None or spec.loader is None:
+    raise ImportError(f"cannot load {SCRIPT}")
 md = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(md)
 

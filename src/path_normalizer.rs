@@ -949,7 +949,7 @@ fn configured_base_dir_rules(base_dirs: &[String]) -> (Vec<String>, Vec<Rule>) {
 
     let mut lexical_rules = Vec::new();
     for (index, path) in configured.iter().enumerate() {
-        push_configured_base_dir_rule(&mut lexical_rules, path.to_owned(), index);
+        push_configured_base_dir_rule(&mut lexical_rules, path, index);
     }
     let reserved_lexical: std::collections::HashSet<String> = lexical_rules
         .iter()
@@ -974,7 +974,7 @@ fn configured_base_dir_rules(base_dirs: &[String]) -> (Vec<String>, Vec<Rule>) {
                 continue;
             }
             let mut candidates = Vec::new();
-            push_configured_base_dir_rule(&mut candidates, canonical, index);
+            push_configured_base_dir_rule(&mut candidates, &canonical, index);
             candidates.retain(|rule| !reserved_lexical.contains(&rule.prefix));
             alias_rules.extend(candidates);
         }
@@ -994,14 +994,14 @@ fn configured_base_dir_rules(base_dirs: &[String]) -> (Vec<String>, Vec<Rule>) {
     (configured, lexical_rules)
 }
 
-fn push_configured_base_dir_rule(rules: &mut Vec<Rule>, prefix: String, index: usize) {
+fn push_configured_base_dir_rule(rules: &mut Vec<Rule>, prefix: &str, index: usize) {
     let sentinel = configured_base_dir_sentinel(index);
     let target = configured_base_dir_target(index);
     if prefix.is_empty() {
         return;
     }
     rules.push(Rule {
-        prefix: prefix.clone(),
+        prefix: prefix.to_owned(),
         key_sentinel: sentinel.clone(),
         source_sentinel: sentinel.clone(),
         flag_target: target.clone(),
@@ -1010,9 +1010,9 @@ fn push_configured_base_dir_rule(rules: &mut Vec<Rule>, prefix: String, index: u
     // Config entries are host-independent: expand variants according to the
     // entry's syntax, not the OS running kache. In particular, `/snap` must not
     // gain a `\snap` alias merely because the client runs on Windows.
-    if is_windows_absolute_path(&prefix) {
-        push_slash_and_case_variants(rules, &prefix, &sentinel, &sentinel, &target);
-        if let Some(short) = short_path_name(&prefix)
+    if is_windows_absolute_path(prefix) {
+        push_slash_and_case_variants(rules, prefix, &sentinel, &sentinel, &target);
+        if let Some(short) = short_path_name(prefix)
             && short != prefix
         {
             rules.push(Rule {
@@ -1243,9 +1243,8 @@ fn leak_window(value: &str, idx: usize, prefix_len: usize) -> &str {
     let end = value
         .char_indices()
         .map(|(offset, _)| offset)
-        .chain(std::iter::once(value.len()))
         .find(|&offset| offset >= raw_end)
-        .expect("the string length always bounds the requested window");
+        .unwrap_or(value.len());
     &value[start..end]
 }
 
@@ -1442,7 +1441,7 @@ fn push_rule_with_variants_target_and_source(
     // canonical form is the only rule. (Configured base dirs still expand
     // Windows-shaped entries via `push_configured_base_dir_rule`.)
     rules.push(Rule {
-        prefix: prefix.clone(),
+        prefix,
         key_sentinel: sentinel.to_string(),
         source_sentinel: source_sentinel.to_string(),
         flag_target: flag_target.to_string(),

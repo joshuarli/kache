@@ -29,3 +29,7 @@ kache-fs = { version = "2.0.0-rc.2", path = "../kache-fs", features = ["testing"
 kache-log = { version = "2.0.0-rc.2", path = "../kache-log" }
 rustc-hash = "2"
 tempfile = "3"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

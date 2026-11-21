@@ -352,4 +352,25 @@ mod tests {
                 .contains("unsupported report schema_version")
         );
     }
+
+    #[test]
+    fn the_delta_hit_rate_is_hits_over_all_crates_built_since_the_earlier_summary() {
+        let summary = |local_hits, dups, misses| ReportSummary {
+            hit_rate_pct: 0.0,
+            total_crates: local_hits + dups + misses,
+            local_hits,
+            dups,
+            misses,
+        };
+        let earlier = summary(2, 0, 2);
+        let delta = summary(5, 1, 3).delta_since(&earlier);
+        assert_eq!((delta.local_hits, delta.dups, delta.misses, delta.total_crates), (3, 1, 1, 5));
+        assert_eq!(delta.hit_rate_pct, 60.0);
+        let one = summary(3, 0, 2).delta_since(&earlier);
+        assert_eq!((one.total_crates, one.hit_rate_pct), (1, 100.0), "a single crate has a rate");
+        let none = earlier.delta_since(&earlier);
+        assert_eq!((none.total_crates, none.hit_rate_pct), (0, 0.0), "no crates is 0%, not NaN");
+        let rewound = summary(0, 0, 0).delta_since(&earlier);
+        assert_eq!(rewound.total_crates, 0, "counters never go negative");
+    }
 }

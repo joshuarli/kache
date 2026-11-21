@@ -18,6 +18,8 @@ spec = importlib.util.spec_from_file_location(
     "bench_edit_loop",
     sys_path_parent / "bench-edit-loop.py",
 )
+if spec is None or spec.loader is None:
+    raise ImportError("cannot load bench-edit-loop.py")
 bench_edit_loop = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bench_edit_loop)
 

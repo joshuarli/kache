@@ -874,7 +874,7 @@ fn put_records_the_executable_bit_from_the_compiler_output_not_the_staging_snaps
                 &[],
                 "x86_64-unknown-linux-gnu",
                 "",
-                &[(output.clone(), "harness-a1b2c3d4e5f60718".to_string())],
+                &[(output, "harness-a1b2c3d4e5f60718".to_string())],
                 "",
                 "",
                 1,
@@ -925,7 +925,7 @@ fn put_records_no_executable_bit_for_a_non_executable_output() {
                 &[],
                 "x86_64-unknown-linux-gnu",
                 "",
-                &[(output.clone(), "libfoo.rlib".to_string())],
+                &[(output, "libfoo.rlib".to_string())],
                 "",
                 "",
                 1,
@@ -1195,6 +1195,20 @@ fn materialize_blob_errors_when_source_cannot_be_copied() {
         "expected copy context, got: {err:#}"
     );
     assert!(!blob.exists());
+}
+
+#[test]
+fn materialize_blob_reports_a_destination_without_a_parent_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.rlib");
+    fs::write(&source, b"bytes").unwrap();
+
+    let err = materialize_blob(&source, Path::new("/"), false).unwrap_err();
+
+    assert!(
+        err.to_string().contains("no parent directory"),
+        "expected a parent-directory error, got: {err:#}"
+    );
 }
 
 #[test]
@@ -1930,7 +1944,7 @@ fn free_staging_path_skips_occupied_names() {
     fs::write(&first, b"taken").unwrap();
 
     // First candidate always collides; the next one is free.
-    let names: Vec<PathBuf> = vec![first.clone(), second.clone()];
+    let names: Vec<PathBuf> = vec![first, second.clone()];
     let mut calls = 0usize;
     let got = free_staging_path(|_| {
         let p = names[calls].clone();
@@ -2245,7 +2259,7 @@ fn blob_ingest_defers_flushes() {
 #[test]
 fn deferred_durability_verifies_pending_hits_until_the_flush() {
     let _env_lock = crate::test_support::process_state_test_lock();
-    let _verify = EnvVarGuard::remove("KACHE_VERIFY_RESTORES");
+    let _verify = EnvVarGuard::remove(&_env_lock, "KACHE_VERIFY_RESTORES");
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
@@ -2264,7 +2278,7 @@ fn deferred_durability_verifies_pending_hits_until_the_flush() {
                 &[],
                 "x86_64-unknown-linux-gnu",
                 "dev",
-                &[(output_file.clone(), "libout.rlib".to_string())],
+                &[(output_file, "libout.rlib".to_string())],
                 "",
                 "",
             )
@@ -2329,7 +2343,7 @@ fn deferred_durability_verifies_pending_hits_until_the_flush() {
 #[test]
 fn deferred_durability_leaves_imported_entries_pending_until_the_flush() {
     let _env_lock = crate::test_support::process_state_test_lock();
-    let _verify = EnvVarGuard::remove("KACHE_VERIFY_RESTORES");
+    let _verify = EnvVarGuard::remove(&_env_lock, "KACHE_VERIFY_RESTORES");
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
     let store = Store::open(&config).unwrap();
@@ -2456,7 +2470,7 @@ fn deferred_imports_verify_shared_pending_blobs_without_syncing() {
 #[test]
 fn reimport_repairs_missing_pending_blobs_without_replacing_shared_winners() {
     let _env_lock = crate::test_support::process_state_test_lock();
-    let _verify = EnvVarGuard::remove("KACHE_VERIFY_RESTORES");
+    let _verify = EnvVarGuard::remove(&_env_lock, "KACHE_VERIFY_RESTORES");
     for batched in [false, true] {
         {
             let dir = tempfile::tempdir().unwrap();
@@ -3165,7 +3179,7 @@ fn durability_flush_keeps_failed_blob_and_metadata_syncs_retryable() {
 #[test]
 fn get_counts_hits_and_evicts_damaged_blobs() {
     let _env_lock = crate::test_support::process_state_test_lock();
-    let _verify = EnvVarGuard::remove("KACHE_VERIFY_RESTORES");
+    let _verify = EnvVarGuard::remove(&_env_lock, "KACHE_VERIFY_RESTORES");
     for damage in ["missing", "short", "long", "directory"] {
         let dir = tempfile::tempdir().unwrap();
         let config = test_config(dir.path());
@@ -3250,26 +3264,42 @@ fn test_config(dir: &Path) -> Config {
     }
 }
 
-struct EnvVarGuard {
+struct EnvVarGuard<'lock> {
     key: &'static str,
     previous: Option<std::ffi::OsString>,
+    _process_state: std::marker::PhantomData<&'lock crate::test_support::ProcessStateTestGuard>,
 }
 
-impl EnvVarGuard {
-    fn set(key: &'static str, value: &str) -> Self {
+impl<'lock> EnvVarGuard<'lock> {
+    fn set(
+        _process_state: &'lock crate::test_support::ProcessStateTestGuard,
+        key: &'static str,
+        value: &str,
+    ) -> Self {
         let previous = std::env::var_os(key);
         unsafe { std::env::set_var(key, value) };
-        Self { key, previous }
+        Self {
+            key,
+            previous,
+            _process_state: std::marker::PhantomData,
+        }
     }
 
-    fn remove(key: &'static str) -> Self {
+    fn remove(
+        _process_state: &'lock crate::test_support::ProcessStateTestGuard,
+        key: &'static str,
+    ) -> Self {
         let previous = std::env::var_os(key);
         unsafe { std::env::remove_var(key) };
-        Self { key, previous }
+        Self {
+            key,
+            previous,
+            _process_state: std::marker::PhantomData,
+        }
     }
 }
 
-impl Drop for EnvVarGuard {
+impl Drop for EnvVarGuard<'_> {
     fn drop(&mut self) {
         match &self.previous {
             Some(value) => unsafe { std::env::set_var(self.key, value) },
@@ -3326,7 +3356,7 @@ fn file_hash_records_persist_and_reject_changed_fingerprints() {
     fs::write(&second, vec![9; 65_536]).unwrap();
     let second_fingerprint = FileFingerprint::from_path(&second).unwrap();
     store.record_verified_file_hashes(&[
-        (fingerprint.clone(), "batched"),
+        (fingerprint, "batched"),
         (second_fingerprint, "batched-second"),
     ]);
     assert!(
@@ -3797,7 +3827,6 @@ fn unverifiable_entries_are_removed_and_the_index_rebuilds() {
     fs::remove_file(blob_of("missing_blob")).unwrap();
     let resized = blob_of("resized_blob");
     let mut permissions = fs::metadata(&resized).unwrap().permissions();
-    #[allow(clippy::permissions_set_readonly_false)]
     permissions.set_readonly(false);
     fs::set_permissions(&resized, permissions).unwrap();
     fs::write(&resized, b"shorter").unwrap();
@@ -4041,7 +4070,7 @@ fn test_store_put_reports_full_dup_for_existing_blob() {
             &[],
             "host",
             "dev",
-            &[(output_file.clone(), "libmylib.rlib".to_string())],
+            &[(output_file, "libmylib.rlib".to_string())],
             "",
             "",
         )
@@ -4686,7 +4715,6 @@ fn rebuild_index_skips_entries_whose_blobs_are_missing_or_wrong_size() {
     // omitting it passed locally and only failed in CI.
     let make_writable = |p: &Path| {
         let mut perms = std::fs::metadata(p).unwrap().permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
         perms.set_readonly(false);
         std::fs::set_permissions(p, perms).unwrap();
     };
@@ -4738,7 +4766,6 @@ fn stranded_entry_sweep_readopts_servable_entries_and_removes_the_rest() {
         .clone();
     let gone_blob = blob_path_in_store_dir(&config.store_dir(), &gone_hash);
     let mut perms = std::fs::metadata(&gone_blob).unwrap().permissions();
-    #[allow(clippy::permissions_set_readonly_false)]
     perms.set_readonly(false);
     std::fs::set_permissions(&gone_blob, perms).unwrap();
     std::fs::remove_file(&gone_blob).unwrap();
@@ -6071,7 +6098,7 @@ fn older_than_matches_former_sql_while_duplicate_fails_closed() {
             .unwrap()
     };
     let mut policy_dup = crate::eviction::DuplicatePolicy.select(&candidates);
-    let mut sql_dup_sorted = sql_dup.clone();
+    let mut sql_dup_sorted = sql_dup;
     policy_dup.sort();
     sql_dup_sorted.sort();
     assert_eq!(
@@ -6704,7 +6731,7 @@ fn test_store_clear() {
             &[],
             "",
             "dev",
-            &[(output_file.clone(), "lib.rlib".to_string())],
+            &[(output_file, "lib.rlib".to_string())],
             "",
             "",
         )
@@ -9055,6 +9082,24 @@ fn test_blob_path_sharding() {
 }
 
 #[test]
+fn blob_shard_dir_is_the_directory_holding_the_blob() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(test_config(dir.path())).unwrap();
+    for hash in [
+        "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+        "abc",
+        "ab",
+        "a",
+    ] {
+        assert_eq!(
+            store.blob_path(hash).parent(),
+            Some(store.blob_shard_dir(hash).as_path()),
+            "hash {hash:?}"
+        );
+    }
+}
+
+#[test]
 #[cfg(target_os = "macos")]
 fn test_exclude_from_indexing_nonexistent_dir_silent() {
     let dir = PathBuf::from("/tmp/kache_test_nonexistent_874291");
@@ -9728,7 +9773,6 @@ fn republication_during_removal_cleanup_is_never_stranded() {
         }
     };
     let publisher = {
-        let config = config.clone();
         let dir_path = dir.path().to_path_buf();
         let released = std::sync::Arc::clone(&released);
         let attempting = std::sync::Arc::clone(&attempting);
@@ -13698,7 +13742,7 @@ fn eviction_stands_off_after_losing_the_write_lock() {
     let build = Store::open(&config).unwrap();
     build.db.execute_batch("BEGIN IMMEDIATE").unwrap();
 
-    let mut gc_config = config.clone();
+    let mut gc_config = config;
     gc_config.max_size = 1;
     let gc = Store::open(&gc_config).unwrap();
     // Each removal waits out the busy timeout before it gives up. Cut it
@@ -13731,7 +13775,7 @@ fn eviction_pauses_between_write_slices() {
     let store = Store::open(&config).unwrap();
     put_evictable_entries(&store, dir.path(), 60);
 
-    let mut gc_config = config.clone();
+    let mut gc_config = config;
     gc_config.max_size = 1;
     let mut gc = Store::open(&gc_config).unwrap();
     let slice = Duration::from_millis(1);
@@ -13778,7 +13822,7 @@ fn eviction_skips_entries_it_found_held_without_taking_the_lock() {
         std::fs::hard_link(store.blob_path(hash), retainer).unwrap();
     }
 
-    let mut gc_config = config.clone();
+    let mut gc_config = config;
     gc_config.max_size = 1;
     let mut gc = Store::open(&gc_config).unwrap();
     // A zero slice pauses after every entry that took the lock.
@@ -14035,10 +14079,10 @@ fn ro_tree_snapshot(dir: &Path) -> Vec<(PathBuf, u64, Option<std::time::SystemTi
                 out.push((p.clone(), 0, Some(m.modified().unwrap()), Vec::new()));
                 stack.push(p);
             } else if p.to_string_lossy().ends_with("-shm") {
-                out.push((p.clone(), m.len(), None, Vec::new()));
+                out.push((p, m.len(), None, Vec::new()));
             } else {
                 let bytes = fs::read(&p).unwrap();
-                out.push((p.clone(), m.len(), Some(m.modified().unwrap()), bytes));
+                out.push((p, m.len(), Some(m.modified().unwrap()), bytes));
             }
         }
     }
@@ -14069,7 +14113,7 @@ fn ro_put(store: &Store, src: &Path, key: &str, bytes: &[u8]) {
 #[test]
 fn read_only_store_serves_hits_and_writes_nothing() {
     let _env_lock = crate::test_support::process_state_test_lock();
-    let _verify = EnvVarGuard::set("KACHE_VERIFY_RESTORES", "always");
+    let _verify = EnvVarGuard::set(&_env_lock, "KACHE_VERIFY_RESTORES", "always");
     let dir = tempfile::tempdir().unwrap();
     let src = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
@@ -14298,7 +14342,7 @@ fn read_only_store_refuses_without_a_live_index_and_creates_nothing() {
 fn read_only_store_treats_a_truncated_blob_as_a_miss_and_evicts_nothing() {
     use std::os::unix::fs::PermissionsExt;
     let _env_lock = crate::test_support::process_state_test_lock();
-    let _verify = EnvVarGuard::remove("KACHE_VERIFY_RESTORES");
+    let _verify = EnvVarGuard::remove(&_env_lock, "KACHE_VERIFY_RESTORES");
     let dir = tempfile::tempdir().unwrap();
     let src = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
@@ -14408,7 +14452,6 @@ fn read_only_maintenance_preserves_files() {
     fs::remove_file(&staging)
         .or_else(|_| {
             let mut permissions = fs::metadata(&staging)?.permissions();
-            #[allow(clippy::permissions_set_readonly_false)]
             permissions.set_readonly(false);
             fs::set_permissions(&staging, permissions)?;
             fs::remove_file(&staging)

@@ -36,7 +36,7 @@ impl CcPreprocessMemoInput {
 /// when it was taken. No file has it, so no lookup matches the row by stamp
 /// and the content is compared instead. A row whose stamp has no matching
 /// proof reads back with it too.
-pub const UNPROVEN_SIZE: i64 = -1;
+pub(crate) const UNPROVEN_SIZE: i64 = -1;
 
 /// The rule the C/C++ memo's rows are recorded under. Lookups serve a
 /// mapped hash or an assembler verdict only at this rule or a later one,
@@ -47,7 +47,7 @@ pub const UNPROVEN_SIZE: i64 = -1;
 /// 1: a stamp is recorded only if it had settled when it was observed,
 ///    and a mapped hash or a verdict only from the bytes behind its
 ///    content hash.
-pub const CC_MEMO_RULE: i64 = 1;
+pub(crate) const CC_MEMO_RULE: i64 = 1;
 
 /// What an input row's `proof` holds for `stamp` under [`CC_MEMO_RULE`].
 ///
@@ -92,7 +92,7 @@ pub struct CcPreprocessMemo {
 /// source and compiler); each header state it compiled under is a read set
 /// of its own, and keeping earlier ones lets a header edit that is reverted
 /// find its entry again without preprocessing.
-pub const CC_MEMO_VARIANTS: usize = 8;
+pub(crate) const CC_MEMO_VARIANTS: usize = 8;
 
 /// The row a read set is stored under: `<memo_key>/<digest of its hash>`.
 /// Releases that recorded one read set per unit write
@@ -841,7 +841,7 @@ mod tests {
         cache
             .put_cc_preprocess_memo_inputs("a", "hash-a", std::slice::from_ref(&first))
             .unwrap();
-        let mut moved = first.clone();
+        let mut moved = first;
         moved.fingerprint = FileFingerprint {
             path: "/other/shared.h".into(),
             size: 11,

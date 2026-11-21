@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """Exercise publishable-crate discovery and crates.io helpers."""
 
+import contextlib
 import importlib.util
+import io
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 def load_mod():
     path = Path(__file__).with_name("crates-io.py")
     spec = importlib.util.spec_from_file_location("crates_io", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     sys.modules["crates_io"] = module
     spec.loader.exec_module(module)
     return module
@@ -166,6 +170,101 @@ class CratesIoTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as raised:
             self.mod.load_publishable(self.root)
         self.assertIn("cycle", str(raised.exception))
+
+
+class FakeClient:
+    def __init__(self, published=(), known=(), visible=True):
+        self.published = set(published)
+        self.known = set(known)
+        self.visible = visible
+        self.index_checks = []
+
+    def version_exists(self, name, version):
+        return (name, version) in self.published
+
+    def crate(self, name):
+        return {"name": name} if name in self.known else None
+
+    def index_has_version(self, name, version):
+        self.index_checks.append((name, version))
+        return self.visible
+
+
+class PublishGateTests(unittest.TestCase):
+    def setUp(self):
+        self.mod = load_mod()
+        root = Path("/unused")
+        self.crates = [
+            self.mod.Crate("kache-format", "1.2.3", root),
+            self.mod.Crate("kache-store", "1.2.3", root),
+        ]
+        self.cargo_calls = []
+        patcher = mock.patch.object(
+            self.mod, "run_cargo", lambda _root, args: self.cargo_calls.append(args)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def publish(self, client, *, version="1.2.3", dry_run=False):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+            io.StringIO()
+        ):
+            return self.mod.cmd_publish(
+                self.crates,
+                client,
+                Path("/unused"),
+                version=version,
+                dry_run=dry_run,
+                sleep=lambda _seconds: None,
+            )
+
+    def test_a_version_mismatch_publishes_nothing(self):
+        client = FakeClient(known={"kache-format", "kache-store"})
+        with self.assertRaises(SystemExit) as raised:
+            self.publish(client, version="1.2.4")
+        self.assertIn("not all 1.2.4", str(raised.exception))
+        self.assertEqual(self.cargo_calls, [])
+        self.assertEqual(client.index_checks, [])
+
+    def test_publishing_goes_in_order_and_waits_for_each_index_entry(self):
+        client = FakeClient(known={"kache-format", "kache-store"})
+        self.assertEqual(self.publish(client), 0)
+        self.assertEqual(
+            self.cargo_calls,
+            [
+                ["publish", "-p", "kache-format", "--locked"],
+                ["publish", "-p", "kache-store", "--locked"],
+            ],
+        )
+        self.assertEqual(
+            client.index_checks,
+            [("kache-format", "1.2.3"), ("kache-store", "1.2.3")],
+        )
+
+    def test_an_already_published_version_is_not_published_again(self):
+        client = FakeClient(
+            published={("kache-format", "1.2.3")}, known={"kache-store"}
+        )
+        self.assertEqual(self.publish(client), 0)
+        self.assertEqual(self.cargo_calls, [["publish", "-p", "kache-store", "--locked"]])
+
+    def test_an_unregistered_crate_stops_the_run_before_any_later_publish(self):
+        client = FakeClient(known={"kache-store"})
+        self.assertEqual(self.publish(client), 1)
+        self.assertEqual(self.cargo_calls, [])
+
+    def test_a_dry_run_publishes_and_waits_for_nothing(self):
+        client = FakeClient(known={"kache-format", "kache-store"})
+        self.assertEqual(self.publish(client, dry_run=True), 0)
+        self.assertEqual(self.cargo_calls, [])
+        self.assertEqual(client.index_checks, [])
+
+    def test_an_entry_that_never_reaches_the_index_fails_the_run(self):
+        client = FakeClient(known={"kache-format", "kache-store"}, visible=False)
+        with self.assertRaises(SystemExit) as raised:
+            self.publish(client)
+        self.assertIn("did not become visible", str(raised.exception))
+        self.assertEqual(self.cargo_calls, [["publish", "-p", "kache-format", "--locked"]])
 
 
 if __name__ == "__main__":

@@ -226,8 +226,9 @@ fn recovery_floor_obeys_file_environment_and_ci_defaults() {
 
 #[test]
 fn test_shellexpand() {
-    let expanded = shellexpand("~/foo");
-    assert!(!expanded.to_string_lossy().starts_with("~/"));
+    let home = kache_fs::home_dir().expect("tests run with a home directory");
+    assert_eq!(shellexpand("~/foo"), home.join("foo"));
+    assert_eq!(shellexpand("~foo"), PathBuf::from("~foo"));
 }
 
 #[test]
@@ -2127,6 +2128,11 @@ fn blank_bypass_entries_never_match() {
         ),
         None
     );
+    // An unnamed crate must not match a blank crate rule either.
+    assert_eq!(
+        Config::user_bypass_reason_with("", &argv, &["".to_string()], &[], &[], |_| None),
+        None
+    );
 }
 
 #[test]
@@ -2426,7 +2432,7 @@ fn raw_config_load_rejects_a_file_that_does_not_parse() {
 
 #[cfg(feature = "file-write")]
 #[test]
-fn update_file_config_keeps_comments_and_unknown_keys() {
+fn update_file_config_rewrites_the_file_without_comments_or_unknown_keys() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     let source = r#"# my kache settings
@@ -2455,6 +2461,10 @@ bucket = "b"
     assert_eq!(cache.local_max_size.as_deref(), Some("55GiB"));
     assert_eq!(cache.key_salt.as_deref(), Some("custom"));
     assert!(cache.exclude.is_none());
+    let written = std::fs::read_to_string(&path).unwrap();
+    for dropped in ["my kache settings", "keep it small", "retired_setting", "user-agent", "bucket"] {
+        assert!(!written.contains(dropped), "{dropped} survived: {written}");
+    }
 }
 
 #[test]
@@ -2519,17 +2529,23 @@ fn update_file_config_leaves_an_unchanged_file_byte_for_byte() {
     let source = "# note\n[cache]\nlocal_store = '~/store'  # mine\n";
     std::fs::write(&path, source).unwrap();
     let (before, _) = Config::load_raw_file_config_from(&path).unwrap();
-    let mut after = before.clone();
-    after.cc = Some(CcFileConfig::default());
+    let unchanged = before.clone();
 
-    Config::update_file_config_at(&path, &before, &after).unwrap();
+    Config::update_file_config_at(&path, &before, &unchanged).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
 
-    let (loaded, _) = Config::load_raw_file_config_from(&path).unwrap();
-    assert_eq!(
-        loaded.cache.unwrap().local_store.as_deref(),
-        Some("~/store")
-    );
-    assert!(loaded.cc.unwrap_or_default().extra_allowlist_flags.is_none());
+    let mut changed = before.clone();
+    changed.cc = Some(CcFileConfig {
+        extra_allowlist_flags: Some(vec!["-fno-x".into()]),
+    });
+    Config::update_file_config_at(&path, &before, &changed).unwrap();
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert_ne!(written, source);
+    assert!(written.contains("-fno-x"), "{written}");
+
+    let absent = dir.path().join("absent.toml");
+    Config::update_file_config_at(&absent, &before, &unchanged).unwrap();
+    assert!(absent.exists(), "a missing file is created even when nothing changed");
 }
 
 #[test]
@@ -2628,4 +2644,65 @@ fn the_default_floor_is_ten_gib_and_the_user_file_never_a_project_one() {
     assert_eq!(user_config_path(), chosen);
     let _unset = set_env_for_test("KACHE_CONFIG", None);
     assert_eq!(user_config_path(), config_file_path());
+}
+
+#[test]
+fn project_rules_are_trimmed_and_drop_blank_entries() {
+    let file: FileConfig = deser_toml::from_str(
+        "[cache]\n\
+         exclude = [\"  vendor/**  \", \"\"]\n\
+         bypass_crates = [\" app \", \"   \"]\n\
+         bypass_argv = [\"\", \" -Zfoo\"]\n\
+         bypass_env = [\"\\t\", \"A=1 \"]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        ProjectRules::from_file_config(&Ok(file)),
+        ProjectRules {
+            exclude: vec!["vendor/**".into()],
+            bypass_crates: vec!["app".into()],
+            bypass_argv: vec!["-Zfoo".into()],
+            bypass_env: vec!["A=1".into()],
+        }
+    );
+}
+
+#[test]
+fn key_env_var_patterns_are_upper_cased_deduplicated_and_sorted() {
+    assert_eq!(
+        normalize_key_env_vars(
+            [
+                "zulu".to_string(),
+                " boltffi_* ".to_string(),
+                "Alpha".to_string(),
+                "ALPHA".to_string(),
+            ],
+            "test"
+        ),
+        vec!["ALPHA".to_string(), "BOLTFFI_*".to_string(), "ZULU".to_string()]
+    );
+}
+
+#[test]
+fn kache_disabled_accepts_one_and_true_in_any_case() {
+    let root = tempfile::tempdir().unwrap();
+    let disabled = |value: &str| {
+        let env = InvocationEnv::from_parts(
+            [
+                ("KACHE_HOST_CONFIG", ""),
+                ("KACHE_CONFIG", "absent.toml"),
+                ("KACHE_DISABLED", value),
+            ],
+            Some(root.path().to_owned()),
+            Some(root.path().join("home")),
+            root.path().join("tmp"),
+        );
+        Config::load_for(&env).unwrap().disabled
+    };
+    for on in ["1", "true", "TRUE", "True"] {
+        assert!(disabled(on), "{on}");
+    }
+    for off in ["0", "false", "yes", ""] {
+        assert!(!disabled(off), "{off:?}");
+    }
 }

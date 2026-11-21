@@ -101,7 +101,9 @@ impl Prepared {
                 self.published = true;
                 Ok(())
             }
-            _ => Err(io::Error::other("workspace did not publish an artifact")),
+            Outcome::Prepared { .. } => {
+                Err(io::Error::other("workspace did not publish an artifact"))
+            }
         }
     }
 }
