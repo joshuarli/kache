@@ -609,10 +609,7 @@ fn parse_optional_dir(
         return Ok(Some(PathBuf::from(value)));
     }
     let mut raw = parser.try_raw_args().ok_or_else(|| missing(json, "'--shims <DIR>'"))?;
-    match raw.peek() {
-        Some(next) if !looks_like_flag(next) => Ok(Some(PathBuf::from(raw.next().unwrap()))),
-        _ => Ok(None),
-    }
+    Ok(raw.next_if(|next| !looks_like_flag(next)).map(PathBuf::from))
 }
 
 fn looks_like_flag(arg: &std::ffi::OsStr) -> bool {
