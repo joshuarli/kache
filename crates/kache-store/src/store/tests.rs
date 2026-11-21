@@ -9309,6 +9309,7 @@ fn test_remove_entry_decrements_refcount() {
 /// refcount must equal the number of entries — no drift, no lost or
 /// duplicated blob — and the per-writer temp names must leave no debris.
 #[test]
+#[deny(clippy::cast_sign_loss)]
 fn test_concurrent_puts_sharing_blob_are_consistent() {
     const N: usize = 8;
     let dir = tempfile::tempdir().unwrap();
@@ -9367,7 +9368,11 @@ fn test_concurrent_puts_sharing_blob_are_consistent() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(refcount as usize, N, "refcount must equal the entry count");
+    assert_eq!(
+        usize::try_from(refcount),
+        Ok(N),
+        "refcount must equal the entry count"
+    );
     assert_blob_refs_match_mappings(&store);
     assert!(store.blob_path(&hash).is_file());
     for i in 0..N {
