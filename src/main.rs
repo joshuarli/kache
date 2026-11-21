@@ -5,6 +5,7 @@ mod build_script;
 mod build_script_inputs;
 use kache_store::atomic;
 mod cache_fs;
+#[cfg_attr(not(test), forbid(unsafe_code))]
 mod cache_key;
 mod cargo_env;
 mod cargo_layout;
