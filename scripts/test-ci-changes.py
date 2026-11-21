@@ -8,6 +8,8 @@ import unittest
 spec = importlib.util.spec_from_file_location(
     "ci_changes", Path(__file__).with_name("ci-changes.py")
 )
+if spec is None or spec.loader is None:
+    raise ImportError("cannot load ci-changes.py")
 ci = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci)
 

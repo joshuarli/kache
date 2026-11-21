@@ -16,6 +16,8 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location(
     "bench", Path(__file__).with_name("bench-contention.py")
 )
+if spec is None or spec.loader is None:
+    raise ImportError("cannot load bench-contention.py")
 bench = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bench)
 
@@ -34,6 +36,7 @@ class ContentionTests(unittest.TestCase):
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
             ) as child:
                 try:
+                    assert child.stdout is not None
                     self.assertEqual(child.stdout.readline().strip(), "ready")
                     with self.assertRaisesRegex(ValueError, "did not drain"):
                         bench.wait_for_daemon_lock(path, 0)
@@ -803,7 +806,7 @@ else:
                     order = bench.ordered(sample, arms, data["randomization"])
                     expected = [
                         arm for arm, _, _, backend in order
-                        if backend == "kache" or sample < context
+                        if backend == "kache" or (context is not None and sample < context)
                     ]
                     self.assertEqual(
                         [
