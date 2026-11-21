@@ -9,15 +9,6 @@ Not started.
 
 ## Tickets
 
-### DSLP-13 · P2 · Types: support crates, launcher, scenarios (9/28)
-
-- **Area:** deslop · types
-- **Where:** crates/kache-client, crates/kache-core, crates/kache-format, crates/kache-ipc, crates/kache-log, crates/kache-proofs, crates/kache-protocol, crates/kache-shims, launcher, scenarios
-- **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope contains approximately 14331 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
 ### DSLP-15 · P2 · Types: src/cache_key submodules (11/28)
 
 - **Area:** deslop · types
