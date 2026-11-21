@@ -42,7 +42,7 @@ fn load_gc_summary_includes_a_run_exactly_at_the_cutoff() {
 fn load_gc_summary_returns_recent_run_within_window() {
     let dir = tempfile::tempdir().unwrap();
     write_gc_stats(dir.path(), UtcTime::now() - std::time::Duration::from_secs(3600));
-    let gc = load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(UtcTime::now()))
+    let (gc, _) = load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(UtcTime::now()))
         .expect("recent gc run is within the 24h window");
     assert_eq!(gc.entries_evicted, 3);
     assert_eq!(gc.bytes_freed, 4096);
@@ -236,7 +236,7 @@ fn gc_stats_with_totals_from_an_earlier_version_still_parses() {
 
     let raw = std::fs::read_to_string(dir.path().join(GC_STATS_FILE)).unwrap();
     assert!(!raw.contains("totals"), "{raw}");
-    let gc = load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(UtcTime::now()))
+    let (gc, _) = load_gc_summary(dir.path(), SinceWindow::DEFAULT.cutoff(UtcTime::now()))
         .expect("the recorded run is inside the window");
     assert_eq!(gc.entries_evicted, 5);
 }

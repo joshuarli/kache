@@ -1329,7 +1329,7 @@ fn event_matches_root(event: &BuildEvent, root: &str) -> bool {
 fn load_gc_summary_all(config: &Config, cutoff: UtcTime) -> Option<GcSummary> {
     std::iter::once(config.clone())
         .chain(crate::store_view::shard_configs(config))
-        .filter_map(|store| load_gc_summary_at(&store.cache_dir, cutoff))
+        .filter_map(|store| load_gc_summary(&store.cache_dir, cutoff))
         .reduce(|(mut total, total_at), (next, next_at)| {
             if next_at >= total_at {
                 total.last_run = next.last_run;
@@ -1345,12 +1345,9 @@ fn load_gc_summary_all(config: &Config, cutoff: UtcTime) -> Option<GcSummary> {
 }
 
 /// Load GC stats from gc_stats.json if GC ran at or after `cutoff`.
-fn load_gc_summary(cache_dir: &std::path::Path, cutoff: UtcTime) -> Option<GcSummary> {
-    load_gc_summary_at(cache_dir, cutoff).map(|(summary, _)| summary)
-}
-
-/// [`load_gc_summary`] with the parsed instant its `last_run` names.
-fn load_gc_summary_at(
+///
+/// Returns the summary with the instant its `last_run` names, parsed once.
+fn load_gc_summary(
     cache_dir: &std::path::Path,
     cutoff: UtcTime,
 ) -> Option<(GcSummary, UtcTime)> {
