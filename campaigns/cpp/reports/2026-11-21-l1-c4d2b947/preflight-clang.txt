@@ -1,0 +1,40 @@
+Preflight only; unmodified c4d2b947 activity.rs; compiler=clang; TMPDIR/KACHE_CACHE_DIR unset
+Unrelated CPU limit: 0.5 cores
+Activity {
+    wall_ms: 5020.985339,
+    unrelated_cpu_ms: 210,
+    unrelated_system_cpu_ms: Some(
+        210,
+    ),
+    unrelated_process_cpu_ms: 170,
+    unrelated_cores: 0.04182445990607582,
+    busiest: [
+        Busy {
+            pid: 1981607,
+            cpu_ms: 70,
+            name: "amazon-ssm-agen",
+        },
+        Busy {
+            pid: 1427,
+            cpu_ms: 20,
+            name: "devin-remote",
+        },
+        Busy {
+            pid: 2586,
+            cpu_ms: 20,
+            name: "chrome",
+        },
+        Busy {
+            pid: 179,
+            cpu_ms: 10,
+            name: "systemd-journal",
+        },
+        Busy {
+            pid: 468,
+            cpu_ms: 10,
+            name: "rsyslogd",
+        },
+    ],
+    eligible: true,
+}
+PREFLIGHT_VERDICT=ELIGIBLE

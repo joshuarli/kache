@@ -13,7 +13,7 @@ plan: [C_CPP_PARITY_CAMPAIGN.md](../../C_CPP_PARITY_CAMPAIGN.md); tracking
 entry: KACH-26 in [TODO.md](../../TODO.md). Groundwork branch:
 `feat/ccp00-campaign-groundwork`.
 
-## Current state (reconciled 2026-11-20 against the code, main `aa8df06a`)
+## Current state (L1 acceptance updated 2026-11-21 at `c4d2b947`)
 
 Counts are taken from the files, not carried forward:
 `grep '^status = ' campaigns/cpp/cases.toml | sort | uniq -c` and
@@ -89,7 +89,46 @@ Engineering work still open (not provisioning):
   eligible M1 acceptance verdict exists. Its single-pair ratios are
   diagnostics only. The loaded-host tables under "CCP-09 baseline" predate
   #74/#75 and the acceptance mode.
-- CCP-09 L1 attempt, 2026-11-21, clean `da350481` (#93, after #92):
+- CCP-09 L1 rerun, 2026-11-21, clean `c4d2b947` (includes #101, #105,
+  #109), same three workloads and `--jobs 4` as #99:
+  [GCC 11 report](reports/2026-11-21-l1-c4d2b947/gcc/report.json),
+  [Clang 14 report](reports/2026-11-21-l1-c4d2b947/clang/report.json),
+  [comparison, phase evidence and LLVM estimate](reports/2026-11-21-l1-c4d2b947/README.md).
+  Both standalone five-second preflights passed on their first attempt
+  (GCC 0.021952 unrelated cores, Clang 0.041824); both runner preflights
+  passed too. Threshold unchanged at 0.5 cores. **All 6/6 workloads are
+  eligible, 60/60 complete pairs and 180/180 admitted/eligible arm replays;
+  all six FAIL performance acceptance.** Every correctness/reuse validation
+  passed. The unchanged rule uses time-weighted whole-replay activity:
+  1573/1740 individual short build windows passed, while every whole replay
+  remained under the limit (maximum 0.366677 cores); none was removed.
+  Compared with #99's 2/6 eligible workloads, activity accounting no longer
+  blocks these cells, but this is still not passing L1 acceptance.
+  Cold/warm paired kache/ccache geomeans:
+
+  | Compiler | Tiny C | C++ headers | zlib |
+  |---|---|---|---|
+  | GCC 11 | 1.158 / 2.947 | 0.974 / 3.507 | 1.029 / 1.456 |
+  | Clang 14 | 1.293 / 3.284 | 1.046 / 2.825 | 1.453 / 1.278 |
+
+  Top mean paired wall losses are now eligible: **Clang tiny-C cold
+  +724.8 ms**, then **GCC C++ settled header edit +675.8 ms**. Clang's
+  epoch-support record remains `no`, requiring preprocessing fallback;
+  retained cold events now show 48 preprocessors for 48 compiles, versus
+  96 in #99, with 1061 ms summed key time. GCC's invalidated existing
+  read-set memo takes preprocessing before recompilation: 12 preprocessors,
+  12 compiles, 1429 ms summed key time. Phase sums locate the paths, not an
+  exact allocation of all excess wall time. Clang tiny-C cold excess was
+  +1708.6 ms in #99 (ineligible/diagnostic); Clang C++ cold improved from
+  +872.8 to +330.1 ms. Conversely, eligible C++ warm ratios regressed from
+  1.657 to 3.507 (GCC) and 1.560 to 2.825 (Clang), with zero compiler,
+  preprocessor or probe runs. This twelve-TU/four-job hit-path regression
+  remains unprofiled; the earlier timestamp single-TU improvement was
+  against #98's newer regression, not #99. LLVM is still **not run**:
+  reserve roughly 6–18 hours for both compilers (high uncertainty, all
+  phases included), verify scratch ceilings before launch, and profile
+  the demonstrated smaller-workload losses first.
+- Historical CCP-09 L1 attempt, 2026-11-21, clean `da350481` (#93, after #92):
   this Ubuntu 22.04 x86_64 glibc VM's standalone five-second preflight
   passed (0.04185 unrelated cores). Both toolchain preflights passed too.
   [GCC 11 report](reports/2026-11-21-l1-da350481/gcc/report.json),
@@ -126,9 +165,9 @@ Provisioning, not engineering:
 
 - A quiet benchmark host throughout timing. The M1 remains shared with other
   sessions' work and is retried only after a quiet preflight. A separate
-  native L1 cloud VM is now available (attempt above); being virtualized
-  does not itself disqualify it. Its Linux activity-accounting limitation
-  must be resolved before further acceptance timing. L1 newer-compiler
+  native L1 cloud VM is now available (rerun above); being virtualized
+  does not itself disqualify it. Linux activity accounting was fixed in
+  #101; the rerun has eligible data but fails performance targets. L1 newer-compiler
   cells, L2 and eligible M1 acceptance remain missing; shared CI correctness
   runners are not acceptance-timing evidence.
 - M1 standalone LLVM clang: not installed on this host, and no authorized
@@ -883,22 +922,29 @@ host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
    keeps older mtimes and a copy that built a hand-applied mutation keeps
    the mutated binary. `make e2e` on this host needs
    `PATH=/opt/homebrew/bin:$PATH`.
-3. Ranked next actions (2026-11-20):
-   1. Acceptance baseline on M1 once its preflight is quiet:
-      `make cc-bench TOOLCHAINS=cc BENCH_ARGS="--acceptance --workload
-      corpus-c-tiny --workload corpus-cxx-headers --workload zlib"`, then
-      `--workload llvm-subset` alone. Commit `report.json` under
-      `reports/<date>-<lane>-<rev>/` and link it from Current state.
-   2. L1 GCC 11/Clang 14 now has an initial native-VM attempt (Current state).
-      Fix/test Linux activity accounting before retrying affected cells;
-      preserve the 0.5-core limit and sample rules. Newer L1 compiler majors
-      and L2 ARM64 still need acceptance evidence; they do not block M1.
-   3. The fresh L1 wall-loss ranking and event evidence are committed with
-      that report. Its largest losses use Clang 14's miss/preprocessing
-      path, not relocated compiler re-probes. Profile that path first;
-      separately, eligible warm C++ still loses about 9–10 ms per 12 hits.
-      Do not assume the older restore/store/descriptor/config candidates
-      explain a current loss without a new whole-path profile.
+3. Ranked next actions (2026-11-21, post-#101/#105/#109 L1 rerun):
+   1. Profile the largest eligible wall loss: Clang 14 tiny-C cold,
+      +724.8 ms mean paired excess. Its 48 compiles now use 48 rather than
+      96 preprocessors; epoch support still excludes compile-first capture.
+      The retained key phase totals 1061 ms across the units. Separate
+      remaining preprocessing, key bookkeeping and process/IPC cost against
+      ccache; do not mistake removing the sentinel for removing all miss cost.
+   2. Profile GCC C++ settled header edit (+675.8 ms), especially the
+      invalidated-memo fallback's 12 preprocessors and 1429 ms summed key
+      time before 12 required compiles. Also profile the actual twelve-TU,
+      four-job C++ hit path: warm ratios worsened from #99's 1.657/1.560 to
+      3.507/2.825 (GCC/Clang), despite zero compiler/preprocessor/probe runs.
+      GCC warm/relocated key totals are 110/154 ms. These are not explained
+      by the earlier single-TU timestamp microbenchmark; preserve revert
+      correctness and use a whole-path profile before choosing a fix.
+   3. After targeted fixes, retry the affected L1 acceptance workloads
+      with the same jobs, thresholds and retained-sample rules. The sampler
+      blocker is resolved: all six current workloads have ten eligible pairs,
+      but all FAIL. Obtain a quiet M1 baseline, newer L1 compiler-major and
+      L2 ARM64 evidence separately. Defer LLVM until the demonstrated small
+      losses are understood: roughly 6–18 hours for both compilers, highly
+      uncertain, with scratch ceilings still to verify. No LLVM acceptance
+      result exists. Commit every future report and link Current state.
    4. Autotools/libtool launchers (CCP-07) now have a bounded local glibc
       fixture (`make cc-project-autotools`); provision and run other host
       cells before calling the matrix complete. Meson launchers remain open.

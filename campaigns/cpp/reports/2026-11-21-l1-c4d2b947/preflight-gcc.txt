@@ -1,0 +1,40 @@
+Preflight only; unmodified c4d2b947 activity.rs; compiler=gcc; TMPDIR/KACHE_CACHE_DIR unset
+Unrelated CPU limit: 0.5 cores
+Activity {
+    wall_ms: 5010.833008,
+    unrelated_cpu_ms: 110,
+    unrelated_system_cpu_ms: Some(
+        110,
+    ),
+    unrelated_process_cpu_ms: 90,
+    unrelated_cores: 0.021952437813110216,
+    busiest: [
+        Busy {
+            pid: 1914184,
+            cpu_ms: 30,
+            name: "MainThread",
+        },
+        Busy {
+            pid: 1427,
+            cpu_ms: 20,
+            name: "devin-remote",
+        },
+        Busy {
+            pid: 1754,
+            cpu_ms: 10,
+            name: "Xtigervnc",
+        },
+        Busy {
+            pid: 2586,
+            cpu_ms: 10,
+            name: "chrome",
+        },
+        Busy {
+            pid: 1907429,
+            cpu_ms: 10,
+            name: "4:1-mm_percpu_wq",
+        },
+    ],
+    eligible: true,
+}
+PREFLIGHT_VERDICT=ELIGIBLE

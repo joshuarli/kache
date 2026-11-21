@@ -1,0 +1,5 @@
+PASS: gcc report/events byte-identical; clean c4d2b947; jobs/seed/compiler/input digests match #99; validation and paired arithmetic verified
+PASS: clang report/events byte-identical; clean c4d2b947; jobs/seed/compiler/input digests match #99; validation and paired arithmetic verified
+PASS: 6/6 workloads eligible, 60/60 complete pairs, 180/180 admitted/eligible replays; 1573/1740 individually eligible build windows; zero validation failures
+PASS: 58 paired-loss rows, artifact hashes, epoch records and local evidence links verified
+REPORT_CHECK_EXIT=0
