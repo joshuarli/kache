@@ -117,8 +117,13 @@ const MIN_COLUMNS: usize = 20;
 #[cfg(not(test))]
 #[cfg(unix)]
 fn terminal_columns() -> Option<u16> {
+    let mut size = libc::winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
     // SAFETY: `ioctl` with `TIOCGWINSZ` only writes the winsize struct.
-    let mut size: libc::winsize = unsafe { std::mem::zeroed() };
     if unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut size) } != 0 {
         return None;
     }
