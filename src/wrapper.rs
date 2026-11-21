@@ -4303,7 +4303,7 @@ fn reclaim_after_declined_handoff(
             crate::invocation::wait_for_committed(store, cache_key, Some(wait))?;
             store.claim_build(cache_key)
         }
-        claim => Ok(claim),
+        claim @ (BuildClaim::Acquired(_) | BuildClaim::Committed(_)) => Ok(claim),
     }
 }
 
