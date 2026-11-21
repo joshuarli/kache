@@ -3,8 +3,6 @@ pub(crate) use kache_fs::process_state_test::{
 };
 use std::path::PathBuf;
 
-/// A `Config` rooted in `cache_dir` with every optional feature off, for
-/// tests that need a store without reading the developer's configuration.
 /// Start `command` without a controlling terminal, so a child that shows
 /// `[kache]` lines ([`crate::notice`]) writes them to the stderr the test
 /// reads even when the suite runs in a developer's terminal.
@@ -24,6 +22,8 @@ pub(crate) fn without_terminal(command: &mut std::process::Command) -> &mut std:
     command
 }
 
+/// A `Config` rooted in `cache_dir` with every optional feature off, for
+/// tests that need a store without reading the developer's configuration.
 pub(crate) fn test_config(cache_dir: PathBuf) -> crate::config::Config {
     crate::config::Config {
         key_salt: None,
