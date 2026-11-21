@@ -57,11 +57,13 @@ use std::process::Command;
 /// struct's shape or the probe logic changes in a way that would make
 /// an old on-disk record wrong: a mismatch turns the record into a
 /// cache miss (re-probe), never a wrong hit.
-pub const PROBE_SCHEMA_VERSION: u32 = 5;
+pub const PROBE_SCHEMA_VERSION: u32 = 6;
 
 /// The memoized result of probing a compiler.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedConfig {
+    /// A native GCC/Clang driver, eligible for documented-environment keying.
+    pub native_driver: bool,
     /// Schema of this record — see [`PROBE_SCHEMA_VERSION`].
     pub schema_version: u32,
     /// Id of the [`Prober`] that produced this record (`"cc"`). Lets
@@ -88,6 +90,8 @@ pub struct ResolvedConfig {
 
 /// What to probe.
 pub struct ProbeRequest<'a> {
+    /// Additional environment inputs declared for the compile key.
+    pub key_env_vars: &'a [String],
     /// The compiler as named on the command line: `cc`, `clang-17`, or
     /// a path like `/usr/bin/gcc`.
     pub compiler: &'a str,
@@ -173,18 +177,24 @@ impl Prober for CcProber {
             .unwrap_or(req.compiler)
             .to_string();
 
+        let resolved_tokens = resolve_invocation_for(
+            req.compiler,
+            req.args,
+            req.windows_aware,
+            req.per_tu_paths,
+            env,
+        );
+        let native_driver = cache::native_probe_key_for(self.id(), req, env).is_some()
+            && (version_line.contains("clang version ")
+                || (String::from_utf8_lossy(&output.stdout).contains("Free Software Foundation")
+                    && resolved_tokens.is_some()));
         Ok(ResolvedConfig {
+            native_driver,
             schema_version: PROBE_SCHEMA_VERSION,
             prober: self.id().to_string(),
             compiler_name,
             version_line,
-            resolved_tokens: resolve_invocation_for(
-                req.compiler,
-                req.args,
-                req.windows_aware,
-                req.per_tu_paths,
-                env,
-            ),
+            resolved_tokens,
             host_version_line: None,
         })
     }
@@ -244,6 +254,7 @@ pub(crate) fn probe_compiler_family_for(
 ) -> Option<ProbedFamily> {
     let cache_dir = family_probe_cache_dir_for(env);
     let request = ProbeRequest {
+        key_env_vars: &[],
         compiler: program,
         args: &[],
         key_args: &[],
@@ -284,6 +295,7 @@ pub(crate) fn probe_compiler_family_for(
             cache_dir,
             k,
             &ResolvedConfig {
+                native_driver: false,
                 schema_version: PROBE_SCHEMA_VERSION,
                 prober: "cc-family".to_string(),
                 host_version_line: None,
@@ -566,6 +578,7 @@ fn live_probe_diagnostic_for(compiler: &str) -> LiveProbeDiagnostic {
         .chain([source.to_string_lossy().into_owned()])
         .collect();
     let req = ProbeRequest {
+        key_env_vars: &[],
         compiler,
         args: &args,
         key_args: &args,
@@ -625,7 +638,16 @@ pub(crate) fn probe_for(
     env: &InvocationEnv,
 ) -> Result<ResolvedConfig> {
     let key = cache::probe_key_for(prober.id(), req, env);
+    let native_key = cache::native_probe_key_for(prober.id(), req, env);
     let cache_dir = env.resolve(cache_dir);
+
+    if let Some(key) = &native_key
+        && let Some(cache_dir) = &cache_dir
+        && let Some(hit) = cache::load(cache_dir, key)
+        && hit.native_driver
+    {
+        return Ok(hit);
+    }
 
     if let Some(key) = &key
         && let Some(cache_dir) = &cache_dir
@@ -638,6 +660,11 @@ pub(crate) fn probe_for(
     crate::opcounts::record_probe_run();
     let config = prober.probe_for(req, env)?;
 
+    let key = if config.native_driver {
+        native_key.or(key)
+    } else {
+        key
+    };
     if let Some(key) = &key
         && let Some(cache_dir) = &cache_dir
     {
@@ -675,6 +702,7 @@ mod tests {
         fn probe(&self, _req: &ProbeRequest<'_>) -> Result<ResolvedConfig> {
             self.runs.fetch_add(1, Ordering::SeqCst);
             Ok(ResolvedConfig {
+                native_driver: false,
                 schema_version: PROBE_SCHEMA_VERSION,
                 prober: "test".to_string(),
                 compiler_name: "fake".to_string(),
@@ -688,6 +716,7 @@ mod tests {
     /// A `ProbeRequest` for a compiler with no extra arguments.
     fn req(compiler: &str) -> ProbeRequest<'_> {
         ProbeRequest {
+            key_env_vars: &[],
             compiler,
             args: &[],
             key_args: &[],
@@ -695,6 +724,243 @@ mod tests {
             windows_aware: true,
             base_dirs: &[],
         }
+    }
+
+    #[test]
+    fn native_probe_environment_contract() {
+        struct NativeProber(AtomicUsize);
+        impl Prober for NativeProber {
+            fn id(&self) -> &'static str {
+                "cc"
+            }
+            fn probe(&self, _: &ProbeRequest<'_>) -> Result<ResolvedConfig> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(ResolvedConfig {
+                    native_driver: true,
+                    schema_version: PROBE_SCHEMA_VERSION,
+                    prober: "cc".into(),
+                    compiler_name: "clang".into(),
+                    version_line: "clang version test".into(),
+                    resolved_tokens: Some(vec!["-cc1".into()]),
+                    host_version_line: None,
+                })
+            }
+        }
+        let root = TempDir::new().unwrap();
+        let driver = root.path().join("driver");
+        std::fs::write(&driver, b"\x7fELFfixture").unwrap();
+        let env = InvocationEnv::from_parts(
+            std::iter::empty::<(&str, &str)>(),
+            Some(root.path().into()),
+            None,
+            root.path().into(),
+        );
+        let request = req(driver.to_str().unwrap());
+        let prober = NativeProber(AtomicUsize::new(0));
+        let cache_dir = root.path().join("cache");
+        probe_for(&cache_dir, &prober, &request, &env).unwrap();
+        for value in ["1", "2"] {
+            let mut changed = env.clone();
+            changed.set("HYPERFINE_ITERATION", value);
+            probe_for(&cache_dir, &prober, &request, &changed).unwrap();
+        }
+        assert_eq!(prober.0.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            std::fs::read_dir(cache_dir.join("probes")).unwrap().count(),
+            1
+        );
+
+        for name in [
+            "CPATH",
+            "C_INCLUDE_PATH",
+            "CPLUS_INCLUDE_PATH",
+            "OBJC_INCLUDE_PATH",
+            "OBJCPLUS_INCLUDE_PATH",
+            "GCC_EXEC_PREFIX",
+            "COMPILER_PATH",
+            "LIBRARY_PATH",
+            "PATH",
+            "PATHEXT",
+            "HOME",
+            "USERPROFILE",
+            "XDG_CONFIG_HOME",
+            "PWD",
+            "DEVELOPER_DIR",
+            "TOOLCHAINS",
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+            "LANGUAGE",
+            "TERM",
+            "NO_COLOR",
+            "COLORTERM",
+            "ZERO_AR_DATE",
+            "SystemRoot",
+            "ComSpec",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "LC_MESSAGES",
+            "LC_NUMERIC",
+            "DEPENDENCIES_OUTPUT",
+            "SUNPRO_DEPENDENCIES",
+            "SOURCE_DATE_EPOCH",
+            "CCC_OVERRIDE_OPTIONS",
+            "CCC_TEST",
+            "CLANG_CONFIG_FILE_SYSTEM_DIR",
+            "CLANG_CONFIG_FILE_USER_DIR",
+            "CLANG_NO_DEFAULT_CONFIG",
+            "SDKROOT",
+            "MACOSX_DEPLOYMENT_TARGET",
+            "IPHONEOS_DEPLOYMENT_TARGET",
+            "TVOS_DEPLOYMENT_TARGET",
+            "WATCHOS_DEPLOYMENT_TARGET",
+            "XROS_DEPLOYMENT_TARGET",
+            "DRIVERKIT_DEPLOYMENT_TARGET",
+            "NEW_DEPLOYMENT_TARGET",
+            "INCLUDE",
+            "EXTERNAL_INCLUDE",
+            "CL",
+            "_CL_",
+            "VCINSTALLDIR",
+            "VCToolsInstallDir",
+            "VCToolsVersion",
+            "WindowsSdkDir",
+            "WindowsSDKVersion",
+            "UCRTVersion",
+            "Platform",
+            "GCC_TEST",
+            "CLANG_TEST",
+            "VENDOR_INCLUDE",
+            "VENDOR_SYSROOT",
+            "VENDOR_SDK",
+            "VENDORFLAGS",
+            "CCACHE_TEST",
+            "LLVM_TEST",
+            "LD_LIBRARY_PATH",
+            "LD_PRELOAD",
+            "DYLD_LIBRARY_PATH",
+            "COLLECT_LTO_WRAPPER",
+            "COMPILER_RT_TEST",
+            "RC_DEBUG_OPTIONS",
+            "XCODE_TEST",
+            "UniversalCRTSdkDir",
+            "CUDA_PATH",
+            "HIP_PATH",
+            "ROCM_PATH",
+            "HSA_TEST",
+            "AMD_TEST",
+            "OMP_TEST",
+            "OFFLOAD_TEST",
+            "EXPERIMENTAL_SARIF_SOCKET",
+            "AS_SECURE_LOG_FILE",
+            "FORCE_CLANG_DIAGNOSTICS_CRASH",
+            "CC_PRINT_HEADERS_FILTERING",
+            "CC_LOG_DIAGNOSTICS",
+            "CC_LOG_DIAGNOSTICS_FILE",
+            "OBJECT_MODE",
+            "LIBPATH",
+            "LIB",
+            "TZ",
+            "ROC_TEST",
+            "SYCL_TEST",
+            "SPIRV_TEST",
+            "_CC_TEST",
+            "_CEE_TEST",
+        ] {
+            let before = prober.0.load(Ordering::SeqCst);
+            for value in ["first", "second"] {
+                let mut changed = env.clone();
+                changed.set(name, value);
+                probe_for(&cache_dir, &prober, &request, &changed).unwrap();
+            }
+            assert_eq!(prober.0.load(Ordering::SeqCst), before + 2, "{name}");
+        }
+
+        for native in [false, true] {
+            let patterns = ["client_*".to_string(), "KACHE_CUSTOM".to_string()];
+            let request = ProbeRequest {
+                key_env_vars: &patterns,
+                ..req(driver.to_str().unwrap())
+            };
+            for name in ["CLIENT_VALUE", "KACHE_CUSTOM"] {
+                let key = |value| {
+                    let mut changed = env.clone();
+                    changed.set(name, value);
+                    if native {
+                        cache::native_probe_key_for("cc", &request, &changed)
+                    } else {
+                        cache::probe_key_for("cc", &request, &changed)
+                    }
+                };
+                assert_ne!(key("one"), key("two"), "native={native} {name}");
+            }
+            let mut changed = env.clone();
+            changed.set("CLIENT_VALUE", "one");
+            let before = prober.0.load(Ordering::SeqCst);
+            probe_for(&cache_dir, &prober, &request, &changed).unwrap();
+            changed.set("CLIENT_VALUE", "two");
+            probe_for(&cache_dir, &prober, &request, &changed).unwrap();
+            if native {
+                assert_eq!(prober.0.load(Ordering::SeqCst), before);
+            } else {
+                assert_eq!(prober.0.load(Ordering::SeqCst), before + 2);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opaque_script_wrapper_keeps_arbitrary_environment_inputs() {
+        let root = TempDir::new().unwrap();
+        let driver = root.path().join("gcc");
+        kache_fs::testutil::write_executable(
+            &driver,
+            r##"#!/bin/sh
+echo run >> runs
+case "$1" in
+--version) echo 'clang version test' ;;
+'-###') printf '"clang" "-cc1" "-target-cpu" "%s" "unit.c"\n' "$BUILD_VARIANT" >&2 ;;
+esac
+"##,
+        );
+        let mut env = InvocationEnv::from_parts(
+            [("BUILD_VARIANT", "first")],
+            Some(root.path().into()),
+            None,
+            root.path().into(),
+        );
+        let request = req(driver.to_str().unwrap());
+        let first = probe_for(root.path(), &CcProber, &request, &env).unwrap();
+        assert!(!first.native_driver);
+        env.set("HYPERFINE_ITERATION", "2");
+        assert_eq!(
+            probe_for(root.path(), &CcProber, &request, &env).unwrap(),
+            first
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("runs"))
+                .unwrap()
+                .lines()
+                .count(),
+            4
+        );
+        env.set("BUILD_VARIANT", "second");
+        let second = probe_for(root.path(), &CcProber, &request, &env).unwrap();
+        assert_ne!(first.resolved_tokens, second.resolved_tokens);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("runs"))
+                .unwrap()
+                .lines()
+                .count(),
+            6
+        );
+        assert_eq!(
+            std::fs::read_dir(root.path().join("probes"))
+                .unwrap()
+                .count(),
+            3
+        );
     }
 
     #[cfg(unix)]
@@ -1090,6 +1356,7 @@ esac
             .map(|s| s.to_string())
             .collect();
         let request = ProbeRequest {
+            key_env_vars: &[],
             compiler: "cc",
             args: &args,
             key_args: &args,
@@ -1310,6 +1577,7 @@ esac
             temp.path(),
             &key,
             &ResolvedConfig {
+                native_driver: false,
                 schema_version: PROBE_SCHEMA_VERSION,
                 prober: "cc-family".to_string(),
                 compiler_name: "dummy".to_string(),
@@ -1325,6 +1593,7 @@ esac
             temp.path(),
             &key,
             &ResolvedConfig {
+                native_driver: false,
                 schema_version: PROBE_SCHEMA_VERSION,
                 prober: "cc-family".to_string(),
                 compiler_name: "dummy".to_string(),
@@ -1340,6 +1609,7 @@ esac
             temp.path(),
             &key,
             &ResolvedConfig {
+                native_driver: false,
                 schema_version: PROBE_SCHEMA_VERSION,
                 prober: "cc-family".to_string(),
                 compiler_name: "dummy".to_string(),
@@ -1485,6 +1755,7 @@ esac
         let compiler = script.to_str().unwrap();
 
         let req = ProbeRequest {
+            key_env_vars: &[],
             compiler,
             args: &["-O2".to_string()],
             key_args: &["-O2".to_string()],

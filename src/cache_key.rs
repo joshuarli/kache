@@ -613,7 +613,7 @@ fn cargo_cfg_pairs(
 ///
 /// Exact match, or prefix match when the pattern ends in `*`. ASCII
 /// case-insensitive (see [`apply_key_env_vars`]).
-fn key_env_var_matches(patterns: &[String], name: &str) -> bool {
+pub(crate) fn key_env_var_matches(patterns: &[String], name: &str) -> bool {
     // Byte slicing, not `&name[..n]`: a lossy `vars_os` conversion can leave a
     // multi-byte replacement char in the name, and a prefix length landing
     // mid-character would panic on a str slice.

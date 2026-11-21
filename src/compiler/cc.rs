@@ -5748,50 +5748,79 @@ fn fold_cc_memo_field(hasher: &mut blake3::Hasher, label: &[u8], value: &[u8]) {
     );
 }
 
-/// Environment variables the preprocessor reads, by the GCC, Clang and MSVC
-/// documentation. Names are matched exactly; [`cc_memo_env_pattern_is_keyed`]
+/// Driver/preprocessor inputs from GCC's Environment-Variables.html and
+/// Clang's Driver.cpp, ToolChains/{Clang,Darwin,MSVC}.cpp, tools/driver/driver.cpp.
+/// https://gcc.gnu.org/onlinedocs/gcc/Environment-Variables.html
+/// https://github.com/llvm/llvm-project/tree/main/clang/lib/Driver
+/// Shared with the native driver probe; vendor/loader families over-key.
+/// Names are matched exactly; [`cc_memo_env_pattern_is_keyed`]
 /// widens this to families of names.
 const CC_MEMO_KEYED_ENV: &[&str] = &[
     // GCC "Environment Variables Affecting GCC"; Clang honours the same set.
-    "CPATH",
-    "C_INCLUDE_PATH",
-    "CPLUS_INCLUDE_PATH",
-    "OBJC_INCLUDE_PATH",
-    "OBJCPLUS_INCLUDE_PATH",
-    "GCC_EXEC_PREFIX",
-    "COMPILER_PATH",
-    "LIBRARY_PATH",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "LC_MESSAGES",
-    "DEPENDENCIES_OUTPUT",
-    "SUNPRO_DEPENDENCIES",
-    "SOURCE_DATE_EPOCH",
+    "CPATH",                         // Common preprocessor include directories.
+    "C_INCLUDE_PATH",                // C system include directories.
+    "CPLUS_INCLUDE_PATH",            // C++ system include directories.
+    "OBJC_INCLUDE_PATH",             // Objective-C system include directories.
+    "OBJCPLUS_INCLUDE_PATH",         // Objective-C++ system include directories.
+    "GCC_EXEC_PREFIX",               // GCC subprogram and toolchain prefix.
+    "COMPILER_PATH",                 // GCC/Clang subprogram directories.
+    "LIBRARY_PATH",                  // GCC/Clang library directories.
+    "LIB",                           // Clang Windows library directories (ToolChains/MSVC.cpp).
+    "PATH",                          // Driver subprogram lookup.
+    "PATHEXT",                       // Executable suffix lookup.
+    "HOME",                          // Clang user configuration directory.
+    "USERPROFILE",                   // Windows user configuration directory.
+    "XDG_CONFIG_HOME",               // Vendor/user configuration lookup.
+    "PWD",                           // Clang debug compilation directory.
+    "DEVELOPER_DIR",                 // Apple developer tools selection.
+    "TOOLCHAINS",                    // Apple toolchain selection.
+    "OBJECT_MODE",                   // Clang AIX 32/64-bit target selection (Driver.cpp).
+    "LIBPATH",                       // AIX library lookup.
+    "TZ",                            // Timestamp/diagnostic time zone.
+    "TMPDIR",                        // GCC/Clang temporary files.
+    "TMP",                           // Platform temporary directory fallback.
+    "TEMP",                          // Platform temporary directory fallback.
+    "LANGUAGE",                      // GNU diagnostic message language.
+    "TERM",                          // Diagnostic rendering capabilities.
+    "NO_COLOR",                      // Diagnostic color selection.
+    "EXPERIMENTAL_SARIF_SOCKET",     // GCC diagnostic transport.
+    "AS_SECURE_LOG_FILE",            // Clang assembler secure log (ToolChains/Clang.cpp).
+    "FORCE_CLANG_DIAGNOSTICS_CRASH", // Clang diagnostic behavior (driver.cpp).
+    "COLORTERM",                     // Diagnostic color capabilities.
+    "ZERO_AR_DATE",                  // Darwin archive timestamps.
+    "SystemRoot",                    // Windows system tools and libraries.
+    "ComSpec",                       // Windows command processor selection.
+    "LANG",                          // Default diagnostic locale.
+    "LC_ALL",                        // Locale override (pinned for probes, inherited by compiles).
+    "LC_CTYPE",                      // Character classification locale.
+    "LC_MESSAGES",                   // Diagnostic message locale.
+    "DEPENDENCIES_OUTPUT",           // GCC non-system dependency output.
+    "SUNPRO_DEPENDENCIES",           // GCC system dependency output.
+    "SOURCE_DATE_EPOCH",             // Reproducible time macros.
     // Clang driver.
-    "CCC_OVERRIDE_OPTIONS",
-    "CLANG_CONFIG_FILE_SYSTEM_DIR",
-    "CLANG_CONFIG_FILE_USER_DIR",
-    "CLANG_NO_DEFAULT_CONFIG",
-    "SDKROOT",
-    "MACOSX_DEPLOYMENT_TARGET",
-    "IPHONEOS_DEPLOYMENT_TARGET",
-    "TVOS_DEPLOYMENT_TARGET",
-    "WATCHOS_DEPLOYMENT_TARGET",
-    "XROS_DEPLOYMENT_TARGET",
-    "DRIVERKIT_DEPLOYMENT_TARGET",
+    "CCC_OVERRIDE_OPTIONS",         // Clang argument rewriting.
+    "CLANG_CONFIG_FILE_SYSTEM_DIR", // Clang system configuration directory.
+    "CLANG_CONFIG_FILE_USER_DIR",   // Clang user configuration directory.
+    "CLANG_NO_DEFAULT_CONFIG",      // Clang configuration suppression.
+    "SDKROOT",                      // Apple SDK selection.
+    "MACOSX_DEPLOYMENT_TARGET",     // macOS ABI/deployment selection.
+    "IPHONEOS_DEPLOYMENT_TARGET",   // iOS ABI/deployment selection.
+    "TVOS_DEPLOYMENT_TARGET",       // tvOS ABI/deployment selection.
+    "WATCHOS_DEPLOYMENT_TARGET",    // watchOS ABI/deployment selection.
+    "XROS_DEPLOYMENT_TARGET",       // visionOS ABI/deployment selection.
+    "DRIVERKIT_DEPLOYMENT_TARGET",  // DriverKit ABI/deployment selection.
     // MSVC.
-    "INCLUDE",
-    "EXTERNAL_INCLUDE",
-    "CL",
-    "_CL_",
-    "VCINSTALLDIR",
-    "VCToolsInstallDir",
-    "VCToolsVersion",
-    "WindowsSdkDir",
-    "WindowsSDKVersion",
-    "UCRTVersion",
-    "Platform",
+    "INCLUDE",           // MSVC-compatible include directories.
+    "EXTERNAL_INCLUDE",  // MSVC-compatible external include directories.
+    "CL",                // clang-cl prepended arguments.
+    "_CL_",              // clang-cl appended arguments.
+    "VCINSTALLDIR",      // Visual C++ installation.
+    "VCToolsInstallDir", // Visual C++ toolchain directory.
+    "VCToolsVersion",    // Visual C++ toolchain version.
+    "WindowsSdkDir",     // Windows SDK directory.
+    "WindowsSDKVersion", // Windows SDK version.
+    "UCRTVersion",       // Windows runtime version.
+    "Platform",          // Windows target platform.
 ];
 
 /// Families of names that can reach a preprocessor without being on the
@@ -5801,17 +5830,45 @@ const CC_MEMO_KEYED_ENV: &[&str] = &[
 fn cc_memo_env_pattern_is_keyed(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     [
-        "INCLUDE",
-        "SYSROOT",
-        "SDK",
-        "DEPLOYMENT_TARGET",
-        "CLANG",
-        "GCC",
-        "CCACHE",
+        "INCLUDE",           // Vendor include directories.
+        "SYSROOT",           // Vendor target roots.
+        "SDK",               // Vendor SDK selection.
+        "DEPLOYMENT_TARGET", // Apple and vendor deployment selection.
+        "CLANG",             // Clang configuration, diagnostics and module controls.
+        "GCC",               // GCC configuration, diagnostics and subprocess controls.
+        "CCACHE",            // Compiler wrapper configuration.
     ]
     .iter()
     .any(|needle| upper.contains(needle))
         || upper.ends_with("FLAGS")
+        || [
+            "CCC_",         // Clang driver overrides and tests (Driver.cpp).
+            "CC_",          // Clang diagnostic/output controls (driver.cpp).
+            "LC_",          // GCC/Clang locale categories.
+            "LLVM_",        // LLVM driver/tool configuration.
+            "LD_",          // ELF loader, library and plugin selection.
+            "DYLD_",        // Mach-O loader and library selection.
+            "COLLECT_",     // GCC collect2/LTO subprocess configuration.
+            "COMPILER_RT_", // Clang runtime library lookup.
+            "RC_",          // Apple driver debug/environment options.
+            "XCODE_",       // Apple developer tool configuration.
+            "VC",           // Clang Windows toolchain selection.
+            "UCRT",         // Clang Windows runtime selection.
+            "UNIVERSALCRT", // Clang Windows runtime root.
+            "CUDA",         // Clang CUDA toolchain lookup.
+            "HIP",          // Clang HIP toolchain lookup.
+            "ROC",          // Clang ROCm toolchain and runtime lookup.
+            "HSA_",         // Clang GPU toolchain configuration.
+            "AMD",          // Clang AMD GPU target overrides.
+            "OMP_",         // OpenMP offload toolchain configuration.
+            "OFFLOAD_",     // Offload target selection.
+            "SYCL_",        // Clang SYCL toolchain selection.
+            "SPIRV_",       // Clang SPIR-V toolchain selection.
+            "_CC_",         // Clang z/OS driver options.
+            "_CEE_",        // z/OS runtime configuration.
+        ]
+        .iter()
+        .any(|prefix| upper.starts_with(prefix))
 }
 
 /// Is this a variable the memo key folds?
@@ -5824,7 +5881,7 @@ fn cc_memo_env_pattern_is_keyed(name: &str) -> bool {
 /// no run could ever match the previous one and every warm build preprocessed
 /// every translation unit again. kache's own `KACHE_*` settings steer the
 /// wrapper, never the preprocessor, and are never keyed.
-fn cc_memo_env_is_keyed(name: &OsStr) -> bool {
+pub(crate) fn cc_memo_env_is_keyed(name: &OsStr) -> bool {
     let Some(name) = name.to_str() else {
         return false;
     };
@@ -5869,7 +5926,8 @@ const CC_ARTIFACT_SCHEMA: &[u8] = b"cc_artifact_schema:4\n";
 /// header availability probes; older read sets have no such proof.
 /// v9: drivers that ignore SOURCE_DATE_EPOCH may only memoize expansions
 /// proven independent of time macros.
-const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v9";
+/// v10: the driver and preprocessing memos share expanded environment inputs.
+const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v10";
 
 /// Local identity for a preprocessor invocation. The environment is included
 /// as selected by [`cc_memo_env_is_keyed`].
@@ -8189,7 +8247,7 @@ fn cc_direct_probe_material(program: &str, env: &InvocationEnv) -> Option<String
     let resolved = env.resolve_program(Path::new(program))?;
     let canonical = std::fs::canonicalize(&resolved).ok()?;
     let metadata = std::fs::metadata(&canonical).ok()?;
-    let mut material = crate::probe_memo::Material::new("cc-direct-capture-v2");
+    let mut material = crate::probe_memo::Material::new("cc-direct-capture-v3");
     material.push(program.as_bytes());
     material.push(canonical.as_os_str().as_encoded_bytes());
     material.push(&metadata.len().to_le_bytes());
@@ -8407,6 +8465,7 @@ impl CcCompiler {
             ctx.cache_dir,
             &crate::probe::CcProber,
             &crate::probe::ProbeRequest {
+                key_env_vars: ctx.key_env_vars,
                 compiler: &parsed.program,
                 args: &parsed.rest,
                 key_args: &config_args,
@@ -8946,6 +9005,7 @@ impl CcCompiler {
             ctx.cache_dir,
             &crate::probe::CcProber,
             &crate::probe::ProbeRequest {
+                key_env_vars: ctx.key_env_vars,
                 compiler: &parsed.program,
                 args: &probe_args,
                 key_args: &config_args,

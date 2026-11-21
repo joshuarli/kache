@@ -4705,6 +4705,13 @@ fn a_memo_key_from_before_the_settle_rules_is_never_todays() {
         today, unpinned,
         "an old memo did not verify the compiler's epoch support"
     );
+    let old_env = cc_preprocess_memo_key_as(
+        b"cc-preprocess-memo-v9",
+        &parsed,
+        &[],
+        "test compiler version",
+    ).unwrap();
+    assert_ne!(today, old_env, "an old memo omitted driver environment inputs");
 }
 
 #[test]

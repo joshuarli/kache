@@ -11,13 +11,13 @@ Next: 32
 - **Coordination:** KACH-21 and KACH-27 closed when the Linux gates became required (PR #50). KACH-22 (mutants in no gate) stays open. Evidence lives in the campaign ledger.
 - **Done when:** Every final acceptance criterion in the plan passes on the same integrated revision; safe passthrough, missing tools, and unexecuted lanes do not count as cached parity.
 
-### KACH-29 · P3 · A C/C++ compiler probe is keyed on the whole environment
+### KACH-29 · P3 · Narrow native C/C++ compiler probe environment keys — implemented
 
 - **Area:** Performance
-- **Where:** `src/probe/cache.rs` (`probe_key_for`, `fingerprint_env`)
+- **Where:** `src/probe/cache.rs`, `src/probe/mod.rs`, `src/compiler/cc.rs`
 - **Problem:** The `cc -###` probe record is keyed on every environment variable except `KACHE_*` and the per-command shell and build-driver variables (`PER_COMMAND_ENV`: `_`, `SHLVL`, `MAKEFLAGS`, …). Any other variable that changes per invocation therefore reruns the probe (about 30 ms) on every hit and writes one more record under `probes/`. Under hyperfine (`HYPERFINE_ITERATION`), a warm hit took 42 ms instead of 14, and 68 runs left 68 records. Builds that export a per-job counter or a timestamp pay the same.
-- **Recommendation:** Key the probe on the variables the driver reads (`SDKROOT`, `DEVELOPER_DIR`, `MACOSX_DEPLOYMENT_TARGET`, `COMPILER_PATH`, `GCC_EXEC_PREFIX`, the include and library path variables, `PATH` for tool lookup). An allowlist must be proven complete against both drivers' documentation, or it miskeys. Daemon GC now removes probe records written more than a week earlier, so the records are bounded; the re-probe on every hit remains.
-- **Fix with:** a test that varies an unrelated variable and keeps one probe record, and one per listed variable that rekeys.
+- **Resolution:** Probe schema 6 uses documented GCC/Clang environment inputs only after the probe identifies a native ELF/Mach-O compiler; executable realpaths and invocation names must not name known launchers. Scripts, unknown drivers, launchers and other binary formats keep whole-environment keying. The driver and preprocessor memos share a conservative superset of GCC's environment documentation and Clang driver source inputs, including loader, configuration, include, locale, target and temporary-directory families. User `key_env_vars` patterns join both probe modes and override internal-variable exclusions. Preprocessing/direct-capability memo schemas also advance so old records cannot alias the expanded input set.
+- **Fix with:** native-driver table tests assert that each input re-probes, while `HYPERFINE_ITERATION` preserves one record; a shell wrapper named `gcc` still re-probes on arbitrary inputs. Mutation tests remove `CPATH` and accept scripts as native. Hyperfine's environment-unsetting workaround is unnecessary for qualifying native GCC/Clang, but remains necessary when timing opaque wrappers.
 - **Effort:** M
 
 ### KACH-22 · P3 · Changed-line mutation testing runs in no gate

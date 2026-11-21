@@ -9,7 +9,7 @@
 use super::{PROBE_SCHEMA_VERSION, ProbeRequest, ResolvedConfig};
 use crate::invocation::InvocationEnv;
 use std::fs::Metadata;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// Subdirectory of the kache cache dir that holds probe records.
@@ -39,20 +39,92 @@ pub(crate) fn probe_key_for(
     req: &ProbeRequest<'_>,
     env: &InvocationEnv,
 ) -> Option<String> {
+    probe_key_for_mode(prober_id, req, env, false)
+}
+
+pub(crate) fn native_probe_key_for(
+    prober_id: &str,
+    req: &ProbeRequest<'_>,
+    env: &InvocationEnv,
+) -> Option<String> {
+    if prober_id != "cc" || !native_driver_file(req.compiler, env) {
+        return None;
+    }
+    probe_key_for_mode(prober_id, req, env, true)
+}
+
+fn native_driver_file(program: &str, env: &InvocationEnv) -> bool {
+    let Some(resolved) = env
+        .resolve_program(Path::new(program))
+        .and_then(|p| p.canonicalize().ok())
+    else {
+        return false;
+    };
+    for path in [Path::new(program), resolved.as_path()] {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        let name = name.strip_suffix(".exe").unwrap_or(&name);
+        if ["ccache", "sccache", "distcc", "icecc", "kache"]
+            .iter()
+            .any(|launcher| name == *launcher || name.starts_with(&format!("{launcher}-")))
+        {
+            return false;
+        }
+    }
+    let mut magic = [0u8; 4];
+    if std::fs::File::open(resolved)
+        .and_then(|mut file| file.read_exact(&mut magic))
+        .is_err()
+    {
+        return false;
+    }
+    matches!(
+        magic,
+        [0x7f, b'E', b'L', b'F']
+            | [0xfe, 0xed, 0xfa, 0xce]
+            | [0xce, 0xfa, 0xed, 0xfe]
+            | [0xfe, 0xed, 0xfa, 0xcf]
+            | [0xcf, 0xfa, 0xed, 0xfe]
+            | [0xca, 0xfe, 0xba, 0xbe]
+            | [0xbe, 0xba, 0xfe, 0xca]
+            | [0xca, 0xfe, 0xba, 0xbf]
+            | [0xbf, 0xba, 0xfe, 0xca]
+    )
+}
+
+fn probe_key_for_mode(
+    prober_id: &str,
+    req: &ProbeRequest<'_>,
+    env: &InvocationEnv,
+    native: bool,
+) -> Option<String> {
     let resolved = env
         .resolve_program(Path::new(req.compiler))?
         .canonicalize()
         .ok()?;
-    let cwd = under_base_dirs(fingerprint_text(env.cwd()?.as_os_str().to_owned()), req.base_dirs);
-    probe_key_from_parts(
+    let cwd = under_base_dirs(
+        fingerprint_text(env.cwd()?.as_os_str().to_owned()),
+        req.base_dirs,
+    );
+    probe_key_from_parts_for_mode(
         prober_id,
         req,
         &resolved,
-        env.vars_os().map(fingerprint_env_pair).map(|(name, value)| {
-            let value = if name == "PWD" { under_base_dirs(value, req.base_dirs) } else { value };
-            (name, value)
-        }),
+        env.vars_os()
+            .map(fingerprint_env_pair)
+            .map(|(name, value)| {
+                let value = if name == "PWD" {
+                    under_base_dirs(value, req.base_dirs)
+                } else {
+                    value
+                };
+                (name, value)
+            }),
         Some(&cwd),
+        native,
     )
 }
 
@@ -115,6 +187,7 @@ pub(crate) fn probe_key_with_env(
     probe_key_from_parts(prober_id, req, &resolved, env_vars, None)
 }
 
+#[cfg(test)]
 fn probe_key_from_parts(
     prober_id: &str,
     req: &ProbeRequest<'_>,
@@ -122,13 +195,33 @@ fn probe_key_from_parts(
     env_vars: impl Iterator<Item = (String, String)>,
     cwd: Option<&str>,
 ) -> Option<String> {
+    probe_key_from_parts_for_mode(prober_id, req, resolved, env_vars, cwd, false)
+}
+
+fn probe_key_from_parts_for_mode(
+    prober_id: &str,
+    req: &ProbeRequest<'_>,
+    resolved: &Path,
+    env_vars: impl Iterator<Item = (String, String)>,
+    cwd: Option<&str>,
+    native: bool,
+) -> Option<String> {
     let meta = std::fs::metadata(resolved).ok()?;
     let fingerprint = compiler_fingerprint(&meta);
-    let env_fp = fingerprint_env(env_vars);
+    let env_fp = fingerprint_env_for(env_vars, native, req.key_env_vars);
 
     let mut h = blake3::Hasher::new();
     h.update(b"probe_schema:");
     h.update(PROBE_SCHEMA_VERSION.to_string().as_bytes());
+    h.update(if native {
+        b"\nnative_env:"
+    } else {
+        b"\nopaque_env:"
+    });
+    for pattern in req.key_env_vars {
+        h.update(&(pattern.len() as u64).to_le_bytes());
+        h.update(pattern.as_bytes());
+    }
     h.update(b"\nprober:");
     h.update(prober_id.as_bytes());
     h.update(b"\ncompiler_path:");
@@ -161,6 +254,7 @@ pub fn probe_key_isolated(prober_id: &str, program: &str) -> Option<String> {
     probe_key_for(
         prober_id,
         &ProbeRequest {
+            key_env_vars: &[],
             compiler: program,
             args: &[],
             key_args: &[],
@@ -176,13 +270,26 @@ pub fn probe_key_isolated(prober_id: &str, program: &str) -> Option<String> {
 /// dropping the volatile pseudo-variables [`is_volatile_env_name`]
 /// rejects.
 ///
-/// `cc -###` inherits this environment, so a change to it (a different
-/// `SDKROOT`, `CPATH`, …) can change the resolved invocation. Hashing
-/// the whole environment is the conservative choice: an unrelated
-/// change at worst forces one extra, cheap re-probe, while a relevant
-/// one can never be served a stale record.
+/// Opaque drivers retain the full environment; only verified native drivers
+/// use the documented GCC/Clang inputs shared with the preprocessor memo.
+#[cfg(test)]
 fn fingerprint_env(vars: impl Iterator<Item = (String, String)>) -> String {
-    let mut vars: Vec<(String, String)> = vars.filter(|(k, _)| !is_volatile_env_name(k)).collect();
+    fingerprint_env_for(vars, false, &[])
+}
+
+fn fingerprint_env_for(
+    vars: impl Iterator<Item = (String, String)>,
+    native: bool,
+    patterns: &[String],
+) -> String {
+    let mut vars: Vec<(String, String)> = vars
+        .filter(|(name, _)| {
+            crate::cache_key::key_env_var_matches(patterns, name)
+                || (!is_volatile_env_name(name)
+                    && (!native
+                        || crate::compiler::cc::cc_memo_env_is_keyed(std::ffi::OsStr::new(name))))
+        })
+        .collect();
     vars.sort();
     let mut h = blake3::Hasher::new();
     for (k, v) in vars {
@@ -354,6 +461,7 @@ mod tests {
 
     fn sample(version: &str) -> ResolvedConfig {
         ResolvedConfig {
+            native_driver: false,
             schema_version: PROBE_SCHEMA_VERSION,
             prober: "cc".to_string(),
             compiler_name: "clang".to_string(),
@@ -363,9 +471,79 @@ mod tests {
         }
     }
 
+    #[test]
+    fn native_probe_requires_binary_magic_and_excludes_launchers() {
+        let root = TempDir::new().unwrap();
+        let driver = root.path().join("driver");
+        let env = InvocationEnv::from_parts(
+            std::iter::empty::<(&str, &str)>(),
+            Some(root.path().into()),
+            None,
+            root.path().into(),
+        );
+        for magic in [
+            [0x7f, b'E', b'L', b'F'],
+            [0xfe, 0xed, 0xfa, 0xce],
+            [0xce, 0xfa, 0xed, 0xfe],
+            [0xfe, 0xed, 0xfa, 0xcf],
+            [0xcf, 0xfa, 0xed, 0xfe],
+            [0xca, 0xfe, 0xba, 0xbe],
+            [0xbe, 0xba, 0xfe, 0xca],
+            [0xca, 0xfe, 0xba, 0xbf],
+            [0xbf, 0xba, 0xfe, 0xca],
+        ] {
+            std::fs::write(&driver, magic).unwrap();
+            assert!(
+                native_driver_file(driver.to_str().unwrap(), &env),
+                "{magic:?}"
+            );
+        }
+        for body in [
+            b"".as_slice(),
+            b"ELF",
+            b"MZnative",
+            b"#!/bin/sh\n",
+            b"unknown",
+        ] {
+            std::fs::write(&driver, body).unwrap();
+            assert!(
+                !native_driver_file(driver.to_str().unwrap(), &env),
+                "{body:?}"
+            );
+        }
+        for name in [
+            "ccache",
+            "sccache",
+            "distcc",
+            "icecc",
+            "kache",
+            "kache-engine",
+            "ccache-4",
+        ] {
+            let launcher = root.path().join(name);
+            std::fs::write(&launcher, b"\x7fELFnative").unwrap();
+            assert!(
+                !native_driver_file(launcher.to_str().unwrap(), &env),
+                "{name}"
+            );
+            #[cfg(unix)]
+            {
+                let alias = root.path().join(format!("alias-{name}"));
+                std::os::unix::fs::symlink(&launcher, &alias).unwrap();
+                assert!(
+                    !native_driver_file(alias.to_str().unwrap(), &env),
+                    "alias {name}"
+                );
+            }
+        }
+        std::fs::remove_file(&driver).unwrap();
+        assert!(!native_driver_file(driver.to_str().unwrap(), &env));
+    }
+
     /// A `ProbeRequest` for a compiler with no extra arguments.
     fn req(compiler: &str) -> ProbeRequest<'_> {
         ProbeRequest {
+            key_env_vars: &[],
             compiler,
             args: &[],
             key_args: &[],
@@ -395,6 +573,7 @@ mod tests {
         };
         let key = |(env, base): (InvocationEnv, Vec<(String, String)>)| {
             let request = ProbeRequest {
+                key_env_vars: &[],
                 base_dirs: &base,
                 ..req(compiler.path().to_str().unwrap())
             };
@@ -648,6 +827,7 @@ mod tests {
         let with_flags = probe_key_with_env(
             "cc",
             &ProbeRequest {
+                key_env_vars: &[],
                 compiler: path,
                 args: &[],
                 key_args: &flags,

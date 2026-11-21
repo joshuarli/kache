@@ -662,10 +662,23 @@ its header revert from 8.69x to 1.41x. **Losses now, ranked:**
    `poll()` on the listener (`perf(daemon): accept a connection when it
    arrives, not after a 5 ms sleep`), and a warm single-unit hit went from
    14.2 ms to 7.8 ms (hyperfine, loaded host). The worker's own 2.7 ms and
-   about 1 ms of protocol round trips remain. Timing kache under hyperfine
-   needs `env -u HYPERFINE_ITERATION -u
-   HYPERFINE_RANDOMIZED_ENVIRONMENT_OFFSET`: the compiler probe is keyed
-   on the whole environment (KACH-29).
+   about 1 ms of protocol round trips remain. KACH-29 now keys identified
+   native ELF/Mach-O GCC/Clang probes on documented driver inputs plus
+   declared `key_env_vars`; the preprocessor memo shares the input set.
+   Hyperfine's `HYPERFINE_*` unsetting workaround can go for those drivers.
+   Opaque drivers (including scripts named `gcc`), known launchers and other
+   binary formats retain whole-environment keying and still need it.
+   Probe schema 6 and fresh preprocessing/direct-capability memo schemas
+   keep records from the previous policy separate.
+   Local Ubuntu 22.04 verification (GCC 11, Clang 14): 967 focused tests
+   passed (2 ignored), `make check` passed, and all five negative controls
+   were detected. The full oracle has 199 MATCH, 44 compiler-unsupported
+   results and one `cc-out-gcno` reproducible/Clang `KACHE_MISSED_REUSE`;
+   the pre-change probe-schema-5 release engine reproduces that same miss.
+   A provisional 25-run warm GCC microcheck with changing
+   `HYPERFINE_ITERATION` went from 6.2 ± 0.2 ms to 3.5 ± 0.2 ms; compiler
+   probe records fell from 29 to 1. Other checks ran concurrently, and
+   hyperfine warned about sub-5-ms commands: this is not acceptance timing.
 2. Header edit, 1.18x on tiny C and 1.24x on zlib: the miss path.
 3. Cold C++ and LLVM, 1.09x to 1.11x; tiny-C cold now beats ccache (0.79x).
 
@@ -859,7 +872,11 @@ host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
       fixture (`make cc-project-autotools`); provision and run other host
       cells before calling the matrix complete. Meson launchers remain open.
       zlib, LLVM and cc-rs build scripts already cache fully.
-   5. KACH-29: key the compiler probe on the variables the driver reads.
+   5. KACH-29 is implemented for identified native GCC/Clang: documented
+      driver environment inputs and declared patterns key the probe;
+      opaque drivers retain whole-environment keying. Native hits no longer
+      need the hyperfine environment workaround. Cross-host timing remains
+      part of the acceptance rerun, not inferred from this key change.
 4. All campaign work runs in isolated worktrees under `.work/wt/`
    (gitignored via `.git/info/exclude`). Evidence needed afterwards lives in
    CI runs (90-day retention) or in committed cases and scripts.
