@@ -64,6 +64,38 @@ Injected fault (critical decision, memory pressure): `scheduler/pressure.rs` `ma
 `scheduler::pressure::tests::reads_the_macos_level` FAILED (7 passed, 1 failed). Restored from a
 pre-edit copy; `cmp` exit 0.
 
+Load-dependent probe tests (coordinator request from sibling lane k5, which saw
+`explicit_probes_use_each_clients_paths_env_cwd_temp_and_memo` and
+`family_probe_executes_scripts_and_parses_outputs` fail in full `make test` runs and pass alone).
+Cause: the family probe's 5 s deadline. With a temporary `eprintln!` in `run_family_probe_for`, one
+full lib run (214 s against 55 to 108 s on a quieter host, load average about 50) failed four
+probe tests together; three printed `recv timed out ... after 5s` for scripts that exit at once
+(`echo KACHE_PROBE_GNU`), so the probe returned `Err`, `probe_compiler_family*` returned `None`, and
+the tests saw `left: None, right: Some(Gnu)`, the same signature k5 recorded. Six further full runs
+did not fail a probe test, so the run that reproduced it also could not distinguish a stalled
+child from a pipe write end held by a concurrent test's child (`sleep 6` in the deadline test);
+the `try_wait` evidence to tell them apart was never captured. A longer deadline fixes either.
+Not a logic defect. Two changes, each with its witness:
+
+- `ac3cee00` (runtime): `run_family_probe_for` read `KACHE_PROBE_TIMEOUT_MS` from the process
+  environment although it receives the client's `InvocationEnv`; a daemon-hosted probe ignored the
+  client's value. `family_probe_deadline_comes_from_the_clients_environment` fails before
+  (`left: Ok(Some(Gnu))`, `right: Err(())`) and passes after. Wire protocol untouched.
+- `c97cf41e` (tests): tests that expect a family carry `KACHE_PROBE_TIMEOUT_MS=60000` in their
+  client environment or through the cache-dir guard, and the deadline test enforces a 500 ms deadline
+  instead of sleeping past 5 s. Negative control: with `KACHE_PROBE_TIMEOUT_MS=1` in the process
+  environment (a stalled host in miniature) the old test binary fails all four of
+  `explicit_probes_use_each_clients_paths_env_cwd_temp_and_memo`,
+  `family_probe_executes_scripts_and_parses_outputs`, `family_probe_cached_result_roundtrips` and
+  `family_probe_waits_for_exit_after_stdout_eof_and_enforces_its_deadline`; the new one passes all
+  four. `cargo test -p kache --lib -- probe::` passes (113 tests, 5.5 s).
+
+Not mine, same cause class: `service::tests::manager_command_deadline_bounds_wait_and_caps_diagnostics`
+(`src/service.rs`), plus `daemon::execution::tests::*handoff_streams_two_compilers*`,
+`daemon::lifecycle_client::tests::abandoned_startup_reaps_the_child_without_terminating_it` and
+`cli::doctor_probe::tests::failed_and_stalled_compilers_return_details_and_finish` failed in
+loaded runs here.
+
 Needs environment: `cargo-llvm-cov` and `cargo-mutants` are not installed, so there is no
 coverage figure and no survivor list; the Linux paths (`pressure::under_pressure`,
 `permit_wait::linux`) do not compile on this host. No test was added: no `none` boundary and no
