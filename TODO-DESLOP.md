@@ -9,15 +9,6 @@ Not started.
 
 ## Tickets
 
-### DSLP-3 · P2 · Types: crates/kache-config (1/28)
-
-- **Area:** deslop · types
-- **Where:** crates/kache-config
-- **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope contains approximately 5564 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
 ### DSLP-4 · P2 · Tests: crates/kache-config (1/28)
 
 - **Area:** deslop · tests
@@ -719,4 +710,3 @@ Not started.
 - **Recommendation:** Narrow visibility and adopt unreachable_pub; move the cfg(test) items into mod tests; drop the Linux gate; remove the clones; export config_path_lock once; add !docs/deslop-*.md to .gitignore.
 - **Fix with:** deslop
 - **Effort:** S
-
