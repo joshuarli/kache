@@ -9,15 +9,6 @@ Not started.
 
 ## Tickets
 
-### DSLP-4 · P2 · Tests: crates/kache-config (1/28)
-
-- **Area:** deslop · tests
-- **Where:** crates/kache-config
-- **Problem:** Audit boundaries and tiers, then measure coverage and scoped mutation; prove new tests with injected faults. Scope contains approximately 5564 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: critical survivors dispositioned, test cost budget holds, and scoped lane is qualified; run make test and make lint. Missing coverage or mutation tools are Needs environment.
-- **Fix with:** deslop
-- **Effort:** M
-
 ### DSLP-5 · P2 · Dead code: crates/kache-config (1/28)
 
 - **Area:** deslop · dead code

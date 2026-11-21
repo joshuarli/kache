@@ -259,6 +259,67 @@ mod tests {
     }
 
     #[test]
+    fn rewriting_a_snapshot_removes_duplicate_keys_without_changing_its_clone() {
+        let mut env = InvocationEnv::from_parts(
+            [("TOKEN", "first"), ("EMPTY", ""), ("TOKEN", "last")],
+            None,
+            None,
+            PathBuf::new(),
+        );
+        let original = env.clone();
+        assert_eq!(env.var("TOKEN"), Ok("last".to_string()));
+        env.set("TOKEN", "replacement");
+        assert_eq!(
+            env.vars_os().collect::<Vec<_>>(),
+            vec![
+                (OsString::from("EMPTY"), OsString::from("")),
+                (OsString::from("TOKEN"), OsString::from("replacement")),
+            ]
+        );
+        assert_eq!(
+            original.vars_os().collect::<Vec<_>>(),
+            vec![
+                (OsString::from("TOKEN"), OsString::from("first")),
+                (OsString::from("EMPTY"), OsString::from("")),
+                (OsString::from("TOKEN"), OsString::from("last")),
+            ]
+        );
+        assert_eq!(original.var("TOKEN"), Ok("last".to_string()));
+        assert_eq!(env.var("MISSING"), Err(VarError::NotPresent));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_search_paths_are_rooted_in_each_invocations_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        for name in ["left", "right"] {
+            let cwd = root.path().join(name);
+            let bin = cwd.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let program = bin.join("compiler");
+            std::fs::write(&program, b"fixture").unwrap();
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let env = InvocationEnv::from_parts(
+                [("PATH", "bin")],
+                Some(cwd),
+                None,
+                root.path().to_owned(),
+            );
+            assert_eq!(
+                env.resolve_program(Path::new("compiler")),
+                Some(program.clone())
+            );
+            assert_eq!(
+                env.command("compiler").unwrap().get_program(),
+                program.as_os_str()
+            );
+            assert_eq!(env.resolve_program(Path::new("missing-compiler")), None);
+        }
+    }
+
+    #[test]
     fn debug_output_excludes_environment_values() {
         let env = InvocationEnv::from_parts(
             [("PRIVATE_TOKEN", "a-secret-value")],
