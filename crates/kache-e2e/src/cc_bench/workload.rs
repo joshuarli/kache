@@ -274,3 +274,69 @@ fn write_corpus_cxx(tree: &Path) -> Result<()> {
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_comparison_set_is_the_documented_four_in_order() {
+        let set: Vec<_> = all().into_iter().map(|w| (w.name, w.units, w.relocatable)).collect();
+        assert_eq!(
+            set,
+            [
+                ("corpus-c-tiny", C_UNITS, true),
+                ("corpus-cxx-headers", CXX_UNITS, true),
+                ("zlib", 0, true),
+                ("llvm-subset", 0, false),
+            ]
+        );
+        assert_eq!((C_UNITS, CXX_UNITS), (48, 12));
+    }
+
+    #[test]
+    fn generated_corpora_contain_the_files_their_edits_touch() {
+        for (name, kind, units, ext) in [
+            ("corpus-c-tiny", Kind::CorpusC, C_UNITS, "c"),
+            ("corpus-cxx-headers", Kind::CorpusCxx, CXX_UNITS, "cpp"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            match kind {
+                Kind::CorpusC => write_corpus_c(dir.path()).unwrap(),
+                _ => write_corpus_cxx(dir.path()).unwrap(),
+            }
+            let workload = all().into_iter().find(|w| w.name == name).unwrap();
+            let (source, header) = workload.edit_targets();
+            assert!(dir.path().join(source).is_file(), "{name}: {source}");
+            assert!(dir.path().join(header).is_file(), "{name}: {header}");
+            let sources = std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == ext))
+                .count();
+            assert_eq!(sources, units, "{name}");
+            let makefile = std::fs::read_to_string(dir.path().join("Makefile")).unwrap();
+            assert!(makefile.matches(".o").count() >= units, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_edit_appends_a_declaration_named_by_its_tag() {
+        let first = edited(b"int a;", "one");
+        let second = edited(b"int a;", "two");
+        assert_eq!(first, b"int a;\nextern int kache_bench_edit_one;\n");
+        assert_ne!(first, second, "two tags are two new states");
+        assert!(edited(&first, "two").starts_with(&first));
+    }
+
+    #[test]
+    fn outputs_are_the_sorted_objects_outside_cmake_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("sub/CMakeFiles/CMakeScratch")).unwrap();
+        for name in ["b.o", "a.o", "sub/c.o", "sub/CMakeFiles/CMakeScratch/skip.o", "a.c", "sub/d.obj"] {
+            std::fs::write(root.join(name), "").unwrap();
+        }
+        let found = outputs(root).unwrap();
+        assert_eq!(found, [root.join("a.o"), root.join("b.o"), root.join("sub/c.o")]);
+    }
+}
