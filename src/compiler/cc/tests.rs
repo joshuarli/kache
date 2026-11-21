@@ -10820,12 +10820,12 @@ fn response_files_expand_for_gnu_drivers_only_and_refuse_when_unsafe() {
     );
     let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
     assert_eq!(
-        cc_args_with_response_files(&args(&["gcc", "-O2", "@args.rsp"]), &env),
+        cc_args_with_response_files(&args(&["gcc", "-O2", "@args.rsp"]), &env).map(|value| value.0),
         Some(args(&["gcc", "-O2", "-DV=1", "-c", "u.c", "-o", "u.o"]))
     );
     assert_eq!(cc_args_with_response_files(&args(&["gcc", "-c", "u.c"]), &env), None);
     assert_eq!(cc_args_with_response_files(&args(&["clang-cl", "@args.rsp"]), &env), None);
-    for unsafe_file in ["@nested.rsp", "@empty.rsp", "@missing.rsp"] {
+    for unsafe_file in ["@empty.rsp", "@missing.rsp"] {
         assert_eq!(cc_args_with_response_files(&args(&["gcc", unsafe_file]), &env), None, "{unsafe_file}");
     }
 
@@ -10834,7 +10834,44 @@ fn response_files_expand_for_gnu_drivers_only_and_refuse_when_unsafe() {
     assert!(parsed.refuse_reasons(&[]).is_empty(), "{:?}", parsed.refuse_reasons(&[]));
     assert_eq!(parsed.rest, args(&["-DV=1", "-c", "u.c", "-o", "u.o"]));
     let nested = compiler.parse(&args(&["gcc", "-c", "@nested.rsp"])).unwrap();
-    assert!(format!("{:?}", nested.refuse_reasons(&[])).contains("response file"));
+    assert!(nested.refuse_reasons(&[]).is_empty());
+    assert_eq!(nested.response_file_digests.len(), 2);
+}
+
+#[test]
+fn nested_response_files_use_cwd_and_key_every_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir(root.join("sub")).unwrap();
+    fs::write(root.join("sub/outer.rsp"), "@inner.rsp -c u.c -o u.o\n").unwrap();
+    fs::write(root.join("sub/inner.rsp"), "-DV=99\n").unwrap();
+    fs::write(root.join("inner.rsp"), "@leaf.rsp -DV=1\n").unwrap();
+    fs::write(root.join("leaf.rsp"), "-O2\n").unwrap();
+    let env = InvocationEnv::from_parts([("PATH", "")], Some(root.to_path_buf()), None, root.to_path_buf());
+    let compiler = CcCompiler::for_invocation(Vec::new(), &env);
+    let parse = || compiler.parse(&s(&["gcc", "@sub/outer.rsp"])).unwrap();
+    let first = parse();
+    assert!(first.refuse_reasons(&[]).is_empty());
+    assert_eq!(first.rest, s(&["-O2", "-DV=1", "-c", "u.c", "-o", "u.o"]));
+    assert_eq!(first.response_file_digests.len(), 3);
+    let key = cc_raw_flags_for_key(&first, &[]);
+    fs::write(root.join("leaf.rsp"), "  -O2\n").unwrap();
+    let whitespace = parse();
+    assert_eq!(first.rest, whitespace.rest);
+    assert_ne!(key, cc_raw_flags_for_key(&whitespace, &[]));
+    fs::write(root.join("inner.rsp"), "-DV=2\n").unwrap();
+    assert_ne!(key, cc_raw_flags_for_key(&parse(), &[]));
+    fs::write(root.join("inner.rsp"), " \n").unwrap();
+    assert!(parse().refuse_reasons(&[]).is_empty());
+    fs::write(root.join("inner.rsp"), "-O2 -O2\n").unwrap();
+    fs::write(root.join("sub/outer.rsp"), "@inner.rsp @inner.rsp -c u.c -o u.o\n").unwrap();
+    assert_eq!(parse().response_file_digests.len(), 3);
+    for bad in ["@inner.rsp", "@missing.rsp", "--rsp-quoting=windows", "--config=x.cfg", "\"\"", "a\r\nb", "x\0y"] {
+        fs::write(root.join("inner.rsp"), bad).unwrap();
+        assert!(!parse().refuse_reasons(&[]).is_empty(), "{bad:?}");
+    }
+    fs::write(root.join("inner.rsp"), " ".repeat(1_048_577)).unwrap();
+    assert!(!parse().refuse_reasons(&[]).is_empty());
 }
 
 #[cfg(unix)]

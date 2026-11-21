@@ -1,4 +1,4 @@
-summary = "a response file naming another is refused (GCC and Clang resolve the inner path differently) and runs exactly as raw"
+summary = "nested GNU response files expand from cwd and restore cached objects after deleting outputs"
 cohort = "blocking"
 profiles = ["transparent", "reproducible"]
 outputs = ["u.o"]
@@ -13,6 +13,16 @@ name = "populate"
 reuse = "miss"
 
 [[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
 name = "edit-inner"
 reuse = "miss"
 action = [{ op = "write", path = "inner.rsp", content = "-DNESTED=7\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-edit"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

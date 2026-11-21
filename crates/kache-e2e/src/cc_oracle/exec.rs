@@ -1,6 +1,7 @@
 //! Runs one arm of a case through its steps and records what it observed.
 
 use anyhow::{Context, Result, bail};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
@@ -426,6 +427,22 @@ pub fn split_response_file(body: &str) -> Vec<String> {
     }
 }
 
+fn snapshot_response_files(args: &[String], fixture: &Path) -> BTreeMap<String, Vec<String>> {
+    let mut files = BTreeMap::new();
+    let mut pending = args.to_vec();
+    while let Some(arg) = pending.pop() {
+        if files.contains_key(&arg) || files.len() >= 4096 {
+            continue;
+        }
+        let Some(path) = arg.strip_prefix('@') else { continue };
+        let Ok(body) = std::fs::read_to_string(fixture.join(path)) else { continue };
+        let tokens = split_response_file(&body);
+        pending.extend(tokens.iter().cloned());
+        files.insert(arg, tokens);
+    }
+    files
+}
+
 /// ccache's configuration file syntax: one `key = value` per line.
 fn ccache_config_text(settings: &std::collections::BTreeMap<String, String>) -> String {
     settings.iter().map(|(key, value)| format!("{key} = {value}\n")).collect()
@@ -681,14 +698,7 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                 }
             }
 
-            let response_files = args
-                .iter()
-                .filter_map(|arg| {
-                    let path = arg.strip_prefix('@')?;
-                    let body = std::fs::read_to_string(ctx.fixture.join(path)).ok()?;
-                    Some((arg.clone(), split_response_file(&body)))
-                })
-                .collect();
+            let response_files = snapshot_response_files(&args, ctx.fixture);
             step_obs.push(Observation {
                 response_files,
                 status: output.status.code(),
@@ -1048,6 +1058,21 @@ mod tests {
             ["-DMSG=\"hello world\"", "-Iinc dir", "a b", "", "-c"]
         );
         assert!(split_response_file(" \n").is_empty());
+    }
+
+    #[test]
+    fn response_file_snapshots_follow_nested_cwd_paths_and_stop_cycles() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/outer.rsp"), "@inner.rsp").unwrap();
+        std::fs::write(dir.path().join("inner.rsp"), "-DV=1").unwrap();
+        let args = vec!["@sub/outer.rsp".to_string()];
+        let files = snapshot_response_files(&args, dir.path());
+        assert_eq!(files["@inner.rsp"], ["-DV=1"]);
+        std::fs::write(dir.path().join("inner.rsp"), "@sub/outer.rsp").unwrap();
+        assert_eq!(snapshot_response_files(&args, dir.path()).len(), 2);
+        assert!(snapshot_response_files(&["@missing".into()], dir.path()).is_empty());
+        assert!(snapshot_response_files(&[], dir.path()).is_empty());
     }
 
     #[test]

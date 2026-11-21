@@ -243,6 +243,7 @@ pub struct CcArgs {
     pub program: String,
     /// argv[1..] verbatim — preserved for passthrough / re-execution.
     pub rest: Vec<String>,
+    pub(crate) response_file_digests: Vec<String>,
 
     /// Source files (`.c`, `.cpp`, `.cc`, `.cxx`, `.m`, `.mm`).
     /// May be empty for link-only invocations or pure flag probes.
@@ -794,6 +795,7 @@ impl CcArgs {
             invocation_env: env.clone(),
             program: program.clone(),
             rest: rest.to_vec(),
+            response_file_digests: Vec::new(),
             sources: Vec::new(),
             output: None,
             mode: CompileMode::Link, // default: compile + link
@@ -5163,6 +5165,9 @@ fn cc_supported_mllvm_value(value: &str) -> bool {
 fn cc_raw_flags_for_key(parsed: &CcArgs, prefix_maps: &[CcPrefixMap]) -> Vec<Vec<u8>> {
     let dialect = parsed.family.dialect();
     let mut flags = Vec::new();
+    if !parsed.response_file_digests.is_empty() {
+        flags.push(format!("response-files.v1={:?}", parsed.response_file_digests).into_bytes());
+    }
     if parsed.records_switches() {
         flags.push(format!("recorded.argv.v1={:?}", (&parsed.program, &parsed.rest, parsed.invocation_env.cwd(), file_prefix_map_args(prefix_maps))).into_bytes());
     }
@@ -9190,7 +9195,10 @@ impl Compiler for CcCompiler {
 
     fn parse(&self, args: &[String]) -> Result<CcArgs> {
         let expanded = cc_args_with_response_files(args, &self.invocation_env);
-        let mut parsed = CcArgs::parse_for(expanded.as_deref().unwrap_or(args), &self.invocation_env)?;
+        let mut parsed = CcArgs::parse_for(expanded.as_ref().map(|value| value.0.as_slice()).unwrap_or(args), &self.invocation_env)?;
+        if let Some((_, digests)) = expanded {
+            parsed.response_file_digests = digests;
+        }
         parsed.depinfo_roots =
             crate::path_normalizer::PathNormalizer::from_invocation(None, &self.invocation_env)
                 .with_base_dirs(&self.base_dirs)
@@ -10310,44 +10318,56 @@ fn stage_cc_stdout_artifact(
 /// separates arguments, a backslash takes the next character literally, and
 /// single or double quotes group text. Where they differ the file is refused:
 /// an empty quoted argument (GCC keeps it, Clang drops it), a backslash
-/// before a line break or at the end, carriage returns, and a nested `@file`
-/// (whose path base differs between them). A missing or non-UTF-8 file is
-/// refused too.
+/// before a line break or at the end, and carriage returns. Both drivers
+/// resolve nested `@file` paths from cwd in GNU mode, not the containing file.
+/// Clang config/quoting overrides, cycles, excessive expansion, and missing
+/// or non-UTF-8 files are refused.
 fn expand_cc_response_files(args: &[String], env: &InvocationEnv) -> Result<Vec<String>> {
-    let mut expanded = Vec::new();
-    for arg in args {
-        let Some(path) = arg.strip_prefix('@').filter(|path| !path.is_empty()) else {
-            expanded.push(arg.clone());
-            continue;
-        };
-        let body = fs::read_to_string(
-            env.resolve(Path::new(path))
-                .context("resolving cc response file")?,
-        )
-        .with_context(|| format!("reading cc response file {path}"))?;
-        let tokens = gnu_response_file_arguments(&body)
-            .with_context(|| format!("cc response file {path}"))?;
-        anyhow::ensure!(
-            !tokens.iter().any(|token| token.starts_with('@')),
-            "cc response file {path} names another response file"
-        );
-        expanded.extend(tokens);
+    expand_cc_response_files_tracked(args, env).map(|value| value.0)
+}
+
+fn expand_cc_response_files_tracked(args: &[String], env: &InvocationEnv) -> Result<(Vec<String>, Vec<String>)> {
+    fn visit(args: &[String], env: &InvocationEnv, active: &mut Vec<PathBuf>, expanded: &mut Vec<String>, digests: &mut Vec<String>, bytes: &mut usize) -> Result<()> {
+        for arg in args {
+            anyhow::ensure!(expanded.len() < 16_384, "cc response argument limit");
+            anyhow::ensure!(!arg.starts_with("--rsp-quoting") && !arg.starts_with("--config"), "cc response config/quoting override — not yet");
+            let Some(path) = arg.strip_prefix('@').filter(|path| !path.is_empty()) else {
+                expanded.push(arg.clone());
+                continue;
+            };
+            anyhow::ensure!(active.len() < 32 && digests.len() < 4096, "cc response nesting/file limit");
+            let path = env.resolve(Path::new(path)).context("resolving cc response file")?;
+            let canonical = fs::canonicalize(&path).context("resolving cc response identity")?;
+            anyhow::ensure!(!active.contains(&canonical), "cc response file cycle");
+            anyhow::ensure!(fs::metadata(&path)?.len() <= 1_048_576, "cc response file size limit");
+            let body = fs::read_to_string(&path).with_context(|| format!("reading cc response file {}", path.display()))?;
+            *bytes = bytes.saturating_add(body.len());
+            anyhow::ensure!(*bytes <= 1_048_576 && !body.contains('\0'), "cc response byte limit or NUL");
+            let tokens = gnu_response_file_arguments(&body)?;
+            digests.push(blake3::hash(body.as_bytes()).to_hex().to_string());
+            active.push(canonical);
+            visit(&tokens, env, active, expanded, digests, bytes)?;
+            active.pop();
+        }
+        Ok(())
     }
-    Ok(expanded)
+    let (mut expanded, mut digests) = (Vec::new(), Vec::new());
+    visit(args, env, &mut Vec::new(), &mut expanded, &mut digests, &mut 0)?;
+    Ok((expanded, digests))
 }
 
 /// `args` with its response files expanded, when it has any and they can be
 /// expanded safely. GNU drivers only: clang-cl splits them the Windows way.
 /// `None` leaves the `@file` arguments in place, and they refuse.
-fn cc_args_with_response_files(args: &[String], env: &InvocationEnv) -> Option<Vec<String>> {
+fn cc_args_with_response_files(args: &[String], env: &InvocationEnv) -> Option<(Vec<String>, Vec<String>)> {
     let (program, rest) = args.split_first()?;
     if !rest.iter().any(|arg| arg.len() > 1 && arg.starts_with('@'))
         || ToolFamily::detect(program, rest).dialect() != Dialect::Gnu
     {
         return None;
     }
-    match expand_cc_response_files(rest, env) {
-        Ok(expanded) => Some(std::iter::once(program.clone()).chain(expanded).collect()),
+    match expand_cc_response_files_tracked(rest, env) {
+        Ok((expanded, digests)) => Some((std::iter::once(program.clone()).chain(expanded).collect(), digests)),
         Err(error) => {
             log::debug!("cc response file not expanded: {error:#}");
             None

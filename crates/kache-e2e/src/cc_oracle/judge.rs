@@ -233,9 +233,21 @@ fn kache_verdict(row: &Row<'_>, ccache: Verdict) -> (Verdict, Vec<String>) {
 
 /// `args` with each `@file` replaced by the arguments it held.
 pub fn expand_response_files(args: &[String], files: &BTreeMap<String, Vec<String>>) -> Vec<String> {
-    args.iter()
-        .flat_map(|arg| files.get(arg).cloned().unwrap_or_else(|| vec![arg.clone()]))
-        .collect()
+    let mut expanded = args.to_vec();
+    for _ in 0..32 {
+        let next: Vec<_> = expanded.iter()
+            .flat_map(|arg| files.get(arg).cloned().unwrap_or_else(|| vec![arg.clone()]))
+            .take(16_385)
+            .collect();
+        if next.len() > 16_384 {
+            return args.to_vec();
+        }
+        if next == expanded {
+            return next;
+        }
+        expanded = next;
+    }
+    args.to_vec()
 }
 
 fn is_hit_result(result: &str) -> bool {
@@ -598,12 +610,19 @@ mod tests {
             .verdict
         };
         assert_eq!(verdict(&kache), Verdict::Match);
+        kache.response_files.insert("@args.rsp".into(), vec!["@inner.rsp".into()]);
+        kache.response_files.insert("@inner.rsp".into(), argv());
+        assert_eq!(verdict(&kache), Verdict::Match);
+        kache.response_files.insert("@inner.rsp".into(), vec!["-c".into(), "other.c".into()]);
+        assert_eq!(verdict(&kache), Verdict::HarnessError);
         kache.response_files.insert("@args.rsp".into(), vec!["-c".into(), "other.c".into()]);
         assert_eq!(verdict(&kache), Verdict::HarnessError);
         assert_eq!(
             expand_response_files(&["-O2".into(), "@x".into()], &BTreeMap::from([("@x".to_string(), vec!["-c".to_string(), "a.c".to_string()])])),
             ["-O2", "-c", "a.c"]
         );
+        assert!(expand_response_files(&[], &BTreeMap::new()).is_empty());
+        assert_eq!(expand_response_files(&["@x".into()], &BTreeMap::from([("@x".into(), vec!["@x".into()])])), ["@x"]);
     }
 
     #[test]
