@@ -128,6 +128,8 @@ mod tests {
         let mut l = InodeLedger::new();
         assert!(l.admit(&f(1, 1, 10)));
         assert!(l.admit(&f(2, 1, 10)));
+        assert!(l.admit(&f(2, 1, 10)), "a single-link inode is never remembered");
+        assert_eq!(l.distinct_inodes(), 0, "single-link files stay out of the ledger");
         assert_eq!(l.pinned_outside(), PinnedOutside::default());
     }
 
