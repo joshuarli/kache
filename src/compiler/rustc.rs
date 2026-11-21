@@ -240,7 +240,6 @@ impl RustcCompiler {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn execute_with_args(
         &self,
         parsed: &RustcArgs,
