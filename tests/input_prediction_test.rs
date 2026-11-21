@@ -2006,7 +2006,7 @@ impl EmptyOutDirMacro {
 #[cfg(unix)]
 fn predicts_on_the_shared_out_dir(with_macro: bool) {
     // As root nothing is aliased: the mode bits would not stop root's writes.
-    if unsafe { libc::geteuid() } == 0 {
+    if common::running_as_root() {
         eprintln!("skipping the shared OUT_DIR test as root");
         return;
     }

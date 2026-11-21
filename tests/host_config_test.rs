@@ -5,7 +5,6 @@
 //! test process's environment, and a test opts back in by naming a host file
 //! on its own command.
 
-#[allow(dead_code)]
 mod common;
 
 use common::{hermetic_command, kache_binary};

@@ -253,22 +253,10 @@ gitignore = true
 exclude_globs = [
     "crates/kache-fs/src/apfs.rs",
     "src/fallback/macos.rs",
-    "crates/kache-client/src/stdio_windows.rs",
-    "crates/kache-client/src/frontend_windows.rs",
-    "crates/kache-ipc/src/windows_handles.rs",
-    "crates/kache-ipc/src/windows_process.rs",
-    "crates/kache-ipc/src/windows_msvc.rs",
-    "crates/kache-ipc/src/execution/windows.rs",
-    "crates/kache-ipc/src/execution/windows_client.rs",
-    "src/invocation/windows_broker.rs",
     # Native adapters absent from the Ubuntu mutation binary. Required macOS
     # and Windows test jobs exercise them; shared broker logic stays in scope.
     "src/invocation/unix_broker/macos.rs",
-    "crates/kache-ipc/src/execution/workspace/windows.rs",
-    "src/invocation/process/windows.rs",
-    "src/daemon_execution_windows.rs",
     "src/daemon_execution_macos.rs",
-    "tests/windows_execution_test.rs",
 ]
 # `notice::show`, `notice::show_requested` and `notice::terminal` open the
 # controlling terminal, and the lane has none: `terminal` already returns
@@ -278,9 +266,6 @@ exclude_globs = [
 # `notice::deliver`, which picks terminal, stderr or log, stays in scope and
 # is tested with in-memory writers, refused writes and no terminal.
 exclude_re = [
-    # Only this thin syscall adapter is Windows-only; the delegation policy
-    # is compiled and mutation-tested on Linux.
-    "crates/kache-ipc/src/windows_security.rs:.*matches_daemon",
     # Both wrappers are cfg(target_os = "macos"); Linux cannot observe them.
     "src/invocation/unix_broker.rs:.*can_track_client",
     "src/fallback.rs:.*compiler_peer_may_delegate",
@@ -295,8 +280,6 @@ exclude_re = [
     # an exact Instant equality. The EOF/exit test covers an alive child
     # both before and beyond the deadline, including the true/== mutants.
     "src/probe/mod.rs:.*replace < with <= in run_family_probe_for",
-    # Cargo metadata uses the same deadline comparison after stdout closes.
-    "src/build_intent.rs:.*replace < with <= in run_bounded",
     # This replacement names the inactive non-Unix terminal stub on Linux.
     # Keep the real Unix terminal opener and its viable mutations in scope.
     "src/invocation/io.rs:.*replace process_terminal -> Option<File> with Some\\(Default::default\\(\\)\\)",
@@ -324,17 +307,11 @@ exclude_re = [
     # lane never compiles them. Native Windows tests exercise busy/connected
     # deadlines, delivery, framing, reply identity and negotiation refusal.
     # The Unix sender and shared bounded-worker/protocol policy stay in scope.
-    "src/daemon.rs:.*(send_request_with_async_timeout|with_windows_client|send_line_fire_and_forget_windows)( ->|$)",
-    "src/daemon_control.rs:.*(request_windows|classify_connect_error|legacy_exchange_windows)( ->|$)",
     "crates/kache-ipc/src/lib.rs:.*(pipe_path|discard_pipe_writes_on_drop::<impl Drop for Discard<'_>>::drop|discard_sync_pipe_writes_on_drop::<impl Drop for Discard<'_>>::drop)( ->| with |$)",
     # Only the Windows arm has these operators or guarded retries. Keep the
     # connect_tokio body replacement and its Unix transport mutation-tested.
-    "crates/kache-ipc/src/lib.rs:.*replace (\\+|==|&&|<|>=) with .* in connect_tokio$",
-    "crates/kache-ipc/src/lib.rs:.*replace match guard .* in connect_tokio$",
-    "src/fallback.rs:.*compiler_peer_unrestricted",
     "src/compiler/platform.rs:.*MacOsPlatform::codesign",
     "src/compiler/platform.rs:.*replace <impl Platform for MacOsPlatform>::ensure_binary_loadable -> .* with Ok\\(Default::default\\(\\)\\)",
-    "crates/kache-ipc/src/execution.rs:.*windows_tests::",
     "crates/kache-protocol/src/execution.rs:.*delete match arm Self::Windows",
     # interprocess 2.4.4's Unix socket flush is already Ok(()). Socket writes
     # are unbuffered; the Windows pipe flush stays in its native test job.
@@ -352,21 +329,8 @@ exclude_re = [
     # bound with `<`; `<` versus `<=` differs only when the elapsed time equals
     # the bound to the nanosecond, which no test can arrange. Both sides of
     # each bound are tested.
-    "replace < with <= in (session_lock|advertised_login)",
     "crates/kache-fs/src/copy.rs:.*(native_reflink_macos|native_reflink_windows|native_reflink_unsupported|windows_cluster_size)",
-    "crates/kache-fs/src/identity.rs:.*windows_metadata_identity",
-    "crates/kache-fs/src/identity.rs:.*windows_handle_identity",
-    "crates/kache-fs/src/identity.rs:.*replace \\| with \\^ in windows_identity",
     "crates/kache-fs/src/lib.rs:.*testutil::",
-    "replace run_config_editor",
-    "replace run_monitor",
-    # `run_monitor` keeps one check of its own: refusing to start when stdout
-    # is not a terminal. A test cannot flip that without either seizing the
-    # developer's terminal or running under a pseudo-terminal the lane does
-    # not have; the loop body it guards is exercised through the extracted
-    # `ingest_tailed_records`, `stats_fetch_due`, `project_scan_due`, and
-    # `handle_terminal_event`, which stay in scope.
-    "delete ! in run_monitor",
     # `scheduler/pressure.rs` asks the OS whether memory is short: each
     # `under_pressure` is compiled for one platform and reads live kernel
     # state (a sysctl on macOS, `/proc` on Linux) that no test can set, so a
@@ -392,13 +356,10 @@ exclude_re = [
     "delete match arm \\(Some\\(spelled_root\\), Some\\(root\\)\\) in fold_native_link_inputs",
     "probe_unsupported",
     "from struct AttrList",
-    "regular_output_is_independent_windows",
-    "regular_output_is_independent_unsupported",
     "kani_proofs::",
     "replace > with (>=|<|==) in run_gc_local",
     "replace > with (>=|<|==) in Daemon::run_gc",
     "replace \\+ with . in Daemon::run_gc",
-    "replace < with <= in join_inflight_download",
     # `capture_rustc_stderr` reads until end of file, and that comparison is
     # the loop's only exit. Inverted, the reader spins on the zero-length read
     # that means EOF, so the lane reports a timeout: there is no test that can
@@ -416,40 +377,15 @@ exclude_re = [
     # The Windows-only store wrapper stays excluded. The shared kache-fs
     # sampler is compiled on Linux and remains in mutation scope.
     "crates/kache-store/src/link.rs:.*sample_write_clock",
-    "NonInheritableStdio",
     "windows_pattern_has_ambiguous_root",
     "windows_path_uses_device_namespace",
-    "windows_kache_processes",
-    # `windows_system_time_ns` is `#[cfg(windows)]`: this lane never compiles it.
-    # Its conversion, `filetime_to_unix_ns`, is `#[cfg(any(windows, test))]`
-    # and stays in scope here; the Windows lane runs the stamp-clock test.
-    "windows_system_time_ns",
-    "replace && with \\|\\| in find_daemon_pids",
-    "replace != with == in find_daemon_pids",
-    "query_windows_file_identity",
-    # The Windows half of `fsync_published_blob`: a published blob is
-    # read-only and Windows needs write access to flush a handle, so the
-    # attribute comes off and goes back on around the flush. That block is
-    # `#[cfg(windows)]`, never compiled in this Linux lane, so a mutant
-    # inside it changes nothing that runs here.
-    "delete ! in fsync_published_blob",
-    # The Windows sender of a cc hand-off is `#[cfg(windows)]` and never built
-    # here. The Unix sender next to it stays in scope and is tested against a
-    # stalled daemon, a complete reply and an early close.
-    "send_handoff_windows",
-    "observe_storage_windows",
-    "observe_storage_unsupported",
     # sysctl hw.memsize: compiled only on macOS, where Test (macOS) runs
     # the_machines_memory_is_read against it.
     "macos_memsize",
-    "run_cargo_non_unix",
     "replace report_key_divergence with \\(\\)",
     "delete ! in install_shims",
     "replace Config::socket_path .* with Default::default",
     "replace try_collect_slots .* with Ok\\(None\\)",
-    "src/remote_pack.rs:351:20: replace > with (>=|==) in encode_catalog",
-    "src/remote_pack.rs:309:20: replace < with <= in decode_pack",
-    "src/remote_pack.rs:324:22: replace > with >= in decode_pack",
     "replace run_bench .* with Ok",
     "replace run_pull_bench .* with Ok",
     "replace run_sccache_bench .* with Ok",
@@ -464,14 +400,7 @@ exclude_re = [
     # stays in scope, and the runner's integration tests kill its mutants.
     "replace run_cold_phase .* with Ok",
     "replace run_mbx_cold_phase .* with Ok",
-    "src/cache_fs.rs:.*replace probe_windows",
     "src/cache_fs.rs:.*replace statfs_total_bytes_macos",
-    "src/cache_fs.rs:.*replace volume_total_bytes_windows",
-    # Only the Windows body performs discovery. The non-Windows body is the
-    # constant Ok(()) stub. Snapshot/path/probe validation stays in scope.
-    "src/native_link_key.rs:.*WindowsProbeEnvironment::augment_from_installed_msvc",
-    "SqlitePlannerRepository>::identity_candidates .* with Ok\\(vec!\\[\\]\\)",
-    "crates/kache-store/src/link.rs:.*replace warn_no_cow_restore_once with \\(\\)",
     # Build-script execution cache. The non-Unix `install` is a stub that
     # refuses (`run_cargo_non_unix` shape: the ubuntu lane compiles only the
     # Unix body, whose launcher tests stay in scope). `pin_kache` copies the
@@ -528,15 +457,10 @@ exclude_re = [
     # FIFO tests check the flags themselves. The pre-open check that stands
     # in for them elsewhere is `#[cfg(not(unix))]`, never built in this lane.
     "crates/kache-store/src/filesystem.rs:\\d+:\\d+: replace \\| with \\^$",
-    "special_tag_without_open_flags",
     # `init`'s target-recovery offer reads this process's environment and
     # stdin and prints; its decision (`recovery_offer`), settings
     # (`RecoverySettings::of`) and write (`save_target_recovery`) are pure or
     # take a path, and are tested directly.
     "replace offer_target_recovery -> Result<\\(\\)> with Ok\\(\\(\\)\\)",
-    " in offer_target_recovery$",
-    # Windows startup releases its inherited cwd; native compiler acceptance
-    # checks directory removal while the daemon stays alive.
-    "release_daemon_working_directory",
 
 ]

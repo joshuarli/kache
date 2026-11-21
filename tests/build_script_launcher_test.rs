@@ -6,7 +6,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-#[allow(dead_code)]
 mod common;
 use common::{hermetic_command, stop_daemon};
 

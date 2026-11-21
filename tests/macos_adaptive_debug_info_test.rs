@@ -10,7 +10,6 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 
-#[allow(dead_code)]
 mod common;
 use common::{hermetic_command, kache_binary, settle_writes, stop_daemon};
 

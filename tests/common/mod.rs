@@ -17,6 +17,9 @@
 //! already gitignored, and concurrent suites reuse the same build instead of
 //! each doing their own (cargo's build-dir lock serializes them).
 
+// Every test binary compiles its own copy of this module and uses a subset of it.
+#![allow(dead_code)]
+
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -41,7 +44,6 @@ fn bootstrap_target_dir() -> PathBuf {
         .join("kache-test-bootstrap")
 }
 
-#[allow(dead_code)]
 /// Files and `.dSYM` bundles Cargo wrote for units in `profile`
 /// (`<target>/debug`): legacy `deps` and `examples`, each per-unit `out`,
 /// and bundles sitting next to an uplifted binary.
@@ -73,19 +75,11 @@ pub fn profile_artifacts(profile: &Path) -> Vec<PathBuf> {
     artifacts
 }
 
-#[allow(dead_code)]
 fn is_cargo_unit_hash(hash: &str) -> bool {
     hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-/// Whether `profile` holds Cargo fingerprints in either layout.
-#[allow(dead_code)]
-pub fn profile_has_fingerprints(profile: &Path) -> bool {
-    !fingerprint_dirs(profile).is_empty()
-}
-
 /// Drop `package`'s fingerprints so the next build cannot be Fresh.
-#[allow(dead_code)]
 pub fn clear_package_fingerprints(profile: &Path, package: &str) {
     let legacy = profile.join(".fingerprint");
     if let Ok(entries) = std::fs::read_dir(&legacy) {
@@ -108,56 +102,8 @@ pub fn clear_package_fingerprints(profile: &Path, package: &str) {
     }
 }
 
-/// Every file inside a fingerprint directory under `profile`.
-#[allow(dead_code)]
-pub fn fingerprint_files(profile: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for dir in fingerprint_dirs(profile) {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            if entry.path().is_file() {
-                files.push(entry.path());
-            }
-        }
-    }
-    files
-}
-
-#[allow(dead_code)]
-fn fingerprint_dirs(profile: &Path) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(profile.join(".fingerprint")) {
-        for entry in entries.flatten() {
-            if entry.path().is_dir() {
-                dirs.push(entry.path());
-            }
-        }
-    }
-    let Ok(packages) = std::fs::read_dir(profile.join("build")) else {
-        return dirs;
-    };
-    for package in packages.flatten() {
-        if !package.path().is_dir() {
-            continue;
-        }
-        let Ok(units) = std::fs::read_dir(package.path()) else {
-            continue;
-        };
-        for unit in units.flatten() {
-            let fingerprint = unit.path().join("fingerprint");
-            if fingerprint.is_dir() {
-                dirs.push(fingerprint);
-            }
-        }
-    }
-    dirs
-}
-
 /// Every unit `out` directory under `profile`, legacy `<pkg>-<hash>/out` and
 /// per-unit `<pkg>/<hash>/out`.
-#[allow(dead_code)]
 pub fn unit_out_dirs(profile: &Path) -> Vec<PathBuf> {
     let mut outs = Vec::new();
     let Ok(entries) = std::fs::read_dir(profile.join("build")) else {
@@ -187,7 +133,6 @@ pub fn unit_out_dirs(profile: &Path) -> Vec<PathBuf> {
     outs
 }
 
-#[allow(dead_code)]
 fn push_artifacts(dir: &Path, artifacts: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -217,11 +162,9 @@ fn reuse_outer_build() -> bool {
 /// failure — including its stderr, which is where `No space left on device`
 /// shows up.
 static KACHE_BIN: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-#[allow(dead_code)]
 static KACHE_ENGINE_BIN: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 
 /// A TOML basic string, with quotes and backslashes escaped.
-#[allow(dead_code)]
 pub fn toml_basic(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
@@ -255,7 +198,6 @@ pub fn kache_binary() -> PathBuf {
     }
 }
 
-#[allow(dead_code)]
 pub fn kache_engine_binary() -> PathBuf {
     match KACHE_ENGINE_BIN.get_or_init(bootstrap_kache_engine) {
         Ok(path) => path.clone(),
@@ -279,7 +221,6 @@ pub fn resolve_kache_binary_with(explicit: Option<&Path>) -> Result<PathBuf, Str
     bootstrap_kache_build()
 }
 
-#[allow(dead_code)]
 pub fn resolve_kache_engine_binary_with(kache: &Path, explicit: bool) -> Result<PathBuf, String> {
     let engine = kache.with_file_name(format!("kache-engine{}", std::env::consts::EXE_SUFFIX));
     if engine.is_file() {
@@ -298,7 +239,6 @@ fn bootstrap_kache() -> Result<PathBuf, String> {
     resolve_kache_binary_with(std::env::var_os("KACHE_TEST_BINARY").as_deref().map(Path::new))
 }
 
-#[allow(dead_code)]
 fn bootstrap_kache_engine() -> Result<PathBuf, String> {
     resolve_kache_engine_binary_with(
         &kache_binary(),
@@ -349,7 +289,6 @@ fn bootstrap_kache_build() -> Result<PathBuf, String> {
 /// missing, and includes each file it finds, as `sqlx::migrate!` and
 /// `include_dir!` do. rustc reports the files it included, never the
 /// directory it listed.
-#[allow(dead_code)]
 pub const SCAN_MACRO: &str = r#"extern crate proc_macro;
 #[proc_macro]
 pub fn scan(_input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -394,7 +333,6 @@ pub fn isolated_config_path(cache_dir: &Path) -> PathBuf {
 /// the returned command.
 ///
 /// Not every test binary spawns children, so the rest see it as dead.
-#[allow(dead_code)]
 pub fn hermetic_command(
     program: impl AsRef<OsStr>,
     cache_dir: &Path,
@@ -446,7 +384,6 @@ pub fn hermetic_command(
 ///
 /// Only the tests that materialize artifacts need this, and each integration
 /// test binary compiles this module separately, so the rest see it as dead.
-#[allow(dead_code)]
 pub fn scratch_dir() -> PathBuf {
     let dir = match std::env::var_os("KACHE_TEST_SCRATCH_DIR") {
         Some(dir) => PathBuf::from(dir),
@@ -466,7 +403,6 @@ pub fn scratch_dir() -> PathBuf {
 /// of a second, which this always waits, and about two seconds for a
 /// whole-second stamp found under `dirs`. A stamp in the future cannot be
 /// waited out and is left to the test.
-#[allow(dead_code)]
 pub fn settle_writes(dirs: &[&Path]) {
     use kache_store::file_hash::{
         FINE_STAMP_WINDOW_NS, metadata_ctime_ns, metadata_mtime_ns, stamp_clock_ns,
@@ -530,7 +466,6 @@ fn daemon_run_lock_is_held(lock_path: &Path) -> bool {
 }
 
 /// Waits until no daemon holds the run lock under `runtime_dir`.
-#[allow(dead_code)]
 pub fn wait_for_daemon_exit(runtime_dir: &Path, timeout: Duration) -> Result<(), String> {
     wait_for_daemon_lock_release(&daemon_run_lock_path(runtime_dir), timeout)
 }
@@ -551,13 +486,11 @@ fn wait_for_daemon_lock_release(lock_path: &Path, timeout: Duration) -> Result<(
 
 /// Stops a fixture's daemon before its runtime directory is removed.
 /// Declare after the TempDir, or before it in a fixture's field list.
-#[allow(dead_code)]
 pub struct DaemonGuard {
     program: PathBuf,
     runtime: PathBuf,
 }
 
-#[allow(dead_code)]
 impl DaemonGuard {
     pub fn new(program: impl AsRef<Path>, runtime: impl AsRef<Path>) -> Self {
         Self {
@@ -593,7 +526,6 @@ impl Drop for DaemonGuard {
 /// Cleanup must never be what wedges or fails a test run: the stop runs with
 /// null stdio (no pipe for a daemon to hold open) and a deadline, and every
 /// failure is ignored.
-#[allow(dead_code)]
 pub fn stop_daemon(stop: &mut Command, runtime_dir: &Path) {
     let socket = stop.get_envs().find_map(|(name, value)| {
         (name == "KACHE_SOCKET_PATH")
@@ -643,4 +575,12 @@ pub fn stop_daemon(stop: &mut Command, runtime_dir: &Path) {
     // On Windows the daemon can keep handles into the runtime dir during
     // teardown; wait for it before the fixture removes that directory.
     let _ = wait_for_daemon_lock_release(&lock_path, Duration::from_secs(45));
+}
+
+/// Whether this process runs as root, for tests whose mode-bit setup root's
+/// writes would bypass.
+#[cfg(unix)]
+pub fn running_as_root() -> bool {
+    // SAFETY: `geteuid` takes no arguments, touches no memory and cannot fail.
+    unsafe { libc::geteuid() == 0 }
 }

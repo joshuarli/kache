@@ -2,7 +2,6 @@
 
 use std::fs;
 
-#[allow(dead_code)]
 mod common;
 
 #[test]

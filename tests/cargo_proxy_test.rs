@@ -5,7 +5,6 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::process::Command;
 
-#[allow(dead_code)]
 mod common;
 use common::hermetic_command;
 

@@ -131,7 +131,7 @@ The action can persist the local store through GitHub's cache service.
 
 [Report a bug](https://github.com/joshuarli/kache/issues/new?template=bug_report.md),
 [request a feature](https://github.com/joshuarli/kache/issues/new?template=feature_request.md),
-or read [CONTRIBUTING.md](.github/CONTRIBUTING.md) to contribute.
+or read [AGENTS.md](AGENTS.md) for the checks a pull request must pass.
 
 Licensed under [Apache 2.0](LICENSE).
 

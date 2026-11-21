@@ -276,7 +276,6 @@ fn run_fixture(target_dir: &Path) -> String {
 }
 
 
-#[allow(clippy::too_many_arguments)]
 fn exercise_uncached_lane(
     project: &Path,
     input: &Path,

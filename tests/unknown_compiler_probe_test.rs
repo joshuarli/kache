@@ -1,7 +1,6 @@
 #![cfg(unix)]
 
 use std::fs;
-#[allow(dead_code)]
 mod common;
 use std::time::{Duration, Instant};
 

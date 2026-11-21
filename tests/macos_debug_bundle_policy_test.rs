@@ -3,7 +3,6 @@
 
 use std::fs;
 
-#[allow(dead_code)]
 mod common;
 use common::{hermetic_command, kache_binary, settle_writes, stop_daemon};
 

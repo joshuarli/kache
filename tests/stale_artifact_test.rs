@@ -403,7 +403,6 @@ fn stale_recovers_from_corrupted_artifact() {
                 if blob.file_type().unwrap().is_file() {
                     // blob files in the store are read-only; make writable before deleting
                     let mut perms = std::fs::metadata(blob.path()).unwrap().permissions();
-                    #[allow(clippy::permissions_set_readonly_false)]
                     perms.set_readonly(false);
                     std::fs::set_permissions(blob.path(), perms).unwrap();
                     std::fs::remove_file(blob.path()).unwrap();

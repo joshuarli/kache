@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[allow(dead_code)]
 mod common;
 use common::{build_kache, hermetic_command, settle_writes};
 

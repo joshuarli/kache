@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
 
-#[allow(dead_code)]
 mod common;
 
 fn frontend_bin() -> PathBuf {

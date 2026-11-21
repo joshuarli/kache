@@ -1,5 +1,5 @@
 Prefix: DSLP
-Next: 95
+Next: 102
 
 Deslop campaign backlog ([plan](https://github.com/laputa-systems/stuff/blob/main/docs/campaigns/deslop.md), tier D). One agent works this file with the `deslop` skill: take the lowest-numbered open ticket whose area does not start with `Needs owner ·`. After DSLP-5, work the open P1 and P2 findings, then fill in `## Report` below.
 
@@ -198,42 +198,6 @@ Not started.
 - **Fix with:** deslop
 - **Effort:** M
 
-### DSLP-29 · P2 · Types: tests adaptive_incremental through diagnostic_width (25/28)
-
-- **Area:** deslop · types
-- **Where:** tests/adaptive_incremental_test.rs, tests/adaptive_incremental_workspace_test.rs, tests/build_script_declared_inputs_test.rs, tests/build_script_inputs_test.rs, tests/build_script_launcher_test.rs, tests/cache_key_underkeying_test.rs, tests/cached_units_regression_test.rs, tests/cargo_fix_test.rs, tests/cargo_proxy_test.rs, tests/cc_family_probe_test.rs, tests/cc_passthrough_args_test.rs, tests/cc_release_regression_test.rs, tests/cli_commands_test.rs, tests/codegen_backend_test.rs, tests/common/mod.rs, tests/config_commands_test.rs, tests/custom_harness_test.rs, tests/diagnostic_width_test.rs, tests/engine_bootstrap_test.rs, tests/event_log_contention_test.rs, tests/eviction_evidence_test.rs, tests/extra_inputs_warm_target_test.rs, tests/fixtures/cc_release_regressions.sh, tests/fixtures/mock_cc_constant_output.sh, tests/fixtures/mock_cc_diagnostics.sh, tests/fixtures/mock_cc_lc_all.sh, tests/fixtures/mock_cc_static.sh, tests/fixtures/proc-attr-unavailable.c, tests/host_config_test.rs, tests/incremental_passthrough_test.rs, tests/input_prediction_test.rs
-- **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope contains approximately 17362 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-30 · P2 · Types: tests integration through worktree_depinfo (26/28)
-
-- **Area:** deslop · types
-- **Where:** tests/integration_test.rs, tests/launcher_personality_test.rs, tests/macos_adaptive_debug_info_test.rs, tests/macos_debug_bundle_policy_test.rs, tests/macos_local_network_metadata_test.rs, tests/macos_native_install_name_test.rs, tests/metadata_streaming_test.rs, tests/msvc_passthrough_test.rs, tests/out_dir_alias_test.rs, tests/owned_help_test.rs, tests/proc_macro_env_key_test.rs, tests/stale_artifact_test.rs, tests/unknown_compiler_probe_test.rs, tests/workspace_extra_inputs_test.rs, tests/worktree_depinfo_test.rs
-- **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope contains approximately 7846 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-31 · P2 · Types: src scheduler through wrapper_config, test-projects (27/28)
-
-- **Area:** deslop · types
-- **Where:** src/scheduler.rs, src/service.rs, src/since.rs, src/store_view, src/store_view.rs, src/term.rs, src/test_support.rs, src/toolchain_dylib.rs, src/tree_stamp.rs, src/verify_compare.rs, src/version.rs, src/volume_gc.rs, src/wrapper_config.rs, test-projects
-- **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope contains approximately 8745 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-32 · P2 · Types: build, CI, docs and configuration (28/28)
-
-- **Area:** deslop · types
-- **Where:** build.rs, Cargo.toml, Cargo.lock, .cargo/, .github/, Makefile, Dockerfile, Cross.toml, rust-toolchain.toml, docs/, campaigns/, README.md and C_CPP_PARITY_CAMPAIGN.md
-- **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope includes roughly 9,300 lines of documentation and campaign fixtures, plus build and CI configuration. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
 ### DSLP-33 · P2 · Tests: crates/kache-e2e bench, cc oracle, daemon (2/28)
 
 - **Area:** deslop · tests
@@ -401,42 +365,6 @@ Not started.
 - **Area:** deslop · tests
 - **Where:** src/wrapper.rs
 - **Problem:** Audit boundaries and tiers, then measure coverage and scoped mutation; prove new tests with injected faults. Scope contains approximately 8214 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: critical survivors dispositioned, test cost budget holds, and scoped lane is qualified; run make test and make lint. Missing coverage or mutation tools are Needs environment.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-56 · P2 · Tests: tests adaptive_incremental through diagnostic_width (25/28)
-
-- **Area:** deslop · tests
-- **Where:** tests/adaptive_incremental_test.rs, tests/adaptive_incremental_workspace_test.rs, tests/build_script_declared_inputs_test.rs, tests/build_script_inputs_test.rs, tests/build_script_launcher_test.rs, tests/cache_key_underkeying_test.rs, tests/cached_units_regression_test.rs, tests/cargo_fix_test.rs, tests/cargo_proxy_test.rs, tests/cc_family_probe_test.rs, tests/cc_passthrough_args_test.rs, tests/cc_release_regression_test.rs, tests/cli_commands_test.rs, tests/codegen_backend_test.rs, tests/common/mod.rs, tests/config_commands_test.rs, tests/custom_harness_test.rs, tests/diagnostic_width_test.rs, tests/engine_bootstrap_test.rs, tests/event_log_contention_test.rs, tests/eviction_evidence_test.rs, tests/extra_inputs_warm_target_test.rs, tests/fixtures/cc_release_regressions.sh, tests/fixtures/mock_cc_constant_output.sh, tests/fixtures/mock_cc_diagnostics.sh, tests/fixtures/mock_cc_lc_all.sh, tests/fixtures/mock_cc_static.sh, tests/fixtures/proc-attr-unavailable.c, tests/host_config_test.rs, tests/incremental_passthrough_test.rs, tests/input_prediction_test.rs
-- **Problem:** Audit boundaries and tiers, then measure coverage and scoped mutation; prove new tests with injected faults. Scope contains approximately 17362 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: critical survivors dispositioned, test cost budget holds, and scoped lane is qualified; run make test and make lint. Missing coverage or mutation tools are Needs environment.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-57 · P2 · Tests: tests integration through worktree_depinfo (26/28)
-
-- **Area:** deslop · tests
-- **Where:** tests/integration_test.rs, tests/launcher_personality_test.rs, tests/macos_adaptive_debug_info_test.rs, tests/macos_debug_bundle_policy_test.rs, tests/macos_local_network_metadata_test.rs, tests/macos_native_install_name_test.rs, tests/metadata_streaming_test.rs, tests/msvc_passthrough_test.rs, tests/out_dir_alias_test.rs, tests/owned_help_test.rs, tests/proc_macro_env_key_test.rs, tests/stale_artifact_test.rs, tests/unknown_compiler_probe_test.rs, tests/workspace_extra_inputs_test.rs, tests/worktree_depinfo_test.rs
-- **Problem:** Audit boundaries and tiers, then measure coverage and scoped mutation; prove new tests with injected faults. Scope contains approximately 7846 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: critical survivors dispositioned, test cost budget holds, and scoped lane is qualified; run make test and make lint. Missing coverage or mutation tools are Needs environment.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-58 · P2 · Tests: src scheduler through wrapper_config, test-projects (27/28)
-
-- **Area:** deslop · tests
-- **Where:** src/scheduler.rs, src/service.rs, src/since.rs, src/store_view, src/store_view.rs, src/term.rs, src/test_support.rs, src/toolchain_dylib.rs, src/tree_stamp.rs, src/verify_compare.rs, src/version.rs, src/volume_gc.rs, src/wrapper_config.rs, test-projects
-- **Problem:** Audit boundaries and tiers, then measure coverage and scoped mutation; prove new tests with injected faults. Scope contains approximately 8745 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: critical survivors dispositioned, test cost budget holds, and scoped lane is qualified; run make test and make lint. Missing coverage or mutation tools are Needs environment.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-59 · P2 · Tests: build, CI, docs and configuration (28/28)
-
-- **Area:** deslop · tests
-- **Where:** build.rs, Cargo.toml, Cargo.lock, .cargo/, .github/, Makefile, Dockerfile, Cross.toml, rust-toolchain.toml, docs/, campaigns/, README.md and C_CPP_PARITY_CAMPAIGN.md
-- **Problem:** Audit boundaries and tiers, then measure coverage and scoped mutation; prove new tests with injected faults. Scope includes roughly 9,300 lines of documentation and campaign fixtures, plus build and CI configuration. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
 - **Recommendation:** Accept: critical survivors dispositioned, test cost budget holds, and scoped lane is qualified; run make test and make lint. Missing coverage or mutation tools are Needs environment.
 - **Fix with:** deslop
 - **Effort:** M
@@ -612,42 +540,6 @@ Not started.
 - **Fix with:** deslop
 - **Effort:** M
 
-### DSLP-83 · P2 · Dead code: tests adaptive_incremental through diagnostic_width (25/28)
-
-- **Area:** deslop · dead code
-- **Where:** tests/adaptive_incremental_test.rs, tests/adaptive_incremental_workspace_test.rs, tests/build_script_declared_inputs_test.rs, tests/build_script_inputs_test.rs, tests/build_script_launcher_test.rs, tests/cache_key_underkeying_test.rs, tests/cached_units_regression_test.rs, tests/cargo_fix_test.rs, tests/cargo_proxy_test.rs, tests/cc_family_probe_test.rs, tests/cc_passthrough_args_test.rs, tests/cc_release_regression_test.rs, tests/cli_commands_test.rs, tests/codegen_backend_test.rs, tests/common/mod.rs, tests/config_commands_test.rs, tests/custom_harness_test.rs, tests/diagnostic_width_test.rs, tests/engine_bootstrap_test.rs, tests/event_log_contention_test.rs, tests/eviction_evidence_test.rs, tests/extra_inputs_warm_target_test.rs, tests/fixtures/cc_release_regressions.sh, tests/fixtures/mock_cc_constant_output.sh, tests/fixtures/mock_cc_diagnostics.sh, tests/fixtures/mock_cc_lc_all.sh, tests/fixtures/mock_cc_static.sh, tests/fixtures/proc-attr-unavailable.c, tests/host_config_test.rs, tests/incremental_passthrough_test.rs, tests/input_prediction_test.rs
-- **Problem:** Run applicable dead-code tools and inspect entry points, registrations and consumers before cuts. Scope contains approximately 17362 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: findings clean or reasoned allowlist, walk-backs ticketed Needs owner; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-84 · P2 · Dead code: tests integration through worktree_depinfo (26/28)
-
-- **Area:** deslop · dead code
-- **Where:** tests/integration_test.rs, tests/launcher_personality_test.rs, tests/macos_adaptive_debug_info_test.rs, tests/macos_debug_bundle_policy_test.rs, tests/macos_local_network_metadata_test.rs, tests/macos_native_install_name_test.rs, tests/metadata_streaming_test.rs, tests/msvc_passthrough_test.rs, tests/out_dir_alias_test.rs, tests/owned_help_test.rs, tests/proc_macro_env_key_test.rs, tests/stale_artifact_test.rs, tests/unknown_compiler_probe_test.rs, tests/workspace_extra_inputs_test.rs, tests/worktree_depinfo_test.rs
-- **Problem:** Run applicable dead-code tools and inspect entry points, registrations and consumers before cuts. Scope contains approximately 7846 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: findings clean or reasoned allowlist, walk-backs ticketed Needs owner; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-85 · P2 · Dead code: src scheduler through wrapper_config, test-projects (27/28)
-
-- **Area:** deslop · dead code
-- **Where:** src/scheduler.rs, src/service.rs, src/since.rs, src/store_view, src/store_view.rs, src/term.rs, src/test_support.rs, src/toolchain_dylib.rs, src/tree_stamp.rs, src/verify_compare.rs, src/version.rs, src/volume_gc.rs, src/wrapper_config.rs, test-projects
-- **Problem:** Run applicable dead-code tools and inspect entry points, registrations and consumers before cuts. Scope contains approximately 8745 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: findings clean or reasoned allowlist, walk-backs ticketed Needs owner; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-86 · P2 · Dead code: build, CI, docs and configuration (28/28)
-
-- **Area:** deslop · dead code
-- **Where:** build.rs, Cargo.toml, Cargo.lock, .cargo/, .github/, Makefile, Dockerfile, Cross.toml, rust-toolchain.toml, docs/, campaigns/, README.md and C_CPP_PARITY_CAMPAIGN.md
-- **Problem:** Run applicable dead-code tools and inspect entry points, registrations and consumers before cuts. Scope includes roughly 9,300 lines of documentation and campaign fixtures, plus build and CI configuration. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: findings clean or reasoned allowlist, walk-backs ticketed Needs owner; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
 ### DSLP-88 · P2 · Make workspace tests independent of checkout-local temporary roots and ambient KACHE_CACHE_DIR
 
 - **Area:** Needs environment · test isolation
@@ -693,6 +585,60 @@ Not started.
 - **Fix with:** root-cause
 - **Effort:** S
 
+### DSLP-95 · P3 · src/scheduler/, launcher/, scenarios/ and crates/README.md are in no deslop component
+
+- **Area:** deslop · scope
+- **Where:** src/scheduler/, launcher/ (396 lines, 20 unsafe), scenarios/, crates/README.md
+- **Problem:** These paths fall outside all 28 component scopes, so no Types/Tests/Dead code pass covered them; launcher/ alone holds 20 unsafe blocks.
+- **Recommendation:** Add one component ticket group covering them and run the three steps.
+- **Fix with:** deslop
+- **Effort:** M
+
+### DSLP-96 · P3 · 28 test early returns skip silently when a prerequisite is missing
+
+- **Area:** Tests
+- **Where:** tests/ (e.g. missing cc, running as root)
+- **Problem:** Tests print 'skipping' and return, so a CI host missing cc or running as root passes them without exercising anything.
+- **Recommendation:** Route them through a common::skip_unless helper that panics when KACHE_TEST_DENY_SKIPS is set, and set it in CI.
+- **Fix with:** test-audit
+- **Effort:** S
+
+### DSLP-97 · P3 · Eight lib tests fail under host load through wall-clock waits
+
+- **Area:** Tests
+- **Where:** src/invocation/, src/probe/, src/daemon_execution.rs, src/daemon_lifecycle.rs, kache-store wait_for_committed_returns_false_without_an_owner
+- **Problem:** Under load average 25-45 these fail with process-spawn timeouts and EAGAIN and pass alone; they wait on wall-clock bounds rather than readiness signals.
+- **Recommendation:** Replace the waits with readiness signals or generous condition-wait bounds; prove each with a deterministic delay.
+- **Fix with:** root-cause
+- **Effort:** M
+
+### DSLP-98 · P3 · Launcher build and install paths lack a decisive test
+
+- **Area:** Tests · build
+- **Where:** build.rs (link_flags), tests/build_script_launcher_test.rs
+- **Problem:** link_flags is untested because build scripts are not test targets, and build_script_launcher_test still passes with a 0-byte embedded launcher.
+- **Recommendation:** Move link_flags into launcher/compile.rs with unit tests, and assert the installed launcher bytes equal the embedded ones.
+- **Fix with:** test-audit
+- **Effort:** S
+
+### DSLP-99 · P3 · CLI reference and mutants config drift from the binary
+
+- **Area:** Docs · tests
+- **Where:** docs/commands/reference.mdx, .cargo/mutants.toml lines 1-250
+- **Problem:** No test compares kache --help with the command reference (it documented a removed completions command), and the mutants.toml header still describes removed Windows and TUI exclusions.
+- **Recommendation:** Add a test that diffs --help output against the reference, and rewrite the mutants.toml header.
+- **Fix with:** single-source-of-truth
+- **Effort:** S
+
+### DSLP-100 · P3 · CI runs none of the client-crates, resource-guard, make pr or docs checks
+
+- **Area:** Needs owner · CI
+- **Where:** .github/workflows/, Makefile (client-crates-check, test-resource-guard-check, pr), scripts/check-docs.sh
+- **Problem:** These local gates pass but no workflow runs them, so regressions they catch reach main.
+- **Recommendation:** Owner decision on CI work: wire them into the CI workflow.
+- **Fix with:** deslop
+- **Effort:** S
+
 ### DSLP-90 · P4 · import_downloaded_entry follows symlinks in a downloaded entry (latent, no caller)
 
 - **Area:** Needs owner · remote storage
@@ -710,3 +656,13 @@ Not started.
 - **Recommendation:** Narrow visibility and adopt unreachable_pub; move the cfg(test) items into mod tests; drop the Linux gate; remove the clones; export config_path_lock once; add !docs/deslop-*.md to .gitignore.
 - **Fix with:** deslop
 - **Effort:** S
+
+### DSLP-101 · P4 · Build, docs and config leftovers from the tests and configuration pass
+
+- **Area:** Dead code · docs
+- **Where:** Cross.toml, Cargo.toml [features], README.md, TODO.md:8, AGENTS.md (DSLP-89 gap)
+- **Problem:** Cross.toml has no in-repo consumer and [features] default = [] is unused (consumer questions); README links a missing bug_report issue template; TODO.md says 67 oracle cases where STATUS.md and cases.toml say 72; AGENTS.md lists DSLP-89 as open though cache_key_underkeying_test.rs:1166-1174 guards it.
+- **Recommendation:** Confirm consumers then remove Cross.toml and the empty features table; fix the README link and the case count; drop the stale AGENTS.md gap.
+- **Fix with:** dead-code-archaeology
+- **Effort:** S
+

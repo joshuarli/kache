@@ -4,7 +4,6 @@
 use std::fs;
 use std::path::Path;
 
-#[allow(dead_code)]
 mod common;
 
 fn script(path: &Path, body: &str) {
