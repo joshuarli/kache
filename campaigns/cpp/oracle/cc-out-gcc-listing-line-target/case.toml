@@ -1,0 +1,27 @@
+summary = "High-level GAS listings read #line targets outside dependency capture and must pass through after edits"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+families = ["gcc"]
+outputs = ["stdout.o", "file.o", "listing.txt"]
+
+[[compile]]
+argv = ["{cc}", "-g", "-Wa,-adhln", "-c", "u.c", "-o", "stdout.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-g", "-Wa,-adhln=listing.txt", "-c", "u.c", "-o", "file.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "line-target-edit"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "orig.y", content = "/* ORIGINAL_NEW */\n" }]
+
+[[step]]
+name = "passthrough-after-delete"
+reuse = "miss"
+action = [{ op = "delete-outputs" }]

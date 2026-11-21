@@ -1424,6 +1424,10 @@ impl CcArgs {
         self.rest.iter().any(|arg| arg == "-emit-llvm")
     }
 
+    fn lists_assembler_source(&self) -> bool {
+        self.rest.iter().any(|arg| arg == "-Wa,-adhln" || arg.starts_with("-Wa,-adhln="))
+    }
+
     fn emits_reports(&self) -> bool {
         self.rest.iter().any(|arg| cc_report_flag(arg))
     }
@@ -2346,6 +2350,34 @@ fn is_line_marker(line: &[u8]) -> bool {
     line.strip_prefix(b"# ")
         .or_else(|| line.strip_prefix(b"#line "))
         .is_some_and(|rest| rest.first().is_some_and(u8::is_ascii_digit))
+}
+
+fn cc_check_listing_inputs(parsed: &CcArgs, expansion: &[u8], inputs: &[PathBuf]) -> Result<()> {
+    if !parsed.lists_assembler_source() {
+        return Ok(());
+    }
+    let literals = cc_string_literals(expansion);
+    anyhow::ensure!(
+        [expansion, literals.text.as_slice()].into_iter().all(|text| {
+            cc_directive_operands(text, b".file").next().is_none()
+        }),
+        "cc: assembler listing with inline .file — not yet"
+    );
+    let mut source = None;
+    for line in expansion.split(|&byte| byte == b'\n') {
+        if is_line_marker(line) {
+            let decoded = cc_string_literals(line).text;
+            let name = std::str::from_utf8(decoded.strip_prefix(b"\n").context("listing source marker has no file")?)?;
+            source = Some(parsed.invocation_env.resolve(Path::new(name)).context("resolving listing source marker")?);
+        } else if !line.trim_ascii().is_empty() {
+            let source = source.as_ref().context("listing text has no source marker")?;
+            anyhow::ensure!(
+                inputs.contains(source),
+                "cc: assembler listing source outside the read set: {} — not yet", source.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Fold an expansion's line layout into its text hash. Two expansions whose
@@ -3397,6 +3429,11 @@ fn preprocess_hash(
             "cc: inputs changed during the time macro scan"
         );
     }
+    if parsed.lists_assembler_source() {
+        let inputs = fingerprints.as_ref().context("listing requires a dependency read set")?
+            .iter().map(|input| PathBuf::from(input.local_path())).collect::<Vec<_>>();
+        cc_check_listing_inputs(parsed, &output.stdout, &inputs)?;
+    }
     Ok(PreprocessHash {
         hash,
         fingerprints,
@@ -3462,7 +3499,7 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Exact("-fsave-optimization-record"), class: FlagClass::RawKeyed, source: "Clang object-derived .opt.yaml; source locations bind reports to literal paths and input content; format/file overrides remain unmodeled", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Regex(r"-fopt-info(-optimized)?(=.*)?"), class: FlagClass::RawKeyed, source: "GCC bare/optimized stderr only; bounded modes because other verbosity is unverified; =file variants refuse because GCC appends instead of replacing existing output", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Regex(r"-fcallgraph-info(=(su|da)(,(su|da))*)?"), class: FlagClass::RawKeyed, source: "GCC object-derived .ci; bounded marker lists only; literal paths and original input content are keyed; LTO/dump overrides refuse", dialect: Some(Dialect::Gnu) },
-    FlagSpec { matcher: Matcher::Regex(r"-Wa,-adhln(=[^,]+)?"), class: FlagClass::RawKeyed, source: "GCC/GAS stdout or explicit listing; mixed forwarded options remain unmodeled; original source text and literal paths keyed, LTO refuses", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-Wa,-adhln(=[^,]+)?"), class: FlagClass::RawKeyed, source: "GCC/GAS stdout or explicit listing; h reads debug source files, so line-marker targets outside the dependency read set and inline .file refuse; only literal, local, validated read sets may reuse the memo; mixed forwarding and LTO refuse", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-aux-info"), class: FlagClass::RawKeyed, source: "GCC explicit auxiliary declarations output, if written (C++ ignores it); literal argv/cwd/maps and original input content keyed", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Regex(r"-fsanitize-coverage=(trace-pc|trace-pc-guard|inline-8bit-counters|pc-table|trace-cmp)(,(trace-pc|trace-pc-guard|inline-8bit-counters|pc-table|trace-cmp))*"), class: FlagClass::RawKeyed, source: "argv-only sanitizer instrumentation, including fuzzer-no-link combinations; other modes remain unmodeled", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-frecord-gcc-switches"), class: FlagClass::RawKeyed, source: "Clang records input/output/include paths and prefix-map operands; key the full literal argv, cwd and injected maps, bind to this checkout, and disable private dependency capture", dialect: Some(Dialect::Gnu) },
@@ -6322,6 +6359,11 @@ fn cc_preprocess_memo_key_as(
     let compiler_metadata = std::fs::metadata(&compiler_path).ok()?;
     let mut hasher = blake3::Hasher::new();
     fold_cc_memo_field(&mut hasher, b"schema", schema);
+    if parsed.lists_assembler_source() {
+        // A relocated or older memo has not checked this invocation's listing sources.
+        fold_cc_memo_field(&mut hasher, b"listing-inputs-v1",
+            format!("{:?}", (&parsed.rest, cwd, file_prefix_map_args(prefix_maps))).as_bytes());
+    }
     // The name alone: it selects the driver mode, and `compiler-path` below
     // says which binary it found, so `cc` and `/usr/bin/cc` share a memo.
     let compiler_name = Path::new(&parsed.program)
@@ -8619,7 +8661,8 @@ pub(crate) fn cc_direct_key_eligible(parsed: &CcArgs) -> bool {
 fn cc_direct_key_shape_ok(parsed: &CcArgs) -> bool {
     parsed.family.dialect() == Dialect::Gnu
         && !parsed.records_switches()
-        && !parsed.emits_llvm() || parsed.emits_reports()
+        && !parsed.emits_llvm()
+        && !parsed.emits_reports()
         && parsed.mode == CompileMode::Compile
         && parsed.sources.len() == 1
         && parsed
@@ -9867,7 +9910,7 @@ impl CcCompiler {
                 ctx.file_hasher.cc_preprocess_memo_lookup(
                     key,
                     |name| cc_unmapped_path_candidates(name, &prefix_maps),
-                    &|path| cc_mapped_content_hash(path, &prefix_maps),
+                    &|path| (!parsed.lists_assembler_source()).then(|| cc_mapped_content_hash(path, &prefix_maps)).flatten(),
                 )
             })
         };
