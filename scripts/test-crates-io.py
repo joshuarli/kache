@@ -12,8 +12,9 @@ from pathlib import Path
 def load_mod():
     path = Path(__file__).with_name("crates-io.py")
     spec = importlib.util.spec_from_file_location("crates_io", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     sys.modules["crates_io"] = module
     spec.loader.exec_module(module)
     return module
