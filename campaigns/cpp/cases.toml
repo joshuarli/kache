@@ -303,6 +303,24 @@ ccache.suite = "ivfsoverlay.bash"
 status = "planned"
 
 [[case]]
+id = "cc-flag-profile-dir"
+package = "CCP-05"
+summary = "coverage/profile generation directories and embedded gcda paths; restore notes and distinguish DIR/object changes"
+profiles = ["both"]
+compilers = ["gcc", "clang", "apple-clang"]
+ccache.suite = "profiling.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-profile-generate-clang"
+package = "CCP-05"
+summary = "standalone Clang profile generation restores the exact object with the requested profraw directory"
+profiles = ["both"]
+compilers = ["clang", "apple-clang"]
+ccache.suite = "profiling_clang.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-input-pgo-profile"
 package = "CCP-02"
 summary = "-fprofile-use / -fauto-profile content change invalidates (keyed by file content, not spelling)"

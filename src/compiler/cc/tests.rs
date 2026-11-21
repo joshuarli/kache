@@ -2128,10 +2128,11 @@ fn diagnostics_written_to_files_refuse() {
 
 #[test]
 fn sidecar_flags_cache_as_object_compiles_only() {
-    let cases: [&[&str]; 5] = [
+    let cases: [&[&str]; 6] = [
         &["--coverage"],
         &["-fprofile-arcs"],
         &["-ftest-coverage"],
+        &["-fprofile-generate=profiles"],
         &["-g", "-gsplit-dwarf"],
         &["--serialize-diagnostics", "u.dia"],
     ];
@@ -2219,6 +2220,44 @@ fn serialized_diagnostics_path_stays_out_of_the_preprocess_and_probe_argv() {
             !argv.iter().any(|arg| arg.ends_with(".dia") || arg.contains("serialize")),
             "{argv:?}"
         );
+    }
+}
+
+#[test]
+fn profile_directories_preserve_paths_and_generation_locations() {
+    for program in ["gcc", "clang", "cc"] {
+        for flags in [
+            vec!["--coverage", "-fprofile-dir=profiles"],
+            vec!["-fprofile-arcs", "-ftest-coverage", "-fprofile-dir=profiles"],
+            vec!["-fprofile-generate=profiles"],
+            vec!["-fprofile-generate=/absolute/profiles", "-ftest-coverage"],
+        ] {
+            let parse = |cwd: &str, object, flags: &[&str]| {
+                let env = InvocationEnv::from_parts([("PATH", "")], Some(PathBuf::from(cwd)), None, PathBuf::from(cwd));
+                let mut args = vec![program, "-c", "u.c", "-o", object];
+                args.extend_from_slice(flags);
+                CcArgs::parse_for(&s(&args), &env).unwrap()
+            };
+            let parsed = parse("/a", "out/u.o", &flags);
+            assert!(parsed.refuse_reasons(&[]).is_empty(), "{program} {flags:?}");
+            assert_ne!(cc_sidecar_key(&parsed), cc_sidecar_key(&parse("/b", "out/u.o", &flags)), "cwd must distinguish runtime paths: {flags:?}");
+            assert_ne!(cc_sidecar_key(&parsed), cc_sidecar_key(&parse("/a", "other/u.o", &flags)), "the object selects the gcda filename: {flags:?}");
+            let maps = vec![CcPrefixMap { from: "/absolute".into(), to: "/mapped".into() }];
+            let raw = cc_raw_flags_for_key(&parsed, &maps);
+            assert_eq!(raw, flags.iter().map(|flag| flag.as_bytes().to_vec()).collect::<Vec<_>>());
+            let changed: Vec<_> = flags.iter().map(|flag| flag.replace("profiles", "other")).collect();
+            let changed: Vec<_> = changed.iter().map(String::as_str).collect();
+            assert_ne!(raw, cc_raw_flags_for_key(&parse("/a", "out/u.o", &changed), &maps));
+            let notes = flags.iter().any(|flag| ["--coverage", "-ftest-coverage"].contains(flag));
+            assert_eq!(parsed.sidecar_outputs().len(), usize::from(notes));
+            if notes {
+                assert_eq!(parsed.sidecar_outputs()[0].path, PathBuf::from("out/u.gcno"));
+                assert_eq!(parsed.sidecar_outputs()[0].presence, CcSidecarPresence::Required);
+            }
+        }
+        for flag in ["-fprofile-dir=", "-fprofile-generate=", "-fprofile-generate", "-fprofile-prefix-path=/a"] {
+            assert!(!CcArgs::parse(&s(&[program, flag, "-c", "u.c", "-o", "u.o"])).unwrap().refuse_reasons(&[]).is_empty(), "{flag} must refuse");
+        }
     }
 }
 

@@ -1333,6 +1333,7 @@ impl CcArgs {
     fn coverage_instrumented(&self) -> bool {
         self.rest.iter().any(|arg| {
             matches!(arg.as_str(), "--coverage" | "-fprofile-arcs" | "-ftest-coverage")
+                || arg.starts_with("-fprofile-generate=")
         })
     }
 
@@ -3376,6 +3377,8 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Exact("--coverage"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov instrumentation and notes; the sidecar key folds the paths the outputs embed", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fprofile-arcs"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov arc instrumentation; the object names its absolute .gcda path", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-ftest-coverage"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov notes file", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-fprofile-dir=.+"), class: FlagClass::RawKeyed, source: "profile directory keyed verbatim; coverage keys the exact cwd and object spelling, retaining GCC path mangling; -fprofile-prefix-path remains unmodeled and GCC profile-use directories refuse", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-fprofile-generate=.+"), class: FlagClass::RawKeyed, source: "generation directory keyed verbatim and bound to cwd/object like gcov; notes, when requested, use the coverage sidecar model; bare/empty generation and profile-prefix-path remain unmodeled", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-gsplit-dwarf"), class: FlagClass::RawKeyed, source: "CCP-05 — split DWARF; the object names its .dwo as the output was spelled", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("--serialize-diagnostics"), class: FlagClass::NoObjectEffect, source: "CCP-05 — clang serialized diagnostics output path", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-serialize-diagnostics"), class: FlagClass::NoObjectEffect, source: "CCP-05 — clang serialized diagnostics output path", dialect: Some(Dialect::Gnu) },

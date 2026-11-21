@@ -1,0 +1,36 @@
+summary = "Clang standalone profile generation embeds DIR/default_%m.profraw without a gcno sidecar; DIR and object changes cannot restore the wrong object"
+cohort = "blocking"
+families = ["clang"]
+requires = [["{cc}", "-fprofile-generate=profiles", "-x", "c", "-c", "-", "-o", "probe.o"]]
+requires_stdin = "int u(int x) { return x; }\n"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o", "v.o"]
+
+[[compile]]
+argv = ["{cc}", "@args.rsp", "-c", "u.c"]
+source = "u.c"
+also_names = ["@args.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "dir-change"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "args.rsp", content = "-fprofile-generate=/kache-profile-b -o u.o\n" }]
+
+[[step]]
+name = "object-path-change"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "args.rsp", content = "-fprofile-generate=/kache-profile-b -o v.o\n" }]
+
+[[step]]
+name = "restore-new-object"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

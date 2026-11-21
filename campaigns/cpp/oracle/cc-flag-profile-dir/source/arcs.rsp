@@ -1,0 +1,1 @@
+-fprofile-arcs -ftest-coverage -fprofile-dir=/kache-profile-a -o arcs/u.o
