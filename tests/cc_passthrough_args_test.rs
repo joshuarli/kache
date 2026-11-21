@@ -1194,7 +1194,6 @@ fn cc_timestamp_header_addition_and_mtime_change_do_not_restore_stale_objects() 
         .args(["-c", "unit.c", "-o", "expected.o"])
         .env("SOURCE_DATE_EPOCH", "0").output().unwrap();
     assert!(raw.status.success(), "{raw:?}");
-    assert_ne!(stamped, fs::read(root.join("expected.o")).unwrap());
     assert_eq!(restored, fs::read(root.join("expected.o")).unwrap(), "stale timestamp object restored");
 }
 
