@@ -3813,7 +3813,6 @@ fn unverifiable_entries_are_removed_and_the_index_rebuilds() {
     fs::remove_file(blob_of("missing_blob")).unwrap();
     let resized = blob_of("resized_blob");
     let mut permissions = fs::metadata(&resized).unwrap().permissions();
-    #[allow(clippy::permissions_set_readonly_false)]
     permissions.set_readonly(false);
     fs::set_permissions(&resized, permissions).unwrap();
     fs::write(&resized, b"shorter").unwrap();
@@ -4702,7 +4701,6 @@ fn rebuild_index_skips_entries_whose_blobs_are_missing_or_wrong_size() {
     // omitting it passed locally and only failed in CI.
     let make_writable = |p: &Path| {
         let mut perms = std::fs::metadata(p).unwrap().permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
         perms.set_readonly(false);
         std::fs::set_permissions(p, perms).unwrap();
     };
@@ -4754,7 +4752,6 @@ fn stranded_entry_sweep_readopts_servable_entries_and_removes_the_rest() {
         .clone();
     let gone_blob = blob_path_in_store_dir(&config.store_dir(), &gone_hash);
     let mut perms = std::fs::metadata(&gone_blob).unwrap().permissions();
-    #[allow(clippy::permissions_set_readonly_false)]
     perms.set_readonly(false);
     std::fs::set_permissions(&gone_blob, perms).unwrap();
     std::fs::remove_file(&gone_blob).unwrap();
@@ -14424,7 +14421,6 @@ fn read_only_maintenance_preserves_files() {
     fs::remove_file(&staging)
         .or_else(|_| {
             let mut permissions = fs::metadata(&staging)?.permissions();
-            #[allow(clippy::permissions_set_readonly_false)]
             permissions.set_readonly(false);
             fs::set_permissions(&staging, permissions)?;
             fs::remove_file(&staging)
