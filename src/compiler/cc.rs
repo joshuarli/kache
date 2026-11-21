@@ -4981,6 +4981,18 @@ fn cc_raw_flags_for_key(parsed: &CcArgs, prefix_maps: &[CcPrefixMap]) -> Vec<Vec
             flags.push(normalize_raw_keyed_cc_flag(arg, prefix_maps));
         }
     }
+    let mut idx = 0;
+    while idx < parsed.rest.len() {
+        if let Some(arg) = parse_cc_arg_at(&parsed.rest, idx, dialect) {
+            if matches!(arg.spec.action, CcArgAction::LanguageOverride) {
+                flags.push(format!("-x@{idx}").into_bytes());
+                flags.extend(parsed.rest[idx..idx + arg.consumed].iter().map(|token| token.as_bytes().to_vec()));
+            }
+            idx += arg.consumed;
+        } else {
+            idx += if takes_separate_value(&parsed.rest, idx, dialect) { 2 } else { 1 };
+        }
+    }
     flags
 }
 

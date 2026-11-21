@@ -96,6 +96,15 @@ ccache.suite = "base.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-flag-x-after-last-input"
+package = "CCP-03"
+summary = "trailing -x positions distinguish driver diagnostics without changing earlier source language"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-core-warning-replay"
 package = "CCP-01"
 summary = "diagnostics of a successful compile replayed byte-for-byte on restore"

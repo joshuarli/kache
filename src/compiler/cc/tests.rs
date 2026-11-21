@@ -33,6 +33,23 @@ fn dependency_output_env_refuses_gcc_but_preserves_clang() {
 }
 
 #[test]
+fn language_option_position_distinguishes_driver_diagnostics() {
+    let raw = |args: &[&str]| {
+        cc_raw_flags_for_key(&CcArgs::parse(&s(args)).unwrap(), &[])
+    };
+    let plain = ["gcc", "-c", "u.c", "-o", "a.o"];
+    let trailing = ["gcc", "-c", "u.c", "-o", "b.o", "-x", "c"];
+    assert_ne!(raw(&plain), raw(&trailing));
+    assert_ne!(raw(&trailing), raw(&["gcc", "-x", "c", "-c", "u.c", "-o", "b.o"]));
+    assert_ne!(raw(&plain), raw(&["gcc", "-c", "u.c", "-xc++"]));
+    assert_ne!(raw(&trailing), raw(&["gcc", "-c", "u.c", "-o", "b.o", "-x", "c++"]));
+    assert_eq!(raw(&trailing), raw(&["gcc", "-c", "u.c", "-o", "a.o", "-x", "c"]));
+    assert_eq!(raw(&plain), raw(&["gcc", "-c", "u.c", "-o", "-xc.o"]));
+    let parsed = CcArgs::parse(&s(&["gcc", "-c", "u.c", "-x", "c++"])).unwrap();
+    assert_eq!(build_preprocess_args(&parsed), s(&["-E", "u.c", "-x", "c++"]));
+}
+
+#[test]
 fn header_availability_uses_each_clients_relative_paths_and_include_environment() {
     let root = tempfile::tempdir().unwrap();
     let mut clients = Vec::new();
