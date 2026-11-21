@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from bench import report as perf_gate_report
 from bench.design import ordered, plan
@@ -48,7 +48,7 @@ class SampleRecord(TypedDict):
     started_monotonic_s: float
     ended_monotonic_s: float
     cold_reused: bool
-    result: dict[str, Any]
+    result: dict[str, object]
 
 
 def group_resources(entries):
