@@ -655,6 +655,7 @@ fn volume_route_path_cc_uses_output_parent() {
         program: "cc".into(),
         rest: Vec::new(),
         response_file_digests: Vec::new(),
+        original_args: None,
         sources: vec![PathBuf::from("a.c")],
         output: Some(PathBuf::from("/mnt/biglake/build/a.o")),
         mode: crate::compiler::cc::CompileMode::Compile,
@@ -6042,6 +6043,46 @@ fn cc_passthrough_forwards_the_original_arguments_only() {
         format!("-c\n-o\n{output_arg}\n"),
         "unsafe output passthrough must compile directly without cache-only flags"
     );
+}
+
+#[cfg(unix)]
+fn cc_response_file_execution_preserves_arguments(uncached: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let program = root.join("gcc");
+    let capture = root.join("argv");
+    kache_fs::testutil::write_executable(&program, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n", capture.display()));
+    std::fs::write(root.join("u.c"), "int answer;\n").unwrap();
+    std::fs::write(root.join("outer.rsp"), "@inner.rsp -c u.c -o u.o\n").unwrap();
+    let env = crate::invocation::InvocationEnv::from_parts(
+        [("KACHE_CC_PATH_NORMALIZE", "0")], Some(root.to_path_buf()), None, root.to_path_buf(),
+    );
+    let compiler = CcCompiler::for_invocation(Vec::new(), &env);
+    let config = test_config(root.join("cache"));
+    for body in [format!("-DX={}", "a".repeat(204800)), (0..150).map(|i| format!("-DX{i}={}", "a".repeat(4096))).collect::<Vec<_>>().join(" "), String::new(), "-DX=1".into()] {
+        std::fs::write(root.join("inner.rsp"), body).unwrap();
+        let parsed = compiler.parse(&[program.to_string_lossy().into_owned(), "@outer.rsp".into()]).unwrap();
+        assert!(parsed.refuse_reasons(&[]).is_empty());
+        let status = if uncached {
+            cc_passthrough(&config, &parsed).unwrap().exit_code
+        } else {
+            compiler.execute(&parsed).unwrap().exit_code
+        };
+        assert_eq!(status, 0);
+        assert_eq!(std::fs::read_to_string(&capture).unwrap(), "@outer.rsp\n");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cc_response_file_passthrough_preserves_oversized_arguments() {
+    cc_response_file_execution_preserves_arguments(true);
+}
+
+#[cfg(unix)]
+#[test]
+fn cc_response_file_compile_preserves_oversized_arguments() {
+    cc_response_file_execution_preserves_arguments(false);
 }
 
 #[test]
