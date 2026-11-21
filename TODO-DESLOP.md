@@ -9,15 +9,6 @@ Not started.
 
 ## Tickets
 
-### DSLP-9 · P2 · Types: crates/kache-store core (5/28)
-
-- **Area:** deslop · types
-- **Where:** crates/kache-store/examples/bench-cc-memos.rs, crates/kache-store/src/atomic.rs, crates/kache-store/src/blob_drift.rs, crates/kache-store/src/blob_validation.rs, crates/kache-store/src/cc_memo.rs, crates/kache-store/src/config.rs, crates/kache-store/src/eviction.rs, crates/kache-store/src/eviction_evidence/tests.rs, crates/kache-store/src/eviction_evidence.rs, crates/kache-store/src/file_hash.rs, crates/kache-store/src/filesystem.rs, crates/kache-store/src/index_compaction.rs, crates/kache-store/src/lib.rs, crates/kache-store/src/link.rs, crates/kache-store/src/markers.rs, crates/kache-store/src/opcounts.rs, crates/kache-store/src/sharing.rs, crates/kache-store/src/store/compile_time_backfill.rs, crates/kache-store/src/store/tests/cost_backfill_tests.rs
-- **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope contains approximately 12970 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
 ### DSLP-11 · P2 · Types: crates/kache-store remaining modules (7/28)
 
 - **Area:** deslop · types
