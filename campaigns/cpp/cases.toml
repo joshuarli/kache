@@ -1621,6 +1621,15 @@ ccache.suite = "modules.bash"
 status = "out_of_scope"
 
 [[case]]
+id = "cc-flag-emit-llvm"
+package = "CCP-03"
+summary = "Clang LLVM bitcode/text emission keys literal source spelling and restores exact output"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-out-of-scope-native-windows"
 package = "CCP-03"
 summary = "native Windows/MSVC (cl) is out of scope; clang-cl compiler-only behavior is in scope where available"
