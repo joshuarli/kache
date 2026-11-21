@@ -739,6 +739,10 @@ esac
                         ("CLIENT_VALUE", name.into()),
                         ("TMPDIR", cwd.join("tmp").into_os_string()),
                         ("KACHE_CACHE_DIR", cache_dir.clone().into_os_string()),
+                        (
+                            "KACHE_PROBE_TIMEOUT_MS",
+                            std::ffi::OsString::from(TEST_PROBE_TIMEOUT_MS),
+                        ),
                     ],
                     Some(cwd.clone()),
                     Some(cwd.clone()),
@@ -1209,9 +1213,15 @@ esac
         assert_eq!(absolute, expected_absolute);
     }
 
+    /// Probes that must succeed run under a deadline a loaded host cannot
+    /// miss: the production default of 5 s expires on an oversubscribed
+    /// machine for a script that exits at once.
+    const TEST_PROBE_TIMEOUT_MS: &str = "60000";
+
     struct TestCacheDirGuard {
         _lock: crate::test_support::ProcessStateTestGuard,
         previous: Option<std::ffi::OsString>,
+        previous_timeout: Option<std::ffi::OsString>,
     }
 
     impl Drop for TestCacheDirGuard {
@@ -1221,6 +1231,10 @@ esac
                     Some(prev) => std::env::set_var("KACHE_CACHE_DIR", prev),
                     None => std::env::remove_var("KACHE_CACHE_DIR"),
                 }
+                match self.previous_timeout.as_ref() {
+                    Some(prev) => std::env::set_var("KACHE_PROBE_TIMEOUT_MS", prev),
+                    None => std::env::remove_var("KACHE_PROBE_TIMEOUT_MS"),
+                }
             }
         }
     }
@@ -1228,12 +1242,15 @@ esac
     fn set_test_cache_dir(path: &std::path::Path) -> TestCacheDirGuard {
         let lock = crate::config::config_path_lock();
         let previous = std::env::var_os("KACHE_CACHE_DIR");
+        let previous_timeout = std::env::var_os("KACHE_PROBE_TIMEOUT_MS");
         unsafe {
             std::env::set_var("KACHE_CACHE_DIR", path);
+            std::env::set_var("KACHE_PROBE_TIMEOUT_MS", TEST_PROBE_TIMEOUT_MS);
         }
         TestCacheDirGuard {
             _lock: lock,
             previous,
+            previous_timeout,
         }
     }
 
@@ -1428,6 +1445,7 @@ esac
     #[test]
     fn run_family_probe_handles_large_output() {
         let temp = TempDir::new().unwrap();
+        let _guard = set_test_cache_dir(temp.path());
         // Emit more than the old 8 KiB read limit before the family marker so
         // the regression is deterministic: `run_family_probe` must drain the
         // pipe and scan the whole bounded output. Its own timeout already
@@ -1457,7 +1475,11 @@ esac
             "#!/bin/sh\nprintf KACHE_PROBE_GNU\nexec 1>&-\nexec sleep \"$PROBE_DELAY\"\n",
         );
         let mut env = InvocationEnv::from_parts(
-            [("PATH", env!("PATH")), ("PROBE_DELAY", "1")],
+            [
+                ("PATH", env!("PATH")),
+                ("PROBE_DELAY", "1"),
+                ("KACHE_PROBE_TIMEOUT_MS", TEST_PROBE_TIMEOUT_MS),
+            ],
             Some(root.path().to_owned()),
             None,
             root.path().to_owned(),
@@ -1467,6 +1489,7 @@ esac
             Ok(Some(ProbedFamily::Gnu))
         );
         env.set("PROBE_DELAY", "6");
+        env.set("KACHE_PROBE_TIMEOUT_MS", "500");
         assert_eq!(
             run_family_probe_for(program.to_str().unwrap(), &env),
             Err(())
