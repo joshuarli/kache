@@ -874,6 +874,17 @@ impl CcArgs {
     pub fn refuse_reasons(&self, extra_allowlist_flags: &[String]) -> Vec<RefuseReason> {
         let mut reasons = Vec::new();
 
+        if self.family == ToolFamily::Gnu {
+            for (variable, reason) in [
+                ("DEPENDENCIES_OUTPUT", "cc DEPENDENCIES_OUTPUT dependency output — not yet"),
+                ("SUNPRO_DEPENDENCIES", "cc SUNPRO_DEPENDENCIES dependency output — not yet"),
+            ] {
+                if self.invocation_env.var_os(variable).is_some() {
+                    reasons.push(RefuseReason::Unsupported(reason));
+                }
+            }
+        }
+
         // ── Non-`-c` mode refusals (short-circuit) ──
         //
         // First, check whether the invocation is the `-c` object

@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn dependency_output_env_refuses_gcc_but_preserves_clang() {
+    let root = tempfile::tempdir().unwrap();
+    for variable in ["DEPENDENCIES_OUTPUT", "SUNPRO_DEPENDENCIES"] {
+        for value in ["u.d", "u.d custom-target", "", "missing/u.d target"] {
+            let env = InvocationEnv::from_parts(
+                [(variable, value)],
+                Some(root.path().to_owned()),
+                None,
+                root.path().to_owned(),
+            );
+            for program in ["gcc", "g++", "cc"] {
+                let parsed = CcArgs::parse_for(&s(&[program, "-c", "u.c", "-o", "u.o"]), &env).unwrap();
+                assert!(
+                    parsed.refuse_reasons(&[]).iter().any(|reason| reason.description().contains(variable)),
+                    "{program} must pass through with {variable}={value:?}",
+                );
+            }
+            let parsed = CcArgs::parse_for(&s(&["clang", "-c", "u.c", "-o", "u.o"]), &env).unwrap();
+            assert!(parsed.refuse_reasons(&[]).is_empty());
+        }
+    }
+    let env = InvocationEnv::from_parts(
+        std::iter::empty::<(&str, &str)>(),
+        Some(root.path().to_owned()),
+        None,
+        root.path().to_owned(),
+    );
+    let parsed = CcArgs::parse_for(&s(&["gcc", "-c", "u.c", "-o", "u.o"]), &env).unwrap();
+    assert!(parsed.refuse_reasons(&[]).is_empty());
+}
+
+#[test]
 fn header_availability_uses_each_clients_relative_paths_and_include_environment() {
     let root = tempfile::tempdir().unwrap();
     let mut clients = Vec::new();

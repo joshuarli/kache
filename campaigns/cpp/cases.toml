@@ -60,6 +60,33 @@ ccache.suite = "base.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-core-dependencies-output-env"
+package = "CCP-01"
+summary = "DEPENDENCIES_OUTPUT depfile preserved through GCC passthrough; Clang unchanged"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-core-dependencies-output-env-target"
+package = "CCP-01"
+summary = "DEPENDENCIES_OUTPUT explicit target preserved through GCC passthrough"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-core-sunpro-dependencies-env"
+package = "CCP-01"
+summary = "SUNPRO_DEPENDENCIES depfile and explicit target preserved through GCC passthrough"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-core-user-depfile"
 package = "CCP-01"
 summary = "caller -MD -MF depfile restored with raw-identical bytes; new header dependency invalidates"

@@ -1,0 +1,23 @@
+summary = "environment dependency outputs survive repeated compiles and header edits"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o", "u.d"]
+env = { DEPENDENCIES_OUTPUT = "u.d" }
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "any"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-header"
+reuse = "miss"
+action = [{ op = "write", path = "u.h", content = "#define VALUE 3\n" }, { op = "delete-outputs" }]
