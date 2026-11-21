@@ -1288,12 +1288,6 @@ fn resolve_snapshot(
             });
         }
     };
-    if strict_watches && windows_path_uses_device_namespace(&crate_dir) {
-        anyhow::bail!(
-            "active extra_inputs cannot enumerate a crate through a Windows verbatim/device \
-             namespace path safely; use the ordinary drive or UNC spelling"
-        );
-    }
     if strict_watches {
         // The parsed pattern set, rather than formatting/comments, defines the
         // key. Still observe the config through the guarded hasher so a rewrite
@@ -1399,18 +1393,6 @@ fn resolve_declared_inputs(
             anyhow::bail!(
                 "active extra_inputs pattern {pattern:?} uses `$ENV` or `~` expansion; Cargo \
                  cannot notice that expansion changing, so use a stable literal path"
-            );
-        }
-        if strict_watches && windows_pattern_has_ambiguous_root(Path::new(pattern)) {
-            anyhow::bail!(
-                "active extra_inputs pattern {pattern:?} uses a Windows rooted-without-drive or \
-                 drive-relative path; use a fully-qualified absolute path or a crate-relative path"
-            );
-        }
-        if strict_watches && windows_path_uses_device_namespace(Path::new(pattern)) {
-            anyhow::bail!(
-                "active extra_inputs pattern {pattern:?} uses a Windows verbatim/device namespace \
-                 that glob enumeration cannot track safely; use an ordinary drive or UNC path"
             );
         }
         if strict_watches && parent_traversal_follows_glob(pattern) {
@@ -1861,35 +1843,6 @@ fn pattern_uses_dynamic_expansion(pattern: &str) -> bool {
             return true;
         }
     }
-    false
-}
-
-#[cfg(test)]
-fn windows_root_shape_is_ambiguous(is_absolute: bool, has_root: bool, has_prefix: bool) -> bool {
-    !is_absolute && (has_root || has_prefix)
-}
-
-/// Windows drive-relative shapes can only arise on a Windows host; here this
-/// is always false.
-fn windows_pattern_has_ambiguous_root(_path: &Path) -> bool {
-    false
-}
-
-#[cfg(test)]
-fn windows_prefix_uses_device_namespace(prefix: std::path::Prefix<'_>) -> bool {
-    use std::path::Prefix;
-    matches!(
-        prefix,
-        Prefix::Verbatim(_)
-            | Prefix::VerbatimUNC(_, _)
-            | Prefix::VerbatimDisk(_)
-            | Prefix::DeviceNS(_)
-    )
-}
-
-/// Device-namespace prefixes can only arise on a Windows host; here this is
-/// always false.
-fn windows_path_uses_device_namespace(_path: &Path) -> bool {
     false
 }
 
@@ -2501,47 +2454,6 @@ mod tests {
             conditions[index] = true;
             assert!(any_broad_watch_condition(conditions));
         }
-
-        for (is_absolute, has_root, has_prefix, expected) in [
-            (false, false, false, false),
-            (false, false, true, true),
-            (false, true, false, true),
-            (false, true, true, true),
-            (true, false, false, false),
-            (true, false, true, false),
-            (true, true, false, false),
-            (true, true, true, false),
-        ] {
-            assert_eq!(
-                windows_root_shape_is_ambiguous(is_absolute, has_root, has_prefix),
-                expected
-            );
-        }
-
-        use std::path::Prefix;
-        let server = std::ffi::OsStr::new("server");
-        let share = std::ffi::OsStr::new("share");
-        for prefix in [
-            Prefix::Verbatim(server),
-            Prefix::VerbatimUNC(server, share),
-            Prefix::VerbatimDisk(b'C'),
-            Prefix::DeviceNS(server),
-        ] {
-            assert!(windows_prefix_uses_device_namespace(prefix));
-        }
-        for prefix in [Prefix::Disk(b'C'), Prefix::UNC(server, share)] {
-            assert!(!windows_prefix_uses_device_namespace(prefix));
-        }
-    }
-
-    #[test]
-    fn windows_only_path_rejections_stay_disabled_on_other_platforms() {
-        assert!(!windows_pattern_has_ambiguous_root(Path::new(
-            r"C:\relative"
-        )));
-        assert!(!windows_path_uses_device_namespace(Path::new(
-            r"\\?\C:\repo"
-        )));
     }
 
     #[test]
