@@ -8,12 +8,8 @@
 
 use anyhow::{Context, Result};
 use deser::Deserialize;
-use std::collections::{HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::bench_profile::BenchProfile;
-use crate::fixture::Fixture;
-use crate::phase::Phase;
 use rustc_hash::FxHashSet;
 
 /// Where a scenario's source comes from.
@@ -114,10 +110,6 @@ impl Selectors {
         self.items
             .iter()
             .all(|selector| selector.matches(name, &tags, source_kind))
-    }
-
-    pub fn matches_scenario(&self, scenario: &Scenario) -> bool {
-        self.matches(&scenario.name, scenario.source.kind(), &scenario.tags)
     }
 
     pub fn matches_metadata(&self, metadata: &ScenarioMetadata) -> bool {
@@ -311,150 +303,6 @@ pub struct MeasureSpec {
     pub known_passthrough: Vec<String>,
 }
 
-/// The common scenario shape both fixture and clone TOML files adapt into.
-#[derive(Debug, Clone)]
-pub struct Scenario {
-    pub name: String,
-    pub source: ScenarioSource,
-    pub tags: Vec<String>,
-    pub phases: Vec<Phase>,
-    pub env: HashMap<String, String>,
-    pub commands: ScenarioCommands,
-    pub checks: ScenarioChecks,
-}
-
-impl Scenario {
-    pub fn from_fixture(fixture: &Fixture) -> Self {
-        Self {
-            name: fixture.name.clone(),
-            source: ScenarioSource::Fixture {
-                dir: fixture.dir.clone(),
-            },
-            tags: fixture.tags.clone(),
-            phases: fixture_phases(fixture),
-            env: fixture.env.clone(),
-            commands: ScenarioCommands {
-                setup: Vec::new(),
-                build: fixture.commands.build.clone(),
-                clean: Some(fixture.commands.clean.clone()),
-            },
-            checks: fixture.checks.clone(),
-        }
-    }
-
-    pub fn from_bench_profile(profile: &BenchProfile) -> Self {
-        Self {
-            name: profile.name.clone(),
-            source: ScenarioSource::Clone {
-                repo: profile.repo.clone(),
-                git_ref: profile.git_ref.clone(),
-                objdir: profile.objdir.clone(),
-            },
-            tags: profile.tags.clone(),
-            phases: default_phases(SourceKind::Clone),
-            env: profile
-                .env
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            commands: ScenarioCommands {
-                setup: profile.setup.clone(),
-                build: profile.build.clone(),
-                clean: None,
-            },
-            checks: profile.checks.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum ScenarioSource {
-    Fixture {
-        dir: PathBuf,
-    },
-    Clone {
-        repo: String,
-        git_ref: String,
-        objdir: String,
-    },
-}
-
-impl ScenarioSource {
-    pub fn kind(&self) -> SourceKind {
-        match self {
-            ScenarioSource::Fixture { .. } => SourceKind::Fixture,
-            ScenarioSource::Clone { .. } => SourceKind::Clone,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ScenarioCommands {
-    pub setup: Vec<String>,
-    pub build: String,
-    pub clean: Option<String>,
-}
-
-/// Deserializable version of the common scenario schema.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ScenarioConfig {
-    pub name: String,
-    pub source: ScenarioSourceConfig,
-    #[deser(default)]
-    pub tags: Vec<String>,
-    #[deser(default)]
-    pub phases: Vec<Phase>,
-    #[deser(default)]
-    pub env: HashMap<String, String>,
-    pub commands: ScenarioCommandsConfig,
-    #[deser(default)]
-    pub checks: ScenarioChecks,
-}
-
-impl ScenarioConfig {
-    pub fn phases_or_default(&self) -> Vec<Phase> {
-        if self.phases.is_empty() {
-            default_phases(self.source.kind())
-        } else {
-            self.phases.clone()
-        }
-    }
-
-    pub fn into_scenario(self) -> Scenario {
-        let source = match self.source {
-            ScenarioSourceConfig::Fixture { path } => ScenarioSource::Fixture { dir: path },
-            ScenarioSourceConfig::Clone {
-                repo,
-                git_ref,
-                objdir,
-                ref_next: _,
-            } => ScenarioSource::Clone {
-                repo,
-                git_ref,
-                objdir,
-            },
-        };
-        let phases = if self.phases.is_empty() {
-            default_phases(source.kind())
-        } else {
-            self.phases
-        };
-        Scenario {
-            name: self.name,
-            source,
-            tags: self.tags,
-            phases,
-            env: self.env,
-            commands: ScenarioCommands {
-                setup: self.commands.setup,
-                build: self.commands.build,
-                clean: self.commands.clean,
-            },
-            checks: self.checks,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[deser(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ScenarioSourceConfig {
@@ -480,36 +328,10 @@ impl ScenarioSourceConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct ScenarioCommandsConfig {
-    #[deser(default)]
-    pub setup: Vec<String>,
-    pub build: String,
-    #[deser(default)]
-    pub clean: Option<String>,
-}
-
-pub fn default_phases(source_kind: SourceKind) -> Vec<Phase> {
-    match source_kind {
-        SourceKind::Fixture => vec![Phase::Cold, Phase::Warm, Phase::Noop, Phase::Relocate],
-        SourceKind::Clone => vec![Phase::Cold, Phase::Warm],
-    }
-}
-
-fn fixture_phases(fixture: &Fixture) -> Vec<Phase> {
-    let mut phases = default_phases(SourceKind::Fixture);
-    if fixture.assertions.relocate_noop.is_some() {
-        phases.push(Phase::RelocateNoop);
-    }
-    if fixture.modify.is_some() {
-        phases.push(Phase::RelocateModified);
-    }
-    phases
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixture::Fixture;
 
     #[test]
     fn fixture_gets_gate_and_source_tags_by_default() {
@@ -599,48 +421,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_unified_fixture_scenario_config() {
-        let cfg: ScenarioConfig = deser_toml::from_str(
-            r#"
-name = "c-hello"
-tags = ["lang:cc"]
-
-[source]
-kind = "fixture"
-path = "source"
-
-[commands]
-build = "make"
-clean = "make clean"
-
-[checks.measure.warm]
-min_hit_rate_pct = 90.0
-"#,
-        )
-        .unwrap();
-        assert_eq!(cfg.name, "c-hello");
-        assert_eq!(cfg.source.kind(), SourceKind::Fixture);
-        assert_eq!(
-            cfg.phases_or_default(),
-            vec![Phase::Cold, Phase::Warm, Phase::Noop, Phase::Relocate]
-        );
-        assert_eq!(cfg.commands.clean.as_deref(), Some("make clean"));
-        assert_eq!(
-            cfg.checks
-                .measure
-                .warm
-                .as_ref()
-                .and_then(|m| m.min_hit_rate_pct),
-            Some(90.0)
-        );
-
-        let scenario = cfg.into_scenario();
-        assert_eq!(scenario.name, "c-hello");
-        assert_eq!(scenario.source.kind(), SourceKind::Fixture);
-        assert_eq!(scenario.commands.clean.as_deref(), Some("make clean"));
-    }
-
-    #[test]
     fn fixture_negative_control_exempt_must_be_top_level() {
         let cfg: Fixture = deser_toml::from_str(
             r#"
@@ -678,41 +458,6 @@ clean = "make clean"
         )
         .unwrap_err();
         assert!(err.to_string().contains("unknown field"));
-    }
-
-    #[test]
-    fn parses_unified_clone_scenario_config() {
-        let cfg: ScenarioConfig = deser_toml::from_str(
-            r#"
-name = "substrate"
-tags = ["lang:rust"]
-phases = ["cold", "warm"]
-
-[source]
-kind = "clone"
-repo = "https://example.com/repo.git"
-ref = "v1"
-objdir = "target"
-
-[commands]
-setup = ["rustup target add wasm32-unknown-unknown"]
-build = "cargo build"
-
-[checks.assert.warm]
-min_key_stability_pct = 80.0
-max_passthrough_pct = 30.0
-max_errors = 0
-"#,
-        )
-        .unwrap();
-        assert_eq!(cfg.name, "substrate");
-        assert_eq!(cfg.source.kind(), SourceKind::Clone);
-        assert_eq!(cfg.phases, vec![Phase::Cold, Phase::Warm]);
-        assert_eq!(cfg.commands.setup.len(), 1);
-        let assert = cfg.checks.assertions.warm.as_ref().unwrap();
-        assert_eq!(assert.min_key_stability_pct, Some(80.0));
-        assert_eq!(assert.max_passthrough_pct, Some(30.0));
-        assert_eq!(assert.max_errors, Some(0));
     }
 
     #[test]
@@ -795,36 +540,6 @@ max_wall_s = 900
         ] {
             let err = deser_toml::from_str::<ScenarioChecks>(raw).unwrap_err();
             assert!(err.to_string().contains("unknown field"), "{err}");
-        }
-    }
-
-    #[test]
-    fn scenario_source_config_parses_ref_next() {
-        let cfg: ScenarioConfig = deser_toml::from_str(
-            r#"
-name = "bench-firefox-pull"
-
-[source]
-kind = "clone"
-repo = "https://github.com/mozilla-firefox/firefox.git"
-ref = "24e52d9437e3fc676335893e579624458bc34789"
-ref_next = "73c9f54454133a705eaceec1a43be995540e3ab4"
-objdir = "obj-kache-bench"
-
-[commands]
-build = "./mach build"
-"#,
-        )
-        .unwrap();
-
-        match cfg.source {
-            ScenarioSourceConfig::Clone { ref ref_next, .. } => {
-                assert_eq!(
-                    ref_next.as_deref(),
-                    Some("73c9f54454133a705eaceec1a43be995540e3ab4")
-                );
-            }
-            _ => panic!("expected a clone source config"),
         }
     }
 
