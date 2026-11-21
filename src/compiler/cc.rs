@@ -1906,15 +1906,20 @@ fn build_preprocess_args(parsed: &CcArgs) -> Vec<String> {
 /// passthrough) if the preprocessor yields empty stdout.
 const CC_PREPROCESS_MEMO_TARGET: &str = "__kache_preprocess_memo";
 
+/// The depfile a compile is asked to write inside `dir`, with the spelling the
+/// compiler receives. `None` when that spelling is not UTF-8, which leaves the
+/// invocation without dependency capture.
+fn capture_depfile(dir: &Path) -> Option<(PathBuf, String)> {
+    let path = dir.join("inputs.d");
+    let arg = path.to_str()?.to_string();
+    Some((path, arg))
+}
+
 fn add_preprocess_dep_capture(
     parsed: &CcArgs,
     pp_args: Vec<String>,
-    dep_path: &Path,
+    path: String,
 ) -> Vec<String> {
-    let path = dep_path
-        .to_str()
-        .expect("dependency capture is enabled only for UTF-8 temp paths")
-        .to_string();
     let extra = match parsed.family.dialect() {
         Dialect::Gnu => vec![
             "-MD".to_string(),
@@ -2984,10 +2989,9 @@ fn preprocess_hash(
     };
     let dep_path = dep_temp
         .as_ref()
-        .map(|dir| dir.path().join("inputs.d"))
-        .filter(|path| path.to_str().is_some());
-    let mut pp_args = dep_path.as_deref().map_or(pp_args.clone(), |path| {
-        add_preprocess_dep_capture(parsed, pp_args.clone(), path)
+        .and_then(|dir| capture_depfile(dir.path()));
+    let mut pp_args = dep_path.as_ref().map_or(pp_args.clone(), |(_, arg)| {
+        add_preprocess_dep_capture(parsed, pp_args.clone(), arg.clone())
     });
     let run = |args: &[String]| {
         crate::opcounts::record_preprocessor_run();
@@ -3067,7 +3071,7 @@ fn preprocess_hash(
     // have noticed the root.
     // Fingerprinted for a path-bound expansion too: the memo carries the
     // binding, and the key folds the reading checkout's roots.
-    let fingerprints = dep_path.as_deref().and_then(|path| {
+    let fingerprints = dep_path.as_ref().and_then(|(path, _)| {
         let dependencies = std::fs::read_to_string(path)
             .context("reading cc preprocess dependency file")
             .and_then(|raw| {
@@ -9633,13 +9637,12 @@ impl CcCompiler {
         };
         let private_path = private
             .as_ref()
-            .map(|dir| dir.path().join("inputs.d"))
-            .filter(|path| path.to_str().is_some());
+            .and_then(|dir| capture_depfile(dir.path()));
         let extra = match &private_path {
-            Some(path) => vec![
+            Some((_, arg)) => vec![
                 "-MD".to_string(),
                 "-MF".to_string(),
-                path.to_str().expect("checked UTF-8").to_string(),
+                arg.clone(),
                 "-MT".to_string(),
                 CC_DIRECT_CAPTURE_TARGET.to_string(),
             ],
@@ -9651,7 +9654,7 @@ impl CcCompiler {
         }
         let depfile = match (caller_depfile, private_path) {
             (Some(path), _) => path,
-            (None, Some(path)) => path,
+            (None, Some((path, _))) => path,
             (None, None) => return Ok((result, None)),
         };
         let inputs = {

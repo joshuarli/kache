@@ -4580,14 +4580,14 @@ fn code_moved_to_another_line_changes_the_expansion_key() {
 
 #[test]
 fn preprocess_dep_capture_is_complete_for_both_dialects() {
-    let dep = Path::new("memo inputs.d");
+    let dep = || "memo inputs.d".to_string();
     let gnu = CcArgs::parse(&s(&["gcc", "-c", "a.c"])).unwrap();
-    let gnu_args = add_preprocess_dep_capture(&gnu, build_preprocess_args(&gnu), dep);
+    let gnu_args = add_preprocess_dep_capture(&gnu, build_preprocess_args(&gnu), dep());
     assert!(gnu_args.windows(2).any(|args| args == ["-MD", "-MF"]));
     assert!(gnu_args.iter().any(|arg| arg == "memo inputs.d"));
 
     let cl = CcArgs::parse(&s(&["clang-cl", "-c", "a.c"])).unwrap();
-    let cl_args = add_preprocess_dep_capture(&cl, build_preprocess_args(&cl), dep);
+    let cl_args = add_preprocess_dep_capture(&cl, build_preprocess_args(&cl), dep());
     assert!(
         cl_args
             .windows(2)
