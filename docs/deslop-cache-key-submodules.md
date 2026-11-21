@@ -92,6 +92,8 @@ file restored, `cmp` exit 0):
 | `name.is_none() && length >= 24` to `length >= 24` | `macho_refuses_a_short_or_repeated_dylib_id_command` |
 | the stub spelling check replaced by `true` | `stub_refuses_an_install_name_spelled_inside_another_field` |
 
+Three more tests were added to `tests.rs` for gaps in `src/cache_key.rs` (`c6a064f7`, `b6857aa8`, `f26f4077`); they and their faults are recorded in [deslop-cache-key.md](deslop-cache-key.md).
+
 Not faulted: `commands <= MAX_HEADER - header` (the u32::MAX header test is
 the witness by construction; deleting the guard would allocate 4 GiB, so no run).
 A critical decision elsewhere in this module tree: `if workspace_unit && !covered`
