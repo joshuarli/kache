@@ -128,3 +128,29 @@ pub fn collect_meta(kache_path: &std::path::Path) -> HashMap<&'static str, Strin
     );
     m
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn phase(status: &str) -> PhaseResult {
+        PhaseResult {
+            phase: "cold".into(),
+            status: status.into(),
+            build_wall_s: 0,
+            build_exit_code: 0,
+            verify: None,
+            kache_report: deser_value::Value::from(0),
+            measurements: Vec::new(),
+            assertions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_fixture_passes_only_when_every_phase_passed() {
+        assert_eq!(fixture_status(&[phase("pass"), phase("pass")]), "pass");
+        assert_eq!(fixture_status(&[phase("pass"), phase("fail")]), "fail");
+        assert_eq!(fixture_status(&[phase("fail"), phase("pass")]), "fail");
+        assert_eq!(fixture_status(&[phase("skip")]), "fail");
+    }
+}
