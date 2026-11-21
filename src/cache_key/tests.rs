@@ -5969,6 +5969,41 @@ fn clippy_identity_follows_version_config_and_lint_arguments() {
     assert!(with_args.contains("CLIPPY_ARGS=-Dclippy::all"));
 }
 
+#[test]
+fn configured_base_dirs_key_the_set_and_not_where_the_roots_are() {
+    let _lock = key_test_lock();
+    if !rustc_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("lib.rs");
+    std::fs::write(&source, "pub fn value() {}\n").unwrap();
+    let root = |name: &str| {
+        let root = dir.path().join(name);
+        std::fs::create_dir_all(&root).unwrap();
+        root.to_string_lossy().into_owned()
+    };
+    let (first, second) = (root("first"), root("second"));
+    let args = RustcArgs::parse(&base_args(&source)).unwrap();
+    let key = |normalizer: &PathNormalizer| {
+        provide_dep_info(
+            DepInfo {
+                source_files: vec![source.clone()],
+                env_deps: vec![],
+            },
+            None,
+        );
+        compute_cache_key(&args, &FileHasher::new(), normalizer, &KeyEnv::default()).unwrap()
+    };
+    let unconfigured = key(&PathNormalizer::empty());
+    let at_first = key(&PathNormalizer::empty().with_base_dirs(std::slice::from_ref(&first)));
+    let at_second = key(&PathNormalizer::empty().with_base_dirs(std::slice::from_ref(&second)));
+    let both = key(&PathNormalizer::empty().with_base_dirs(&[first, second]));
+    assert_ne!(unconfigured, at_first, "a configured client is a different recipe");
+    assert_eq!(at_first, at_second, "the key must not name where the root is");
+    assert_ne!(at_first, both, "the number of configured roots is part of the key");
+}
+
 #[cfg(unix)]
 #[test]
 fn clippy_lint_arguments_key_a_clippy_chain_and_no_other_compile() {
