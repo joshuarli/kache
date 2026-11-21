@@ -89,6 +89,7 @@ pub struct Config {
     /// with `KACHE_RUNTIME_DIR` / `[cache] runtime_dir`. When
     /// `KACHE_TRUST_DOMAIN` isolates the store, a defaulted runtime dir
     /// follows that isolated path; an explicit runtime dir does not.
+    /// Overlong default socket paths use a private node-local runtime instead.
     pub runtime_dir: PathBuf,
     /// Optional daemon IPC endpoint resolved once by [`Config::load`].
     /// `None` keeps the default `<runtime_dir>/daemon.sock` placement.
@@ -569,7 +570,9 @@ impl Config {
                     .map(|s| shellexpand_for(invocation, s))
                     .ok_or(())
             })
-            .unwrap_or_else(|_| cache_dir.clone());
+            .ok();
+        let runtime_explicit = runtime_dir.is_some();
+        let runtime_dir = runtime_dir.unwrap_or_else(|| cache_dir.clone());
         let runtime_dir = resolve_invocation_path(invocation, &runtime_dir)?;
         let runtime_follows_cache = runtime_dir == cache_dir;
 
@@ -589,6 +592,9 @@ impl Config {
         // manually constructed Config or change an existing Config mid-run.
         let socket_path_override =
             resolve_socket_path_override(invocation.var_os("KACHE_SOCKET_PATH"));
+        let runtime_dir = crate::runtime::resolve_runtime(
+            &cache_dir, runtime_dir, runtime_explicit, socket_path_override.as_deref(),
+        )?;
 
         let explicit_max_size = env_or_ignored_for(invocation, "KACHE_MAX_SIZE", ignore_env)
             .ok()
