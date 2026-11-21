@@ -273,6 +273,7 @@ pub struct CcArgs {
     pub language_override: Option<String>,
     /// Detected compiler driver family (selects the flag dialect).
     pub family: ToolFamily,
+    pub(crate) wp_dependency_family: Option<crate::probe::ProbedFamily>,
     /// Path ownership captured at parse time for portable dependency sidecars.
     pub(crate) depinfo_roots: Vec<(PathBuf, String, u8)>,
     /// clang's `--serialize-diagnostics <path>` output.
@@ -781,6 +782,13 @@ impl CcArgs {
             .context("cc invocation missing argv[0]")?;
 
         let family = ToolFamily::detect(program, rest);
+        let wp_dependency_family = if family.dialect() == Dialect::Gnu
+            && rest.iter().any(|arg| arg.starts_with("-Wp,"))
+        {
+            crate::probe::probe_compiler_family_for(program, env)
+        } else {
+            None
+        };
 
         let mut parsed = CcArgs {
             invocation_env: env.clone(),
@@ -798,6 +806,7 @@ impl CcArgs {
             depinfo: None,
             language_override: None,
             family,
+            wp_dependency_family,
             depinfo_roots: Vec::new(),
             serialize_diagnostics: None,
             include_pch: None,
@@ -1874,14 +1883,7 @@ fn cc_wp_dependency_spec(parsed: &CcArgs) -> Option<DepInfoSpec> {
     if parsed.family.dialect() != Dialect::Gnu || parsed.mode != CompileMode::Compile {
         return None;
     }
-    let name = super::command_basename(&parsed.program)?;
-    let name = super::strip_windows_exe_suffix(name).to_ascii_lowercase();
-    if !matches!(
-        kache_shims::compiler_driver(&name),
-        Some("gcc" | "g++" | "clang" | "clang++")
-    ) {
-        return None;
-    }
+    let family = parsed.wp_dependency_family?;
     let mut wp = None;
     let mut idx = 0;
     while idx < parsed.rest.len() {
@@ -1915,10 +1917,10 @@ fn cc_wp_dependency_spec(parsed: &CcArgs) -> Option<DepInfoSpec> {
         };
     }
     let (include_system, output) = wp?;
-    if parsed.family == ToolFamily::Gnu && output.is_none() {
+    if family == crate::probe::ProbedFamily::Gnu && output.is_none() {
         return None;
     }
-    let targets = if parsed.family == ToolFamily::Gnu {
+    let targets = if family == crate::probe::ProbedFamily::Gnu {
         vec![(
             format!("{}.o", parsed.sources.first()?.file_stem()?.to_str()?),
             false,
@@ -4089,7 +4091,7 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec {
         matcher: Matcher::Regex(r"-Wp,-M(?:M)?D(?:,[^,]+)?"),
         class: FlagClass::NoObjectEffect,
-        source: "isolated named GCC/Clang depfile modelled by DepInfoSpec; mixed lists/options refuse; bare GCC overwrites its source; ambiguous cc drivers stay passthrough",
+        source: "isolated depfile modelled by DepInfoSpec using the verified compiler family; mixed lists/options and unknown families refuse; bare GCC overwrites its source",
         dialect: Some(Dialect::Gnu),
     },
     FlagSpec {

@@ -1,11 +1,34 @@
 use super::*;
 
+fn wp_args_for_family(args: &[&str], family: Option<crate::probe::ProbedFamily>) -> CcArgs {
+    let dir = tempfile::tempdir().unwrap();
+    let env = InvocationEnv::from_parts(
+        [("PATH", OsStr::new(""))],
+        Some(dir.path().to_owned()),
+        None,
+        dir.path().to_owned(),
+    );
+    let mut parsed = CcArgs::parse_for(&s(args), &env).unwrap();
+    parsed.wp_dependency_family = family;
+    if parsed.depinfo.is_none() {
+        parsed.depinfo = cc_wp_dependency_spec(&parsed);
+    }
+    parsed
+}
+
 #[test]
 fn wp_depfiles_use_the_existing_depinfo_model() {
     for program in ["gcc", "clang"] {
         for (flag, system) in [("-Wp,-MD,deps.tmp", true), ("-Wp,-MMD,deps.tmp", false)] {
-            let parsed =
-                CcArgs::parse(&s(&[program, flag, "-c", "src/unit.c", "-o", "out.o"])).unwrap();
+            let family = if program == "gcc" {
+                crate::probe::ProbedFamily::Gnu
+            } else {
+                crate::probe::ProbedFamily::Clang
+            };
+            let parsed = wp_args_for_family(
+                &[program, flag, "-c", "src/unit.c", "-o", "out.o"],
+                Some(family),
+            );
             assert!(parsed.refuse_reasons(&[]).is_empty());
             assert_eq!(
                 parsed.depinfo_output_path(),
@@ -44,7 +67,10 @@ fn wp_depfiles_use_the_existing_depinfo_model() {
         }
     }
     for flag in ["-Wp,-MD", "-Wp,-MMD"] {
-        let parsed = CcArgs::parse(&s(&["clang", flag, "-c", "unit.c", "-o", "out.o"])).unwrap();
+        let parsed = wp_args_for_family(
+            &["clang", flag, "-c", "unit.c", "-o", "out.o"],
+            Some(crate::probe::ProbedFamily::Clang),
+        );
         assert!(parsed.refuse_reasons(&[]).is_empty());
         assert_eq!(parsed.depinfo_output_path(), Some(PathBuf::from("out.d")));
     }
@@ -61,8 +87,10 @@ fn wp_depfiles_refuse_unsafe_or_ambiguous_forms() {
             "-Wp,-MMD,u.d,-DVALUE=1",
             "-Wp,-DVALUE=1",
         ] {
-            let parsed =
-                CcArgs::parse(&s(&[program, flag, "-c", "unit.c", "-o", "out.o"])).unwrap();
+            let parsed = wp_args_for_family(
+                &[program, flag, "-c", "unit.c", "-o", "out.o"],
+                Some(crate::probe::ProbedFamily::Gnu),
+            );
             assert!(!parsed.refuse_reasons(&[]).is_empty(), "{program} {flag}");
         }
         for other in [
@@ -77,29 +105,99 @@ fn wp_depfiles_refuse_unsafe_or_ambiguous_forms() {
             "-Xpreprocessor",
             "-Wp,-MD,other.d",
         ] {
-            let parsed = CcArgs::parse(&s(&[
-                program,
-                "-Wp,-MMD,u.d",
-                other,
-                "other",
-                "-c",
-                "unit.c",
-                "-o",
-                "out.o",
-            ]))
-            .unwrap();
+            let parsed = wp_args_for_family(
+                &[
+                    program,
+                    "-Wp,-MMD,u.d",
+                    other,
+                    "other",
+                    "-c",
+                    "unit.c",
+                    "-o",
+                    "out.o",
+                ],
+                Some(crate::probe::ProbedFamily::Gnu),
+            );
             assert!(!parsed.refuse_reasons(&[]).is_empty(), "{program} {other}");
         }
     }
     for program in ["gcc", "cc", "c++", "clang-cl"] {
         for flag in ["-Wp,-MMD", "-Wp,-MD"] {
-            let parsed =
-                CcArgs::parse(&s(&[program, flag, "-c", "unit.c", "-o", "out.o"])).unwrap();
+            let parsed = wp_args_for_family(
+                &[program, flag, "-c", "unit.c", "-o", "out.o"],
+                Some(crate::probe::ProbedFamily::Gnu),
+            );
             assert!(!parsed.refuse_reasons(&[]).is_empty(), "{program} {flag}");
         }
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn wp_depfiles_use_the_probed_family_of_cc_aliases() {
+    for name in ["cc", "c++"] {
+        for (marker, family) in [
+            ("KACHE_PROBE_GNU", Some(crate::probe::ProbedFamily::Gnu)),
+            ("KACHE_PROBE_CLANG", Some(crate::probe::ProbedFamily::Clang)),
+            ("unknown", None),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let program = root.path().join(name);
+            fs::write(&program, format!("#!/bin/sh\nprintf '%s\\n' '{marker}'\n")).unwrap();
+            let mut perms = fs::metadata(&program).unwrap().permissions();
+            std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+            fs::set_permissions(&program, perms).unwrap();
+            let cache = root.path().join("cache");
+            let env = InvocationEnv::from_parts(
+                [("KACHE_CACHE_DIR", cache.as_os_str())],
+                Some(root.path().to_owned()),
+                None,
+                root.path().to_owned(),
+            );
+            for flag in ["-Wp,-MD,u.d", "-Wp,-MMD,u.d", "-Wp,-MD", "-Wp,-MMD"] {
+                let parsed = CcArgs::parse_for(
+                    &s(&[
+                        program.to_str().unwrap(),
+                        flag,
+                        "-c",
+                        "unit.c",
+                        "-o",
+                        "out.o",
+                    ]),
+                    &env,
+                )
+                .unwrap();
+                assert_eq!(parsed.wp_dependency_family, family);
+                let safe = family.is_some()
+                    && (flag.ends_with(",u.d")
+                        || family == Some(crate::probe::ProbedFamily::Clang));
+                assert_eq!(
+                    parsed.refuse_reasons(&[]).is_empty(),
+                    safe,
+                    "{name} {marker} {flag}"
+                );
+                if safe {
+                    assert_eq!(
+                        parsed.depinfo_output_path(),
+                        Some(PathBuf::from(if flag.ends_with(",u.d") {
+                            "u.d"
+                        } else {
+                            "out.d"
+                        }))
+                    );
+                    assert_eq!(
+                        parsed.depinfo.as_ref().unwrap().targets,
+                        if family == Some(crate::probe::ProbedFamily::Gnu) {
+                            vec![("unit.o".into(), false)]
+                        } else {
+                            vec![]
+                        }
+                    );
+                }
+            }
+        }
+    }
+}
 #[test]
 fn dependency_output_env_refuses_gcc_but_preserves_clang() {
     let root = tempfile::tempdir().unwrap();
