@@ -874,7 +874,7 @@ fn put_records_the_executable_bit_from_the_compiler_output_not_the_staging_snaps
                 &[],
                 "x86_64-unknown-linux-gnu",
                 "",
-                &[(output.clone(), "harness-a1b2c3d4e5f60718".to_string())],
+                &[(output, "harness-a1b2c3d4e5f60718".to_string())],
                 "",
                 "",
                 1,
@@ -925,7 +925,7 @@ fn put_records_no_executable_bit_for_a_non_executable_output() {
                 &[],
                 "x86_64-unknown-linux-gnu",
                 "",
-                &[(output.clone(), "libfoo.rlib".to_string())],
+                &[(output, "libfoo.rlib".to_string())],
                 "",
                 "",
                 1,
@@ -1930,7 +1930,7 @@ fn free_staging_path_skips_occupied_names() {
     fs::write(&first, b"taken").unwrap();
 
     // First candidate always collides; the next one is free.
-    let names: Vec<PathBuf> = vec![first.clone(), second.clone()];
+    let names: Vec<PathBuf> = vec![first, second.clone()];
     let mut calls = 0usize;
     let got = free_staging_path(|_| {
         let p = names[calls].clone();
@@ -2264,7 +2264,7 @@ fn deferred_durability_verifies_pending_hits_until_the_flush() {
                 &[],
                 "x86_64-unknown-linux-gnu",
                 "dev",
-                &[(output_file.clone(), "libout.rlib".to_string())],
+                &[(output_file, "libout.rlib".to_string())],
                 "",
                 "",
             )
@@ -3342,7 +3342,7 @@ fn file_hash_records_persist_and_reject_changed_fingerprints() {
     fs::write(&second, vec![9; 65_536]).unwrap();
     let second_fingerprint = FileFingerprint::from_path(&second).unwrap();
     store.record_verified_file_hashes(&[
-        (fingerprint.clone(), "batched"),
+        (fingerprint, "batched"),
         (second_fingerprint, "batched-second"),
     ]);
     assert!(
@@ -4056,7 +4056,7 @@ fn test_store_put_reports_full_dup_for_existing_blob() {
             &[],
             "host",
             "dev",
-            &[(output_file.clone(), "libmylib.rlib".to_string())],
+            &[(output_file, "libmylib.rlib".to_string())],
             "",
             "",
         )
@@ -6084,7 +6084,7 @@ fn older_than_matches_former_sql_while_duplicate_fails_closed() {
             .unwrap()
     };
     let mut policy_dup = crate::eviction::DuplicatePolicy.select(&candidates);
-    let mut sql_dup_sorted = sql_dup.clone();
+    let mut sql_dup_sorted = sql_dup;
     policy_dup.sort();
     sql_dup_sorted.sort();
     assert_eq!(
@@ -6717,7 +6717,7 @@ fn test_store_clear() {
             &[],
             "",
             "dev",
-            &[(output_file.clone(), "lib.rlib".to_string())],
+            &[(output_file, "lib.rlib".to_string())],
             "",
             "",
         )
@@ -9741,7 +9741,6 @@ fn republication_during_removal_cleanup_is_never_stranded() {
         }
     };
     let publisher = {
-        let config = config.clone();
         let dir_path = dir.path().to_path_buf();
         let released = std::sync::Arc::clone(&released);
         let attempting = std::sync::Arc::clone(&attempting);
@@ -13711,7 +13710,7 @@ fn eviction_stands_off_after_losing_the_write_lock() {
     let build = Store::open(&config).unwrap();
     build.db.execute_batch("BEGIN IMMEDIATE").unwrap();
 
-    let mut gc_config = config.clone();
+    let mut gc_config = config;
     gc_config.max_size = 1;
     let gc = Store::open(&gc_config).unwrap();
     // Each removal waits out the busy timeout before it gives up. Cut it
@@ -13744,7 +13743,7 @@ fn eviction_pauses_between_write_slices() {
     let store = Store::open(&config).unwrap();
     put_evictable_entries(&store, dir.path(), 60);
 
-    let mut gc_config = config.clone();
+    let mut gc_config = config;
     gc_config.max_size = 1;
     let mut gc = Store::open(&gc_config).unwrap();
     let slice = Duration::from_millis(1);
@@ -13791,7 +13790,7 @@ fn eviction_skips_entries_it_found_held_without_taking_the_lock() {
         std::fs::hard_link(store.blob_path(hash), retainer).unwrap();
     }
 
-    let mut gc_config = config.clone();
+    let mut gc_config = config;
     gc_config.max_size = 1;
     let mut gc = Store::open(&gc_config).unwrap();
     // A zero slice pauses after every entry that took the lock.
@@ -14048,10 +14047,10 @@ fn ro_tree_snapshot(dir: &Path) -> Vec<(PathBuf, u64, Option<std::time::SystemTi
                 out.push((p.clone(), 0, Some(m.modified().unwrap()), Vec::new()));
                 stack.push(p);
             } else if p.to_string_lossy().ends_with("-shm") {
-                out.push((p.clone(), m.len(), None, Vec::new()));
+                out.push((p, m.len(), None, Vec::new()));
             } else {
                 let bytes = fs::read(&p).unwrap();
-                out.push((p.clone(), m.len(), Some(m.modified().unwrap()), bytes));
+                out.push((p, m.len(), Some(m.modified().unwrap()), bytes));
             }
         }
     }
