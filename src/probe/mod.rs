@@ -844,6 +844,7 @@ mod tests {
             "COMPILER_RT_TEST",
             "RC_DEBUG_OPTIONS",
             "XCODE_TEST",
+            "xcrun_verbose",
             "UniversalCRTSdkDir",
             "CUDA_PATH",
             "HIP_PATH",

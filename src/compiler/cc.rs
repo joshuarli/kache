@@ -5852,6 +5852,7 @@ fn cc_memo_env_pattern_is_keyed(name: &str) -> bool {
             "COMPILER_RT_", // Clang runtime library lookup.
             "RC_",          // Apple driver debug/environment options.
             "XCODE_",       // Apple developer tool configuration.
+            "XCRUN_",       // Apple tool lookup, cache and diagnostic controls.
             "VC",           // Clang Windows toolchain selection.
             "UCRT",         // Clang Windows runtime selection.
             "UNIVERSALCRT", // Clang Windows runtime root.
