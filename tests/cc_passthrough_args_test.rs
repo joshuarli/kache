@@ -908,6 +908,51 @@ fn cacheable_cc_command(root: &std::path::Path) -> Command {
 }
 
 #[test]
+fn coverage_preprocess_fallback_restores_object_and_notes() {
+    if !Command::new("clang")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        assert!(
+            !cfg!(target_os = "linux") || std::env::var_os("CI").is_none(),
+            "Linux CI must provide clang"
+        );
+        eprintln!("skipping coverage regression: clang unavailable");
+        return;
+    }
+    for discovery in ["0", "1"] {
+        let dir = FixtureDir::new();
+        let root = dir.path().canonicalize().unwrap();
+        fs::write(root.join("kache.toml"), "").unwrap();
+        fs::write(root.join("unit.c"), "int square(int x) { return x * x; }\n").unwrap();
+        let compile = || {
+            let output = cacheable_cc_command(&root)
+                .args(["clang", "--coverage", "-c", "unit.c", "-o", "unit.o"])
+                .env("KACHE_DEFERRED_DISCOVERY", discovery)
+                .env_remove("KACHE_CC_PATH_NORMALIZE")
+                .env_remove("KACHE_CC_SOURCE_DATE_EPOCH")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            last_cc_event(&root)
+        };
+        let first = compile();
+        assert_eq!(first["result"], "miss", "discovery={discovery}: {first:?}");
+        let object = fs::read(root.join("unit.o")).unwrap();
+        let notes = fs::read(root.join("unit.gcno")).unwrap();
+        fs::remove_file(root.join("unit.o")).unwrap();
+        fs::write(root.join("unit.gcno"), "stale notes\n").unwrap();
+        let restored = compile();
+        assert_eq!(restored["result"], "local_hit", "discovery={discovery}: {restored:?}");
+        assert_eq!(restored["compiler_runs"], 0, "{restored:?}");
+        assert_eq!(restored["cache_key"], first["cache_key"]);
+        assert_eq!(fs::read(root.join("unit.o")).unwrap(), object);
+        assert_eq!(fs::read(root.join("unit.gcno")).unwrap(), notes);
+    }
+}
+
+#[test]
 fn cc_ignoring_source_date_epoch_does_not_restore_a_stale_time() {
     let dir = FixtureDir::new();
     let root = dir.path().canonicalize().unwrap();

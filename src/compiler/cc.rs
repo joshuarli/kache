@@ -9545,10 +9545,9 @@ impl CcCompiler {
             trace_name,
             pp_hash
         );
-        // A PCH records its inputs' absolute paths, which the prefix maps do
-        // not rewrite, so it belongs to this checkout like any output that
-        // spells a root.
-        if parsed.mode == CompileMode::Precompile {
+        // PCH and coverage outputs can record absolute paths that prefix maps
+        // do not rewrite, even when the preprocessor expansion is portable.
+        if parsed.mode == CompileMode::Precompile || parsed.coverage_instrumented() {
             self.key_path_bound.set(true);
         }
         // A read set whose object spells a checkout root is keyed to that

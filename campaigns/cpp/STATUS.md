@@ -365,6 +365,12 @@ Observed on Apple clang 21, GCC 15.2 and clang 23 (L4 image):
   sidecar set differs from the invocation's misses.
 - GCC coverage hits were also checked by hand in the L4 image: `gcov`
   reports 100% after running the binary linked from a restored pair.
+- Coverage keys also bind every mapped checkout root on the preprocessing
+  fallback. Clang 14 ignores `SOURCE_DATE_EPOCH` and takes that path; its
+  deterministic object still embeds the absolute `.gcda` path, so the
+  portable-key output guard previously declined to store it. Both discovery
+  modes now restore the object/notes pair without relaxing that guard or
+  gating `cc-out-gcno` on compiler version.
 
 **CCP-05 diagnostic formatting finding.** Before this fix, every
 `-fdiagnostics-*` flag and the color switches were left out of the
@@ -672,9 +678,11 @@ its header revert from 8.69x to 1.41x. **Losses now, ranked:**
    keep records from the previous policy separate.
    Local Ubuntu 22.04 verification (GCC 11, Clang 14): 967 focused tests
    passed (2 ignored), `make check` passed, and all five negative controls
-   were detected. The full oracle has 199 MATCH, 44 compiler-unsupported
-   results and one `cc-out-gcno` reproducible/Clang `KACHE_MISSED_REUSE`;
-   the pre-change probe-schema-5 release engine reproduces that same miss.
+   were detected. At that revision the full oracle had 199 MATCH, 44
+   compiler-unsupported results and one `cc-out-gcno` reproducible/Clang
+   `KACHE_MISSED_REUSE`;
+   the pre-change probe-schema-5 release engine reproduced that same miss
+   (subsequently fixed under CCP-05 above).
    A provisional 25-run warm GCC microcheck with changing
    `HYPERFINE_ITERATION` went from 6.2 ± 0.2 ms to 3.5 ± 0.2 ms; compiler
    probe records fell from 29 to 1. Other checks ran concurrently, and
