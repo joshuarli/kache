@@ -230,7 +230,7 @@ fn selection_lines(selection: &kache_shims::Selection) -> Vec<String> {
             "warning: {}. The service may run as a user who cannot reach this path.",
             selection.reason
         )),
-        _ => {}
+        kache_shims::Stability::InstallerManaged | kache_shims::Stability::UserManaged => {}
     }
     lines
 }
@@ -483,7 +483,7 @@ impl StartupLog {
     fn human(&self) -> String {
         match self {
             Self::File(path) => term::home_path(path),
-            other => other.to_string(),
+            Self::Journal => self.to_string(),
         }
     }
 }
