@@ -118,11 +118,9 @@ mod tests {
     }
 
     #[test]
-    fn identity_supports_non_utf8_and_missing_components_before_parent_traversal() {
+    fn identity_supports_missing_components_before_parent_traversal() {
         let root = tempfile::tempdir().unwrap();
-        let cache = root
-            .path()
-            .join(std::ffi::OsString::from_vec(vec![0xff; 120]));
+        let cache = root.path().join("deep".repeat(30));
         let through_missing = cache.join("missing/../store");
         let direct = cache.join("store");
         assert_eq!(
@@ -135,6 +133,39 @@ mod tests {
             runtime,
             resolve_runtime(&direct, direct.clone(), false, None).unwrap()
         );
+        std::fs::remove_dir(runtime).unwrap();
+    }
+
+    #[test]
+    fn identity_preserves_non_utf8_path_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root
+            .path()
+            .join(std::ffi::OsString::from_vec(vec![0xff; 120]));
+        let through_missing = cache.join("missing/../store");
+        let direct = cache.join("store");
+        assert_eq!(
+            cache_identity(&direct).unwrap(),
+            root.path()
+                .canonicalize()
+                .unwrap()
+                .join(cache.file_name().unwrap())
+                .join("store")
+        );
+        assert_eq!(
+            cache_identity(&through_missing).unwrap(),
+            cache_identity(&direct).unwrap()
+        );
+        let runtime = resolve_runtime(&direct, direct.clone(), false, None).unwrap();
+        // APFS rejects non-UTF-8 directory names.
+        #[cfg(not(target_os = "macos"))]
+        {
+            std::fs::create_dir_all(&through_missing).unwrap();
+            assert_eq!(
+                runtime,
+                resolve_runtime(&direct, direct.clone(), false, None).unwrap()
+            );
+        }
         std::fs::remove_dir(runtime).unwrap();
     }
 
