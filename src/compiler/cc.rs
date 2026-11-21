@@ -6885,7 +6885,7 @@ fn cc_shadowing_names(
 }
 
 /// Version of the header scans [`cc_resolve_read_set_probes`] reads.
-const CC_HEADER_SCAN_VERSION: i64 = 5;
+const CC_HEADER_SCAN_VERSION: i64 = 6;
 
 /// The probes a read set's headers make once every header's aliases are
 /// known. A function of the headers' bytes and the command-line
@@ -6918,9 +6918,14 @@ fn cc_probe_read_set(contents: &[String], definitions: &str) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-/// A header's probe scan, parsed. `None` is a header whose probes cannot be
-/// read from its literal text.
-type CcParsedHeaderScan = std::sync::Arc<Option<CcHeaderProbeScan>>;
+/// Content-addressed header analysis, parsed.
+type CcParsedHeaderScan = std::sync::Arc<CcHeaderAnalysis>;
+
+#[derive(deser::Serialize, deser::Deserialize)]
+struct CcHeaderAnalysis {
+    probes: Option<CcHeaderProbeScan>,
+    timestamp: String,
+}
 
 /// Parsed scans by content hash, kept for the life of the process. A scan
 /// depends on the header's bytes alone, and the store holds the macOS SDK's
@@ -6987,19 +6992,36 @@ fn cc_parsed_header_scans(
         .iter()
         .map(|&index| read_inputs[index].clone())
         .collect::<Vec<_>>();
-    let serialized = file_hasher.cc_header_scans(&paths, CC_HEADER_SCAN_VERSION, &|path| {
+    let scan = |path: &Path| -> Result<(String, String)> {
         let bytes = fs::read(path)
             .with_context(|| format!("reading header availability input {}", path.display()))?;
-        let probes = cc_header_probe_scan(&cc_splice_lines(&bytes));
-        Ok((
-            blake3::hash(&bytes).to_hex().to_string(),
-            deser_json::to_string(&probes)?,
-        ))
-    })?;
+        let content = blake3::hash(&bytes).to_hex().to_string();
+        let analysis = CcHeaderAnalysis {
+            probes: cc_header_probe_scan(&cc_splice_lines(&bytes)),
+            timestamp: cc_timestamp_scan_record(&content, cc_timestamp_may_expand(&bytes)),
+        };
+        Ok((content, deser_json::to_string(&analysis)?))
+    };
+    let mut serialized = file_hasher.cc_header_scans(&paths, CC_HEADER_SCAN_VERSION, &scan)?;
     let parsed = serialized
-        .iter()
-        .map(|scan| deser_json::from_str::<Option<CcHeaderProbeScan>>(scan).map(std::sync::Arc::new))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+        .iter_mut()
+        .zip(&missing)
+        .map(|(text, &index)| -> Result<CcParsedHeaderScan> {
+            let parsed = deser_json::from_str::<CcHeaderAnalysis>(text).ok()
+                .filter(|analysis| cc_timestamp_scan_valid(&contents[index], &analysis.timestamp));
+            let analysis = match parsed {
+                Some(analysis) => analysis,
+                None => {
+                    let (content, fresh) = scan(&read_inputs[index])?;
+                    anyhow::ensure!(content == contents[index], "cc: input changed while repairing header analysis");
+                    let analysis = deser_json::from_str(&fresh)?;
+                    *text = fresh;
+                    analysis
+                }
+            };
+            Ok(std::sync::Arc::new(analysis))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut cache = cc_header_scan_cache()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -7029,7 +7051,7 @@ fn cc_resolve_read_set_probes(
     let all_scans = || {
         scans
             .iter()
-            .filter_map(|scan| scan.as_ref().as_ref())
+            .filter_map(|scan| scan.probes.as_ref())
             .chain(std::iter::once(&argument_scan))
     };
     let aliases = cc_header_probe_aliases(all_scans());
@@ -7045,8 +7067,7 @@ fn cc_resolve_read_set_probes(
     let mut seen = HashSet::new();
     for ((input, content), scan) in read_inputs.iter().zip(contents).zip(scans) {
         let Some(probes) = scan
-            .as_ref()
-            .as_ref()
+            .probes.as_ref()
             .and_then(|scan| cc_resolve_header_probes(scan, &aliases))
         else {
             anyhow::bail!(
@@ -8251,28 +8272,73 @@ fn cc_direct_inputs_digest(fingerprints: &[crate::cache_key::CcPreprocessMemoInp
 }
 
 fn cc_timestamp_may_expand(bytes: &[u8]) -> bool {
-    let spelling: Vec<u8> = bytes.iter().copied()
-        .filter(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
-        .collect();
-    spelling.windows(b"__TIMESTAMP__".len())
-        .any(|window| window == b"__TIMESTAMP__")
+    const NAME: &[u8] = b"__TIMESTAMP__";
+    memchr::memchr_iter(b'_', bytes).any(|start| {
+        bytes[start..].iter().copied()
+            .filter(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            .take(NAME.len())
+            .eq(NAME.iter().copied())
+    })
+}
+
+fn cc_timestamp_scan_record(content: &str, sensitive: bool) -> String {
+    let value = if sensitive { "1" } else { "0" };
+    let mut hash = blake3::Hasher::new();
+    hash.update(b"kache.cc.timestamp-scan.v1\0");
+    hash.update(content.as_bytes());
+    hash.update(value.as_bytes());
+    format!("{value}:{}", hash.finalize().to_hex())
+}
+
+fn cc_timestamp_scan_valid(content: &str, record: &str) -> bool {
+    match record.as_bytes().first() {
+        Some(b'0') => record == cc_timestamp_scan_record(content, false),
+        Some(b'1') => record == cc_timestamp_scan_record(content, true),
+        _ => false,
+    }
+}
+
+fn cc_timestamp_inputs_sensitive(
+    inputs: &[PathBuf],
+    file_hasher: Option<&crate::cache_key::FileHasher<'_>>,
+) -> Result<bool> {
+    let scan = |path: &Path| -> Result<(String, String)> {
+        let bytes = fs::read(path)
+            .with_context(|| format!("reading timestamp input {}", path.display()))?;
+        let content = blake3::hash(&bytes).to_hex().to_string();
+        let record = cc_timestamp_scan_record(&content, cc_timestamp_may_expand(&bytes));
+        Ok((content, record))
+    };
+    if let Some(file_hasher) = file_hasher {
+        let analyses = file_hasher.cc_content_hashes(inputs)
+            .and_then(|contents| cc_parsed_header_scans(inputs, &contents, file_hasher));
+        match analyses {
+            Ok(scans) => return Ok(scans.iter().any(|scan| scan.timestamp.starts_with('1'))),
+            Err(error) => log::debug!("cc timestamp analysis unavailable: {error}"),
+        }
+    }
+    let mut sensitive = false;
+    for path in inputs {
+        sensitive |= scan(path)?.1.starts_with('1');
+    }
+    Ok(sensitive)
 }
 
 fn cc_timestamp_key(
     parsed: &CcArgs,
     inputs: &[PathBuf],
     prefix_maps: &[CcPrefixMap],
+    file_hasher: Option<&crate::cache_key::FileHasher<'_>>,
 ) -> Result<Option<String>> {
-    let mut sensitive = parsed.rest.iter().any(|arg| cc_timestamp_may_expand(arg.as_bytes()));
-    let mut stamps = Vec::with_capacity(inputs.len());
-    for path in inputs {
-        let bytes = fs::read(path).with_context(|| format!("reading timestamp input {}", path.display()))?;
-        sensitive |= cc_timestamp_may_expand(&bytes);
-        let metadata = fs::metadata(path)?;
-        stamps.push((cc_mapped_path(path, prefix_maps), crate::cache_key::metadata_mtime_ns(&metadata)));
-    }
+    let sensitive = parsed.rest.iter().any(|arg| cc_timestamp_may_expand(arg.as_bytes()))
+        || cc_timestamp_inputs_sensitive(inputs, file_hasher)?;
     if !sensitive {
         return Ok(None);
+    }
+    let mut stamps = Vec::with_capacity(inputs.len());
+    for path in inputs {
+        let metadata = fs::metadata(path)?;
+        stamps.push((cc_mapped_path(path, prefix_maps), crate::cache_key::metadata_mtime_ns(&metadata)));
     }
     // A macro defined in a header expands with the invoking file's mtime.
     stamps.sort_unstable();
@@ -9706,6 +9772,7 @@ impl CcCompiler {
             parsed,
             read_inputs.as_deref().unwrap_or_default(),
             &prefix_maps,
+            Some(ctx.file_hasher),
         )? {
             hasher.update(b"timestamp_mtimes.v1:");
             hasher.update(timestamp.as_bytes());

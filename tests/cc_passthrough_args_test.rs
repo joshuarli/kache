@@ -1160,6 +1160,45 @@ fn cc_time_macro_scan_diagnostics(root: &std::path::Path, compiler: &std::path::
 }
 
 #[test]
+fn cc_timestamp_header_addition_and_mtime_change_do_not_restore_stale_objects() {
+    let dir = FixtureDir::new();
+    let root = dir.path().canonicalize().unwrap();
+    fs::write(root.join("kache.toml"), "").unwrap();
+    let source = root.join("unit.c");
+    let header = root.join("stamp.h");
+    fs::write(&source, "#include \"stamp.h\"\nconst char *stamp = STAMP;\n").unwrap();
+    fs::write(&header, "#define STAMP \"ordinary\"\n").unwrap();
+    let touch = |seconds| {
+        fs::File::open(&source).unwrap().set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+        ).unwrap();
+    };
+    touch(1_700_000_000);
+    let compile = || {
+        let _ = fs::remove_file(root.join("unit.o"));
+        let output = cacheable_cc_command(&root).args(["cc", "-c", "unit.c", "-o", "unit.o"])
+            .env("SOURCE_DATE_EPOCH", "0").output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        fs::read(root.join("unit.o")).unwrap()
+    };
+    let ordinary = compile();
+    assert_eq!(ordinary, compile());
+    fs::write(&header, "#define STAMP __TIMESTAMP__\n").unwrap();
+    let stamped = compile();
+    assert_ne!(ordinary, stamped, "adding a timestamp macro must rekey");
+    assert_eq!(stamped, compile());
+    assert_eq!(stamped, compile());
+    touch(1_700_086_400);
+    let restored = compile();
+    let raw = Command::new("cc").current_dir(&root)
+        .args(["-c", "unit.c", "-o", "expected.o"])
+        .env("SOURCE_DATE_EPOCH", "0").output().unwrap();
+    assert!(raw.status.success(), "{raw:?}");
+    assert_ne!(stamped, fs::read(root.join("expected.o")).unwrap());
+    assert_eq!(restored, fs::read(root.join("expected.o")).unwrap(), "stale timestamp object restored");
+}
+
+#[test]
 fn deferred_cc_does_not_publish_inputs_changed_during_the_compile() {
     let dir = FixtureDir::new();
     let root = dir.path().canonicalize().unwrap();

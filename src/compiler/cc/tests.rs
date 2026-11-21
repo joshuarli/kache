@@ -4951,7 +4951,7 @@ fn timestamp_key_tracks_invocation_and_header_mtimes() {
         ),
     ).unwrap();
     let inputs = [source.clone(), header.clone()];
-    let key = || cc_timestamp_key(&parsed, &inputs, &[]).unwrap().unwrap();
+    let key = || cc_timestamp_key(&parsed, &inputs, &[], None).unwrap().unwrap();
     let first = key();
     assert_eq!(first, key(), "unchanged inputs retain reuse");
     for path in &inputs {
@@ -4961,14 +4961,103 @@ fn timestamp_key_tracks_invocation_and_header_mtimes() {
         ).unwrap();
         assert_ne!(before, key(), "{} mtime matters", path.display());
     }
-    assert_eq!(cc_timestamp_key(&parsed, &[], &[]).unwrap(), None);
-    assert!(cc_timestamp_key(&parsed, &[dir.path().join("absent")], &[]).is_err());
+    assert_eq!(cc_timestamp_key(&parsed, &[], &[], None).unwrap(), None);
+    assert!(cc_timestamp_key(&parsed, &[dir.path().join("absent")], &[], None).is_err());
     fs::write(&header, "#define STAMP 1\n").unwrap();
-    assert_eq!(cc_timestamp_key(&parsed, &inputs, &[]).unwrap(), None);
+    assert_eq!(cc_timestamp_key(&parsed, &inputs, &[], None).unwrap(), None);
     for bytes in [b"__TIMESTAMP__".as_slice(), b"__TIME ## STAMP__", b"__TIME %:%: STAMP__", b"__TIME\\\nSTAMP__", b"__TIME\\\r\nSTAMP__"] {
         assert!(cc_timestamp_may_expand(bytes));
     }
     assert!(!cc_timestamp_may_expand(b"__DATE__ __TIME__"));
+}
+
+#[test]
+fn timestamp_detector_preserves_filtered_spelling_semantics() {
+    fn previous(bytes: &[u8]) -> bool {
+        let spelling: Vec<u8> = bytes.iter().copied()
+            .filter(|byte| byte.is_ascii_alphanumeric() || *byte == b'_').collect();
+        spelling.windows(b"__TIMESTAMP__".len()).any(|word| word == b"__TIMESTAMP__")
+    }
+    let cases: &[&[u8]] = &[
+        b"", b"ordinary text", b"__DATE__ __TIME__", b"__TIMESTAMP__",
+        b"prefix___TIMESTAMP___suffix", b"__TIME ## STAMP__", b"__TIME %:%: STAMP__",
+        b"__TIME\\\nSTAMP__", b"__TIME\\\r\nSTAMP__", b"__TIME??/\nSTAMP__",
+        b"_/**/_TIME/**/STAMP__", b"__TIME\\STAMP__", b"__TIME\\u0053TAMP__",
+        b"__TIME\\x53TAMP__", b"__TIME\x00STAMP__", b"__TIME\xffSTAMP__",
+        b"___TIMESTAMx__ __TIMESTAMP__", b"__TIMESTAM", b"__TIMESTAMPS__",
+        b"#define STAMP __TIMESTAMP__\n", b"-DSTAMP=__TIME##STAMP__",
+    ];
+    for bytes in cases {
+        assert_eq!(cc_timestamp_may_expand(bytes), previous(bytes), "{bytes:?}");
+    }
+    for separator in [b"".as_slice(), b" ", b"/**/", b"##", b"%:%:", b"\\\n", b"\\\r\n", b"\\", b"??/\n", b"\0", b"\xff"] {
+        for split in 0..=b"__TIMESTAMP__".len() {
+            let bytes = [&b"__TIMESTAMP__"[..split], separator, &b"__TIMESTAMP__"[split..]].concat();
+            assert_eq!(cc_timestamp_may_expand(&bytes), previous(&bytes), "{bytes:?}");
+            assert!(cc_timestamp_may_expand(&bytes));
+        }
+    }
+}
+
+#[test]
+fn timestamp_scan_records_reject_corruption_and_other_contents() {
+    let content = "a".repeat(64);
+    for sensitive in [false, true] {
+        let record = cc_timestamp_scan_record(&content, sensitive);
+        assert!(cc_timestamp_scan_valid(&content, &record));
+        assert!(!cc_timestamp_scan_valid(&"b".repeat(64), &record));
+        let mut corrupted = record.into_bytes();
+        corrupted[0] = if sensitive { b'0' } else { b'1' };
+        assert!(!cc_timestamp_scan_valid(&content, std::str::from_utf8(&corrupted).unwrap()));
+    }
+    for record in ["", "0", "1:broken", "garbage"] {
+        assert!(!cc_timestamp_scan_valid(&content, record));
+    }
+}
+
+#[test]
+fn timestamp_analysis_survives_a_fresh_hasher_without_reading_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("unique-timestamp-negative.h");
+    fs::write(&path, format!("/* {} */\n#define STAMP 42\n", dir.path().display())).unwrap();
+    let paths = [path.clone()];
+    let db = dir.path().join("index.sqlite");
+    let first = crate::cache_key::FileHasher::persistent(&db);
+    assert!(!cc_timestamp_inputs_sensitive(&paths, Some(&first)).unwrap());
+    let content = first.cc_content_hashes(&paths).unwrap().pop().unwrap();
+    cc_header_scan_cache().lock().unwrap().scans.remove(&content);
+    let warm = crate::cache_key::FileHasher::persistent(&db);
+    warm.hash(&path).unwrap();
+    let hashed = warm.stats().bytes_hashed;
+    fs::rename(&path, dir.path().join("hidden.h")).unwrap();
+    assert!(!cc_timestamp_inputs_sensitive(&paths, Some(&warm)).unwrap());
+    assert_eq!(warm.stats().bytes_hashed, hashed);
+    assert!(!cc_timestamp_inputs_sensitive(&[], Some(&warm)).unwrap());
+    assert!(cc_timestamp_inputs_sensitive(&paths, None).is_err());
+}
+
+#[test]
+fn timestamp_analysis_repairs_corrupt_records_and_observes_new_contents() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("stamp.h");
+    fs::write(&path, format!("/* {} */\n#define STAMP __TIMESTAMP__\n", dir.path().display())).unwrap();
+    let paths = [path.clone()];
+    let db = dir.path().join("index.sqlite");
+    let hasher = crate::cache_key::FileHasher::persistent(&db);
+    let corrupt = CcHeaderAnalysis {
+        probes: None,
+        timestamp: cc_timestamp_scan_record(&"0".repeat(64), false),
+    };
+    hasher.cc_header_scans(&paths, CC_HEADER_SCAN_VERSION, &|path| {
+        Ok((crate::cache_key::hash_file(path)?, deser_json::to_string(&corrupt)?))
+    }).unwrap();
+    assert!(cc_timestamp_inputs_sensitive(&paths, Some(&hasher)).unwrap());
+    fs::write(&path, "#define STAMP 42\n").unwrap();
+    let fresh = crate::cache_key::FileHasher::persistent(&db);
+    assert!(!cc_timestamp_inputs_sensitive(&paths, Some(&fresh)).unwrap());
+    fs::write(&path, "#define STAMP __TIMESTAMP__\n").unwrap();
+    let changed = crate::cache_key::FileHasher::persistent(&db);
+    assert!(cc_timestamp_inputs_sensitive(&paths, Some(&changed)).unwrap());
 }
 
 #[cfg(unix)]
@@ -10804,7 +10893,10 @@ fn the_header_scan_cache_starts_over_at_its_budget() {
         scans: Default::default(),
         bytes: 0,
     };
-    let scan = || std::sync::Arc::new(None);
+    let scan = || std::sync::Arc::new(CcHeaderAnalysis {
+        probes: None,
+        timestamp: cc_timestamp_scan_record("content", false),
+    });
     cache.insert("a".into(), scan(), 6, 20);
     cache.insert("b".into(), scan(), 6, 20);
     assert_eq!(cache.bytes, 12);
