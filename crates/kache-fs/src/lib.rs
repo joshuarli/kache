@@ -10,6 +10,10 @@ use std::io;
 use std::path::Path;
 
 pub mod paths;
+#[cfg(unix)]
+mod runtime;
+#[cfg(unix)]
+pub use runtime::{private_runtime_dir, validate_socket_path};
 #[cfg(feature = "testing")]
 pub mod process_state_test;
 pub mod volume;
