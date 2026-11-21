@@ -249,7 +249,12 @@ impl ArtifactKind {
                 LinkStrategy::Copy
             }
             ArtifactKind::Metadata => LinkStrategy::WritableCopy,
-            _ => LinkStrategy::Hardlink,
+            ArtifactKind::Library
+            | ArtifactKind::Object
+            | ArtifactKind::DepInfo
+            | ArtifactKind::DebugSidecar
+            | ArtifactKind::DebugBundle
+            | ArtifactKind::Other(_) => LinkStrategy::Hardlink,
         }
     }
 }
