@@ -1111,9 +1111,11 @@ fn cc_time_macro_scan_uses_one_expansion_for_an_ordinary_native_unit() {
     fs::write(root.join("unit.c"), "#include \"value.h\"\nint value = VALUE;\n").unwrap();
     fs::write(root.join("value.h"), "#define VALUE 42\n").unwrap();
     let compiler = unpinned_cc_driver(&root);
+    // Apple Clang's default SDK adds escaped SDKSettings.json metadata to the read set.
     let compile = || {
         let output = cacheable_cc_command(&root).arg(&compiler)
-            .args(["-c", "unit.c", "-o", "unit.o"]).output().unwrap();
+            .args(["-c", "unit.c", "-o", "unit.o"])
+            .arg("-isysroot").arg(&root).output().unwrap();
         assert!(output.status.success(), "{output:?}");
         last_cc_event(&root)
     };
