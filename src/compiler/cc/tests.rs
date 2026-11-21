@@ -9,7 +9,7 @@ fn wp_args_for_family(args: &[&str], family: Option<crate::probe::ProbedFamily>)
         dir.path().to_owned(),
     );
     let mut parsed = CcArgs::parse_for(&s(args), &env).unwrap();
-    parsed.wp_dependency_family = family;
+    parsed.probed_family = family;
     if parsed.depinfo.is_none() {
         parsed.depinfo = cc_wp_dependency_spec(&parsed);
     }
@@ -167,7 +167,7 @@ fn wp_depfiles_use_the_probed_family_of_cc_aliases() {
                     &env,
                 )
                 .unwrap();
-                assert_eq!(parsed.wp_dependency_family, family);
+                assert_eq!(parsed.probed_family, family);
                 let safe = family.is_some()
                     && (flag.ends_with(",u.d")
                         || family == Some(crate::probe::ProbedFamily::Clang));
@@ -2596,6 +2596,45 @@ fn recorded_switches_key_the_literal_invocation() {
     let plain = CcArgs::parse(&s(&["clang", "-Ia", "-c", "u.c", "-o", "a.o"])).unwrap();
     assert!(cc_raw_flags_for_key(&plain, &[]).is_empty());
     assert!(cc_direct_key_shape_ok(&plain));
+}
+
+#[test]
+fn llvm_emission_keys_literal_source_paths_and_models_outputs() {
+    for (mode, ext) in [("-c", "bc"), ("-S", "ll")] {
+        let parse = |source: &str, cwd: &str| {
+            let env = InvocationEnv::from_parts([("PATH", "")], Some(PathBuf::from(cwd)), None, PathBuf::from(cwd));
+            let mut parsed = CcArgs::parse_for(&s(&["cc", "-emit-llvm", mode, source]), &env).unwrap();
+            parsed.probed_family = Some(crate::probe::ProbedFamily::Clang);
+            parsed
+        };
+        let parsed = parse("u.c", "/a");
+        assert!(parsed.refuse_reasons(&[]).is_empty(), "{:?}", parsed.refuse_reasons(&[]));
+        let expected = PathBuf::from(format!("u.{ext}"));
+        assert_eq!(parsed.object_output_path(), Some(expected.clone()));
+        assert_eq!(parsed.compiler_output_paths(), vec![expected]);
+        assert!(!cc_direct_key_shape_ok(&parsed));
+        assert!(!build_preprocess_args(&parsed).contains(&"-emit-llvm".to_string()));
+        let key = cc_raw_flags_for_key(&parsed, &[]);
+        assert_eq!(key, cc_raw_flags_for_key(&parse("u.c", "/a"), &[]));
+        assert_ne!(key, cc_raw_flags_for_key(&parse("./u.c", "/a"), &[]));
+        assert_ne!(key, cc_raw_flags_for_key(&parse("u.c", "/b"), &[]));
+        assert_ne!(key, cc_raw_flags_for_key(&parsed, &[CcPrefixMap { from: "/a".into(), to: "/mapped".into() }]));
+        for family in [None, Some(crate::probe::ProbedFamily::Gnu)] {
+            let mut unknown = parsed.clone();
+            unknown.probed_family = family;
+            assert!(!unknown.refuse_reasons(&[]).is_empty());
+        }
+        for lto in ["-flto", "-flto=thin", "-fno-lto"] {
+            let mut changed = parsed.clone();
+            changed.rest.push(lto.into());
+            assert!(changed.refuse_reasons(&[]).is_empty());
+            assert_ne!(key, cc_raw_flags_for_key(&changed, &[]));
+        }
+    }
+    let mut invalid = wp_args_for_family(&["cc", "-emit-llvm", "-E", "u.c"], Some(crate::probe::ProbedFamily::Clang));
+    assert!(!invalid.refuse_reasons(&[]).is_empty());
+    invalid.sources.clear();
+    assert!(!invalid.refuse_reasons(&[]).is_empty());
 }
 
 #[test]
