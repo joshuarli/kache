@@ -1,7 +1,8 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-pub(crate) fn resolve_runtime(
+/// Resolve the daemon runtime, relocating only an implicit overlong socket path.
+pub fn resolve_runtime(
     cache: &Path,
     runtime: PathBuf,
     explicit: bool,
