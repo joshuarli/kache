@@ -18,15 +18,6 @@ Not started.
 - **Fix with:** deslop
 - **Effort:** M
 
-### DSLP-7 · P2 · Types: crates/kache-e2e fixture and scenario runners (3/28)
-
-- **Area:** deslop · types
-- **Where:** crates/kache-e2e/src/fixture.rs, crates/kache-e2e/src/fixture_runner.rs, crates/kache-e2e/src/lib.rs, crates/kache-e2e/src/phase.rs, crates/kache-e2e/src/report.rs, crates/kache-e2e/src/result.rs, crates/kache-e2e/src/runner.rs, crates/kache-e2e/src/scenario.rs, crates/kache-e2e/src/scenario_runner.rs, crates/kache-e2e/src/source.rs, crates/kache-e2e/tests/skip_summary.rs, crates/kache-e2e/tests/strict_gate.rs
-- **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope contains approximately 5586 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
 ### DSLP-8 · P2 · Types: crates/kache-fs (4/28)
 
 - **Area:** deslop · types
