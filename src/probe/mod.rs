@@ -45,6 +45,7 @@ mod cache;
 mod resolve;
 
 pub(crate) use cache::prune as prune_records;
+pub(crate) use resolve::is_prefix_map_flag;
 
 use crate::invocation::InvocationEnv;
 use crate::invocation::process::CommandExt as _;
@@ -57,7 +58,7 @@ use std::process::Command;
 /// struct's shape or the probe logic changes in a way that would make
 /// an old on-disk record wrong: a mismatch turns the record into a
 /// cache miss (re-probe), never a wrong hit.
-pub const PROBE_SCHEMA_VERSION: u32 = 6;
+pub const PROBE_SCHEMA_VERSION: u32 = 7;
 
 /// The memoized result of probing a compiler.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -27,17 +27,10 @@
 //!    [`PATH_SENTINEL`]. This makes the key portable across machines
 //!    and worktrees.
 //!
-//!    The sentinel pass is **safe by construction**: a path is only
-//!    recognised where a path can legally start — token start, just
-//!    after `=`, or just after the `-I` prefix — and only as an
-//!    absolute path: POSIX `/…`, or (when `windows_aware`) a Windows
-//!    drive (`C:\…` / `C:/…`) or UNC (`\\…`) path. A codegen-semantic
-//!    `-cc1` token is never an absolute path (they are `-flag`,
-//!    `-flag=word`, `+feature`, or short bare words; none start `/`,
-//!    `\\`, or `<letter>:<sep>`), so the pass cannot blank out anything
-//!    that affects the object. And the failure it *could* produce — an
-//!    over- or under-specific path — only ever costs a cache miss,
-//!    never a miscache, because a path string changes no object bytes.
+//!    Prefix-map options are semantic exceptions: both OLD and NEW stay
+//!    literal here, including separate-token values. The compiler key
+//!    normalizes only OLD through its checkout prefix maps; NEW is an
+//!    observable output path and must remain literal.
 //!
 //!    `windows_aware` is **dialect-gated by the caller**: it is off for
 //!    clang-cl, whose objects keep raw native paths (it ignores
@@ -131,6 +124,9 @@ fn is_abs_path_start(s: &str, windows_aware: bool) -> bool {
 /// or `\` elsewhere is not treated as a path, so codegen-semantic tokens
 /// are never altered.
 fn sentinel_token(tok: &str, windows_aware: bool) -> String {
+    if is_prefix_map_flag(tok.split('=').next().unwrap_or(tok)) {
+        return tok.to_string();
+    }
     if is_abs_path_start(tok, windows_aware) {
         return PATH_SENTINEL.to_string();
     }
@@ -146,6 +142,11 @@ fn sentinel_token(tok: &str, windows_aware: bool) -> String {
         return format!("-I{PATH_SENTINEL}");
     }
     tok.to_string()
+}
+
+pub(crate) fn is_prefix_map_flag(flag: &str) -> bool {
+    matches!(flag, "-ffile-prefix-map" | "-fdebug-prefix-map" | "-fmacro-prefix-map"
+        | "-fcoverage-prefix-map" | "-fprofile-prefix-map")
 }
 
 /// Reduce a `-cc1` command line to its codegen-semantic token list:
@@ -186,7 +187,11 @@ pub fn semantic_tokens(
             i += skip;
             continue;
         }
-        if i == last {
+        if (i > 0 && is_prefix_map_flag(&toks[i - 1]))
+            || is_prefix_map_flag(tok.split('=').next().unwrap_or(tok))
+        {
+            out.push(tok.clone());
+        } else if i == last {
             out.push(PATH_SENTINEL.to_string());
         } else if let Some(head) = per_tu_path_head(tok, per_tu_paths) {
             // A per-TU path appearing as a flag value (e.g.
@@ -418,7 +423,11 @@ fn gnu_semantic_tokens(
             i += skip;
             continue;
         }
-        if let Some(head) = per_tu_path_head(tok, per_tu_paths) {
+        if (i > 0 && is_prefix_map_flag(&toks[i - 1]))
+            || is_prefix_map_flag(tok.split('=').next().unwrap_or(tok))
+        {
+            out.push(tok.clone());
+        } else if let Some(head) = per_tu_path_head(tok, per_tu_paths) {
             out.push(format!("{head}{PATH_SENTINEL}"));
         } else {
             out.push(sentinel_token(tok, windows_aware));
@@ -448,6 +457,35 @@ pub fn resolved_semantic_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prefix_map_paths_remain_semantic_in_both_driver_forms() {
+        for flag in ["-ffile-prefix-map", "-fdebug-prefix-map", "-fmacro-prefix-map", "-fcoverage-prefix-map", "-fprofile-prefix-map"] {
+            for windows_aware in [false, true] {
+                for mapping in ["/old=/new", "relative=/new", "C:\\old=D:\\new", "/old=", "=/new", "/old=/new=extra"] {
+                    let attached = format!("{flag}={mapping}");
+                    assert_eq!(sentinel_token(&attached, windows_aware), attached);
+                    for args in [format!("\"{attached}\""), format!("\"{flag}\" \"{mapping}\"")] {
+                        let clang = semantic_tokens(
+                            &format!("\"clang\" \"-cc1\" {args} \"unit.c\""),
+                            windows_aware,
+                            &[mapping.to_string()],
+                        );
+                        let gcc = gnu_semantic_tokens(
+                            &format!("\"/usr/lib/gcc/cc1\" {args} \"unit.c\""),
+                            windows_aware,
+                            &[mapping.to_string()],
+                        );
+                        for tokens in [clang, gcc] {
+                            assert!(tokens.contains(&attached) || tokens.windows(2).any(|pair| pair == [flag, mapping]), "{tokens:?}");
+                        }
+                    }
+                }
+            }
+        }
+        assert!(!is_prefix_map_flag("-ffile-prefix-map-extra"));
+        assert_eq!(sentinel_token("-other=/old=/new", true), "-other=<path>");
+    }
 
     // Real `cc -### -O2 -c …` output captured from Apple clang. Frozen
     // fixtures: the parser is tested against actual compiler output

@@ -312,6 +312,15 @@ ccache.suite = "source_date_epoch.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-flag-file-prefix-map-target"
+package = "CCP-03"
+summary = "file, debug and macro prefix map source and target paths differentiate objects"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-diagnostic-locale"
 package = "CCP-02"
 summary = "LC_ALL/diagnostic locale affecting diagnostics is accounted for"

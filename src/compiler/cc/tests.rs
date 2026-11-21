@@ -2992,6 +2992,25 @@ fn classifier_accepts_path_prefix_map_flags() {
     }
 }
 
+#[test]
+fn prefix_map_normalization_keeps_targets_and_unrelated_sources_literal() {
+    let maps = [CcPrefixMap { from: "/checkout/one".into(), to: CC_ROOT_SENTINEL.into() }];
+    let normalize = |token: &str, previous| normalize_resolved_cc_token(token, previous, &maps);
+    for flag in ["-ffile-prefix-map", "-fdebug-prefix-map", "-fmacro-prefix-map", "-fcoverage-prefix-map", "-fprofile-prefix-map"] {
+        let first = normalize(&format!("{flag}=/checkout/one=/x"), None);
+        assert_eq!(first, format!("{flag}={CC_ROOT_SENTINEL}=/x").as_bytes());
+        assert_ne!(first, normalize(&format!("{flag}=/checkout/one=/y"), None));
+        assert_ne!(first, normalize(&format!("{flag}=/unrelated=/x"), None));
+        assert_eq!(normalize(&format!("{flag}=/checkout/one=/checkout/one"), None), format!("{flag}={CC_ROOT_SENTINEL}=/checkout/one").as_bytes());
+        assert_eq!(normalize("/checkout/one=/x", Some(flag)), format!("{CC_ROOT_SENTINEL}=/x").as_bytes());
+        assert_eq!(normalize("/checkout/one=/checkout/one", Some(flag)), format!("{CC_ROOT_SENTINEL}=/checkout/one").as_bytes());
+        assert_eq!(normalize(&format!("{flag}=malformed"), None), format!("{flag}=malformed").as_bytes());
+    }
+    let other_maps = [CcPrefixMap { from: "/checkout/two".into(), to: CC_ROOT_SENTINEL.into() }];
+    assert_eq!(normalize("-ffile-prefix-map=/checkout/one=/x", None), normalize_resolved_cc_token("-ffile-prefix-map=/checkout/two=/x", None, &other_maps));
+    assert_eq!(normalize("-other=/checkout/one", None), format!("-other={CC_ROOT_SENTINEL}").as_bytes());
+}
+
 /// Issue #644: aws-lc-sys forwards its debug-prefix map to GNU as rather
 /// than cc1. The exact assembler sub-option is raw-keyed so it caches
 /// without pretending the cc1-only probe captured it.

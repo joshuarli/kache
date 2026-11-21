@@ -1,0 +1,47 @@
+summary = "user file, debug and macro prefix maps key both source and target paths"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["a.o", "b.o", "file-old.o", "debug-x.o", "debug-y.o", "debug-old.o", "macro-x.o", "macro-y.o", "macro-old.o"]
+[[compile]]
+argv = ["{cc}", "-g", "-ffile-prefix-map={fixture}=/x", "-c", "u.c", "-o", "a.o"]
+source = "u.c"
+reuse = "any"
+[[compile]]
+argv = ["{cc}", "-g", "-ffile-prefix-map={fixture}/a=/x", "-c", "u.c", "-o", "file-old.o"]
+source = "u.c"
+reuse = "any"
+[[compile]]
+argv = ["{cc}", "-g", "-fdebug-prefix-map={fixture}=/x", "-c", "u.c", "-o", "debug-x.o"]
+source = "u.c"
+reuse = "any"
+[[compile]]
+argv = ["{cc}", "-g", "-fdebug-prefix-map={fixture}=/y", "-c", "u.c", "-o", "debug-y.o"]
+source = "u.c"
+reuse = "any"
+[[compile]]
+argv = ["{cc}", "-g", "-fdebug-prefix-map={fixture}/a=/x", "-c", "u.c", "-o", "debug-old.o"]
+source = "u.c"
+reuse = "any"
+[[compile]]
+argv = ["{cc}", "-g", "-fmacro-prefix-map={fixture}=/x", "-c", "{fixture}/u.c", "-o", "macro-x.o"]
+source = "{fixture}/u.c"
+reuse = "any"
+[[compile]]
+argv = ["{cc}", "-g", "-fmacro-prefix-map={fixture}=/y", "-c", "{fixture}/u.c", "-o", "macro-y.o"]
+source = "{fixture}/u.c"
+reuse = "any"
+[[compile]]
+argv = ["{cc}", "-g", "-fmacro-prefix-map={fixture}/a=/x", "-c", "{fixture}/u.c", "-o", "macro-old.o"]
+source = "{fixture}/u.c"
+reuse = "any"
+[[compile]]
+argv = ["{cc}", "-g", "-ffile-prefix-map={fixture}=/y", "-c", "u.c", "-o", "b.o"]
+source = "u.c"
+reuse = "any"
+[[step]]
+name = "populate"
+reuse = "miss"
+[[step]]
+name = "restore"
+reuse = "any"
+action = [{ op = "delete-outputs" }]

@@ -4992,6 +4992,34 @@ fn normalize_raw_keyed_cc_flag(arg: &str, prefix_maps: &[CcPrefixMap]) -> Vec<u8
     normalized
 }
 
+fn normalize_resolved_cc_token(
+    token: &str,
+    previous: Option<&str>,
+    prefix_maps: &[CcPrefixMap],
+) -> Vec<u8> {
+    let mapping = if previous.is_some_and(crate::probe::is_prefix_map_flag) {
+        Some(("", token))
+    } else {
+        token.split_once('=').filter(|(flag, _)| crate::probe::is_prefix_map_flag(flag))
+    };
+    if let Some((flag, mapping)) = mapping {
+        let Some((from, to)) = mapping.split_once('=') else {
+            return token.as_bytes().to_vec();
+        };
+        let mut normalized = Vec::with_capacity(token.len());
+        if !flag.is_empty() {
+            normalized.extend_from_slice(flag.as_bytes());
+            normalized.push(b'=');
+        }
+        normalized.extend_from_slice(&apply_cc_prefix_maps_to_bytes(from.as_bytes().to_vec(), prefix_maps));
+        normalized.push(b'=');
+        normalized.extend_from_slice(to.as_bytes());
+        normalized
+    } else {
+        apply_cc_prefix_maps_to_bytes(token.as_bytes().to_vec(), prefix_maps)
+    }
+}
+
 /// Whether `rest[idx]` is a flag that [`CcArgs::parse`] reads together with
 /// the next token as its value (`-I <dir>`, `-o <path>`, `-D <name>`).
 ///
@@ -9053,7 +9081,7 @@ impl CcCompiler {
         // miscache. That is the safe direction.
         if let Some(tokens) = &resolved.resolved_tokens {
             hasher.update(b"resolved:");
-            for tok in tokens {
+            for (index, tok) in tokens.iter().enumerate() {
                 // Resolved `cc -###` tokens carry absolute build paths —
                 // `-I` dirs, `-D NAME="/abs/.../foo.ico"` defines, input /
                 // `-o` paths — that embed the build directory. Hashing them
@@ -9080,7 +9108,11 @@ impl CcCompiler {
                         token = format!("{resolved_prefix}<cc-file-input>");
                     }
                 }
-                let mapped = apply_cc_prefix_maps_to_bytes(token.into_bytes(), &prefix_maps);
+                let mapped = normalize_resolved_cc_token(
+                    &token,
+                    index.checked_sub(1).map(|previous| tokens[previous].as_str()),
+                    &prefix_maps,
+                );
                 hasher.update(&mapped);
                 hasher.update(b"\x1f");
                 log::trace!(
