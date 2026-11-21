@@ -114,11 +114,44 @@ proved with two faults: removing `| Request::Health` from `is_build_activity` an
 turning `Request::CompileStarted(req) => req.client_version.as_deref()` into
 `None` each failed `only_build_requests_keep_the_machine_busy_and_only_some_declare_a_release`.
 
-Needs environment: `cargo-llvm-cov` and `cargo-mutants` are not installed on this
-host (DSLP-87), so no coverage or mutation numbers exist for this scope and no
-survivor list could be dispositioned. The scoped lane and `make mutants-diff`
-qualification are unmet for the same reason. Kani and `make e2e` are also
-absent. Hand-injected faults above stand in as a witness for each new test only.
+Coverage. `cargo-llvm-cov` is not installed, but the pinned toolchain ships
+`llvm-profdata` and `llvm-cov`, so coverage was measured by hand:
+
+```sh
+RUSTC_WRAPPER= CARGO_TARGET_DIR=.work/tmp/target-cov RUSTFLAGS="-C instrument-coverage" \
+  cargo test -p kache --lib --no-run     # and the eight crates below
+LLVM_PROFILE_FILE=$PWD/.work/tmp/cov/%p-%m.profraw cargo test -p kache --lib
+LLVM_PROFILE_FILE=... cargo test -p kache-client -p kache-core -p kache-format \
+  -p kache-ipc -p kache-log -p kache-protocol -p kache-shims -p kache-proofs
+llvm-profdata merge -sparse .work/tmp/cov/*.profraw -o .work/tmp/cov.profdata
+llvm-cov export --format=lcov --instr-profile=.work/tmp/cov.profdata --object <each test binary>
+```
+
+Lines inside `#[cfg(test)]` items were removed from the lcov before counting, so
+the figures are production lines only. Unit and in-crate integration tests only:
+the root crate's `tests/*.rs` binaries were not instrumented, and the launcher
+runs in a compiled child. One unrelated test failed under instrumentation
+(`daemon::tests::detached_daemon_survives_sigint_to_the_callers_group`, outside
+this scope, not investigated; it spawns a detached daemon under a loaded host).
+
+| Crate | Production lines covered | Notes |
+| --- | --- | --- |
+| `kache-client` | 177/269 (65.8%) | `frontend.rs` 19/98: its tests spawn child processes whose counters are not merged here. |
+| `kache-core` | 360/401 (89.8%) | |
+| `kache-format` | 46/46 (100%) | |
+| `kache-ipc` | 882/954 (92.5%) | |
+| `kache-log` | 152/173 (87.9%) | |
+| `kache-protocol` | 294/320 (91.9%) | `fallback.rs` 0/5 and `execution/process.rs` 0/8 are the unused, untested items listed under DSLP-67. |
+| `kache-shims` | 798/821 (97.2%) | |
+| `kache-proofs` | 0 production lines | The proof module is `include!`d under `cfg(any(kani, test))`. |
+| Total | 2,709/2,984 (90.8%) | |
+
+Needs environment: `cargo-mutants` (DSLP-87) and branch coverage (the
+instrumented build did not enable it). With no mutation run there is no survivor
+list, so the scoped lane is unqualified and the acceptance "no undispositioned
+survivor" cannot be claimed for this scope; the uncovered production lines above
+and the hand-injected faults are the substitute evidence. Kani and `make e2e`
+are also absent.
 
 ## DSLP-67: Dead code
 
