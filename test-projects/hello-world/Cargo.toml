@@ -3,5 +3,5 @@ name = "hello-world"
 version = "0.1.0"
 edition = "2021"
 
-# Empty `[workspace]` — see test-projects/multi-dep/Cargo.toml for why.
+# Empty `[workspace]` — see the root Cargo.toml for why.
 [workspace]
