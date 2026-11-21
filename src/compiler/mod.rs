@@ -1892,6 +1892,24 @@ mod tests {
     }
 
     #[test]
+    fn every_kind_restores_with_its_mutation_profile() {
+        for (kind, expected) in [
+            (ArtifactKind::Executable, LinkStrategy::Copy),
+            (ArtifactKind::DynamicLibrary, LinkStrategy::Copy),
+            (ArtifactKind::WasmModule, LinkStrategy::Copy),
+            (ArtifactKind::Metadata, LinkStrategy::WritableCopy),
+            (ArtifactKind::Library, LinkStrategy::Hardlink),
+            (ArtifactKind::Object, LinkStrategy::Hardlink),
+            (ArtifactKind::DepInfo, LinkStrategy::Hardlink),
+            (ArtifactKind::DebugSidecar, LinkStrategy::Hardlink),
+            (ArtifactKind::DebugBundle, LinkStrategy::Hardlink),
+            (ArtifactKind::Other("unknown-ext"), LinkStrategy::Hardlink),
+        ] {
+            assert_eq!(kind.link_strategy(), expected, "{kind:?}");
+        }
+    }
+
+    #[test]
     fn classify_by_filename_distinguishes_extensionless_from_unknown() {
         // Two distinct "Other" tags so callers can choose what convention
         // to apply: target/-scan callers treat extensionless as bin output;
