@@ -18,7 +18,7 @@ impl Fixture {
         let cache = root.path().join("deep-cache-".repeat(13)).join("store");
         std::fs::write(
             root.path().join("config.toml"),
-            "[cache]\nlocal_only=true\nauto_gc=false\nscheduler=false\nprefetch_enabled=false\n",
+            "[cache]\nlocal_only=true\nauto_gc=false\nscheduler=false\nprefetch_enabled=false\ntrust_daemon_execution=true\n",
         )
         .unwrap();
         Self {
