@@ -827,4 +827,22 @@ build = "./mach build"
             _ => panic!("expected a clone source config"),
         }
     }
+
+    #[test]
+    fn selectors_are_trimmed_and_never_empty() {
+        assert_eq!(Selector::parse("  tier:gate ").unwrap().raw(), "tier:gate");
+        for blank in ["", "   "] {
+            let error = Selector::parse(blank).unwrap_err().to_string();
+            assert!(error.contains("cannot be empty"), "{error}");
+        }
+        let error = Selectors::parse_many(&["suite:e2e".into(), " ".into()]).unwrap_err();
+        assert!(format!("{error:#}").contains("parsing --select ` `"), "{error:#}");
+    }
+
+    #[test]
+    fn the_source_kind_alias_selects_only_that_kind() {
+        let selectors = Selectors::parse_many(&["fixture".into()]).unwrap();
+        assert!(selectors.matches("anything", SourceKind::Fixture, &[]));
+        assert!(!selectors.matches("anything", SourceKind::Clone, &[]));
+    }
 }

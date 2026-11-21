@@ -71,4 +71,23 @@ mod tests {
         assert_eq!(Phase::WarmSameTree.name(), "warm-same-tree");
         assert!(Phase::WarmSameTree.cleans_first());
     }
+
+    #[test]
+    fn only_the_noop_phases_skip_the_clean_and_only_the_edited_phase_skips_verify() {
+        let every = [
+            Phase::Cold,
+            Phase::WarmSameTree,
+            Phase::Warm,
+            Phase::Pull,
+            Phase::Noop,
+            Phase::Relocate,
+            Phase::RelocateModified,
+            Phase::RelocateNoop,
+        ];
+        for phase in every {
+            let noop = matches!(phase, Phase::Noop | Phase::RelocateNoop);
+            assert_eq!(phase.cleans_first(), !noop, "{}", phase.name());
+            assert_eq!(phase.runs_verify(), phase != Phase::RelocateModified, "{}", phase.name());
+        }
+    }
 }
