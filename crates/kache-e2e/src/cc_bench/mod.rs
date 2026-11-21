@@ -1186,9 +1186,12 @@ mod tests {
 
     fn fake_daemon(root: &Path, start: &str, status: &str) -> PathBuf {
         let executable = root.join("kache");
-        std::fs::write(&executable, format!(
+        let script = format!(
             "#!/bin/sh\ncase \"$1 $2\" in\n'daemon start') {start} ;;\n'daemon stop') printf stopped > \"$KACHE_RUNTIME_DIR/stopped\" ;;\n'--json daemon') printf '%s' '{status}' ;;\nesac\n"
-        )).unwrap();
+        );
+        assert!(Command::new("/bin/sh")
+            .args(["-c", "printf '%s' \"$1\" > \"$2\"", "sh"])
+            .arg(script).arg(&executable).status().unwrap().success());
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
         executable
     }
