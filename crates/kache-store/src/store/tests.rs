@@ -9068,6 +9068,24 @@ fn test_blob_path_sharding() {
 }
 
 #[test]
+fn blob_shard_dir_is_the_directory_holding_the_blob() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(test_config(dir.path())).unwrap();
+    for hash in [
+        "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+        "abc",
+        "ab",
+        "a",
+    ] {
+        assert_eq!(
+            store.blob_path(hash).parent(),
+            Some(store.blob_shard_dir(hash).as_path()),
+            "hash {hash:?}"
+        );
+    }
+}
+
+#[test]
 #[cfg(target_os = "macos")]
 fn test_exclude_from_indexing_nonexistent_dir_silent() {
     let dir = PathBuf::from("/tmp/kache_test_nonexistent_874291");
