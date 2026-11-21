@@ -1,0 +1,38 @@
+summary = "nested relative response paths use cwd, not the containing directory; every nested file contributes to the key"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "@sub/outer.rsp"]
+source = "u.c"
+also_names = ["@sub/outer.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "leaf-whitespace-edit"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "leaf.rsp", content = "  -DEXTRA=2\n" }]
+
+[[step]]
+name = "leaf-value-edit"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "leaf.rsp", content = "-DEXTRA=3\n" }]
+
+[[step]]
+name = "inner-edit"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "inner.rsp", content = "@leaf.rsp -DNESTED=7\n" }]
+
+[[step]]
+name = "restore-edits"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
