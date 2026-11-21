@@ -33,7 +33,7 @@ fn dependency_output_env_refuses_gcc_but_preserves_clang() {
 }
 
 #[test]
-fn language_option_position_distinguishes_driver_diagnostics() {
+fn trailing_language_options_distinguish_driver_diagnostics() {
     let raw = |args: &[&str]| {
         cc_raw_flags_for_key(&CcArgs::parse(&s(args)).unwrap(), &[])
     };
@@ -45,8 +45,24 @@ fn language_option_position_distinguishes_driver_diagnostics() {
     assert_ne!(raw(&trailing), raw(&["gcc", "-c", "u.c", "-o", "b.o", "-x", "c++"]));
     assert_eq!(raw(&trailing), raw(&["gcc", "-c", "u.c", "-o", "a.o", "-x", "c"]));
     assert_eq!(raw(&plain), raw(&["gcc", "-c", "u.c", "-o", "-xc.o"]));
+    assert_eq!(raw(&trailing), raw(&["gcc", "-o", "other.o", "-c", "u.c", "-x", "c"]));
+    assert_eq!(raw(&trailing), raw(&["gcc", "-c", "u.c", "-x", "c"]));
+    assert_ne!(raw(&["gcc", "-c", "u.c", "-x", "c", "-x", "c++"]), raw(&["gcc", "-c", "u.c", "-x", "c++", "-x", "c"]));
     let parsed = CcArgs::parse(&s(&["gcc", "-c", "u.c", "-x", "c++"])).unwrap();
     assert_eq!(build_preprocess_args(&parsed), s(&["-E", "u.c", "-x", "c++"]));
+}
+
+#[test]
+fn leading_language_options_do_not_add_raw_key_material() {
+    let raw = |args: &[&str]| {
+        cc_raw_flags_for_key(&CcArgs::parse(&s(args)).unwrap(), &[])
+    };
+    let leading = raw(&["gcc", "-x", "c", "u.c", "-c"]);
+    assert!(leading.is_empty());
+    assert_eq!(leading, raw(&["gcc", "-o", "other.o", "-x", "c", "u.c", "-c"]));
+    assert_eq!(leading, raw(&["gcc", "-c", "-o", "other.o", "-x", "c", "u.c"]));
+    assert!(raw(&["gcc", "-x", "c++", "foo.cpp", "-c"]).is_empty());
+    assert!(raw(&["gcc", "-x", "c", "first.c", "-x", "c++", "last.cpp", "-c"]).is_empty());
 }
 
 #[test]
