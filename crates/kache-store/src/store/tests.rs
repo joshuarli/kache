@@ -1198,6 +1198,20 @@ fn materialize_blob_errors_when_source_cannot_be_copied() {
 }
 
 #[test]
+fn materialize_blob_reports_a_destination_without_a_parent_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.rlib");
+    fs::write(&source, b"bytes").unwrap();
+
+    let err = materialize_blob(&source, Path::new("/"), false).unwrap_err();
+
+    assert!(
+        err.to_string().contains("no parent directory"),
+        "expected a parent-directory error, got: {err:#}"
+    );
+}
+
+#[test]
 fn materialize_blob_removes_tmp_when_atomic_rename_fails() {
     // Covers materialize_blob atomic-rename failure cleanup branch.
     let dir = tempfile::tempdir().unwrap();

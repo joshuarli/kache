@@ -406,7 +406,8 @@ fn materialize_blob_with_durability(
     if blob.is_file() {
         return Ok(false);
     }
-    fs::create_dir_all(blob.parent().unwrap()).context("creating blob shard directory")?;
+    fs::create_dir_all(blob.parent().context("blob path has no parent directory")?)
+        .context("creating blob shard directory")?;
     let bytes = fs::metadata(source).map(|m| m.len()).unwrap_or(0);
     let ingest = std::cell::Cell::new(StoreIngest::Copy(StoreCopyReason::Other));
     let ro_failed = std::cell::Cell::new(false);
@@ -4263,7 +4264,8 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             Self::discard_staged_blob(staged);
             return Ok(PublishRename::LostRace);
         }
-        fs::create_dir_all(blob.parent().unwrap()).context("creating blob shard directory")?;
+        fs::create_dir_all(blob.parent().context("blob path has no parent directory")?)
+            .context("creating blob shard directory")?;
         // Keep SQLite's writer lock from this final existence check through
         // the rename. Plain rename would otherwise overwrite a
         // newly published inode on Unix and undo another entry's flush.
