@@ -6054,7 +6054,8 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
     // Asking runs the service manager, which --no-service must not touch.
     let service_available = !no_service && crate::service::login_service_available();
     let service_path = crate::service::service_file_path();
-    let service_installed = service_path.as_ref().is_some_and(|p| p.exists());
+    let installed_service_path = service_path.as_deref().filter(|p| p.exists());
+    let service_installed = installed_service_path.is_some();
     let service_problem = service_path
         .as_deref()
         .filter(|p| p.exists())
@@ -6206,10 +6207,10 @@ pub fn init(yes: bool, no_service: bool, no_shell: bool, check: bool) -> Result<
         if !check {
             service_action_taken = install_login_service();
         }
-    } else if service_installed {
+    } else if let Some(path) = installed_service_path {
         println!(
             "  \x1b[32m✓\x1b[0m Login service: configured ({})",
-            service_path.as_ref().unwrap().display()
+            path.display()
         );
     } else {
         println!("  \x1b[33m→\x1b[0m Background service: start kache when you log in");
