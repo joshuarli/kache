@@ -982,9 +982,7 @@ fn load_workspace_packages(
         let package_dir = manifest_path
             .parent()
             .expect("Cargo.toml member has a parent directory");
-        let has_lib_target = manifest.lib.is_some();
-        let (crate_name, lib_source_path) = if has_lib_target {
-            let lib = manifest.lib.as_ref().expect("checked above");
+        let (crate_name, lib_source_path) = if let Some(lib) = manifest.lib.as_ref() {
             let name = lib
                 .name
                 .clone()
