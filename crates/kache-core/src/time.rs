@@ -110,8 +110,13 @@ impl UtcTime {
     }
 
     /// Whole seconds since the epoch, saturating at the i64 bounds.
+    #[deny(clippy::cast_possible_truncation)]
     pub fn timestamp(&self) -> i64 {
-        (self.nanos / NANOS_PER_SEC).clamp(i64::MIN as i128, i64::MAX as i128) as i64
+        i64::try_from(self.nanos / NANOS_PER_SEC).unwrap_or(if self.nanos < 0 {
+            i64::MIN
+        } else {
+            i64::MAX
+        })
     }
 
     /// Milliseconds since the epoch, saturating at the i64 bounds.
@@ -691,6 +696,22 @@ mod tests {
         assert!(UtcTime::from_ymd_hms(2026, 13, 1, 0, 0, 0).is_none());
         assert!(UtcTime::from_ymd_hms(2026, 2, 29, 0, 0, 0).is_none());
         assert!(UtcTime::from_ymd_hms(2024, 2, 29, 0, 0, 0).is_some());
+    }
+
+    #[test]
+    fn whole_seconds_truncate_and_saturate() {
+        for (nanos, seconds) in [
+            (0, 0),
+            (-1, 0),
+            (NANOS_PER_SEC - 1, 0),
+            (-NANOS_PER_SEC - 1, -1),
+            (i128::from(i64::MIN) * NANOS_PER_SEC, i64::MIN),
+            (i128::from(i64::MAX) * NANOS_PER_SEC, i64::MAX),
+            (i128::MIN, i64::MIN),
+            (i128::MAX, i64::MAX),
+        ] {
+            assert_eq!(UtcTime { nanos }.timestamp(), seconds);
+        }
     }
 
     #[test]
