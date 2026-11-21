@@ -1,5 +1,6 @@
 mod args;
 mod blob_heal;
+#[cfg_attr(not(test), forbid(unsafe_code))]
 mod build_script;
 mod build_script_inputs;
 use kache_store::atomic;
