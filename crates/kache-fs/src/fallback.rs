@@ -13,7 +13,7 @@ impl SizeProbe for FallbackProbe {
     fn measure_file(&self, path: &Path) -> io::Result<FileSizing> {
         let md = std::fs::symlink_metadata(path)?;
 
-        let (inode, nlink) = crate::identity::metadata_identity(path, &md, false)?;
+        let (inode, nlink) = crate::identity::metadata_identity(&md);
         let allocated = md.blocks().saturating_mul(512);
 
         Ok(FileSizing {
