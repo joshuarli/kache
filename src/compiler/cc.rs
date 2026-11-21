@@ -274,6 +274,7 @@ pub struct CcArgs {
     /// Detected compiler driver family (selects the flag dialect).
     pub family: ToolFamily,
     pub(crate) wp_dependency_family: Option<crate::probe::ProbedFamily>,
+    pub(crate) report_family: Option<crate::probe::ProbedFamily>,
     /// Path ownership captured at parse time for portable dependency sidecars.
     pub(crate) depinfo_roots: Vec<(PathBuf, String, u8)>,
     /// clang's `--serialize-diagnostics <path>` output.
@@ -336,6 +337,7 @@ enum CcArgAction {
     DepTarget,
     LanguageOverride,
     SerializeDiagnostics,
+    AuxInfo,
     IncludePch,
     Include,
     /// clang-cl `/imsvc`: a system include directory. Its headers reach the
@@ -392,14 +394,24 @@ pub(crate) enum CcSidecar {
     SplitDwarf,
     SerializedDiagnostics,
     JsonDiagnostics,
+    StackUsage,
+    OptimizationRecord,
+    Callgraph,
+    AssemblerListing,
+    AuxInfo,
 }
 
 impl CcSidecar {
-    const ALL: [CcSidecar; 4] = [
+    const ALL: [CcSidecar; 9] = [
         CcSidecar::CoverageNotes,
         CcSidecar::SplitDwarf,
         CcSidecar::SerializedDiagnostics,
         CcSidecar::JsonDiagnostics,
+        CcSidecar::StackUsage,
+        CcSidecar::OptimizationRecord,
+        CcSidecar::Callgraph,
+        CcSidecar::AssemblerListing,
+        CcSidecar::AuxInfo,
     ];
 
     pub(crate) fn store_name(self) -> &'static str {
@@ -408,6 +420,11 @@ impl CcSidecar {
             CcSidecar::SplitDwarf => "sidecar.dwo",
             CcSidecar::SerializedDiagnostics => "sidecar.dia",
             CcSidecar::JsonDiagnostics => "sidecar.gcc.json",
+            CcSidecar::StackUsage => "sidecar.su",
+            CcSidecar::OptimizationRecord => "sidecar.opt.yaml",
+            CcSidecar::Callgraph => "sidecar.ci",
+            CcSidecar::AssemblerListing => "sidecar.listing",
+            CcSidecar::AuxInfo => "sidecar.aux",
         }
     }
 
@@ -432,6 +449,14 @@ pub(crate) struct CcSidecarOutput {
 }
 
 static CC_ARG_SPECS: &[CcArgSpec] = &[
+    CcArgSpec {
+        matcher: Matcher::Exact("-aux-info"),
+        value_form: CcArgValueForm::Separated,
+        action: CcArgAction::AuxInfo,
+        bucket: CcArgBucket::RawKeyed,
+        source: "GCC auxiliary declarations output",
+        dialect: Some(Dialect::Gnu),
+    },
     CcArgSpec {
         matcher: Matcher::Exact("-c"),
         value_form: CcArgValueForm::Flag,
@@ -789,6 +814,11 @@ impl CcArgs {
         } else {
             None
         };
+        let report_family = if family.dialect() == Dialect::Gnu && rest.iter().any(|arg| cc_report_flag(arg)) {
+            crate::probe::probe_compiler_family_for(program, env)
+        } else {
+            None
+        };
 
         let mut parsed = CcArgs {
             invocation_env: env.clone(),
@@ -807,6 +837,7 @@ impl CcArgs {
             language_override: None,
             family,
             wp_dependency_family,
+            report_family,
             depinfo_roots: Vec::new(),
             serialize_diagnostics: None,
             include_pch: None,
@@ -1012,12 +1043,39 @@ impl CcArgs {
             ));
         }
 
+        if self.emits_reports() {
+            let supported = self.report_family.is_some_and(|family| {
+                self.rest.iter().filter(|arg| cc_report_flag(arg)).all(|arg| {
+                    if arg == "-fsave-optimization-record" {
+                        family == crate::probe::ProbedFamily::Clang
+                    } else {
+                        family == crate::probe::ProbedFamily::Gnu
+                    }
+                })
+            });
+            let unsafe_option = self.rest.iter().any(|arg| {
+                arg.starts_with("-flto") || arg.starts_with("-dump")
+                    || arg.starts_with("-Xclang") || arg.starts_with("-Xassembler")
+                    || (arg.starts_with("-fopt-info") && arg.contains('='))
+                    || arg == "-Wa,-adhln=" || arg == "-Wa,-adhln=-"
+            });
+            let invalid_aux = self.rest.iter().enumerate().any(|(i, arg)| {
+                arg == "-aux-info" && self.rest.get(i + 1).is_none_or(|path| path.is_empty() || path.starts_with('-'))
+            });
+            let repeated_output = self.rest.iter().filter(|arg| arg.starts_with("-Wa,-adhln")).count() > 1
+                || self.rest.iter().filter(|arg| *arg == "-aux-info").count() > 1;
+            if !supported || unsafe_option || invalid_aux || repeated_output {
+                reasons.push(RefuseReason::Unsupported("cc reports with unknown compiler family, append outputs, LTO, dump overrides or invalid output paths — not yet"));
+            }
+        }
+
         // Universal objects are keyed slice by slice. Sidecars would need
         // one file per slice.
         if self.is_universal()
             && (self.family.dialect() != Dialect::Gnu
                 || !self.sidecar_outputs().is_empty()
-                || self.coverage_instrumented())
+                || self.coverage_instrumented()
+                || self.emits_reports())
         {
             reasons.push(RefuseReason::Unsupported(
                 "cc multi-arch -arch X -arch Y outside a plain clang compile — not yet",
@@ -1049,7 +1107,8 @@ impl CcArgs {
         if self.mode != CompileMode::Compile
             && (self.coverage_instrumented()
                 || self.splits_dwarf()
-                || self.serialize_diagnostics.is_some())
+                || self.serialize_diagnostics.is_some()
+                || self.emits_reports())
         {
             reasons.push(RefuseReason::Unsupported(
                 "cc coverage, split DWARF or serialized diagnostics outside -c — not yet",
@@ -1306,6 +1365,21 @@ impl CcArgs {
                 presence: CcSidecarPresence::Required,
             });
         }
+        for (flag, role, extension) in [
+            ("-fstack-usage", CcSidecar::StackUsage, "su"),
+            ("-fsave-optimization-record", CcSidecar::OptimizationRecord, "opt.yaml"),
+            ("-fcallgraph-info", CcSidecar::Callgraph, "ci"),
+        ] {
+            if self.rest.iter().any(|arg| arg == flag || (flag == "-fcallgraph-info" && arg.starts_with("-fcallgraph-info="))) {
+                outputs.push(CcSidecarOutput { role, path: object.with_extension(extension), presence: CcSidecarPresence::Required });
+            }
+        }
+        if let Some(path) = self.rest.iter().rev().find_map(|arg| arg.strip_prefix("-Wa,-adhln=")) {
+            outputs.push(CcSidecarOutput { role: CcSidecar::AssemblerListing, path: PathBuf::from(path), presence: CcSidecarPresence::Required });
+        }
+        if let Some(path) = self.rest.windows(2).rev().find_map(|pair| (pair[0] == "-aux-info").then(|| PathBuf::from(&pair[1]))) {
+            outputs.push(CcSidecarOutput { role: CcSidecar::AuxInfo, path, presence: CcSidecarPresence::IfWritten });
+        }
         outputs
     }
 
@@ -1339,6 +1413,14 @@ impl CcArgs {
 
     fn records_switches(&self) -> bool {
         self.rest.iter().any(|arg| arg == "-frecord-gcc-switches")
+    }
+
+    fn lists_assembler_source(&self) -> bool {
+        self.rest.iter().any(|arg| arg == "-Wa,-adhln" || arg.starts_with("-Wa,-adhln="))
+    }
+
+    fn emits_reports(&self) -> bool {
+        self.rest.iter().any(|arg| cc_report_flag(arg))
     }
 
     /// Split DWARF: the object names its `.dwo` as the output was spelled.
@@ -1498,6 +1580,12 @@ impl CcArgs {
     /// Keep the original argv for preprocessing and compiler execution.
     fn probe_args(&self) -> Vec<String> {
         let mut args = self.split_diagnostic_format_args().0;
+        let mut skip = false;
+        args.retain(|arg| {
+            if skip { skip = false; return false; }
+            if arg == "-aux-info" { skip = true; }
+            !cc_report_flag(arg)
+        });
         if cc_wp_dependency_spec(self).is_some() {
             args.retain(|arg| cc_wp_dependency_option(arg).is_none());
         }
@@ -1767,7 +1855,7 @@ fn apply_cc_arg(parsed: &mut CcArgs, depinfo: &mut Option<DepInfoSpec>, arg: &Pa
                 parsed.defines.push(parse_define(value));
             }
         }
-        CcArgAction::SystemInclude => {}
+        CcArgAction::SystemInclude | CcArgAction::AuxInfo => {}
     }
 }
 
@@ -1866,6 +1954,13 @@ fn cc_target_arch(parsed: &CcArgs) -> String {
     } else {
         slices.join("+")
     }
+}
+
+fn cc_report_flag(arg: &str) -> bool {
+    matches!(arg, "-fstack-usage" | "-fsave-optimization-record" | "-aux-info" | "-Wa,-adhln")
+        || arg.starts_with("-fopt-info")
+        || arg.starts_with("-fcallgraph-info")
+        || arg.starts_with("-Wa,-adhln=")
 }
 
 fn cc_wp_dependency_option(arg: &str) -> Option<(bool, Option<&str>)> {
@@ -1970,6 +2065,8 @@ fn build_preprocess_args(parsed: &CcArgs) -> Vec<String> {
             let mut iter = parsed.rest.iter();
             let wp_dependency = cc_wp_dependency_spec(parsed).is_some();
             while let Some(arg) = iter.next() {
+                if arg == "-aux-info" { iter.next(); continue; }
+                if cc_report_flag(arg) { continue; }
                 if wp_dependency && cc_wp_dependency_option(arg).is_some() {
                     continue;
                 }
@@ -2242,6 +2339,34 @@ fn is_line_marker(line: &[u8]) -> bool {
     line.strip_prefix(b"# ")
         .or_else(|| line.strip_prefix(b"#line "))
         .is_some_and(|rest| rest.first().is_some_and(u8::is_ascii_digit))
+}
+
+fn cc_check_listing_inputs(parsed: &CcArgs, expansion: &[u8], inputs: &[PathBuf]) -> Result<()> {
+    if !parsed.lists_assembler_source() {
+        return Ok(());
+    }
+    let literals = cc_string_literals(expansion);
+    anyhow::ensure!(
+        [expansion, literals.text.as_slice()].into_iter().all(|text| {
+            cc_directive_operands(text, b".file").next().is_none()
+        }),
+        "cc: assembler listing with inline .file — not yet"
+    );
+    let mut source = None;
+    for line in expansion.split(|&byte| byte == b'\n') {
+        if is_line_marker(line) {
+            let decoded = cc_string_literals(line).text;
+            let name = std::str::from_utf8(decoded.strip_prefix(b"\n").context("listing source marker has no file")?)?;
+            source = Some(parsed.invocation_env.resolve(Path::new(name)).context("resolving listing source marker")?);
+        } else if !line.trim_ascii().is_empty() {
+            let source = source.as_ref().context("listing text has no source marker")?;
+            anyhow::ensure!(
+                inputs.contains(source),
+                "cc: assembler listing source outside the read set: {} — not yet", source.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Fold an expansion's line layout into its text hash. Two expansions whose
@@ -3293,6 +3418,11 @@ fn preprocess_hash(
             "cc: inputs changed during the time macro scan"
         );
     }
+    if parsed.lists_assembler_source() {
+        let inputs = fingerprints.as_ref().context("listing requires a dependency read set")?
+            .iter().map(|input| PathBuf::from(input.local_path())).collect::<Vec<_>>();
+        cc_check_listing_inputs(parsed, &output.stdout, &inputs)?;
+    }
     Ok(PreprocessHash {
         hash,
         fingerprints,
@@ -3354,6 +3484,12 @@ fn parse_define(s: &str) -> (String, Option<String>) {
 /// the safety signal: a flag kache has never seen could miscache,
 /// so the conservative default is to passthrough.
 pub static CC_FLAGS: &[FlagSpec] = &[
+    FlagSpec { matcher: Matcher::Exact("-fstack-usage"), class: FlagClass::RawKeyed, source: "GCC object-derived .su; reports key literal argv/cwd/maps and original input content; LTO and dump overrides refuse", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-fsave-optimization-record"), class: FlagClass::RawKeyed, source: "Clang object-derived .opt.yaml; source locations bind reports to literal paths and input content; format/file overrides remain unmodeled", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-fopt-info(-optimized)?(=.*)?"), class: FlagClass::RawKeyed, source: "GCC bare/optimized stderr only; bounded modes because other verbosity is unverified; =file variants refuse because GCC appends instead of replacing existing output", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-fcallgraph-info(=(su|da)(,(su|da))*)?"), class: FlagClass::RawKeyed, source: "GCC object-derived .ci; bounded marker lists only; literal paths and original input content are keyed; LTO/dump overrides refuse", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-Wa,-adhln(=[^,]+)?"), class: FlagClass::RawKeyed, source: "GCC/GAS stdout or explicit listing; h reads debug source files, so line-marker targets outside the dependency read set and inline .file refuse; only literal, local, validated read sets may reuse the memo; mixed forwarding and LTO refuse", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-aux-info"), class: FlagClass::RawKeyed, source: "GCC explicit auxiliary declarations output, if written (C++ ignores it); literal argv/cwd/maps and original input content keyed", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Regex(r"-fsanitize-coverage=(trace-pc|trace-pc-guard|inline-8bit-counters|pc-table|trace-cmp)(,(trace-pc|trace-pc-guard|inline-8bit-counters|pc-table|trace-cmp))*"), class: FlagClass::RawKeyed, source: "argv-only sanitizer instrumentation, including fuzzer-no-link combinations; other modes remain unmodeled", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-frecord-gcc-switches"), class: FlagClass::RawKeyed, source: "Clang records input/output/include paths and prefix-map operands; key the full literal argv, cwd and injected maps, bind to this checkout, and disable private dependency capture", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fno-delete-null-pointer-checks"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
@@ -5163,7 +5299,7 @@ fn cc_supported_mllvm_value(value: &str) -> bool {
 fn cc_raw_flags_for_key(parsed: &CcArgs, prefix_maps: &[CcPrefixMap]) -> Vec<Vec<u8>> {
     let dialect = parsed.family.dialect();
     let mut flags = Vec::new();
-    if parsed.records_switches() {
+    if parsed.records_switches() || parsed.emits_reports() {
         flags.push(format!("recorded.argv.v1={:?}", (&parsed.program, &parsed.rest, parsed.invocation_env.cwd(), file_prefix_map_args(prefix_maps))).into_bytes());
     }
     let mut args = parsed.rest.iter();
@@ -6211,6 +6347,11 @@ fn cc_preprocess_memo_key_as(
     let compiler_metadata = std::fs::metadata(&compiler_path).ok()?;
     let mut hasher = blake3::Hasher::new();
     fold_cc_memo_field(&mut hasher, b"schema", schema);
+    if parsed.lists_assembler_source() {
+        // A relocated or older memo has not checked this invocation's listing sources.
+        fold_cc_memo_field(&mut hasher, b"listing-inputs-v1",
+            format!("{:?}", (&parsed.rest, cwd, file_prefix_map_args(prefix_maps))).as_bytes());
+    }
     // The name alone: it selects the driver mode, and `compiler-path` below
     // says which binary it found, so `cc` and `/usr/bin/cc` share a memo.
     let compiler_name = Path::new(&parsed.program)
@@ -8508,6 +8649,7 @@ pub(crate) fn cc_direct_key_eligible(parsed: &CcArgs) -> bool {
 fn cc_direct_key_shape_ok(parsed: &CcArgs) -> bool {
     parsed.family.dialect() == Dialect::Gnu
         && !parsed.records_switches()
+        && !parsed.emits_reports()
         && parsed.mode == CompileMode::Compile
         && parsed.sources.len() == 1
         && parsed
@@ -9755,7 +9897,7 @@ impl CcCompiler {
                 ctx.file_hasher.cc_preprocess_memo_lookup(
                     key,
                     |name| cc_unmapped_path_candidates(name, &prefix_maps),
-                    &|path| cc_mapped_content_hash(path, &prefix_maps),
+                    &|path| (!parsed.lists_assembler_source()).then(|| cc_mapped_content_hash(path, &prefix_maps)).flatten(),
                 )
             })
         };
@@ -9889,6 +10031,18 @@ impl CcCompiler {
         hasher.update(b"preprocessed:");
         hasher.update(pp_hash.as_bytes());
         hasher.update(b"\n");
+        if parsed.emits_reports() {
+            let inputs = read_inputs.as_deref().context("report key requires the original read set")?;
+            let contents = ctx.file_hasher.cc_content_hashes(inputs)?;
+            let mut fields = inputs.iter().zip(contents).map(|(path, content)| {
+                (parsed.invocation_env.resolve(path).unwrap_or_else(|| path.clone()), content)
+            }).collect::<Vec<_>>();
+            fields.sort_unstable();
+            hasher.update(b"cc_report_inputs.v1:");
+            hasher.update(format!("{fields:?}").as_bytes());
+            hasher.update(b"\n");
+            log::trace!(target: "kache::cache_key", "[key:{trace_name}] report_inputs={fields:?}");
+        }
         if let Some(timestamp) = cc_timestamp_key(
             parsed,
             read_inputs.as_deref().unwrap_or_default(),
@@ -9913,7 +10067,7 @@ impl CcCompiler {
         );
         // PCH and coverage outputs can record absolute paths that prefix maps
         // do not rewrite, even when the preprocessor expansion is portable.
-        if parsed.mode == CompileMode::Precompile || parsed.coverage_instrumented() || parsed.records_switches() {
+        if parsed.mode == CompileMode::Precompile || parsed.coverage_instrumented() || parsed.records_switches() || parsed.emits_reports() {
             self.key_path_bound.set(true);
         }
         // A read set whose object spells a checkout root is keyed to that

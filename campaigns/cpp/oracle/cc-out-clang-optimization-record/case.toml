@@ -1,0 +1,52 @@
+summary = "Report outputs restore exact bytes, distinguish object paths and original source comments, and handle empty sources"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+families = ["clang"]
+outputs = ["out/remarks.o","out/remarks.opt.yaml","next/remarks.o","next/remarks.opt.yaml"]
+
+[[compile]]
+argv = ["{cc}", "@remarks.rsp", "-c", "u.c"]
+source = "u.c"
+also_names = ["@remarks.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "object-path-change"
+reuse = "miss"
+action = [
+  { op = "delete-outputs" },
+  { op = "write", path = "remarks.rsp", content = "-O3 -fsave-optimization-record -o next/remarks.o\n" },
+]
+
+[[step]]
+name = "restore-new-object"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "source-comment-change"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "u.c", content = "extern int helper(int);\nint u(int *p, int n) {\n    int sum = 0; /* after! */\n    for (int i = 0; i < n; ++i) sum += p[i];\n    return helper(sum);\n}\n" }]
+
+[[step]]
+name = "restore-new-comment"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "empty-source"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "u.c", content = "\n" }]
+
+[[step]]
+name = "restore-empty"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

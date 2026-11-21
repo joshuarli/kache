@@ -348,6 +348,33 @@ ccache.suite = "sanitize.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-out-gcc-reports"
+package = "CCP-05"
+summary = "stack usage, callgraph, assembler listings, auxiliary declarations and optimization stderr restore exact bytes"
+profiles = ["both"]
+compilers = ["gcc"]
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-out-clang-optimization-record"
+package = "CCP-05"
+summary = "Clang opt.yaml output restores at the object-derived path with exact source locations"
+profiles = ["both"]
+compilers = ["clang", "apple-clang"]
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-out-gcc-listing-line-target"
+package = "CCP-05"
+summary = "GAS high-level listing #line targets outside dependency capture must pass through after edits"
+profiles = ["both"]
+compilers = ["gcc"]
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-input-pgo-profile"
 package = "CCP-02"
 summary = "-fprofile-use / -fauto-profile content change invalidates (keyed by file content, not spelling)"

@@ -1,0 +1,82 @@
+summary = "Report outputs restore exact bytes, distinguish object paths and original source comments, and handle empty sources"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+families = ["gcc"]
+outputs = ["listing.txt","declarations.h","out/stack.o","out/stack.su","next/stack.o","next/stack.su","out/graph.o","out/graph.ci","next/graph.o","next/graph.ci","out/info.o","next/info.o","out/listing.o","next/listing.o","out/listing-file.o","next/listing-file.o","out/aux.o","next/aux.o"]
+
+[[compile]]
+argv = ["{cc}", "@stack.rsp", "-c", "u.c"]
+source = "u.c"
+also_names = ["@stack.rsp"]
+
+[[compile]]
+argv = ["{cc}", "@graph.rsp", "-c", "u.c"]
+source = "u.c"
+also_names = ["@graph.rsp"]
+
+[[compile]]
+argv = ["{cc}", "@info.rsp", "-c", "u.c"]
+source = "u.c"
+also_names = ["@info.rsp"]
+
+[[compile]]
+argv = ["{cc}", "@listing.rsp", "-c", "u.c"]
+source = "u.c"
+also_names = ["@listing.rsp"]
+
+[[compile]]
+argv = ["{cc}", "@listing-file.rsp", "-c", "u.c"]
+source = "u.c"
+also_names = ["@listing-file.rsp"]
+
+[[compile]]
+argv = ["{cc}", "@aux.rsp", "-c", "u.c"]
+source = "u.c"
+also_names = ["@aux.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "object-path-change"
+reuse = "miss"
+action = [
+  { op = "delete-outputs" },
+  { op = "write", path = "stack.rsp", content = "-O3 -fstack-usage -o next/stack.o\n" },
+  { op = "write", path = "graph.rsp", content = "-O3 -fcallgraph-info=su,da -o next/graph.o\n" },
+  { op = "write", path = "info.rsp", content = "-O3 -fopt-info -o next/info.o\n" },
+  { op = "write", path = "listing.rsp", content = "-O3 -g -Wa,-adhln -o next/listing.o\n" },
+  { op = "write", path = "listing-file.rsp", content = "-O3 -g -Wa,-adhln=listing.txt -o next/listing-file.o\n" },
+  { op = "write", path = "aux.rsp", content = "-O3 -aux-info declarations.h -o next/aux.o\n" },
+]
+
+[[step]]
+name = "restore-new-object"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "source-comment-change"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "u.c", content = "extern int helper(int);\nint u(int *p, int n) {\n    int sum = 0; /* after! */\n    for (int i = 0; i < n; ++i) sum += p[i];\n    return helper(sum);\n}\n" }]
+
+[[step]]
+name = "restore-new-comment"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "empty-source"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "u.c", content = "\n" }]
+
+[[step]]
+name = "restore-empty"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

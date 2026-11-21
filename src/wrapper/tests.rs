@@ -667,6 +667,7 @@ fn volume_route_path_cc_uses_output_parent() {
         language_override: None,
         family: crate::compiler::cc::ToolFamily::Gnu,
         wp_dependency_family: None,
+        report_family: None,
         depinfo_roots: Vec::new(),
         serialize_diagnostics: None,
         include_pch: None,
