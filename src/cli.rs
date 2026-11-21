@@ -4366,10 +4366,8 @@ pub fn doctor(
     json: bool,
 ) -> Result<()> {
     let home = kache_fs::home_dir().unwrap_or_default();
-    let (config, provenance) = crate::config::Config::load_with_provenance()
-        .map_or((None, None), |(config, provenance)| {
-            (Some(config), Some(provenance))
-        });
+    let loaded = crate::config::Config::load_with_provenance().ok();
+    let config = loaded.as_ref().map(|(config, _)| config);
 
     // The daemon is optional (see README): `kache doctor` shows its checks
     // for diagnostics but never counts them as issues. See #443.
@@ -4469,7 +4467,7 @@ pub fn doctor(
     });
 
     // 5. Cache directory
-    if let Some(ref cfg) = config {
+    if let Some(cfg) = config {
         let exists = cfg.cache_dir.exists();
         checks.push(Check {
             label: "Cache dir",
@@ -4622,7 +4620,7 @@ pub fn doctor(
     // into that wait below.
     let my_version = crate::VERSION;
     let mut healthy_daemon_reachable = false;
-    if let Some(ref cfg) = config {
+    if let Some((cfg, provenance)) = &loaded {
         let mut stats = crate::daemon::send_stats_request_without_restart(cfg, false).ok();
 
         let is_stale = |stats: &Option<crate::daemon::StatsResponse>| {
@@ -4648,7 +4646,7 @@ pub fn doctor(
         if let Some(stats) = &stats {
             checks.extend(doctor_daemon::checks(
                 cfg,
-                provenance.as_ref().expect("loaded config has provenance"),
+                provenance,
                 stats.effective_config.as_ref(),
             ));
         }
@@ -4864,7 +4862,7 @@ pub fn doctor(
         if fix {
             migrate(purge_sccache)?;
         }
-        if verify && let Some(ref cfg) = config {
+        if verify && let Some(cfg) = config {
             let outcome = self::verify(cfg, checksums, repair)?;
             if doctor_has_issues(outcome.unresolved_integrity_findings()) {
                 std::process::exit(1);
@@ -4935,7 +4933,7 @@ pub fn doctor(
     // part of that condition: they are reclaimable space, not wrong bytes,
     // and GC clears them without anyone's intervention.
     if verify {
-        if let Some(ref cfg) = config {
+        if let Some(cfg) = config {
             println!();
             let outcome = self::verify(cfg, checksums, repair)?;
             let unresolved = outcome.unresolved_integrity_findings();
