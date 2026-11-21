@@ -29,7 +29,7 @@ Baseline `ty check scripts`: 30 diagnostics. Candidates measured:
 | ruff `F401` | 2 | **Fixed** under Dead code. |
 | `shellcheck` default severity | 5 | Rejected: 4x SC1007 in `test-unavailable-proc-labels.sh` (`RUSTC_WRAPPER= cargo ...` clears the variable on purpose) and SC2046 in `fetch-ccache.sh` (`set -- $(...)` splits a three-field pin on purpose). |
 
-Fixes (26 diagnostics removed, each witnessed by ty going clean for it and the
+Fixes (25 diagnostics removed, 30 to 5, each witnessed by ty going clean for it and the
 suites below passing):
 
 1. Six scripts passed `spec_from_file_location(...)` straight to
@@ -38,8 +38,8 @@ suites below passing):
    `test-bench-contention.py`, `test-mutation-diff.py`,
    `bench/tests/test_edit_loop.py`, `bench/gate_local.py`. Each now raises
    `ImportError` naming the path. One shared helper was rejected: the
-   production caller (`gate_local.renderer_from`) loads a module from a staged
-   copy of an older commit, so it must not depend on a new module.
+   production caller (`gate_local.renderer_from`) loads the report module from
+   the staged copy of the commit being measured, which may predate a new helper.
 2. `bench-contention.py`: `server_log.close()` on a value that is `None`
    unless the backend is sccache (now behind a check); `shutil.rmtree(**kwargs)`
    with a dict that matched no overload (now explicit `onexc`/`onerror`
@@ -66,7 +66,7 @@ Costs on this host (load 25 to 50): the `bench` suite 4 to 9 s, contention 6
 to 9 s, `test-mutation-diff.py` 34 to 78 s, the rest under 3 s. **None runs in
 CI**: `.github/workflows` call `make test`, `make lint`, `make e2e`,
 `make cc-oracle` and their negative controls only, and `make test` is
-`cargo test`. Three scripts' suites have no `make` target at all
+`cargo test`. Four suites have no `make` target at all
 (`test-ci-changes.py`, `test-crates-io.py`, `test-mutation-diff.py`,
 `test-version-consistency.py`). Filed below.
 
@@ -77,7 +77,7 @@ over the five suites above plus `test-mutation-diff.py`, tests omitted):
 | Script | Cover | Contract | Guarding tests | Disposition |
 | --- | --- | --- | --- | --- |
 | `bench/stats.py`, `bench/design.py`, `bench/report.py`, `bench/short.py`, `bench/phases.py`, `bench/inference.py` | 92, 84, 88, 84, 88, 77% | Sample validity, paired verdicts, cold-reuse design, the perf-gate comment | `bench/tests/test_short.py`, `test_inference.py`, `test_phases.py`, `test_gate_local.py` | Asserted |
-| `bench/gate_local.py` | 53% | Stage the merge base and head, compare | `bench/tests/test_gate_local.py:15` onward | Partly: the git/cargo staging paths run only by hand |
+| `bench/gate_local.py` | 53% | Stage the merge base and head, compare | `bench/tests/test_gate_local.py` | Partly: the git/cargo staging paths run only by hand |
 | `bench-contention.py` | 61% | Six overlapping Cargo jobs, admission and counts | `test-bench-contention.py` (29), `bench/tests/test_contention_counts.py` | Asserted for the pure parts; the Linux-only runner body is by hand |
 | `mutation-diff.py` | 79% | Which lines enter the mutation lane | `test-mutation-diff.py` (12) | Asserted |
 | `ci-changes.py`, `check-version-consistency.sh` | 95% / by `test-version-consistency.py` | Which CI groups a PR needs; release version agreement | `test-ci-changes.py`, `test-version-consistency.py` | Asserted |
@@ -128,7 +128,7 @@ release or CI policy.
 | Script | Evidence | Disposition |
 | --- | --- | --- |
 | `ci-changes.py`, `test-ci-changes.py`, `ci/resolve-version.sh` | Only the test references `ci-changes.py` and `resolve-version.sh`; `.github/workflows` do not call them. The groups they decide (`nix`, helm, perf-gate) describe CI the workflows no longer have | Consumer question: is this CI-split logic retired? |
-| `require-ci-green.sh` | Header says it gates publishes on CI; no workflow calls it, and `release.yml` is the publish path | Consumer question, security-relevant |
+| `require-ci-green.sh` | Header says it gates irreversible publishes on CI; no workflow, recipe or script calls it | Consumer question, security-relevant |
 | `ci-monitor.sh` | 584 lines; default repo is `Zondax/kunobi-frontend`, not this repository | Consumer question |
 | `check-docs.sh` | No caller | Consumer question |
 | `workspace-members.sh`, `check-coverage-scope.sh` | The first is called by no recipe; the second only by the first | Consumer question: coverage-scope gate with no coverage lane (DSLP-87) |
