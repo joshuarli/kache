@@ -77,6 +77,8 @@ static MACOS_INFO_PLIST: [u8; include_bytes!("Info.plist").len()] =
     *include_bytes!("Info.plist");
 
 use anyhow::{Context, Result};
+#[cfg(unix)]
+use std::io::Write;
 use std::path::PathBuf;
 
 mod version;
@@ -1102,8 +1104,9 @@ fn run_wrapper_mode(args: &[String]) -> Result<()> {
                     )? {
                         std::process::exit(exit);
                     }
+                    warn_daemon_fallback("daemon did not accept compiler execution after startup");
                 }
-                Err(error) => log::debug!("compiler daemon did not start: {error}"),
+                Err(error) => warn_daemon_fallback(&format!("daemon startup failed: {error:#}")),
             }
         }
         Some(config)
@@ -1114,6 +1117,15 @@ fn run_wrapper_mode(args: &[String]) -> Result<()> {
     let config = None;
     let exit = run_compiler_invocation_with_config(args, context, config)?;
     std::process::exit(exit);
+}
+
+#[cfg(unix)]
+fn warn_daemon_fallback(reason: &str) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        let _ = writeln!(std::io::stderr().lock(), "kache: warning: daemon handoff failed; using local compiler execution: {}",
+            reason.replace(['\r', '\n'], " "));
+    }
 }
 
 /// Decide whether raw argv can enter the compiler pipeline without probing a
