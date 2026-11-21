@@ -1,6 +1,106 @@
 use super::*;
 
 #[test]
+fn wp_depfiles_use_the_existing_depinfo_model() {
+    for program in ["gcc", "clang"] {
+        for (flag, system) in [("-Wp,-MD,deps.tmp", true), ("-Wp,-MMD,deps.tmp", false)] {
+            let parsed =
+                CcArgs::parse(&s(&[program, flag, "-c", "src/unit.c", "-o", "out.o"])).unwrap();
+            assert!(parsed.refuse_reasons(&[]).is_empty());
+            assert_eq!(
+                parsed.depinfo_output_path(),
+                Some(PathBuf::from("deps.tmp"))
+            );
+            assert_eq!(parsed.depinfo.as_ref().unwrap().include_system, system);
+            assert_eq!(
+                parsed.depinfo.as_ref().unwrap().targets,
+                if program == "gcc" {
+                    vec![("unit.o".into(), false)]
+                } else {
+                    vec![]
+                }
+            );
+            assert_eq!(cc_direct_key_shape_ok(&parsed), system);
+            assert_eq!(build_preprocess_args(&parsed), s(&["-E", "src/unit.c"]));
+            assert!(
+                !parsed
+                    .probe_args()
+                    .iter()
+                    .any(|arg| arg.starts_with("-Wp,"))
+            );
+            assert!(
+                parsed
+                    .compiler_output_paths()
+                    .contains(&PathBuf::from("deps.tmp"))
+            );
+            assert_eq!(
+                cc_depinfo_object_target(&parsed),
+                if program == "gcc" {
+                    None
+                } else {
+                    Some("out.o".into())
+                }
+            );
+        }
+    }
+    for flag in ["-Wp,-MD", "-Wp,-MMD"] {
+        let parsed = CcArgs::parse(&s(&["clang", flag, "-c", "unit.c", "-o", "out.o"])).unwrap();
+        assert!(parsed.refuse_reasons(&[]).is_empty());
+        assert_eq!(parsed.depinfo_output_path(), Some(PathBuf::from("out.d")));
+    }
+}
+
+#[test]
+fn wp_depfiles_refuse_unsafe_or_ambiguous_forms() {
+    for program in ["gcc", "clang"] {
+        for flag in [
+            "-Wp,-MMD,",
+            "-Wp,-MD,",
+            "-Wp,-MMD,-",
+            "-Wp,-MMD,u.d,-MT,u.o",
+            "-Wp,-MMD,u.d,-DVALUE=1",
+            "-Wp,-DVALUE=1",
+        ] {
+            let parsed =
+                CcArgs::parse(&s(&[program, flag, "-c", "unit.c", "-o", "out.o"])).unwrap();
+            assert!(!parsed.refuse_reasons(&[]).is_empty(), "{program} {flag}");
+        }
+        for other in [
+            "-MD",
+            "-MMD",
+            "-MP",
+            "-MG",
+            "-MF",
+            "-MT",
+            "-MQ",
+            "-Xclang",
+            "-Xpreprocessor",
+            "-Wp,-MD,other.d",
+        ] {
+            let parsed = CcArgs::parse(&s(&[
+                program,
+                "-Wp,-MMD,u.d",
+                other,
+                "other",
+                "-c",
+                "unit.c",
+                "-o",
+                "out.o",
+            ]))
+            .unwrap();
+            assert!(!parsed.refuse_reasons(&[]).is_empty(), "{program} {other}");
+        }
+    }
+    for program in ["gcc", "cc", "c++", "clang-cl"] {
+        for flag in ["-Wp,-MMD", "-Wp,-MD"] {
+            let parsed =
+                CcArgs::parse(&s(&[program, flag, "-c", "unit.c", "-o", "out.o"])).unwrap();
+            assert!(!parsed.refuse_reasons(&[]).is_empty(), "{program} {flag}");
+        }
+    }
+}
+
+#[test]
 fn dependency_output_env_refuses_gcc_but_preserves_clang() {
     let root = tempfile::tempdir().unwrap();
     for variable in ["DEPENDENCIES_OUTPUT", "SUNPRO_DEPENDENCIES"] {

@@ -105,6 +105,24 @@ ccache.suite = "base.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-flag-wp-mmd-depfile"
+package = "CCP-03"
+summary = "Clang forwarded MD/MMD comma-file and bare depfiles restore raw-identically"
+profiles = ["both"]
+compilers = "clang"
+ccache.suite = "direct.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-wp-mmd-depfile-gcc"
+package = "CCP-03"
+summary = "GCC forwarded MD/MMD comma-file depfiles retain source-derived targets"
+profiles = ["both"]
+compilers = "gcc"
+ccache.suite = "direct.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-core-warning-replay"
 package = "CCP-01"
 summary = "diagnostics of a successful compile replayed byte-for-byte on restore"

@@ -1,0 +1,40 @@
+summary = "isolated forwarded dependency options restore raw-identical paths, targets and bytes"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+families = ["clang"]
+outputs = ["mmd-out.o","md-out.o","bare-mmd.o","bare-md.o","mmd.d","md.d","bare-mmd.d","bare-md.d"]
+
+[[compile]]
+argv = ["{cc}", "-Wp,-MMD,mmd.d", "-c", "mmd.c", "-o", "mmd-out.o"]
+source = "mmd.c"
+
+[[compile]]
+argv = ["{cc}", "-Wp,-MD,md.d", "-c", "md.c", "-o", "md-out.o"]
+source = "md.c"
+
+[[compile]]
+argv = ["{cc}", "-Wp,-MMD", "-c", "bare-mmd.c", "-o", "bare-mmd.o"]
+source = "bare-mmd.c"
+
+[[compile]]
+argv = ["{cc}", "-Wp,-MD", "-c", "bare-md.c", "-o", "bare-md.o"]
+source = "bare-md.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-header"
+reuse = "miss"
+action = [{ op = "write", path = "unit.h", content = "#define VALUE 9\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-new-header"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

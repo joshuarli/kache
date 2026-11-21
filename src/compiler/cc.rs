@@ -824,6 +824,9 @@ impl CcArgs {
             idx += 1;
         }
         parsed.depinfo = depinfo;
+        if parsed.depinfo.is_none() {
+            parsed.depinfo = cc_wp_dependency_spec(&parsed);
+        }
         let header_language = parsed
             .language_override
             .as_deref()
@@ -873,6 +876,14 @@ impl CcArgs {
     ///   refused. `-S -o` and `-E` to a named file or to stdout are cached.
     pub fn refuse_reasons(&self, extra_allowlist_flags: &[String]) -> Vec<RefuseReason> {
         let mut reasons = Vec::new();
+
+        if self.rest.iter().any(|arg| arg.starts_with("-Wp,"))
+            && cc_wp_dependency_spec(self).is_none()
+        {
+            reasons.push(RefuseReason::Unsupported(
+                "cc mixed or unsafe -Wp dependency options — not yet",
+            ));
+        }
 
         if self.family == ToolFamily::Gnu {
             for (variable, reason) in [
@@ -1472,7 +1483,11 @@ impl CcArgs {
     /// Terminal formatting must not enter the resolved cc1 tokens either.
     /// Keep the original argv for preprocessing and compiler execution.
     fn probe_args(&self) -> Vec<String> {
-        self.split_diagnostic_format_args().0
+        let mut args = self.split_diagnostic_format_args().0;
+        if cc_wp_dependency_spec(self).is_some() {
+            args.retain(|arg| cc_wp_dependency_option(arg).is_none());
+        }
+        args
     }
 
     /// The formatting flags [`Self::probe_args`] leaves out. They shape the
@@ -1839,6 +1854,87 @@ fn cc_target_arch(parsed: &CcArgs) -> String {
     }
 }
 
+fn cc_wp_dependency_option(arg: &str) -> Option<(bool, Option<&str>)> {
+    let option = arg.strip_prefix("-Wp,")?;
+    let (mode, output) = match option.split_once(',') {
+        Some((mode, output)) if !output.is_empty() && !output.contains(',') && output != "-" => {
+            (mode, Some(output))
+        }
+        Some(_) => return None,
+        None => (option, None),
+    };
+    match mode {
+        "-MD" => Some((true, output)),
+        "-MMD" => Some((false, output)),
+        _ => None,
+    }
+}
+
+fn cc_wp_dependency_spec(parsed: &CcArgs) -> Option<DepInfoSpec> {
+    if parsed.family.dialect() != Dialect::Gnu || parsed.mode != CompileMode::Compile {
+        return None;
+    }
+    let name = super::command_basename(&parsed.program)?;
+    let name = super::strip_windows_exe_suffix(name).to_ascii_lowercase();
+    if !matches!(
+        kache_shims::compiler_driver(&name),
+        Some("gcc" | "g++" | "clang" | "clang++")
+    ) {
+        return None;
+    }
+    let mut wp = None;
+    let mut idx = 0;
+    while idx < parsed.rest.len() {
+        let token = &parsed.rest[idx];
+        if matches!(token.as_str(), "-Xclang" | "-Xpreprocessor") {
+            return None;
+        }
+        if token.starts_with("-Wp,") {
+            if wp.is_some() {
+                return None;
+            }
+            wp = Some(cc_wp_dependency_option(token)?);
+        } else if let Some(arg) = parse_cc_arg_at(&parsed.rest, idx, parsed.family.dialect()) {
+            if matches!(
+                arg.spec.action,
+                CcArgAction::DepIncludeSystem(_)
+                    | CcArgAction::DepOutput
+                    | CcArgAction::DepTarget
+                    | CcArgAction::DepPhonyTargets
+                    | CcArgAction::DepMissingGenerated
+            ) {
+                return None;
+            }
+            idx += arg.consumed;
+            continue;
+        }
+        idx += if takes_separate_value(&parsed.rest, idx, parsed.family.dialect()) {
+            2
+        } else {
+            1
+        };
+    }
+    let (include_system, output) = wp?;
+    if parsed.family == ToolFamily::Gnu && output.is_none() {
+        return None;
+    }
+    let targets = if parsed.family == ToolFamily::Gnu {
+        vec![(
+            format!("{}.o", parsed.sources.first()?.file_stem()?.to_str()?),
+            false,
+        )]
+    } else {
+        Vec::new()
+    };
+    Some(DepInfoSpec {
+        emit: true,
+        include_system,
+        output: output.map(PathBuf::from),
+        targets,
+        ..DepInfoSpec::default()
+    })
+}
+
 /// Build the argv for a preprocess-only run, dialect-dependent.
 ///
 /// **Gnu dialect** — the original args with mode/output/dep-info flags
@@ -1865,7 +1961,11 @@ fn build_preprocess_args(parsed: &CcArgs) -> Vec<String> {
         Dialect::Gnu => {
             let mut out = vec!["-E".to_string()];
             let mut iter = parsed.rest.iter();
+            let wp_dependency = cc_wp_dependency_spec(parsed).is_some();
             while let Some(arg) = iter.next() {
+                if wp_dependency && cc_wp_dependency_option(arg).is_some() {
+                    continue;
+                }
                 match arg.as_str() {
                     "-c" | "-S" | "-P" => {}
                     "-o" | "-MF" | "-MT" | "-MQ" | "--serialize-diagnostics"
@@ -3985,6 +4085,12 @@ pub static CC_FLAGS: &[FlagSpec] = &[
         class: FlagClass::CapturedByProbe,
         source: "Issue #115 — language override (separate-arg form).",
         dialect: None,
+    },
+    FlagSpec {
+        matcher: Matcher::Regex(r"-Wp,-M(?:M)?D(?:,[^,]+)?"),
+        class: FlagClass::NoObjectEffect,
+        source: "isolated named GCC/Clang depfile modelled by DepInfoSpec; mixed lists/options refuse; bare GCC overwrites its source; ambiguous cc drivers stay passthrough",
+        dialect: Some(Dialect::Gnu),
     },
     FlagSpec {
         // Sticky language override forms. The parser records the
