@@ -1019,8 +1019,13 @@ fi
             };
             let error = result.err().expect("a pipe read error must be returned");
             assert!(format!("{error:#}").contains("injected pipe read failure"));
-            assert!(started.elapsed() < std::time::Duration::from_secs(5));
-            assert!(child.try_wait().unwrap().is_some());
+            let status = child.try_wait().unwrap().expect("the child must be reaped");
+            assert_eq!(
+                std::os::unix::process::ExitStatusExt::signal(&status),
+                Some(libc::SIGKILL),
+                "the pipe failure must kill the child, not wait it out: {:?}",
+                started.elapsed()
+            );
         }
     }
 
