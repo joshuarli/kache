@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use deser::{Deserialize, Serialize};
 use rustc_hash::FxHashMap;
 use std::{borrow::Cow, path::PathBuf};
@@ -121,12 +121,12 @@ pub(super) fn restore<'a>(text: &'a str, roots: &Roots) -> Result<Cow<'a, str>> 
     let mut offset = 0;
     for location in record.paths {
         ensure!(location.end > location.start, "empty diagnostic path range");
-        let literal = record.text.get(offset..location.start);
-        let original = record.text.get(location.start..location.end);
-        ensure!(
-            literal.is_some() && original.is_some(),
-            "invalid diagnostic path range"
-        );
+        let (Some(literal), Some(_)) = (
+            record.text.get(offset..location.start),
+            record.text.get(location.start..location.end),
+        ) else {
+            bail!("invalid diagnostic path range");
+        };
         let root = roots
             .iter()
             .find(|(_, token, _)| *token == location.root)
@@ -137,7 +137,7 @@ pub(super) fn restore<'a>(text: &'a str, roots: &Roots) -> Result<Cow<'a, str>> 
             !root.is_empty(),
             "cached diagnostic root has no path spelling"
         );
-        restored.push_str(literal.unwrap());
+        restored.push_str(literal);
         if location.json {
             restored.push_str(&json_fragment(root));
         } else {
