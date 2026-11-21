@@ -5711,7 +5711,7 @@ fn parse_cc_normalize_toggle(value: Option<&str>) -> bool {
 
 /// The effective `SOURCE_DATE_EPOCH` kache pins on *both* the `-E` key probe
 /// and the real compile, so a translation unit that bakes
-/// `__DATE__` / `__TIME__` / `__TIMESTAMP__` into its object produces bytes
+/// `__DATE__` / `__TIME__` into its object produces bytes
 /// that match the time-stable cache key — no stale-timestamp false hit (#423).
 ///
 /// Resolution (see [`resolve_source_date_epoch`]):
@@ -8147,6 +8147,40 @@ fn cc_direct_inputs_digest(fingerprints: &[crate::cache_key::CcPreprocessMemoInp
     hasher.finalize().to_hex().to_string()
 }
 
+fn cc_timestamp_may_expand(bytes: &[u8]) -> bool {
+    let spelling: Vec<u8> = bytes.iter().copied()
+        .filter(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+        .collect();
+    spelling.windows(b"__TIMESTAMP__".len())
+        .any(|window| window == b"__TIMESTAMP__")
+}
+
+fn cc_timestamp_key(
+    parsed: &CcArgs,
+    inputs: &[PathBuf],
+    prefix_maps: &[CcPrefixMap],
+) -> Result<Option<String>> {
+    let mut sensitive = parsed.rest.iter().any(|arg| cc_timestamp_may_expand(arg.as_bytes()));
+    let mut stamps = Vec::with_capacity(inputs.len());
+    for path in inputs {
+        let bytes = fs::read(path).with_context(|| format!("reading timestamp input {}", path.display()))?;
+        sensitive |= cc_timestamp_may_expand(&bytes);
+        let metadata = fs::metadata(path)?;
+        stamps.push((cc_mapped_path(path, prefix_maps), crate::cache_key::metadata_mtime_ns(&metadata)));
+    }
+    if !sensitive {
+        return Ok(None);
+    }
+    // A macro defined in a header expands with the invoking file's mtime.
+    stamps.sort_unstable();
+    let mut hasher = blake3::Hasher::new();
+    for (name, mtime) in stamps {
+        fold_cc_memo_field(&mut hasher, b"name", name.as_bytes());
+        fold_cc_memo_field(&mut hasher, b"mtime", &mtime.to_le_bytes());
+    }
+    Ok(Some(hasher.finalize().to_hex().to_string()))
+}
+
 /// The memo's hash column for a read-set digest, flagged when path-bound.
 fn cc_memo_hash(digest: &str, path_bound: bool) -> String {
     if path_bound {
@@ -9565,6 +9599,15 @@ impl CcCompiler {
         hasher.update(b"preprocessed:");
         hasher.update(pp_hash.as_bytes());
         hasher.update(b"\n");
+        if let Some(timestamp) = cc_timestamp_key(
+            parsed,
+            read_inputs.as_deref().unwrap_or_default(),
+            &prefix_maps,
+        )? {
+            hasher.update(b"timestamp_mtimes.v1:");
+            hasher.update(timestamp.as_bytes());
+            hasher.update(b"\n");
+        }
         if let Some(pch) = cc_pch_key(parsed, read_inputs.as_deref())? {
             hasher.update(b"pch.v1:");
             hasher.update(pch.as_bytes());
@@ -9850,7 +9893,7 @@ impl CcCompiler {
         let args = compose_cc_args(&parsed.rest, appended);
         command.args(&args);
         // Pin the same effective SOURCE_DATE_EPOCH the `-E` key probe used, so a
-        // TU baking __DATE__/__TIME__/__TIMESTAMP__ produces an object whose date
+        // TU baking __DATE__/__TIME__ produces an object whose date
         // matches its time-stable cache key. Mirrors the existing __FILE__
         // normalization (we already rewrite paths via -ffile-prefix-map); pinning
         // the date is the same stance. Opt out with

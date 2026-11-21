@@ -321,6 +321,15 @@ ccache.suite = "base.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-macro-timestamp-mtime"
+package = "CCP-02"
+summary = "__TIMESTAMP__ follows input mtime even with SOURCE_DATE_EPOCH pinned"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "source_date_epoch.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-diagnostic-locale"
 package = "CCP-02"
 summary = "LC_ALL/diagnostic locale affecting diagnostics is accounted for"

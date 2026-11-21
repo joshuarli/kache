@@ -4805,6 +4805,80 @@ fn cc_mapped_content_hash_digests_the_mapped_bytes() {
     );
 }
 
+#[test]
+fn timestamp_key_tracks_invocation_and_header_mtimes() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("unit.c");
+    let header = dir.path().join("unit.h");
+    fs::write(&source, "const char *stamp = STAMP;\n").unwrap();
+    fs::write(&header, "#define STAMP __TIMESTAMP__\n").unwrap();
+    let parsed = CcArgs::parse_for(
+        &s(&["gcc", "-c", "unit.c"]),
+        &InvocationEnv::from_parts(
+            [("SOURCE_DATE_EPOCH", "0")],
+            Some(dir.path().to_owned()),
+            None,
+            dir.path().to_owned(),
+        ),
+    ).unwrap();
+    let inputs = [source.clone(), header.clone()];
+    let key = || cc_timestamp_key(&parsed, &inputs, &[]).unwrap().unwrap();
+    let first = key();
+    assert_eq!(first, key(), "unchanged inputs retain reuse");
+    for path in &inputs {
+        let before = key();
+        fs::File::open(path).unwrap().set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+        ).unwrap();
+        assert_ne!(before, key(), "{} mtime matters", path.display());
+    }
+    assert_eq!(cc_timestamp_key(&parsed, &[], &[]).unwrap(), None);
+    assert!(cc_timestamp_key(&parsed, &[dir.path().join("absent")], &[]).is_err());
+    fs::write(&header, "#define STAMP 1\n").unwrap();
+    assert_eq!(cc_timestamp_key(&parsed, &inputs, &[]).unwrap(), None);
+    for bytes in [b"__TIMESTAMP__".as_slice(), b"__TIME ## STAMP__", b"__TIME %:%: STAMP__", b"__TIME\\\nSTAMP__", b"__TIME\\\r\nSTAMP__"] {
+        assert!(cc_timestamp_may_expand(bytes));
+    }
+    assert!(!cc_timestamp_may_expand(b"__DATE__ __TIME__"));
+}
+
+#[cfg(unix)]
+#[test]
+fn timestamp_touch_changes_cc_cache_key_with_unchanged_contents() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("unit.c");
+    fs::write(&source, "const char *stamp = __TIMESTAMP__;\n").unwrap();
+    let fake_cc = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_cc_constant_output.sh");
+    let env = InvocationEnv::from_parts(
+        [("SOURCE_DATE_EPOCH", "0")],
+        Some(dir.path().to_owned()),
+        None,
+        dir.path().to_owned(),
+    );
+    let parsed = CcArgs::parse_for(
+        &[fake_cc.to_string_lossy().into_owned(), "-c".into(), source.to_string_lossy().into_owned()],
+        &env,
+    ).unwrap();
+    let compiler = CcCompiler::new();
+    let normalizer = crate::path_normalizer::PathNormalizer::empty();
+    let cache = dir.path().join("cache");
+    let key = || {
+        let file_hasher = crate::cache_key::FileHasher::new();
+        let ctx = KeyCtx {
+            invocation_env: &env, file_hasher: &file_hasher, path_normalizer: &normalizer,
+            cache_dir: &cache, key_salt: None, key_env_vars: &[],
+            extra_inputs_digest: None, build_script_inputs_digest: None,
+        };
+        compiler.key_for_test(&parsed, &ctx)
+    };
+    let first = key();
+    assert_eq!(first, key());
+    fs::File::open(&source).unwrap().set_modified(
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+    ).unwrap();
+    assert_ne!(first, key(), "content-only keys lose GCC's timestamp expansion");
+}
+
 /// A recorded name has to come back as the path this checkout uses, and
 /// the memo key must not move when only the checkout root does.
 #[test]
