@@ -86,9 +86,29 @@ Engineering work still open (not provisioning):
   [report.md](reports/2026-11-20-m1-aa8df06a/report.md). Unrelated
   processes used 0.37 to 6.9 cores per replay, chiefly macOS
   `softwareupdated`, an OrbStack VM and another session's benchmark. No
-  current-head acceptance verdict exists. Its single-pair ratios are
+  eligible M1 acceptance verdict exists. Its single-pair ratios are
   diagnostics only. The loaded-host tables under "CCP-09 baseline" predate
   #74/#75 and the acceptance mode.
+- CCP-09 L1 attempt, 2026-11-21, clean `da350481` (#93, after #92):
+  this Ubuntu 22.04 x86_64 glibc VM's standalone five-second preflight
+  passed (0.04185 unrelated cores). Both toolchain preflights passed too.
+  [GCC 11 report](reports/2026-11-21-l1-da350481/gcc/report.json),
+  [Clang 14 report](reports/2026-11-21-l1-da350481/clang/report.json),
+  [analysis, event evidence and host details](reports/2026-11-21-l1-da350481/README.md).
+  All validation passed. C++ headers reached 10 eligible pairs per compiler
+  and **FAIL**ed performance targets; tiny C and zlib were **INELIGIBLE**
+  after 1 pair each on GCC and 5 each on Clang. This is not passing L1
+  acceptance, nor coverage of the newest primary-lane compiler majors.
+  Largest mean paired wall losses are Clang tiny-C cold (+1.709 s) and
+  header edit (+1.633 s), diagnostic only because ineligible. The largest
+  eligible losses are Clang C++ cold (+0.873 s) and header edit (+0.436 s).
+  Events identify Clang 14's preprocessing fallback and second time-macro
+  safety expansion (two preprocessors per miss); hits and relocation
+  have zero compiler/preprocessor/probe runs. An activity-sampler fixture
+  also exposes false cumulative CPU charges on renamed kernel workers;
+  resolve accounting before another acceptance attempt, without relaxing
+  thresholds. LLVM was deferred: estimated multi-hour timing and several
+  GiB of scratch are unjustified while eligibility measurement is unresolved.
 - Real workloads: zlib and the LLVM subset cache fully (CCP-07). cc-rs build
   scripts also do. A probe on 2026-11-20 used `CC="kache cc"`, no Rust
   wrapper, and `zstd-sys`, bundled `libsqlite3-sys` and `blake3`. Its first
@@ -104,12 +124,13 @@ Engineering work still open (not provisioning):
 
 Provisioning, not engineering:
 
-- A quiet benchmark host. The M1 is shared with other sessions' container
-  and benchmark work, and the acceptance preflight rejects it while that
-  runs. It is retried only on a quiet preflight, never as repeated timing
-  under load. No native Linux host other than the OrbStack VM on this same
-  M1 is available, so L1/L2 acceptance cells are missing; the CI runners are
-  shared VMs and do not qualify either.
+- A quiet benchmark host throughout timing. The M1 remains shared with other
+  sessions' work and is retried only after a quiet preflight. A separate
+  native L1 cloud VM is now available (attempt above); being virtualized
+  does not itself disqualify it. Its Linux activity-accounting limitation
+  must be resolved before further acceptance timing. L1 newer-compiler
+  cells, L2 and eligible M1 acceptance remain missing; shared CI correctness
+  runners are not acceptance-timing evidence.
 - M1 standalone LLVM clang: not installed on this host, and no authorized
   setup installs it (`brew install llvm` would change the host). Missing
   cell: M1 × standalone LLVM, every oracle and bench run. Apple clang 21
@@ -868,14 +889,16 @@ host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
       corpus-c-tiny --workload corpus-cxx-headers --workload zlib"`, then
       `--workload llvm-subset` alone. Commit `report.json` under
       `reports/<date>-<lane>-<rev>/` and link it from Current state.
-   2. The same on a quiet native Linux host (L1 GCC/Clang, L2 ARM64) when
-      one exists. Missing cells stay listed; they do not block M1.
-   3. From that report, rank losses by wall time and avoidable compiler
-      work, and profile the one or two largest. For small-unit warm hits,
-      profile the whole client, daemon and restore path. Candidates from
-      the older diagnostics (restore round trips, store open, descriptor
-      handoff, config load) are to be re-ranked from fresh evidence, not
-      assumed.
+   2. L1 GCC 11/Clang 14 now has an initial native-VM attempt (Current state).
+      Fix/test Linux activity accounting before retrying affected cells;
+      preserve the 0.5-core limit and sample rules. Newer L1 compiler majors
+      and L2 ARM64 still need acceptance evidence; they do not block M1.
+   3. The fresh L1 wall-loss ranking and event evidence are committed with
+      that report. Its largest losses use Clang 14's miss/preprocessing
+      path, not relocated compiler re-probes. Profile that path first;
+      separately, eligible warm C++ still loses about 9–10 ms per 12 hits.
+      Do not assume the older restore/store/descriptor/config candidates
+      explain a current loss without a new whole-path profile.
    4. Autotools/libtool launchers (CCP-07) now have a bounded local glibc
       fixture (`make cc-project-autotools`); provision and run other host
       cells before calling the matrix complete. Meson launchers remain open.

@@ -1,0 +1,1023 @@
+{
+  "source_revision": "da350481a58373829051df9b6eff35400e0ba9a9",
+  "wall_loss_method": "Arithmetic mean of paired kache wall_ms minus ccache wall_ms per scenario; workload_eligible=false rows are diagnostic only. Acceptance ratios remain the unmodified runner log-geomeans and intervals.",
+  "losses": [
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 1708.55178,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 1632.6007439999998,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 872.8108398999997,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 436.2184632999999,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 402.6848349999999,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 268.0922860999999,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 263.96891989999983,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 177.85559439999992,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 170.490318,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 155.26452899999998,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 152.8773088,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 147.6863814,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 144.58306789999997,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 130.03936699999997,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 126.915196,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 120.93836499999999,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 102.91812300000001,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 94.38491799999997,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 74.1812930000001,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 67.85884300000001,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 45.958690000000004,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 36.024048799999996,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 35.379840800000004,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 27.9592188,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 26.753512799999974,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 26.401526999999994,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 23.968486400000003,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 23.24136399999999,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 21.2004628,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 18.2787899,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 18.1279333,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 15.9888188,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 15.7067138,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 13.014246999999997,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 10.8949505,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 10.023677,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 10.009515600000004,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 9.5084069,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 8.233204000000015,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "unit-daemon-start",
+      "mean_paired_excess_ms": 7.8927406,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 7.584889000000004,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "unit-steady",
+      "mean_paired_excess_ms": 6.6907692,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 5.4338643,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 4.9704826,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 4.553904,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "unit-steady",
+      "mean_paired_excess_ms": 4.201409000000001,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 4.168772799999999,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 3.6558552,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 3.3310910999999996,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "unit-daemon-start",
+      "mean_paired_excess_ms": 3.2920250000000006,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 3.253444000000001,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 3.0689980000000006,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 2.3133529999999993,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 1.641926999999999,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 0.4355503999999996,
+      "pairs": 5,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": -10.251088999999979,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": -13.605469,
+      "pairs": 1,
+      "workload_eligible": false
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": -23.176625999999942,
+      "pairs": 1,
+      "workload_eligible": false
+    }
+  ],
+  "last_kache_replay_event_phases": [
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "cold",
+      "events": 12,
+      "results": {
+        "miss": 12
+      },
+      "sums": {
+        "compiler_runs": 12,
+        "preprocessor_runs": 0,
+        "probe_runs": 4,
+        "key_ms": 200,
+        "store_ms": 64,
+        "restore_ms": 0,
+        "elapsed_ms": 20425
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "warm",
+      "events": 12,
+      "results": {
+        "local_hit": 12
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 14,
+        "store_ms": 0,
+        "restore_ms": 4,
+        "elapsed_ms": 45
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "edit-source-settled",
+      "events": 1,
+      "results": {
+        "dup": 1
+      },
+      "sums": {
+        "compiler_runs": 1,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 12,
+        "store_ms": 5,
+        "restore_ms": 0,
+        "elapsed_ms": 1661
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "revert-source-settled",
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 2,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "edit-header-settled",
+      "events": 12,
+      "results": {
+        "dup": 12
+      },
+      "sums": {
+        "compiler_runs": 12,
+        "preprocessor_runs": 12,
+        "probe_runs": 0,
+        "key_ms": 1307,
+        "store_ms": 54,
+        "restore_ms": 0,
+        "elapsed_ms": 22352
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "revert-header-settled",
+      "events": 12,
+      "results": {
+        "local_hit": 12
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 34,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 62
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "edit-source-immediate",
+      "events": 1,
+      "results": {
+        "dup": 1
+      },
+      "sums": {
+        "compiler_runs": 1,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 13,
+        "store_ms": 6,
+        "restore_ms": 0,
+        "elapsed_ms": 1700
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "revert-source-immediate",
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 3,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 6
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "relocated",
+      "events": 12,
+      "results": {
+        "local_hit": 12
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 30,
+        "store_ms": 0,
+        "restore_ms": 1,
+        "elapsed_ms": 75
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 4,
+      "scenario": "cold",
+      "events": 48,
+      "results": {
+        "miss": 48
+      },
+      "sums": {
+        "compiler_runs": 48,
+        "preprocessor_runs": 96,
+        "probe_runs": 1,
+        "key_ms": 2186,
+        "store_ms": 139,
+        "restore_ms": 0,
+        "elapsed_ms": 3850
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 4,
+      "scenario": "warm",
+      "events": 48,
+      "results": {
+        "local_hit": 48
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 100
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 4,
+      "scenario": "edit-source-settled",
+      "events": 1,
+      "results": {
+        "dup": 1
+      },
+      "sums": {
+        "compiler_runs": 1,
+        "preprocessor_runs": 2,
+        "probe_runs": 0,
+        "key_ms": 42,
+        "store_ms": 3,
+        "restore_ms": 0,
+        "elapsed_ms": 76
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 4,
+      "scenario": "revert-source-settled",
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 2
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 4,
+      "scenario": "edit-header-settled",
+      "events": 48,
+      "results": {
+        "dup": 48
+      },
+      "sums": {
+        "compiler_runs": 48,
+        "preprocessor_runs": 96,
+        "probe_runs": 0,
+        "key_ms": 2125,
+        "store_ms": 108,
+        "restore_ms": 0,
+        "elapsed_ms": 3869
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 4,
+      "scenario": "revert-header-settled",
+      "events": 48,
+      "results": {
+        "local_hit": 48
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 116
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 4,
+      "scenario": "edit-source-immediate",
+      "events": 1,
+      "results": {
+        "dup": 1
+      },
+      "sums": {
+        "compiler_runs": 1,
+        "preprocessor_runs": 2,
+        "probe_runs": 0,
+        "key_ms": 41,
+        "store_ms": 2,
+        "restore_ms": 0,
+        "elapsed_ms": 74
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 4,
+      "scenario": "revert-source-immediate",
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 2
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 4,
+      "scenario": "relocated",
+      "events": 48,
+      "results": {
+        "local_hit": 48
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 98
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 4,
+      "scenario": "unit-daemon-start",
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 5
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 4,
+      "scenario": "unit-steady",
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 2
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "cold",
+      "events": 12,
+      "results": {
+        "miss": 12
+      },
+      "sums": {
+        "compiler_runs": 12,
+        "preprocessor_runs": 24,
+        "probe_runs": 4,
+        "key_ms": 2830,
+        "store_ms": 65,
+        "restore_ms": 0,
+        "elapsed_ms": 28539
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "warm",
+      "events": 12,
+      "results": {
+        "local_hit": 12
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 15,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 44
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "edit-source-settled",
+      "events": 1,
+      "results": {
+        "dup": 1
+      },
+      "sums": {
+        "compiler_runs": 1,
+        "preprocessor_runs": 2,
+        "probe_runs": 0,
+        "key_ms": 209,
+        "store_ms": 4,
+        "restore_ms": 0,
+        "elapsed_ms": 2292
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "revert-source-settled",
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 2,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 4
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "edit-header-settled",
+      "events": 12,
+      "results": {
+        "dup": 12
+      },
+      "sums": {
+        "compiler_runs": 12,
+        "preprocessor_runs": 24,
+        "probe_runs": 0,
+        "key_ms": 2141,
+        "store_ms": 70,
+        "restore_ms": 0,
+        "elapsed_ms": 24263
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "revert-header-settled",
+      "events": 12,
+      "results": {
+        "local_hit": 12
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 31,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 63
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "edit-source-immediate",
+      "events": 1,
+      "results": {
+        "dup": 1
+      },
+      "sums": {
+        "compiler_runs": 1,
+        "preprocessor_runs": 2,
+        "probe_runs": 0,
+        "key_ms": 156,
+        "store_ms": 5,
+        "restore_ms": 0,
+        "elapsed_ms": 1978
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "revert-source-immediate",
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 3,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 5
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "relocated",
+      "events": 12,
+      "results": {
+        "local_hit": 12
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 33,
+        "store_ms": 0,
+        "restore_ms": 0,
+        "elapsed_ms": 71
+      }
+    }
+  ]
+}
