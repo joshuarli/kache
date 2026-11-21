@@ -1,5 +1,5 @@
 Prefix: DSLP
-Next: 91
+Next: 95
 
 Deslop campaign backlog ([plan](https://github.com/laputa-systems/stuff/blob/main/docs/campaigns/deslop.md), tier D). One agent works this file with the `deslop` skill: take the lowest-numbered open ticket whose area does not start with `Needs owner ·`. After DSLP-5, work the open P1 and P2 findings, then fill in `## Report` below.
 
@@ -167,42 +167,6 @@ Not started.
 - **Area:** deslop · types
 - **Where:** src/compiler/cc.rs, src/compiler/flags.rs, src/compiler/mod.rs, src/compiler/platform.rs, src/compiler/rustc.rs
 - **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope contains approximately 17047 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-21 · P2 · Types: src args, build_script inputs, cargo and config modules (17/28)
-
-- **Area:** deslop · types
-- **Where:** src/args.rs, src/blob_heal.rs, src/build_script, src/build_script_inputs, src/build_script_inputs.rs, src/cache_fs.rs, src/cargo_env.rs, src/cargo_layout.rs, src/cargo_proxy.rs, src/checked_regions.rs, src/cli_args.rs, src/compile.rs, src/compiler_store.rs, src/config.rs, src/config_cli.rs
-- **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope contains approximately 15079 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-22 · P2 · Types: src/extra_inputs.rs (18/28)
-
-- **Area:** deslop · types
-- **Where:** src/extra_inputs.rs
-- **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope contains approximately 4789 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-23 · P2 · Types: src daemon, events, fallback, engine (19/28)
-
-- **Area:** deslop · types
-- **Where:** src/daemon, src/daemon.rs, src/daemon_capacity.rs, src/daemon_control.rs, src/daemon_execution.rs, src/daemon_execution_linux.rs, src/daemon_execution_macos.rs, src/daemon_lifecycle.rs, src/daemon_publish.rs, src/demand.rs, src/disk_recovery.rs, src/engine.rs, src/events, src/events.rs, src/fallback, src/fallback.rs, src/frontend.rs, src/heartbeat.rs
-- **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope contains approximately 15962 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-24 · P2 · Types: src incremental_policy through miss_chain (20/28)
-
-- **Area:** deslop · types
-- **Where:** src/incremental_policy.rs, src/index_compact.rs, src/init_shell.rs, src/invocation, src/invocation.rs, src/key_env.rs, src/lib.rs, src/lifecycle.rs, src/link_probe.rs, src/machine.rs, src/main.rs, src/maintenance.rs, src/miss_chain.rs
-- **Problem:** Measure applicable strict-profile candidates and typing escape hatches; record witnesses and false positives. Scope contains approximately 13938 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
 - **Recommendation:** Accept: adopted profile clean, no increased escape hatches, witnesses recorded; run make test and make lint.
 - **Fix with:** deslop
 - **Effort:** M
@@ -414,42 +378,6 @@ Not started.
 - **Fix with:** deslop
 - **Effort:** M
 
-### DSLP-48 · P2 · Tests: src args, build_script inputs, cargo and config modules (17/28)
-
-- **Area:** deslop · tests
-- **Where:** src/args.rs, src/blob_heal.rs, src/build_script, src/build_script_inputs, src/build_script_inputs.rs, src/cache_fs.rs, src/cargo_env.rs, src/cargo_layout.rs, src/cargo_proxy.rs, src/checked_regions.rs, src/cli_args.rs, src/compile.rs, src/compiler_store.rs, src/config.rs, src/config_cli.rs
-- **Problem:** Audit boundaries and tiers, then measure coverage and scoped mutation; prove new tests with injected faults. Scope contains approximately 15079 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: critical survivors dispositioned, test cost budget holds, and scoped lane is qualified; run make test and make lint. Missing coverage or mutation tools are Needs environment.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-49 · P2 · Tests: src/extra_inputs.rs (18/28)
-
-- **Area:** deslop · tests
-- **Where:** src/extra_inputs.rs
-- **Problem:** Audit boundaries and tiers, then measure coverage and scoped mutation; prove new tests with injected faults. Scope contains approximately 4789 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: critical survivors dispositioned, test cost budget holds, and scoped lane is qualified; run make test and make lint. Missing coverage or mutation tools are Needs environment.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-50 · P2 · Tests: src daemon, events, fallback, engine (19/28)
-
-- **Area:** deslop · tests
-- **Where:** src/daemon, src/daemon.rs, src/daemon_capacity.rs, src/daemon_control.rs, src/daemon_execution.rs, src/daemon_execution_linux.rs, src/daemon_execution_macos.rs, src/daemon_lifecycle.rs, src/daemon_publish.rs, src/demand.rs, src/disk_recovery.rs, src/engine.rs, src/events, src/events.rs, src/fallback, src/fallback.rs, src/frontend.rs, src/heartbeat.rs
-- **Problem:** Audit boundaries and tiers, then measure coverage and scoped mutation; prove new tests with injected faults. Scope contains approximately 15962 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: critical survivors dispositioned, test cost budget holds, and scoped lane is qualified; run make test and make lint. Missing coverage or mutation tools are Needs environment.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-51 · P2 · Tests: src incremental_policy through miss_chain (20/28)
-
-- **Area:** deslop · tests
-- **Where:** src/incremental_policy.rs, src/index_compact.rs, src/init_shell.rs, src/invocation, src/invocation.rs, src/key_env.rs, src/lib.rs, src/lifecycle.rs, src/link_probe.rs, src/machine.rs, src/main.rs, src/maintenance.rs, src/miss_chain.rs
-- **Problem:** Audit boundaries and tiers, then measure coverage and scoped mutation; prove new tests with injected faults. Scope contains approximately 13938 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: critical survivors dispositioned, test cost budget holds, and scoped lane is qualified; run make test and make lint. Missing coverage or mutation tools are Needs environment.
-- **Fix with:** deslop
-- **Effort:** M
-
 ### DSLP-52 · P2 · Tests: src native_archive, out_dir_alias, path_normalizer, prestage (21/28)
 
 - **Area:** deslop · tests
@@ -657,42 +585,6 @@ Not started.
 - **Fix with:** deslop
 - **Effort:** M
 
-### DSLP-75 · P2 · Dead code: src args, build_script inputs, cargo and config modules (17/28)
-
-- **Area:** deslop · dead code
-- **Where:** src/args.rs, src/blob_heal.rs, src/build_script, src/build_script_inputs, src/build_script_inputs.rs, src/cache_fs.rs, src/cargo_env.rs, src/cargo_layout.rs, src/cargo_proxy.rs, src/checked_regions.rs, src/cli_args.rs, src/compile.rs, src/compiler_store.rs, src/config.rs, src/config_cli.rs
-- **Problem:** Run applicable dead-code tools and inspect entry points, registrations and consumers before cuts. Scope contains approximately 15079 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: findings clean or reasoned allowlist, walk-backs ticketed Needs owner; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-76 · P2 · Dead code: src/extra_inputs.rs (18/28)
-
-- **Area:** deslop · dead code
-- **Where:** src/extra_inputs.rs
-- **Problem:** Run applicable dead-code tools and inspect entry points, registrations and consumers before cuts. Scope contains approximately 4789 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: findings clean or reasoned allowlist, walk-backs ticketed Needs owner; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-77 · P2 · Dead code: src daemon, events, fallback, engine (19/28)
-
-- **Area:** deslop · dead code
-- **Where:** src/daemon, src/daemon.rs, src/daemon_capacity.rs, src/daemon_control.rs, src/daemon_execution.rs, src/daemon_execution_linux.rs, src/daemon_execution_macos.rs, src/daemon_lifecycle.rs, src/daemon_publish.rs, src/demand.rs, src/disk_recovery.rs, src/engine.rs, src/events, src/events.rs, src/fallback, src/fallback.rs, src/frontend.rs, src/heartbeat.rs
-- **Problem:** Run applicable dead-code tools and inspect entry points, registrations and consumers before cuts. Scope contains approximately 15962 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: findings clean or reasoned allowlist, walk-backs ticketed Needs owner; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
-### DSLP-78 · P2 · Dead code: src incremental_policy through miss_chain (20/28)
-
-- **Area:** deslop · dead code
-- **Where:** src/incremental_policy.rs, src/index_compact.rs, src/init_shell.rs, src/invocation, src/invocation.rs, src/key_env.rs, src/lib.rs, src/lifecycle.rs, src/link_probe.rs, src/machine.rs, src/main.rs, src/maintenance.rs, src/miss_chain.rs
-- **Problem:** Run applicable dead-code tools and inspect entry points, registrations and consumers before cuts. Scope contains approximately 13938 first-party source lines, excluding related consumers. Contracts: CLI, cache keys, store formats and wrapper protocol where used by this scope. Consumers: workspace crates, kache wrapper, fixtures and scripts calling the scoped modules.
-- **Recommendation:** Accept: findings clean or reasoned allowlist, walk-backs ticketed Needs owner; run make test and make lint.
-- **Fix with:** deslop
-- **Effort:** M
-
 ### DSLP-79 · P2 · Dead code: src native_archive, out_dir_alias, path_normalizer, prestage (21/28)
 
 - **Area:** deslop · dead code
@@ -783,6 +675,33 @@ Not started.
 - **Fix with:** deslop
 - **Effort:** S
 
+### DSLP-91 · P3 · ExtraInputsSnapshot optional fields are re-asserted Some by eight production expects
+
+- **Area:** Types · extra inputs
+- **Where:** src/extra_inputs.rs
+- **Problem:** ExtraInputsSnapshot::digest and provider.package.crate_name are Option, while 8 production expect calls re-assert they are Some; the declaration-path list is also duplicated.
+- **Recommendation:** Split the type into resolved and unresolved forms so the invariant is carried by the type, and keep one declaration-path list.
+- **Fix with:** make-invalid-states-unrepresentable
+- **Effort:** M
+
+### DSLP-92 · P3 · EventTailer is test-only yet the sole reader of the event-log rotation marker
+
+- **Area:** Dead code · events
+- **Where:** src/events.rs:607
+- **Problem:** EventTailer exists only for tests but is the only code that reads the rotation marker, so the marker format is specified only by test code inside the production module.
+- **Recommendation:** Move EventTailer and its tests to tests/ with the rotation format documented, or remove both if the marker has no consumer.
+- **Fix with:** dead-code-archaeology
+- **Effort:** S
+
+### DSLP-93 · P3 · Process promptness tests use 2 s bounds sized for an idle host
+
+- **Area:** Tests · invocation
+- **Where:** src/invocation/process.rs:489, :565, :639, :815, :845
+- **Problem:** The remaining promptness assertions bound child handling at 2 s; a sibling 3 s guard already failed once at load average ~50 (raised to 30 s in this pass).
+- **Recommendation:** Assert the behaviour (child reaped, signal observed) with a generous hang guard instead of a tight elapsed-time bound.
+- **Fix with:** root-cause
+- **Effort:** S
+
 ### DSLP-90 · P4 · import_downloaded_entry follows symlinks in a downloaded entry (latent, no caller)
 
 - **Area:** Needs owner · remote storage
@@ -790,5 +709,14 @@ Not started.
 - **Problem:** An entry directory holding artifact -> /outside/file whose bytes match the claimed hash passes validation (is_file and fs::metadata follow links); the blob is then renamed in as a symlink and set_permissions makes the outside file read-only. Reproduced against the library with a scratch crate under .work/tmp: blob_is_symlink=true, outside_mode=444 from 0644. No production code calls import_downloaded_entry or import_restored_entry (tests only) and AGENTS.md defers remote storage, so it is latent. Details: docs/deslop-diagnose.md.
 - **Recommendation:** Owner decision: delete the unused import path in the dead-code pass, or before a remote layer returns check symlink_metadata is a regular file and open the blob without following links. Leave the code until decided.
 - **Fix with:** os-boundaries
+- **Effort:** S
+
+### DSLP-94 · P4 · Small typing and dead-code leftovers from the args, extra inputs, daemon and incremental pass
+
+- **Area:** Types · dead code
+- **Where:** src/ (unreachable_pub in components 17/19/20), src/extra_inputs.rs, src/daemon_execution.rs:688, src/daemon.rs:1709, src/incremental_policy.rs:386, src/main.rs:1205, src/config.rs, .gitignore
+- **Problem:** unreachable_pub flags 42/62/44 items in components 17/19/20; six #[cfg(test)] items sit outside mod tests in extra_inputs.rs; a pure truth-table test in daemon_execution.rs is Linux-gated; three redundant clones; config_path_lock is exported at two paths; .gitignore ignores docs/**/*.md so deslop docs need git add -f.
+- **Recommendation:** Narrow visibility and adopt unreachable_pub; move the cfg(test) items into mod tests; drop the Linux gate; remove the clones; export config_path_lock once; add !docs/deslop-*.md to .gitignore.
+- **Fix with:** deslop
 - **Effort:** S
 

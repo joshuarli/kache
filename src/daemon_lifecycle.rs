@@ -215,9 +215,8 @@ impl Driver for KacheReplacement<'_> {
                 }
             }
             Step::Prepare => {
-                self.executable = Some(replacement_executable()?);
-                std::fs::metadata(self.executable.as_ref().unwrap())
-                    .context("reading replacement executable")?;
+                let executable = self.executable.insert(replacement_executable()?);
+                std::fs::metadata(executable).context("reading replacement executable")?;
             }
             Step::Drain => {
                 if !self.stopping {
@@ -275,10 +274,11 @@ impl Driver for KacheReplacement<'_> {
                         .open(log)
                         .map(kunobi_daemon::launch::DaemonOutput::File)
                         .unwrap_or(kunobi_daemon::launch::DaemonOutput::Null);
-                    self.child = Some(spawn_detached_daemon(
-                        self.executable.as_ref().unwrap(),
-                        stderr,
-                    )?);
+                    let executable = self
+                        .executable
+                        .as_deref()
+                        .context("replacement executable was not prepared")?;
+                    self.child = Some(spawn_detached_daemon(executable, stderr)?);
                 }
             }
             Step::Verify | Step::Validate => {
