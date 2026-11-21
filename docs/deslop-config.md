@@ -152,8 +152,10 @@ not cuts:
 | `EnvOverrides`, `EnvOverrides::detect` | none | one test (`:1711`) |
 | `Config::load_raw_file_config_from` | none (`#[cfg(test)]`) | tests only |
 | `Config::user_bypass_reason` | none (callers use `ProjectRules::user_bypass_reason_for`) | `:2078` |
-| `user_config_path`, `host_config_path_for`, `config_file_fingerprint`, `Config::volume_store_for`, `Config::cache_dir_for_path` | none | tests only |
-| `DEFAULT_DAEMON_IDLE_TIMEOUT_SECS`, `DEFAULT_GC_MAX_AGE_HOURS`, `DEFAULT_MIN_STORE_COMPILE_MS`, `DEFAULT_RECOVERY_FLOOR` | none | constants; the first three are read nowhere |
+| `Config::cache_dir_for_path` | none | none (no reference at all) |
+| `user_config_path`, `host_config_path_for`, `config_file_fingerprint`, `Config::volume_store_for` | none | tests only |
+| `DEFAULT_DAEMON_IDLE_TIMEOUT_SECS`, `DEFAULT_GC_MAX_AGE_HOURS`, `DEFAULT_MIN_STORE_COMPILE_MS` | none | none (no reference at all) |
+| `DEFAULT_RECOVERY_FLOOR` | none | `default_recovery_floor`, tests |
 | `default_cache_executables` | none (read textually by `scripts/check-docs.sh`) | `:1315`, `:95` |
 | `parse_size_checked`, `sanitize_trust_domain`, `describe_toml_error`, `warn_inert_path_only_env_vars`, `running_in_ci_with`, `expand_exclude_pattern*` | none | used internally |
 
