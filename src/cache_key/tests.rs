@@ -18319,6 +18319,38 @@ fn linker_script_resolves_through_search_path() {
 
 #[cfg(not(windows))]
 #[test]
+fn linker_arguments_that_cannot_be_modeled_fail_closed() {
+    let env = InvocationEnv::capture();
+    let error = |key: &str, flag: &str| {
+        format!("{:#}", unix_link_arg_inputs(key, flag, &env).unwrap_err())
+    };
+    for flag in [
+        "-Wl,--version-script",
+        "-Wl,-sectcreate,__DATA",
+        "-Wl,-exported_symbols_list",
+        "-L",
+        "-Wl,-l",
+        "-Wl,-filelist",
+    ] {
+        let message = error("link-arg", flag);
+        assert!(message.contains("without a value"), "{flag}: {message}");
+    }
+    for flag in ["-Wl,--library-path=/opt/lib", "-L=/opt/lib"] {
+        let message = error("link-arg", flag);
+        assert!(message.contains("unmodeled library search path"), "{flag}: {message}");
+    }
+    let message = error("link-arg", "--library=");
+    assert!(message.contains("without a library"), "{message}");
+    assert!(error("link-arg", "-filelist=,/objects").contains("invalid linker file list"));
+    assert!(error("link-args", "-sectcreate __DATA __note").contains("without a value"));
+
+    let separated = unix_link_arg_inputs("link-arg", "-Wl,-L,/opt/lib,-l,z", &env).unwrap();
+    assert_eq!(separated.dirs, [PathBuf::from("/opt/lib")]);
+    assert_eq!(separated.libs.len(), 1);
+}
+
+#[cfg(not(windows))]
+#[test]
 fn linker_segment_address_options_are_not_script_files() {
     let env = InvocationEnv::capture();
     for flag in ["-Wl,-Ttext,0x1000", "-Wl,-Tdata=0x2000", "-Wl,-Tbss=0x3000", "-Ttext-segment=0x4000"] {
