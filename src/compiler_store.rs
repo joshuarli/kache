@@ -14,6 +14,9 @@ impl ArtifactPolicy for CompilerArtifactPolicy {
         }
     }
     fn allow_empty(name: &str, output_types: &[String]) -> bool {
+        if matches!(name, "sidecar.su" | "sidecar.opt.yaml" | "sidecar.ci" | "sidecar.listing" | "sidecar.aux") {
+            return true;
+        }
         matches!(
             crate::compiler::classify_by_filename(name),
             crate::compiler::ArtifactKind::Metadata
@@ -105,6 +108,27 @@ mod tests {
                 &["bin".into(), kind.into()]
             ));
         }
+    }
+
+    #[test]
+    fn compiler_policy_stores_empty_report_sidecars_without_allowing_empty_objects() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::open(kache_store::config::Config {
+            cache_dir: temp.path().join("cache"), max_size: 1 << 20,
+            upload_spool_max_jobs: 128, gc_evict_shared: false,
+        }).unwrap();
+        let files = ["sidecar.su", "sidecar.opt.yaml", "sidecar.ci", "sidecar.listing", "sidecar.aux"]
+            .into_iter().map(|name| {
+                assert!(CompilerArtifactPolicy::allow_empty(name, &[]));
+                let path = temp.path().join(name);
+                std::fs::write(&path, "").unwrap();
+                (path, name.to_string())
+            }).collect::<Vec<_>>();
+        assert!(!CompilerArtifactPolicy::allow_empty("u.o", &[]));
+        assert!(!CompilerArtifactPolicy::allow_empty("sidecar.gcno", &[]));
+        let key = "e".repeat(64);
+        store.put(&key, "u.c", &[], &[], "", "", &files, "", "").unwrap();
+        assert_eq!(store.get(&key).unwrap().unwrap().files.len(), 5);
     }
 
     #[test]
