@@ -79,11 +79,6 @@ fn is_cargo_unit_hash(hash: &str) -> bool {
     hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-/// Whether `profile` holds Cargo fingerprints in either layout.
-pub fn profile_has_fingerprints(profile: &Path) -> bool {
-    !fingerprint_dirs(profile).is_empty()
-}
-
 /// Drop `package`'s fingerprints so the next build cannot be Fresh.
 pub fn clear_package_fingerprints(profile: &Path, package: &str) {
     let legacy = profile.join(".fingerprint");
@@ -105,51 +100,6 @@ pub fn clear_package_fingerprints(profile: &Path, package: &str) {
     for unit in units.flatten() {
         let _ = std::fs::remove_dir_all(unit.path().join("fingerprint"));
     }
-}
-
-/// Every file inside a fingerprint directory under `profile`.
-pub fn fingerprint_files(profile: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for dir in fingerprint_dirs(profile) {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            if entry.path().is_file() {
-                files.push(entry.path());
-            }
-        }
-    }
-    files
-}
-
-fn fingerprint_dirs(profile: &Path) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(profile.join(".fingerprint")) {
-        for entry in entries.flatten() {
-            if entry.path().is_dir() {
-                dirs.push(entry.path());
-            }
-        }
-    }
-    let Ok(packages) = std::fs::read_dir(profile.join("build")) else {
-        return dirs;
-    };
-    for package in packages.flatten() {
-        if !package.path().is_dir() {
-            continue;
-        }
-        let Ok(units) = std::fs::read_dir(package.path()) else {
-            continue;
-        };
-        for unit in units.flatten() {
-            let fingerprint = unit.path().join("fingerprint");
-            if fingerprint.is_dir() {
-                dirs.push(fingerprint);
-            }
-        }
-    }
-    dirs
 }
 
 /// Every unit `out` directory under `profile`, legacy `<pkg>-<hash>/out` and
