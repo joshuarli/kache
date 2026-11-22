@@ -375,6 +375,15 @@ ccache.suite = "base.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-out-gcc-mapped-listing"
+package = "CCP-05"
+summary = "GAS output and stdout listings see a prefix-mapped source appear, change and disappear"
+profiles = ["both"]
+compilers = ["gcc"]
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
 id = "cc-input-pgo-profile"
 package = "CCP-02"
 summary = "-fprofile-use / -fauto-profile content change invalidates (keyed by file content, not spelling)"

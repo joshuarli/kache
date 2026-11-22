@@ -1,0 +1,36 @@
+summary = "A user prefix map can make GAS read an untracked source for both stdout and file listings"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+families = ["gcc"]
+outputs = ["stdout.o", "file.o", "listing.txt", "debug-map.o", "debug-map.txt"]
+
+[[compile]]
+argv = ["{cc}", "-g", "-ffile-prefix-map=u.c=mapped.c", "-Wa,-adhln", "-c", "u.c", "-o", "stdout.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-g", "-ffile-prefix-map=u.c=mapped.c", "-Wa,-adhln=listing.txt", "-c", "u.c", "-o", "file.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-g", "-fdebug-prefix-map=u.c=mapped.c", "-Wa,-adhln=debug-map.txt", "-c", "u.c", "-o", "debug-map.o"]
+source = "u.c"
+
+[[step]]
+name = "mapped-source-absent"
+reuse = "miss"
+
+[[step]]
+name = "mapped-source-appears"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "mapped.c", content = "/* MAPPED ONE */\n" }]
+
+[[step]]
+name = "mapped-source-changes"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "mapped.c", content = "/* MAPPED TWO */\n" }]
+
+[[step]]
+name = "mapped-source-disappears"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "remove", path = "mapped.c" }]
