@@ -7828,10 +7828,11 @@ impl<'db> FileHasher<'db> {
         mapped_content: &impl Fn(&Path) -> Option<CcContentHashes>,
     ) -> Option<Vec<PathBuf>> {
         // A `pb:` prefix marks a path-bound read set; the digest follows.
-        let digest = record
+        let hash = record
             .preprocessed_hash
-            .strip_prefix("pb:")
+            .strip_prefix("ts:")
             .unwrap_or(&record.preprocessed_hash);
+        let digest = hash.strip_prefix("pb:").unwrap_or(hash);
         // New C memos append the include-resolution digest after `@`.
         // Older callers still store a single digest. Validate both parts;
         // the compiler checks the resolution before trusting the read set.

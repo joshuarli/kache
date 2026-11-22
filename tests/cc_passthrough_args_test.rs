@@ -1217,6 +1217,7 @@ fn cc_token_pasted_timestamp_mtime_changes_miss() {
             let extra: &[&str] = if variant == "commandline" {
                 &["-DLEFT=__TIME", "-DRIGHT=STAMP__"]
             } else { &[] };
+            let discovery_args: &[&str] = if discovery == "0" { &["-MMD"] } else { &[] };
             let touch = |seconds| {
                 fs::File::open(root.join("unit.c")).unwrap().set_modified(
                     std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
@@ -1225,10 +1226,11 @@ fn cc_token_pasted_timestamp_mtime_changes_miss() {
             let compile = || {
                 let _ = fs::remove_file(root.join("unit.o"));
                 let output = cacheable_cc_command(&root).arg("gcc").args(extra)
+                    .args(discovery_args)
                     .arg(format!("-ffile-prefix-map={}=/portable", root.display()))
                     .args(["-c", "unit.c", "-o", "unit.o"])
                     .env("SOURCE_DATE_EPOCH", "946684800")
-                    .env("TZ", "UTC").env("KACHE_CC_PATH_NORMALIZE", "0")
+                    .env("TZ", "UTC").env("KACHE_CC_PATH_NORMALIZE", "1")
                     .env("KACHE_DEFERRED_DISCOVERY", discovery).output().unwrap();
                 assert!(output.status.success(), "{output:?}");
                 fs::read(root.join("unit.o")).unwrap()
@@ -1238,7 +1240,8 @@ fn cc_token_pasted_timestamp_mtime_changes_miss() {
             assert_eq!(last_cc_event(&root)["result"], "miss");
             assert_eq!(first, compile());
             assert_eq!(last_cc_event(&root)["result"], "local_hit");
-            assert_eq!(index_rows(&root, "cc_preprocess_memos"), 0);
+            assert_eq!(index_rows(&root, "cc_preprocess_memos"), 1);
+            assert_eq!(last_cc_event(&root)["preprocessor_runs"], 0, "{variant} {discovery}");
             touch(1_012_608_000);
             let changed = compile();
             assert_eq!(last_cc_event(&root)["result"], "miss", "{variant}, discovery={discovery}");

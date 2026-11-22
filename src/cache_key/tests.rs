@@ -12498,6 +12498,9 @@ fn memo_hash_validation_accepts_resolution_proofs_and_rejects_malformed_ones() {
     for (index, (hash, valid)) in [
         (format!("{}@{}", "a".repeat(64), "b".repeat(64)), true),
         (format!("pb:{}@{}", "a".repeat(64), "b".repeat(64)), true),
+        (format!("ts:{}@{}", "a".repeat(64), "b".repeat(64)), true),
+        (format!("ts:pb:{}@{}", "a".repeat(64), "b".repeat(64)), true),
+        ("ts:pb:invalid".into(), false),
         (format!("{}@", "a".repeat(64)), false),
         (format!("{}@{}", "a".repeat(64), "z".repeat(64)), false),
         (

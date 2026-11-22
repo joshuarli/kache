@@ -6380,7 +6380,7 @@ const CC_ARTIFACT_SCHEMA: &[u8] = b"cc_artifact_schema:4\n";
 /// proven independent of time macros.
 /// v10: the driver and preprocessing memos share expanded environment inputs.
 /// v11: pinned expansions also check for token-pasted timestamp macros.
-const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v11";
+const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v12";
 
 /// Local identity for a preprocessor invocation. The environment is included
 /// as selected by [`cc_memo_env_is_keyed`].
@@ -8536,6 +8536,7 @@ impl CcCapturedInputs {
 /// Memo hash prefix for a path-bound read set: the digest is portable, the
 /// key that uses it folds the reading checkout's roots as well.
 const CC_MEMO_PATH_BOUND_PREFIX: &str = "pb:";
+const CC_MEMO_TIMESTAMP_PREFIX: &str = "ts:";
 
 /// Whether the memo identity of this invocation is spelled entirely in
 /// mapped or system paths. If a checkout root reaches the identity raw, a
@@ -8688,19 +8689,28 @@ fn cc_timestamp_key_for(
 }
 
 /// The memo's hash column for a read-set digest, flagged when path-bound.
-fn cc_memo_hash(digest: &str, path_bound: bool) -> String {
-    if path_bound {
+fn cc_memo_hash(digest: &str, path_bound: bool, timestamp_sensitive: bool) -> String {
+    let hash = if path_bound {
         format!("{CC_MEMO_PATH_BOUND_PREFIX}{digest}")
     } else {
         digest.to_string()
+    };
+    if timestamp_sensitive {
+        format!("{CC_MEMO_TIMESTAMP_PREFIX}{hash}")
+    } else {
+        hash
     }
 }
 
 /// The digest and the path-bound flag a memo hash column carries.
-fn cc_memo_hash_parts(hash: &str) -> (&str, bool) {
-    match hash.strip_prefix(CC_MEMO_PATH_BOUND_PREFIX) {
-        Some(digest) => (digest, true),
+fn cc_memo_hash_parts(hash: &str) -> (&str, bool, bool) {
+    let (hash, timestamp_sensitive) = match hash.strip_prefix(CC_MEMO_TIMESTAMP_PREFIX) {
+        Some(hash) => (hash, true),
         None => (hash, false),
+    };
+    match hash.strip_prefix(CC_MEMO_PATH_BOUND_PREFIX) {
+        Some(digest) => (digest, true, timestamp_sensitive),
+        None => (hash, false, timestamp_sensitive),
     }
 }
 
@@ -10073,7 +10083,7 @@ impl CcCompiler {
                     .borrow_mut()
                     .replace(PendingCcPreprocessMemo {
                         memo_key,
-                        preprocessed_hash: cc_memo_hash(&digest, captured.path_bound),
+                        preprocessed_hash: cc_memo_hash(&digest, captured.path_bound, false),
                         fingerprints: captured.fingerprints,
                         prefix_maps: prefix_maps.clone(),
                         captured: true,
@@ -10086,7 +10096,8 @@ impl CcCompiler {
             );
             (digest, Some(read_inputs))
         } else if let Some((memo_hash, satisfied)) = memo_hit {
-            let (memo_hash, path_bound) = cc_memo_hash_parts(&memo_hash);
+            let (memo_hash, path_bound, memo_timestamp_sensitive) = cc_memo_hash_parts(&memo_hash);
+            timestamp_sensitive = memo_timestamp_sensitive;
             self.key_path_bound.set(path_bound);
             log::trace!(
                 target: "kache::cache_key",
@@ -10147,12 +10158,12 @@ impl CcCompiler {
             } else {
                 format!("{digest}+{}", preprocessed.hash)
             };
-            if let (Some(memo_key), Some(fingerprints)) = (memo_key.filter(|_| !timestamp_sensitive), preprocessed.fingerprints) {
+            if let (Some(memo_key), Some(fingerprints)) = (memo_key, preprocessed.fingerprints) {
                 self.pending_preprocess_memo
                     .borrow_mut()
                     .replace(PendingCcPreprocessMemo {
                         memo_key,
-                        preprocessed_hash: cc_memo_hash(&hash, preprocessed.path_bound),
+                        preprocessed_hash: cc_memo_hash(&hash, preprocessed.path_bound, timestamp_sensitive),
                         fingerprints,
                         prefix_maps: prefix_maps.clone(),
                         captured: false,
