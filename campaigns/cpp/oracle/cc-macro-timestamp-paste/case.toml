@@ -1,4 +1,4 @@
-summary = "token-pasted __TIMESTAMP__ follows source mtime with a pinned epoch"
+summary = "token-pasted __TIMESTAMP__ matches raw after source mtime changes with a pinned epoch"
 cohort = "blocking"
 profiles = ["transparent", "reproducible"]
 outputs = ["u.o"]
@@ -15,5 +15,5 @@ reuse = "any"
 action = [{ op = "delete-outputs" }]
 [[step]]
 name = "touch"
-reuse = "miss"
+reuse = "any"
 action = [{ op = "touch", path = "u.c" }, { op = "delete-outputs" }]
