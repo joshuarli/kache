@@ -234,7 +234,10 @@ fn deferred_cc_reuses_setup_and_still_invalidates_changed_headers() {
                 spans.iter().any(|span| span["name"] == "cc_capture"),
                 "the test must exercise compile-first discovery"
             );
-            assert_eq!(event["preprocessor_runs"], 0);
+            // Opaque drivers may need a timestamp-detection preprocess after capture.
+            assert!(matches!(event["preprocessor_runs"].as_u64(), Some(0 | 1)), "{event:?}");
+        } else if phase == "warm" {
+            assert_eq!(event["preprocessor_runs"], 0, "{event:?}");
         }
         assert!(
             Command::new("cc")
