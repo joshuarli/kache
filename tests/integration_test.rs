@@ -3730,7 +3730,17 @@ fn test_cc_direct_key_checks_timestamp_before_memoizing_system_headers() {
     );
     let report = kache_report(cache_dir.path());
     assert_last_cc_event(&report, "miss", 1);
-    assert_last_cc_preprocessor_runs(&report, 2);
+    let mut probe = std::process::Command::new("cc")
+        .args(["-E", "-P", "-x", "c", "-"])
+        .env("SOURCE_DATE_EPOCH", "946684800")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn().unwrap();
+    std::io::Write::write_all(&mut probe.stdin.take().unwrap(), b"__TIMESTAMP__\n").unwrap();
+    let probe = probe.wait_with_output().unwrap();
+    assert!(probe.status.success(), "{probe:?}");
+    let timestamp_pinned = String::from_utf8_lossy(&probe.stdout).trim() == "\"Sat Jan  1 00:00:00 2000\"";
+    assert_last_cc_preprocessor_runs(&report, u64::from(!timestamp_pinned));
 
     std::fs::remove_file(project.path().join("foo.o")).unwrap();
     run_kache_cc(project.path(), cache_dir.path(), &args);
@@ -3746,7 +3756,7 @@ fn test_cc_direct_key_checks_timestamp_before_memoizing_system_headers() {
     run_kache_cc(project.path(), cache_dir.path(), &args);
     let report = kache_report(cache_dir.path());
     assert_last_cc_event(&report, "miss", 1);
-    assert_last_cc_preprocessor_runs(&report, 2);
+    assert_last_cc_preprocessor_runs(&report, 1);
 
     // Reverting the header returns to a read set the memo still keeps, so
     // the earlier entry is found without the preprocessor.

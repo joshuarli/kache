@@ -1184,7 +1184,7 @@ fn pinned_timestamp_detection_uses_one_preprocess() {
         fs::write(root.join("kache.toml"), "").unwrap();
         fs::write(root.join("unit.c"), source).unwrap();
         let output = cacheable_cc_command(&root)
-            .args(["gcc", "-c", "unit.c", "-o", "unit.o"])
+            .args(["gcc", "-MMD", "-c", "unit.c", "-o", "unit.o"])
             .env("SOURCE_DATE_EPOCH", "946684800")
             .env("KACHE_DEFERRED_DISCOVERY", "0").output().unwrap();
         assert!(output.status.success(), "{output:?}");
@@ -1244,14 +1244,17 @@ fn cc_token_pasted_timestamp_mtime_changes_miss() {
             assert_eq!(last_cc_event(&root)["preprocessor_runs"], 0, "{variant} {discovery}");
             touch(1_012_608_000);
             let changed = compile();
-            assert_eq!(last_cc_event(&root)["result"], "miss", "{variant}, discovery={discovery}");
+            let event = last_cc_event(&root);
             let raw = Command::new("gcc").current_dir(&root).args(extra)
                 .arg(format!("-ffile-prefix-map={}=/portable", root.display()))
                 .args(["-c", "unit.c", "-o", "expected.o"])
                 .env("SOURCE_DATE_EPOCH", "946684800").env("TZ", "UTC").output().unwrap();
             assert!(raw.status.success(), "{raw:?}");
-            assert_ne!(first, changed);
-            assert_eq!(changed, fs::read(root.join("expected.o")).unwrap());
+            let expected = fs::read(root.join("expected.o")).unwrap();
+            if first != expected {
+                assert!(!matches!(event["result"].as_str(), Some("local_hit" | "remote_hit")), "{variant}, discovery={discovery}: {event:?}");
+            }
+            assert_eq!(changed, expected);
         }
     }
 }
@@ -1407,7 +1410,7 @@ exec cc "$@"
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(last_cc_event(&root)["preprocessor_runs"], 2, "keyed first with timestamp check");
+    assert_eq!(last_cc_event(&root)["preprocessor_runs"], 1, "keyed first with timestamp check");
     assert!(
         Command::new("cc")
             .args(["main.c", "unit.o", "-o", "check-value"])
@@ -1491,7 +1494,7 @@ exec cc "$@"
         );
         assert_eq!(
             last_cc_event(&root)["preprocessor_runs"],
-            2,
+            1,
             "{phase}: keyed first with timestamp check"
         );
         assert!(

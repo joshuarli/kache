@@ -43,10 +43,10 @@ find = "42"
 replace = "17"
 expected_stdout_contains = ["util value 17"]
 
-# Cold: each compile runs, and none preprocesses first.
+# Cold: each compile runs; the stdio read set also needs a timestamp check.
 [assertions.cold]
 max_compiler_runs = 3
-max_preprocessor_runs = 0
+max_preprocessor_runs = 1
 
 # Warm: build/b/util.o hits through the memo its cold compile recorded.
 [assertions.warm]

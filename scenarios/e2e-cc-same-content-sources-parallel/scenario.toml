@@ -27,13 +27,11 @@ expected_stdout_contains = ["util v1 src/a/util.c", "util v1 src/b/util.c"]
 [diff]
 artifacts = ["build/a/util.o", "build/b/util.o"]
 
-# Cold: no compile preprocesses first. One that does is not on the
-# compile-first path (a host config with a remote or a fallback turns it
-# off).
+# Cold: each compile runs; the stdio read set also needs a timestamp check.
 [assertions.cold]
 min_misses = 3
 max_compiler_runs = 3
-max_preprocessor_runs = 0
+max_preprocessor_runs = 1
 
 [assertions.warm]
 min_hits = 3
