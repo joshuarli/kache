@@ -157,7 +157,7 @@ CASE ?=
 PROFILES ?=
 CC_ORACLE_CCACHE_DIR ?= .work/tmp/ccache
 CC_ORACLE_OUT ?= .work/tmp/cc-oracle
-CC_ORACLE_CONTROLS := stale-output omit-sidecar disabled-invalidation cache-disabled reference-failure
+CC_ORACLE_CONTROLS := stale-output omit-sidecar disabled-invalidation cache-disabled reference-failure wrong-effective-args
 cc_oracle = ccache="$$(./scripts/fetch-ccache.sh $(CC_ORACLE_CCACHE_DIR) ./target/release/kache-cc-oracle)" && \
   ./target/release/kache-cc-oracle --kache ./target/release/kache --ccache "$$ccache" --out $(CC_ORACLE_OUT) \
   $(foreach t,$(TOOLCHAINS),--toolchain $(t)) $(foreach c,$(CASE),--case $(c)) \

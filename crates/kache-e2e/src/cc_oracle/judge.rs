@@ -69,6 +69,7 @@ pub type Inventory = BTreeMap<String, Entry>;
 /// observation shim's log.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Executions {
+    pub records: Vec<Invocation>,
     /// Code generation for the unit: an execution naming the source that is
     /// not preprocessing, dependency listing, syntax checking or a query
     /// (`-c`, `-S`, a header's PCH).
@@ -79,6 +80,14 @@ pub struct Executions {
     pub probe: u32,
     /// Arguments after the driver for each code-generation execution.
     pub codegen_argv: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Invocation {
+    pub cwd: String,
+    pub argv: Vec<String>,
+    pub response_bodies: BTreeMap<String, Vec<u8>>,
+    pub effective_argv: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -450,6 +459,46 @@ mod tests {
         let mut extra = obs(1);
         extra.tree.insert("a.d".into(), file("dep"));
         assert_eq!(run(Reuse::Miss, &raw, &raw, &extra).reasons, vec!["unexpected a.d"]);
+    }
+
+    #[test]
+    fn wrong_argument_in_deleted_private_response_is_a_harness_error() {
+        let root = tempfile::tempdir().unwrap();
+        let body = b"-c a.c -o a.o";
+        std::fs::write(root.path().join("123.0"), body).unwrap();
+        let log = "/fx\u{1f}123\u{1f}@/vanished/private.rsp\u{1f}\n";
+        let observe = |tamper| super::super::exec::classify_captured(
+            log, std::path::Path::new("/fx"), &["a.c".into()], Some(root.path()), tamper,
+        );
+        let raw = obs(1);
+        let mut kache = obs(1);
+        kache.executions = observe(false);
+        assert_eq!(run(Reuse::Miss, &raw, &raw, &kache).verdict, Verdict::Match);
+        kache.executions = observe(true);
+        let result = run(Reuse::Miss, &raw, &raw, &kache);
+        assert_eq!(result.verdict, Verdict::HarnessError);
+        assert!(result.reasons[0].contains("-DORACLE_WRONG_ARG=1"));
+        assert!(kache.executions.records[0].response_bodies["@/vanished/private.rsp"].ends_with(b" -DORACLE_WRONG_ARG=1"));
+    }
+
+    #[test]
+    fn private_response_preserves_prefix_map_dependency_capture_and_double_dash_tail() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("123.0"), b"-c -o a.o -ffile-prefix-map=/fx=/kache/cc-root -MD -MF /tmp/readset.d -MT __kache_direct_capture -- a.c").unwrap();
+        let log = "/fx\u{1f}123\u{1f}@/deleted/private.rsp\u{1f}\n";
+        let mut kache = obs(1);
+        kache.executions = super::super::exec::classify_captured(
+            log, std::path::Path::new("/fx"), &["a.c".into()], Some(root.path()), false,
+        );
+        kache.response_files.insert("@args.rsp".into(), ["-c", "-o", "a.o", "-ffile-prefix-map=/fx=/kache/cc-root", "--", "a.c"].map(String::from).to_vec());
+        let expected = vec!["@args.rsp".into()];
+        let raw = obs(1);
+        let result = judge(&Row {
+            reuse: Reuse::Miss, expected_status: 0, raw: &raw, raw_repeat: &raw,
+            raw_passthrough: None, ccache: &raw, ccache_preprocessor: &raw, kache: &kache,
+            effective_argv: &expected, passthrough_argv: &expected, driver_args: 0,
+        });
+        assert_eq!(result.verdict, Verdict::Match, "{:?}", result.reasons);
     }
 
     #[test]

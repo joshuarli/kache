@@ -87,7 +87,7 @@ pub fn expected_verdict(control: Control) -> Verdict {
     match control {
         Control::StaleOutput | Control::OmitSidecar | Control::DisabledInvalidation => Verdict::KacheWrongOutput,
         Control::CacheDisabled => Verdict::KacheMissedReuse,
-        Control::ReferenceFailure => Verdict::HarnessError,
+        Control::ReferenceFailure | Control::WrongEffectiveArgs => Verdict::HarnessError,
     }
 }
 
