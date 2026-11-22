@@ -2526,7 +2526,7 @@ fn describe_toml_error_is_one_line_with_position_and_message() {
 fn update_file_config_leaves_an_unchanged_file_byte_for_byte() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
-    let source = "# note\n[cache]\nlocal_store = '~/store'  # mine\n";
+    let source = "# note\n[cache]\nlocal_store = '~/store'  # mine\n[unknown]\nkeep = 7\n";
     std::fs::write(&path, source).unwrap();
     let (before, _) = Config::load_raw_file_config_from(&path).unwrap();
     let unchanged = before.clone();
@@ -2542,10 +2542,49 @@ fn update_file_config_leaves_an_unchanged_file_byte_for_byte() {
     let written = std::fs::read_to_string(&path).unwrap();
     assert_ne!(written, source);
     assert!(written.contains("-fno-x"), "{written}");
+}
 
-    let absent = dir.path().join("absent.toml");
-    Config::update_file_config_at(&absent, &before, &unchanged).unwrap();
-    assert!(absent.exists(), "a missing file is created even when nothing changed");
+#[cfg(feature = "file-write")]
+#[test]
+fn update_file_config_creates_a_missing_file_even_when_values_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nested/config.toml");
+    let config = FileConfig::default();
+
+    Config::update_file_config_at(&path, &config, &config).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        deser_toml::to_string(&config).unwrap()
+    );
+    let (loaded, exists) = Config::load_raw_file_config_from(&path).unwrap();
+    assert!(exists);
+    assert_eq!(
+        deser_value::to_value(&loaded).unwrap(),
+        deser_value::to_value(&config).unwrap()
+    );
+}
+
+#[cfg(feature = "file-write")]
+#[test]
+fn update_file_config_rejects_invalid_existing_bytes_without_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let config = FileConfig::default();
+    for (source, message) in [
+        (
+            b"[cache".as_slice(),
+            format!("{} is not valid TOML", path.display()),
+        ),
+        (b"\xff".as_slice(), format!("reading {}", path.display())),
+    ] {
+        std::fs::write(&path, source).unwrap();
+
+        let error = Config::update_file_config_at(&path, &config, &config).unwrap_err();
+
+        assert_eq!(error.to_string(), message);
+        assert_eq!(std::fs::read(&path).unwrap(), source);
+    }
 }
 
 #[test]

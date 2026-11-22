@@ -1164,6 +1164,14 @@ mod tests {
 
     #[test]
     fn shims_log_and_exec_the_real_compiler() {
+        if std::env::var_os("KACHE_TEST_ORACLE_SHIMS_CHILD").is_none() {
+            let status = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "cc_oracle::exec::tests::shims_log_and_exec_the_real_compiler"])
+                .env("KACHE_TEST_ORACLE_SHIMS_CHILD", "1")
+                .status().unwrap();
+            assert!(status.success());
+            return;
+        }
         let root = tempfile::tempdir().unwrap();
         let tc = Toolchain {
             name: "cc".into(),

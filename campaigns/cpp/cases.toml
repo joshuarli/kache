@@ -60,12 +60,66 @@ ccache.suite = "base.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-core-dependencies-output-env"
+package = "CCP-01"
+summary = "DEPENDENCIES_OUTPUT depfile preserved through GCC passthrough; Clang unchanged"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-core-dependencies-output-env-target"
+package = "CCP-01"
+summary = "DEPENDENCIES_OUTPUT explicit target preserved through GCC passthrough"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-core-sunpro-dependencies-env"
+package = "CCP-01"
+summary = "SUNPRO_DEPENDENCIES depfile and explicit target preserved through GCC passthrough"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-core-user-depfile"
 package = "CCP-01"
 summary = "caller -MD -MF depfile restored with raw-identical bytes; new header dependency invalidates"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-x-after-last-input"
+package = "CCP-03"
+summary = "trailing -x positions distinguish driver diagnostics without changing earlier source language"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-wp-mmd-depfile"
+package = "CCP-03"
+summary = "Clang forwarded MD/MMD comma-file and bare depfiles restore raw-identically"
+profiles = ["both"]
+compilers = "clang"
+ccache.suite = "direct.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-wp-mmd-depfile-gcc"
+package = "CCP-03"
+summary = "GCC forwarded MD/MMD comma-file depfiles retain source-derived targets"
+profiles = ["both"]
+compilers = "gcc"
+ccache.suite = "direct.bash"
 status = "oracle"
 
 [[case]]
@@ -249,6 +303,78 @@ ccache.suite = "ivfsoverlay.bash"
 status = "planned"
 
 [[case]]
+id = "cc-flag-profile-dir"
+package = "CCP-05"
+summary = "coverage/profile generation directories and embedded gcda paths; restore notes and distinguish DIR/object changes"
+profiles = ["both"]
+compilers = ["gcc", "clang", "apple-clang"]
+ccache.suite = "profiling.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-profile-generate-clang"
+package = "CCP-05"
+summary = "standalone Clang profile generation restores the exact object with the requested profraw directory"
+profiles = ["both"]
+compilers = ["clang", "apple-clang"]
+ccache.suite = "profiling_clang.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-record-gcc-switches"
+package = "CCP-03"
+summary = "recorded argv preserves include/output paths and prefix maps"
+profiles = ["both"]
+compilers = ["gcc", "clang", "apple-clang"]
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-sanitize-coverage"
+package = "CCP-03"
+summary = "trace-pc and trace-cmp instrumentation restores exact objects"
+profiles = ["both"]
+compilers = ["gcc", "clang", "apple-clang"]
+ccache.suite = "sanitize.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-sanitize-coverage-clang"
+package = "CCP-03"
+summary = "Clang guard/counter/pc-table instrumentation and fuzzer-no-link combinations"
+profiles = ["both"]
+compilers = ["clang", "apple-clang"]
+ccache.suite = "sanitize.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-out-gcc-reports"
+package = "CCP-05"
+summary = "stack usage, callgraph, assembler listings, auxiliary declarations and optimization stderr restore exact bytes"
+profiles = ["both"]
+compilers = ["gcc"]
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-out-clang-optimization-record"
+package = "CCP-05"
+summary = "Clang opt.yaml output restores at the object-derived path with exact source locations"
+profiles = ["both"]
+compilers = ["clang", "apple-clang"]
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-out-gcc-listing-line-target"
+package = "CCP-05"
+summary = "GAS high-level listing #line targets outside dependency capture must pass through after edits"
+profiles = ["both"]
+compilers = ["gcc"]
+ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-input-pgo-profile"
 package = "CCP-02"
 summary = "-fprofile-use / -fauto-profile content change invalidates (keyed by file content, not spelling)"
@@ -318,6 +444,15 @@ summary = "file, debug and macro prefix map source and target paths differentiat
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "base.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-macro-timestamp-mtime"
+package = "CCP-02"
+summary = "__TIMESTAMP__ follows input mtime even with SOURCE_DATE_EPOCH pinned"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "source_date_epoch.bash"
 status = "oracle"
 
 [[case]]
@@ -1511,6 +1646,15 @@ profiles = ["transparent"]
 compilers = "all"
 ccache.suite = "modules.bash"
 status = "out_of_scope"
+
+[[case]]
+id = "cc-flag-emit-llvm"
+package = "CCP-03"
+summary = "Clang LLVM bitcode/text emission keys literal source spelling and restores exact output"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "base.bash"
+status = "oracle"
 
 [[case]]
 id = "cc-out-of-scope-native-windows"

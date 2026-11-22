@@ -1,0 +1,1 @@
+--coverage -fprofile-dir=profiles -o coverage/u.o

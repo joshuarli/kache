@@ -1,0 +1,33 @@
+summary = "Argv-only sanitizer coverage instrumentation restores exact objects; changing instrumentation flags cannot hit the old entry"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+requires = [["{cc}", "-fsanitize-coverage=trace-pc,trace-cmp", "-x", "c", "-c", "-", "-o", "probe.o"]]
+requires_stdin = "int u(int x) { return x > 3; }\n"
+outputs = ["trace.o"]
+
+[[compile]]
+argv = ["{cc}", "@trace.rsp", "-c", "u.c", "-o", "trace.o"]
+source = "u.c"
+also_names = ["@trace.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "instrumentation-change"
+reuse = "miss"
+action = [
+  { op = "delete-outputs" },
+  { op = "write", path = "trace.rsp", content = "-fsanitize-coverage=trace-pc\n" }
+]
+
+[[step]]
+name = "restore-variant"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

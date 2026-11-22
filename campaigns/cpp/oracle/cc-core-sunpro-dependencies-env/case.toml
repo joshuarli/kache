@@ -1,0 +1,23 @@
+summary = "SUNPRO_DEPENDENCIES depfile and explicit target survive repeated compiles"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o", "u.d"]
+env = { SUNPRO_DEPENDENCIES = "u.d custom-target" }
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "any"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-header"
+reuse = "miss"
+action = [{ op = "write", path = "u.h", content = "#define VALUE 3\n" }, { op = "delete-outputs" }]

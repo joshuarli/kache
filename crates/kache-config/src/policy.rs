@@ -15,6 +15,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ci_truth_values_are_case_insensitive_but_not_whitespace_or_arbitrary_strings() {
+        for provider in ["GITHUB_ACTIONS", "GITLAB_CI", "CI"] {
+            for (value, expected) in [
+                ("1", true),
+                ("TrUe", true),
+                ("YES", true),
+                ("", false),
+                ("0", false),
+                ("false", false),
+                (" true ", false),
+                ("enabled", false),
+            ] {
+                let actual = running_in_ci_with(|name| {
+                    (name == provider).then(|| value.to_string())
+                });
+                assert_eq!(actual, expected, "{provider}={value:?}");
+            }
+        }
+        assert!(running_in_ci_with(|name| {
+            Some(if name == "CI" { "yes" } else { "false" }.to_string())
+        }));
+    }
+
+    #[test]
     fn ci_is_github_gitlab_or_the_common_variable() {
         let env = |pairs: &'static [(&'static str, &'static str)]| {
             move |name: &str| {

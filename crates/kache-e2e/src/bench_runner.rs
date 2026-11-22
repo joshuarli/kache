@@ -83,6 +83,8 @@
 //! `--ref` for a one-off). If a build tool changes its wrapper-injection
 //! knobs, update the scenario's `[[file]]` / `[env]`, not this binary.
 
+#![cfg_attr(not(test), deny(clippy::expect_used))]
+
 use anyhow::{Context, Result, bail};
 use deser::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -288,7 +290,7 @@ pub fn run_bench(config: BenchRunConfig) -> Result<()> {
             .context("writing benchmark kache config")?;
     }
 
-    if profile.is_pull() {
+    if let Some(ref_next) = profile.ref_next.as_deref() {
         if config.cache_backend == CacheBackend::Sccache {
             bail!(
                 "pull scenarios (`ref_next`) are only supported with --cache-backend kache or mbx"
@@ -316,6 +318,7 @@ pub fn run_bench(config: BenchRunConfig) -> Result<()> {
         }
         return run_pull_bench(
             &profile,
+            ref_next,
             &kache,
             &cache_dir,
             &kache_config,
@@ -1772,6 +1775,7 @@ fn retry_load_cold(
 #[allow(clippy::too_many_arguments)]
 fn run_pull_bench(
     profile: &BenchProfile,
+    ref_next: &str,
     kache: &Path,
     cache_dir: &Path,
     kache_config: &Path,
@@ -1787,11 +1791,6 @@ fn run_pull_bench(
     trace_keys: bool,
     sh: &Path,
 ) -> Result<()> {
-    let ref_next = profile
-        .ref_next
-        .as_deref()
-        .expect("run_pull_bench requires ref_next");
-
     // Materialize clone-a at ref A with ref B also fetched (checkout-ready).
     source::clone_worktrees_pull(
         &profile.repo,

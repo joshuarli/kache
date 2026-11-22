@@ -1,0 +1,1 @@
+-ftest-coverage -fprofile-generate=profiles -o generate/u.o

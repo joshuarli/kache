@@ -666,6 +666,7 @@ fn volume_route_path_cc_uses_output_parent() {
         depinfo: None,
         language_override: None,
         family: crate::compiler::cc::ToolFamily::Gnu,
+        probed_family: None,
         depinfo_roots: Vec::new(),
         serialize_diagnostics: None,
         include_pch: None,

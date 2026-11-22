@@ -3,8 +3,10 @@
 pub mod config;
 pub mod invocation;
 pub mod policy;
+mod runtime;
 pub use config::Config;
 pub use invocation::InvocationEnv;
+pub use runtime::resolve_runtime;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;

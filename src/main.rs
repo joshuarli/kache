@@ -78,6 +78,8 @@ static MACOS_INFO_PLIST: [u8; include_bytes!("Info.plist").len()] =
     *include_bytes!("Info.plist");
 
 use anyhow::{Context, Result};
+#[cfg(unix)]
+use std::io::Write;
 use std::path::PathBuf;
 
 mod version;
@@ -1103,8 +1105,14 @@ fn run_wrapper_mode(args: &[String]) -> Result<()> {
                     )? {
                         std::process::exit(exit);
                     }
+                    let eligibility = daemon::compiler_execution_status(&config)
+                        .ok()
+                        .map(|status| status.eligible);
+                    if should_warn_daemon_fallback(eligibility) {
+                        warn_daemon_fallback("daemon did not accept compiler execution after startup");
+                    }
                 }
-                Err(error) => log::debug!("compiler daemon did not start: {error}"),
+                Err(error) => warn_daemon_fallback(&format!("daemon startup failed: {error:#}")),
             }
         }
         Some(config)
@@ -1115,6 +1123,20 @@ fn run_wrapper_mode(args: &[String]) -> Result<()> {
     let config = None;
     let exit = run_compiler_invocation_with_config(args, context, config)?;
     std::process::exit(exit);
+}
+
+#[cfg(unix)]
+fn should_warn_daemon_fallback(eligibility: Option<bool>) -> bool {
+    eligibility != Some(false)
+}
+
+#[cfg(unix)]
+fn warn_daemon_fallback(reason: &str) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        let _ = writeln!(std::io::stderr().lock(), "kache: warning: daemon handoff failed; using local compiler execution: {}",
+            reason.replace(['\r', '\n'], " "));
+    }
 }
 
 /// Decide whether raw argv can enter the compiler pipeline without probing a
@@ -1414,6 +1436,14 @@ fn daemon_restart_message(was_running: bool, ready: bool) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn fallback_warning_only_suppresses_explicit_ineligibility() {
+        assert!(!super::should_warn_daemon_fallback(Some(false)));
+        assert!(super::should_warn_daemon_fallback(Some(true)));
+        assert!(super::should_warn_daemon_fallback(None));
+    }
+
     #[cfg(unix)]
     #[test]
     fn original_compiler_requests_use_only_the_supplied_arguments_and_environment() {

@@ -1,0 +1,25 @@
+summary = "trailing language options preserve driver warnings when sharing cached objects"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["a.o", "b.o", "c.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "a.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "b.o", "-x", "c"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "c.o", "-xc++"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

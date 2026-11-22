@@ -1,0 +1,5433 @@
+{
+  "source_revision": "c4d2b947f3cd1412decfed602a7ac8ded770df88",
+  "comparison_revision": "da350481a58373829051df9b6eff35400e0ba9a9",
+  "wall_loss_method": "Arithmetic mean of within-pair kache wall_ms minus ccache wall_ms, per scenario; runner ratios and all reports remain unchanged.",
+  "summary": [
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "acceptance": {
+        "complete_pairs": 10,
+        "eligible": true,
+        "verdict": "fail",
+        "reasons": [
+          "cold vs ccache: Some(Inconclusive) (geomean 1.158, target 1.1)",
+          "cold vs raw: Some(Fail) (geomean 1.865, target 1.15)",
+          "warm vs ccache: Some(Fail) (geomean 2.947, target 1.15)",
+          "edit-source-settled vs ccache: Some(Inconclusive) (geomean 1.228, target 1.15)",
+          "revert-source-settled vs ccache: Some(Fail) (geomean 1.669, target 1.15)",
+          "edit-header-settled vs ccache: Some(Fail) (geomean 1.509, target 1.15)",
+          "revert-header-settled vs ccache: Some(Fail) (geomean 3.325, target 1.15)",
+          "edit-source-immediate vs ccache: Some(Inconclusive) (geomean 1.143, target 1.15)",
+          "revert-source-immediate vs ccache: Some(Fail) (geomean 1.769, target 1.15)",
+          "relocated vs ccache: Some(Fail) (geomean 3.350, target 1.15)"
+        ]
+      },
+      "validation_failures": 0,
+      "input_digest_matches_99": true,
+      "timed_replays": 30,
+      "admitted_replays": 30,
+      "eligible_replays": 30,
+      "timed_build_intervals": 330,
+      "eligible_build_intervals": 266,
+      "replay_activity": [
+        {
+          "pair": 0,
+          "arm": "kache",
+          "unrelated_cores": 0.2339498154582117,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 0,
+          "arm": "ccache",
+          "unrelated_cores": 0.23727964843424226,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 0,
+          "arm": "raw",
+          "unrelated_cores": 0.20704984416209313,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "raw",
+          "unrelated_cores": 0.22392356550392395,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "kache",
+          "unrelated_cores": 0.27892086072701916,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "ccache",
+          "unrelated_cores": 0.21980041092896105,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "ccache",
+          "unrelated_cores": 0.20624679028903065,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "kache",
+          "unrelated_cores": 0.2517130834341189,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "raw",
+          "unrelated_cores": 0.3666772146487345,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "ccache",
+          "unrelated_cores": 0.2908735837962287,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "raw",
+          "unrelated_cores": 0.1594782957543871,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "kache",
+          "unrelated_cores": 0.2636181832960827,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "kache",
+          "unrelated_cores": 0.2533282023715322,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "ccache",
+          "unrelated_cores": 0.2451798618771639,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "raw",
+          "unrelated_cores": 0.16116744263270144,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "kache",
+          "unrelated_cores": 0.23214011166492088,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "ccache",
+          "unrelated_cores": 0.2083081205418889,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "raw",
+          "unrelated_cores": 0.19222915264012164,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "ccache",
+          "unrelated_cores": 0.18931933095992975,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "raw",
+          "unrelated_cores": 0.23184441055468974,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "kache",
+          "unrelated_cores": 0.21063007187832583,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "kache",
+          "unrelated_cores": 0.23060315123531727,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "raw",
+          "unrelated_cores": 0.21579435132429944,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "ccache",
+          "unrelated_cores": 0.22493429502668028,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "kache",
+          "unrelated_cores": 0.16025503378796863,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "raw",
+          "unrelated_cores": 0.18643043991527053,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "ccache",
+          "unrelated_cores": 0.18811393720399142,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "raw",
+          "unrelated_cores": 0.16512171791619187,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "ccache",
+          "unrelated_cores": 0.2166601575068238,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "kache",
+          "unrelated_cores": 0.16562252724353338,
+          "eligible": true,
+          "admitted": true
+        }
+      ],
+      "ratios": {
+        "cold": {
+          "now": {
+            "scenario": "cold",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.158361990974122,
+              "ci95": [
+                1.0542584391052454,
+                1.2727453272959586
+              ]
+            },
+            "target": 1.1,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 1197.908446,
+            "other_median_ms": 1066.4554120000003
+          },
+          "previous": {
+            "scenario": "cold",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 1.0752481373124039,
+              "ci95": null
+            },
+            "target": 1.1,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 1060.003609,
+            "other_median_ms": 985.822316
+          }
+        },
+        "warm": {
+          "now": {
+            "scenario": "warm",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 2.9474075857426305,
+              "ci95": [
+                2.504766547205819,
+                3.4682719178696244
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 247.11922199999998,
+            "other_median_ms": 81.1268585
+          },
+          "previous": {
+            "scenario": "warm",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 2.98325559549868,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 233.552234,
+            "other_median_ms": 78.287705
+          }
+        },
+        "edit-source-settled": {
+          "now": {
+            "scenario": "edit-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.2277835593144173,
+              "ci95": [
+                1.0704863600161243,
+                1.4081939993145483
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 35.0511075,
+            "other_median_ms": 25.75663
+          },
+          "previous": {
+            "scenario": "edit-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 1.0599152398852685,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 29.04609,
+            "other_median_ms": 27.404163
+          }
+        },
+        "revert-source-settled": {
+          "now": {
+            "scenario": "revert-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.6691288443938117,
+              "ci95": [
+                1.3846250154056152,
+                2.0120906875073943
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 9.6851555,
+            "other_median_ms": 5.702908
+          },
+          "previous": {
+            "scenario": "revert-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 1.5532093463419032,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 8.616623,
+            "other_median_ms": 5.547625
+          }
+        },
+        "edit-header-settled": {
+          "now": {
+            "scenario": "edit-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.5088297384009384,
+              "ci95": [
+                1.3356605046264034,
+                1.704450473453073
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 1518.4954815,
+            "other_median_ms": 975.6859285
+          },
+          "previous": {
+            "scenario": "edit-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 0.9831213037401888,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 1349.9522960000002,
+            "other_median_ms": 1373.128922
+          }
+        },
+        "revert-header-settled": {
+          "now": {
+            "scenario": "revert-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 3.3248070882640874,
+              "ci95": [
+                2.760897370587172,
+                4.0038946365543975
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 251.3534645,
+            "other_median_ms": 79.96722
+          },
+          "previous": {
+            "scenario": "revert-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 2.380673371063953,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 208.53212,
+            "other_median_ms": 87.593755
+          }
+        },
+        "edit-source-immediate": {
+          "now": {
+            "scenario": "edit-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.1432131174289764,
+              "ci95": [
+                0.9694189923224172,
+                1.3481644595498157
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 31.017193,
+            "other_median_ms": 25.6183795
+          },
+          "previous": {
+            "scenario": "edit-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 1.0862571685902536,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 29.132608,
+            "other_median_ms": 26.819255000000002
+          }
+        },
+        "revert-source-immediate": {
+          "now": {
+            "scenario": "revert-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.7692832404148575,
+              "ci95": [
+                1.6890790974958374,
+                1.8532957926327147
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 9.6680365,
+            "other_median_ms": 5.5985375
+          },
+          "previous": {
+            "scenario": "revert-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 1.5767061649682776,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 8.894868,
+            "other_median_ms": 5.641424
+          }
+        },
+        "relocated": {
+          "now": {
+            "scenario": "relocated",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 3.3498833766909626,
+              "ci95": [
+                3.0156110735514834,
+                3.7212088574189495
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 261.0805295,
+            "other_median_ms": 76.55901349999999
+          },
+          "previous": {
+            "scenario": "relocated",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 1.9201019068100897,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 214.773258,
+            "other_median_ms": 111.85513499999999
+          }
+        },
+        "unit-daemon-start": {
+          "now": {
+            "scenario": "unit-daemon-start",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 2.793521462790953,
+              "ci95": [
+                2.4476556444282425,
+                3.188259827659139
+              ]
+            },
+            "target": null,
+            "verdict": null,
+            "kache_median_ms": 10.885392,
+            "other_median_ms": 4.249166
+          },
+          "previous": {
+            "scenario": "unit-daemon-start",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 1.501958339298999,
+              "ci95": null
+            },
+            "target": null,
+            "verdict": null,
+            "kache_median_ms": 9.850388,
+            "other_median_ms": 6.558363
+          }
+        },
+        "unit-steady": {
+          "now": {
+            "scenario": "unit-steady",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 2.173392833854558,
+              "ci95": [
+                2.006223080162542,
+                2.354492108558358
+              ]
+            },
+            "target": null,
+            "verdict": null,
+            "kache_median_ms": 8.722970499999999,
+            "other_median_ms": 4.038105
+          },
+          "previous": {
+            "scenario": "unit-steady",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 2.10291699841522,
+              "ci95": null
+            },
+            "target": null,
+            "verdict": null,
+            "kache_median_ms": 8.01077,
+            "other_median_ms": 3.809361
+          }
+        }
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "acceptance": {
+        "complete_pairs": 10,
+        "eligible": true,
+        "verdict": "fail",
+        "reasons": [
+          "cold vs ccache: Some(Inconclusive) (geomean 0.974, target 1.1)",
+          "warm vs ccache: Some(Fail) (geomean 3.507, target 1.15)",
+          "revert-source-settled vs ccache: Some(Fail) (geomean 2.217, target 1.15)",
+          "edit-header-settled vs ccache: Some(Inconclusive) (geomean 1.103, target 1.15)",
+          "revert-header-settled vs ccache: Some(Fail) (geomean 3.082, target 1.15)",
+          "revert-source-immediate vs ccache: Some(Fail) (geomean 3.152, target 1.15)",
+          "relocated vs ccache: Some(Fail) (geomean 3.671, target 1.15)"
+        ]
+      },
+      "validation_failures": 0,
+      "input_digest_matches_99": true,
+      "timed_replays": 30,
+      "admitted_replays": 30,
+      "eligible_replays": 30,
+      "timed_build_intervals": 270,
+      "eligible_build_intervals": 242,
+      "replay_activity": [
+        {
+          "pair": 0,
+          "arm": "ccache",
+          "unrelated_cores": 0.043883978173528834,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 0,
+          "arm": "kache",
+          "unrelated_cores": 0.043032069391451246,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 0,
+          "arm": "raw",
+          "unrelated_cores": 0.047306321741105585,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "ccache",
+          "unrelated_cores": 0.03635310697255932,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "raw",
+          "unrelated_cores": 0.04009151174637989,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "kache",
+          "unrelated_cores": 0.07561658943281577,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "kache",
+          "unrelated_cores": 0.02815745355161207,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "raw",
+          "unrelated_cores": 0.03339954658177459,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "ccache",
+          "unrelated_cores": 0.036602976804766804,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "kache",
+          "unrelated_cores": 0.052908186588306226,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "ccache",
+          "unrelated_cores": 0.045743420598087746,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "raw",
+          "unrelated_cores": 0.031668695774192845,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "kache",
+          "unrelated_cores": 0.039468407866291196,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "raw",
+          "unrelated_cores": 0.03750993180247393,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "ccache",
+          "unrelated_cores": 0.03586016168524082,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "ccache",
+          "unrelated_cores": 0.04596642789040563,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "raw",
+          "unrelated_cores": 0.03600024915203411,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "kache",
+          "unrelated_cores": 0.04973201444725318,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "ccache",
+          "unrelated_cores": 0.07878070458665315,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "kache",
+          "unrelated_cores": 0.04699326756342657,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "raw",
+          "unrelated_cores": 0.04777587706459568,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "ccache",
+          "unrelated_cores": 0.03282648749514656,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "kache",
+          "unrelated_cores": 0.06240892073252283,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "raw",
+          "unrelated_cores": 0.04195979812426071,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "kache",
+          "unrelated_cores": 0.05240920402765379,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "ccache",
+          "unrelated_cores": 0.028380167250658613,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "raw",
+          "unrelated_cores": 0.05064365724124585,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "ccache",
+          "unrelated_cores": 0.028746354552077358,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "kache",
+          "unrelated_cores": 0.03744488012712701,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "raw",
+          "unrelated_cores": 0.038626921292837096,
+          "eligible": true,
+          "admitted": true
+        }
+      ],
+      "ratios": {
+        "cold": {
+          "now": {
+            "scenario": "cold",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 0.9737690109867593,
+              "ci95": [
+                0.8493071085851569,
+                1.1164702110379854
+              ]
+            },
+            "target": 1.1,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 5523.911738000001,
+            "other_median_ms": 5731.6741725
+          },
+          "previous": {
+            "scenario": "cold",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.0227864048593034,
+              "ci95": [
+                0.9307545664497717,
+                1.1239182354540413
+              ]
+            },
+            "target": 1.1,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 5486.154629000001,
+            "other_median_ms": 5415.2260845
+          }
+        },
+        "warm": {
+          "now": {
+            "scenario": "warm",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 3.5073057210264014,
+              "ci95": [
+                2.965323096428427,
+                4.148348433113631
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 57.20041499999999,
+            "other_median_ms": 15.7366305
+          },
+          "previous": {
+            "scenario": "warm",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.656802830310986,
+              "ci95": [
+                1.4101554090672055,
+                1.946590851530516
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 25.2234305,
+            "other_median_ms": 15.7378885
+          }
+        },
+        "edit-source-settled": {
+          "now": {
+            "scenario": "edit-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 0.99955299265374,
+              "ci95": [
+                0.9460819795833544,
+                1.0560461003210784
+              ]
+            },
+            "target": 1.15,
+            "verdict": "PASS",
+            "kache_median_ms": 1831.5972245,
+            "other_median_ms": 1806.4932880000001
+          },
+          "previous": {
+            "scenario": "edit-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.1191996164212776,
+              "ci95": [
+                0.9463941622823886,
+                1.323558229032881
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 1788.3988264999998,
+            "other_median_ms": 1740.1303515
+          }
+        },
+        "revert-source-settled": {
+          "now": {
+            "scenario": "revert-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 2.217300836982228,
+              "ci95": [
+                1.8830705291654555,
+                2.610854413329363
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 19.1905565,
+            "other_median_ms": 8.2382265
+          },
+          "previous": {
+            "scenario": "revert-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.43400665239166,
+              "ci95": [
+                1.174861938879401,
+                1.7503121099190027
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 10.079610500000001,
+            "other_median_ms": 7.056459
+          }
+        },
+        "edit-header-settled": {
+          "now": {
+            "scenario": "edit-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.1030946754436661,
+              "ci95": [
+                0.9769428511063524,
+                1.2455363807761783
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 6066.3288975,
+            "other_median_ms": 5716.196113999999
+          },
+          "previous": {
+            "scenario": "edit-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.0671050874642203,
+              "ci95": [
+                0.9437657524733638,
+                1.2065634557174287
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 5658.3099305,
+            "other_median_ms": 5414.541626
+          }
+        },
+        "revert-header-settled": {
+          "now": {
+            "scenario": "revert-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 3.082096704880744,
+              "ci95": [
+                2.131415328771888,
+                4.456813259248823
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 58.423648,
+            "other_median_ms": 16.816726
+          },
+          "previous": {
+            "scenario": "revert-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 2.364725614582758,
+              "ci95": [
+                1.7849723682501006,
+                3.13278083836438
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 36.594299500000005,
+            "other_median_ms": 17.397157
+          }
+        },
+        "edit-source-immediate": {
+          "now": {
+            "scenario": "edit-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 0.969169511824851,
+              "ci95": [
+                0.8733241239545854,
+                1.0755337186811356
+              ]
+            },
+            "target": 1.15,
+            "verdict": "PASS",
+            "kache_median_ms": 1735.2962225,
+            "other_median_ms": 1823.545638
+          },
+          "previous": {
+            "scenario": "edit-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.08322579864112,
+              "ci95": [
+                0.9478608806153744,
+                1.2379223099490153
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 1786.786425,
+            "other_median_ms": 1701.5921355
+          }
+        },
+        "revert-source-immediate": {
+          "now": {
+            "scenario": "revert-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 3.1516259721678743,
+              "ci95": [
+                2.3650951925283086,
+                4.199723672781603
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 22.2640295,
+            "other_median_ms": 7.6108744999999995
+          },
+          "previous": {
+            "scenario": "revert-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.7061059563855638,
+              "ci95": [
+                1.4269340270779707,
+                2.0398963646377797
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 12.597186,
+            "other_median_ms": 6.7381005
+          }
+        },
+        "relocated": {
+          "now": {
+            "scenario": "relocated",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 3.6708313622464805,
+              "ci95": [
+                3.131265640030141,
+                4.3033726419719045
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 63.362492,
+            "other_median_ms": 16.941892000000003
+          },
+          "previous": {
+            "scenario": "relocated",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.9221873109823997,
+              "ci95": [
+                1.6870052563978541,
+                2.1901556290292827
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 33.159033,
+            "other_median_ms": 15.442271999999999
+          }
+        }
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "acceptance": {
+        "complete_pairs": 10,
+        "eligible": true,
+        "verdict": "fail",
+        "reasons": [
+          "cold vs ccache: Some(Inconclusive) (geomean 1.029, target 1.1)",
+          "cold vs raw: Some(Inconclusive) (geomean 1.176, target 1.15)",
+          "warm vs ccache: Some(Fail) (geomean 1.456, target 1.15)",
+          "revert-source-settled vs ccache: Some(Inconclusive) (geomean 1.099, target 1.15)",
+          "edit-header-settled vs ccache: Some(Inconclusive) (geomean 1.140, target 1.15)",
+          "revert-header-settled vs ccache: Some(Fail) (geomean 1.406, target 1.15)",
+          "edit-source-immediate vs ccache: Some(Inconclusive) (geomean 1.009, target 1.15)",
+          "relocated vs ccache: Some(Inconclusive) (geomean 1.275, target 1.15)"
+        ]
+      },
+      "validation_failures": 0,
+      "input_digest_matches_99": true,
+      "timed_replays": 30,
+      "admitted_replays": 30,
+      "eligible_replays": 30,
+      "timed_build_intervals": 270,
+      "eligible_build_intervals": 264,
+      "replay_activity": [
+        {
+          "pair": 0,
+          "arm": "raw",
+          "unrelated_cores": 0.09873692337098301,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 0,
+          "arm": "kache",
+          "unrelated_cores": 0.14932648021350214,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 0,
+          "arm": "ccache",
+          "unrelated_cores": 0.16705957821715942,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "kache",
+          "unrelated_cores": 0.1583756557119368,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "raw",
+          "unrelated_cores": 0.175346074731964,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "ccache",
+          "unrelated_cores": 0.16208072345604432,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "raw",
+          "unrelated_cores": 0.14285941594496213,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "kache",
+          "unrelated_cores": 0.12165119319179661,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "ccache",
+          "unrelated_cores": 0.12459594650719737,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "ccache",
+          "unrelated_cores": 0.1855139306883004,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "kache",
+          "unrelated_cores": 0.1731639677090527,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "raw",
+          "unrelated_cores": 0.1053746847204429,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "raw",
+          "unrelated_cores": 0.11115603925297295,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "ccache",
+          "unrelated_cores": 0.12107075395074898,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "kache",
+          "unrelated_cores": 0.12931203058020202,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "raw",
+          "unrelated_cores": 0.14076440291071765,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "ccache",
+          "unrelated_cores": 0.13895728012046252,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "kache",
+          "unrelated_cores": 0.13141355459935958,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "kache",
+          "unrelated_cores": 0.20471176260463303,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "ccache",
+          "unrelated_cores": 0.100354130856854,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "raw",
+          "unrelated_cores": 0.14503564865575452,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "kache",
+          "unrelated_cores": 0.11332488043390491,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "ccache",
+          "unrelated_cores": 0.14931185856982285,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "raw",
+          "unrelated_cores": 0.11481416814049843,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "raw",
+          "unrelated_cores": 0.09811165309824103,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "ccache",
+          "unrelated_cores": 0.17071632165957512,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "kache",
+          "unrelated_cores": 0.13370348056064374,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "raw",
+          "unrelated_cores": 0.1228194863517598,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "ccache",
+          "unrelated_cores": 0.15834269752936198,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "kache",
+          "unrelated_cores": 0.2255928274914304,
+          "eligible": true,
+          "admitted": true
+        }
+      ],
+      "ratios": {
+        "cold": {
+          "now": {
+            "scenario": "cold",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.0285771426924981,
+              "ci95": [
+                0.9267426026649941,
+                1.1416017084216281
+              ]
+            },
+            "target": 1.1,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 656.3749104999999,
+            "other_median_ms": 625.8452300000001
+          },
+          "previous": {
+            "scenario": "cold",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 1.1879217100067507,
+              "ci95": null
+            },
+            "target": 1.1,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 822.026296,
+            "other_median_ms": 691.986929
+          }
+        },
+        "warm": {
+          "now": {
+            "scenario": "warm",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.4562341040998017,
+              "ci95": [
+                1.3604826890946713,
+                1.5587245489720345
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 101.6799735,
+            "other_median_ms": 68.7697405
+          },
+          "previous": {
+            "scenario": "warm",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 1.6994288626177247,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 111.667574,
+            "other_median_ms": 65.708884
+          }
+        },
+        "edit-source-settled": {
+          "now": {
+            "scenario": "edit-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.044705528247701,
+              "ci95": [
+                0.9627585224443697,
+                1.133627607866096
+              ]
+            },
+            "target": 1.15,
+            "verdict": "PASS",
+            "kache_median_ms": 137.291627,
+            "other_median_ms": 130.612562
+          },
+          "previous": {
+            "scenario": "edit-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 1.4209309531202954,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 229.07018300000001,
+            "other_median_ms": 161.21134
+          }
+        },
+        "revert-source-settled": {
+          "now": {
+            "scenario": "revert-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.099461155692522,
+              "ci95": [
+                0.8667927627367202,
+                1.3945834400602877
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 71.369956,
+            "other_median_ms": 77.8386885
+          },
+          "previous": {
+            "scenario": "revert-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 1.1695237170375337,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 69.152141,
+            "other_median_ms": 59.128464
+          }
+        },
+        "edit-header-settled": {
+          "now": {
+            "scenario": "edit-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.1401887393612637,
+              "ci95": [
+                0.9917603761086705,
+                1.3108311167533264
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 552.2935635000001,
+            "other_median_ms": 500.8640325
+          },
+          "previous": {
+            "scenario": "edit-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 0.9802251392811058,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 508.138858,
+            "other_median_ms": 518.389947
+          }
+        },
+        "revert-header-settled": {
+          "now": {
+            "scenario": "revert-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.405532850507041,
+              "ci95": [
+                1.1557148539966748,
+                1.7093512184452133
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 89.1416275,
+            "other_median_ms": 67.12832350000001
+          },
+          "previous": {
+            "scenario": "revert-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 1.1207447087468687,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 76.42007600000001,
+            "other_median_ms": 68.186872
+          }
+        },
+        "edit-source-immediate": {
+          "now": {
+            "scenario": "edit-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.009237639596651,
+              "ci95": [
+                0.8812590139492863,
+                1.1558016395361768
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 137.695452,
+            "other_median_ms": 136.3357945
+          },
+          "previous": {
+            "scenario": "edit-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 1.057271719588725,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 140.021789,
+            "other_median_ms": 132.4369
+          }
+        },
+        "revert-source-immediate": {
+          "now": {
+            "scenario": "revert-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 0.9621295471391695,
+              "ci95": [
+                0.8069016924547726,
+                1.1472193876084964
+              ]
+            },
+            "target": 1.15,
+            "verdict": "PASS",
+            "kache_median_ms": 69.33569550000001,
+            "other_median_ms": 71.7183625
+          },
+          "previous": {
+            "scenario": "revert-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 1.2879562122113724,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 103.952816,
+            "other_median_ms": 80.71145200000001
+          }
+        },
+        "relocated": {
+          "now": {
+            "scenario": "relocated",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.2747293660299208,
+              "ci95": [
+                1.077486194662343,
+                1.5080796066517186
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 94.32112849999999,
+            "other_median_ms": 73.98618149999999
+          },
+          "previous": {
+            "scenario": "relocated",
+            "against": "ccache",
+            "summary": {
+              "pairs": 1,
+              "geomean": 0.8564174415820912,
+              "ci95": null
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 81.151646,
+            "other_median_ms": 94.757115
+          }
+        }
+      },
+      "untimed_configure_events": 30,
+      "event_partition_filter": "Exclude ztest configure probes and unknown invocations without object_output; preserve example/minigzip link events. Full original stream is retained."
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "acceptance": {
+        "complete_pairs": 10,
+        "eligible": true,
+        "verdict": "fail",
+        "reasons": [
+          "cold vs ccache: Some(Fail) (geomean 1.293, target 1.1)",
+          "cold vs raw: Some(Fail) (geomean 2.182, target 1.15)",
+          "warm vs ccache: Some(Fail) (geomean 3.284, target 1.15)",
+          "edit-source-settled vs ccache: Some(Inconclusive) (geomean 1.193, target 1.15)",
+          "revert-source-settled vs ccache: Some(Fail) (geomean 1.691, target 1.15)",
+          "edit-header-settled vs ccache: Some(Inconclusive) (geomean 1.225, target 1.15)",
+          "revert-header-settled vs ccache: Some(Fail) (geomean 2.751, target 1.15)",
+          "edit-source-immediate vs ccache: Some(Inconclusive) (geomean 1.156, target 1.15)",
+          "revert-source-immediate vs ccache: Some(Fail) (geomean 1.695, target 1.15)",
+          "relocated vs ccache: Some(Fail) (geomean 2.905, target 1.15)"
+        ]
+      },
+      "validation_failures": 0,
+      "input_digest_matches_99": true,
+      "timed_replays": 30,
+      "admitted_replays": 30,
+      "eligible_replays": 30,
+      "timed_build_intervals": 330,
+      "eligible_build_intervals": 285,
+      "replay_activity": [
+        {
+          "pair": 0,
+          "arm": "kache",
+          "unrelated_cores": 0.11083996379953939,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 0,
+          "arm": "ccache",
+          "unrelated_cores": 0.0959220764248132,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 0,
+          "arm": "raw",
+          "unrelated_cores": 0.049691566753468794,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "raw",
+          "unrelated_cores": 0.09006145735664245,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "kache",
+          "unrelated_cores": 0.13228040503880112,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "ccache",
+          "unrelated_cores": 0.09714321899664108,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "ccache",
+          "unrelated_cores": 0.09462212538140616,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "kache",
+          "unrelated_cores": 0.13928832743981814,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "raw",
+          "unrelated_cores": 0.04823790028765205,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "ccache",
+          "unrelated_cores": 0.1134633916041002,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "raw",
+          "unrelated_cores": 0.08070900254804345,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "kache",
+          "unrelated_cores": 0.15981938625202197,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "kache",
+          "unrelated_cores": 0.1512151708780659,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "ccache",
+          "unrelated_cores": 0.15464141859031047,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "raw",
+          "unrelated_cores": 0.0727215081043437,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "kache",
+          "unrelated_cores": 0.09913571461164893,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "ccache",
+          "unrelated_cores": 0.16557024113140092,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "raw",
+          "unrelated_cores": 0.05759381892625423,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "ccache",
+          "unrelated_cores": 0.08183331987755382,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "raw",
+          "unrelated_cores": 0.06064969342688792,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "kache",
+          "unrelated_cores": 0.106070728465223,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "kache",
+          "unrelated_cores": 0.10279816858085972,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "raw",
+          "unrelated_cores": 0.05236432457824609,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "ccache",
+          "unrelated_cores": 0.09284761431604896,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "kache",
+          "unrelated_cores": 0.12268295665035003,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "raw",
+          "unrelated_cores": 0.06203216852952274,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "ccache",
+          "unrelated_cores": 0.10700388974989082,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "raw",
+          "unrelated_cores": 0.10771725922692875,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "ccache",
+          "unrelated_cores": 0.08589159485222207,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "kache",
+          "unrelated_cores": 0.09641419457252733,
+          "eligible": true,
+          "admitted": true
+        }
+      ],
+      "ratios": {
+        "cold": {
+          "now": {
+            "scenario": "cold",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.29338922954595,
+              "ci95": [
+                1.1909076071734532,
+                1.4046897416969963
+              ]
+            },
+            "target": 1.1,
+            "verdict": "FAIL",
+            "kache_median_ms": 2899.564233,
+            "other_median_ms": 2304.314082
+          },
+          "previous": {
+            "scenario": "cold",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.675452275168859,
+              "ci95": [
+                1.3406299672687785,
+                2.0938964478672673
+              ]
+            },
+            "target": 1.1,
+            "verdict": "FAIL",
+            "kache_median_ms": 4219.560921,
+            "other_median_ms": 2596.463714
+          }
+        },
+        "warm": {
+          "now": {
+            "scenario": "warm",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 3.2841545082856425,
+              "ci95": [
+                2.760951938030818,
+                3.9065043783360927
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 223.729412,
+            "other_median_ms": 71.154545
+          },
+          "previous": {
+            "scenario": "warm",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 3.222361143540849,
+              "ci95": [
+                2.9872615142584658,
+                3.4759632827055755
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 227.012729,
+            "other_median_ms": 71.504149
+          }
+        },
+        "edit-source-settled": {
+          "now": {
+            "scenario": "edit-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.1928783989792924,
+              "ci95": [
+                0.946572926670784,
+                1.5032744278416301
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 73.6237675,
+            "other_median_ms": 60.233874
+          },
+          "previous": {
+            "scenario": "edit-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.3767259009900323,
+              "ci95": [
+                0.8816814323002828,
+                2.1497268026977006
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 92.714025,
+            "other_median_ms": 65.184761
+          }
+        },
+        "revert-source-settled": {
+          "now": {
+            "scenario": "revert-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.6909708608512184,
+              "ci95": [
+                1.5111489415920403,
+                1.8921910167474731
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 9.571728,
+            "other_median_ms": 5.6147955
+          },
+          "previous": {
+            "scenario": "revert-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.7910280225967052,
+              "ci95": [
+                1.3477976224473907,
+                2.380017091810737
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 8.966111,
+            "other_median_ms": 5.42528
+          }
+        },
+        "edit-header-settled": {
+          "now": {
+            "scenario": "edit-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.225064631173847,
+              "ci95": [
+                0.991456798184671,
+                1.5137153260747265
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 3067.9981035,
+            "other_median_ms": 2285.005754
+          },
+          "previous": {
+            "scenario": "edit-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.6440454503315762,
+              "ci95": [
+                1.417320200070045,
+                1.9070393850467782
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 4239.089047,
+            "other_median_ms": 2635.5778569999998
+          }
+        },
+        "revert-header-settled": {
+          "now": {
+            "scenario": "revert-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 2.750976055753622,
+              "ci95": [
+                2.2857695323986773,
+                3.3108627759982703
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 223.233067,
+            "other_median_ms": 79.470269
+          },
+          "previous": {
+            "scenario": "revert-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 2.9400407004746594,
+              "ci95": [
+                2.5818693610864334,
+                3.3478995687102686
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 219.94524900000002,
+            "other_median_ms": 78.558212
+          }
+        },
+        "edit-source-immediate": {
+          "now": {
+            "scenario": "edit-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.1558295708328787,
+              "ci95": [
+                0.9156010413785529,
+                1.4590874588786917
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 73.06182749999999,
+            "other_median_ms": 61.4767135
+          },
+          "previous": {
+            "scenario": "edit-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.5481404067358482,
+              "ci95": [
+                1.0282400815479722,
+                2.3309135307778006
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 86.91344400000001,
+            "other_median_ms": 58.840482
+          }
+        },
+        "revert-source-immediate": {
+          "now": {
+            "scenario": "revert-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.6949906163451984,
+              "ci95": [
+                1.38922714408158,
+                2.0680514354602653
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 9.613087499999999,
+            "other_median_ms": 5.820655
+          },
+          "previous": {
+            "scenario": "revert-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.7718453396899285,
+              "ci95": [
+                1.2966910438204127,
+                2.421113281180123
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 8.941925999999999,
+            "other_median_ms": 5.047549
+          }
+        },
+        "relocated": {
+          "now": {
+            "scenario": "relocated",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 2.90467476425735,
+              "ci95": [
+                2.3321875386275965,
+                3.6176916934726546
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 219.340257,
+            "other_median_ms": 74.245724
+          },
+          "previous": {
+            "scenario": "relocated",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 2.9281002426722043,
+              "ci95": [
+                2.6369995679830076,
+                3.2513357738981132
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 226.226956,
+            "other_median_ms": 76.595465
+          }
+        },
+        "unit-daemon-start": {
+          "now": {
+            "scenario": "unit-daemon-start",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 2.658823331114401,
+              "ci95": [
+                2.22395364941807,
+                3.178726997268166
+              ]
+            },
+            "target": null,
+            "verdict": null,
+            "kache_median_ms": 10.588064500000002,
+            "other_median_ms": 3.9876785000000003
+          },
+          "previous": {
+            "scenario": "unit-daemon-start",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 3.0497307344488758,
+              "ci95": [
+                2.460583663949038,
+                3.7799395683684875
+              ]
+            },
+            "target": null,
+            "verdict": null,
+            "kache_median_ms": 11.419300999999999,
+            "other_median_ms": 3.688502
+          }
+        },
+        "unit-steady": {
+          "now": {
+            "scenario": "unit-steady",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 2.1402912383454455,
+              "ci95": [
+                1.7001907078886125,
+                2.694313387129977
+              ]
+            },
+            "target": null,
+            "verdict": null,
+            "kache_median_ms": 8.879643000000002,
+            "other_median_ms": 4.0324785
+          },
+          "previous": {
+            "scenario": "unit-steady",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 2.7216269509880022,
+              "ci95": [
+                1.9792534223952316,
+                3.7424481254048914
+              ]
+            },
+            "target": null,
+            "verdict": null,
+            "kache_median_ms": 9.120203,
+            "other_median_ms": 3.7736039999999997
+          }
+        }
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "acceptance": {
+        "complete_pairs": 10,
+        "eligible": true,
+        "verdict": "fail",
+        "reasons": [
+          "cold vs ccache: Some(Inconclusive) (geomean 1.046, target 1.1)",
+          "cold vs raw: Some(Inconclusive) (geomean 1.016, target 1.15)",
+          "warm vs ccache: Some(Fail) (geomean 2.825, target 1.15)",
+          "revert-source-settled vs ccache: Some(Fail) (geomean 2.997, target 1.15)",
+          "edit-header-settled vs ccache: Some(Inconclusive) (geomean 1.048, target 1.15)",
+          "revert-header-settled vs ccache: Some(Fail) (geomean 4.133, target 1.15)",
+          "edit-source-immediate vs ccache: Some(Inconclusive) (geomean 1.146, target 1.15)",
+          "revert-source-immediate vs ccache: Some(Fail) (geomean 3.072, target 1.15)",
+          "relocated vs ccache: Some(Fail) (geomean 3.922, target 1.15)"
+        ]
+      },
+      "validation_failures": 0,
+      "input_digest_matches_99": true,
+      "timed_replays": 30,
+      "admitted_replays": 30,
+      "eligible_replays": 30,
+      "timed_build_intervals": 270,
+      "eligible_build_intervals": 252,
+      "replay_activity": [
+        {
+          "pair": 0,
+          "arm": "ccache",
+          "unrelated_cores": 0.02620505726761557,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 0,
+          "arm": "kache",
+          "unrelated_cores": 0.038949817409103964,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 0,
+          "arm": "raw",
+          "unrelated_cores": 0.03581200928763805,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "ccache",
+          "unrelated_cores": 0.027162243028314645,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "raw",
+          "unrelated_cores": 0.02676755050015047,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "kache",
+          "unrelated_cores": 0.05363432994732553,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "kache",
+          "unrelated_cores": 0.03809195207954406,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "raw",
+          "unrelated_cores": 0.036220999837082365,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "ccache",
+          "unrelated_cores": 0.07046661304587128,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "kache",
+          "unrelated_cores": 0.034940818491637875,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "ccache",
+          "unrelated_cores": 0.05280415223525303,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "raw",
+          "unrelated_cores": 0.04754833520894978,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "kache",
+          "unrelated_cores": 0.06594675476092346,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "raw",
+          "unrelated_cores": 0.028893358803167454,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "ccache",
+          "unrelated_cores": 0.05398437088364573,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "ccache",
+          "unrelated_cores": 0.02571057725735151,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "raw",
+          "unrelated_cores": 0.03329656569315712,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "kache",
+          "unrelated_cores": 0.0422455946118006,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "ccache",
+          "unrelated_cores": 0.024111324753215414,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "kache",
+          "unrelated_cores": 0.042032017238435034,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "raw",
+          "unrelated_cores": 0.028719866356181463,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "ccache",
+          "unrelated_cores": 0.04419090265662629,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "kache",
+          "unrelated_cores": 0.03866248031975491,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "raw",
+          "unrelated_cores": 0.0361016618178953,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "kache",
+          "unrelated_cores": 0.04570728282640353,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "ccache",
+          "unrelated_cores": 0.053365218550693774,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "raw",
+          "unrelated_cores": 0.03275043070950284,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "ccache",
+          "unrelated_cores": 0.02607764616475295,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "kache",
+          "unrelated_cores": 0.05044549749090346,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "raw",
+          "unrelated_cores": 0.034690015027812535,
+          "eligible": true,
+          "admitted": true
+        }
+      ],
+      "ratios": {
+        "cold": {
+          "now": {
+            "scenario": "cold",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.0462860900278634,
+              "ci95": [
+                0.9251490401656378,
+                1.183284567846277
+              ]
+            },
+            "target": 1.1,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 6705.9230845,
+            "other_median_ms": 6658.3483685
+          },
+          "previous": {
+            "scenario": "cold",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.1339225561368245,
+              "ci95": [
+                1.0514327622166957,
+                1.2228840583254301
+              ]
+            },
+            "target": 1.1,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 7387.4432095,
+            "other_median_ms": 6303.0522875
+          }
+        },
+        "warm": {
+          "now": {
+            "scenario": "warm",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 2.825082708902954,
+              "ci95": [
+                2.497713103215003,
+                3.195359908177349
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 52.024852,
+            "other_median_ms": 18.538998499999998
+          },
+          "previous": {
+            "scenario": "warm",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.5597977418332898,
+              "ci95": [
+                1.3017778750961637,
+                1.8689586310940367
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 24.768735500000002,
+            "other_median_ms": 15.6396275
+          }
+        },
+        "edit-source-settled": {
+          "now": {
+            "scenario": "edit-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.0283287873662792,
+              "ci95": [
+                0.9651783387275025,
+                1.0956110933036112
+              ]
+            },
+            "target": 1.15,
+            "verdict": "PASS",
+            "kache_median_ms": 2128.498055,
+            "other_median_ms": 2088.170991
+          },
+          "previous": {
+            "scenario": "edit-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.112086664201184,
+              "ci95": [
+                0.9889784154972548,
+                1.2505194545345968
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 2110.5577224999997,
+            "other_median_ms": 1945.8136035
+          }
+        },
+        "revert-source-settled": {
+          "now": {
+            "scenario": "revert-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 2.997030119425238,
+              "ci95": [
+                2.2507703681352966,
+                3.990717873269124
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 19.482879,
+            "other_median_ms": 7.6992035
+          },
+          "previous": {
+            "scenario": "revert-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.634557282787432,
+              "ci95": [
+                1.1857303726472632,
+                2.2532757634844245
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 10.1460905,
+            "other_median_ms": 6.9154885
+          }
+        },
+        "edit-header-settled": {
+          "now": {
+            "scenario": "edit-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.0483499030317358,
+              "ci95": [
+                0.9479210504064717,
+                1.159418834211329
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 6631.9692255,
+            "other_median_ms": 6395.666795499999
+          },
+          "previous": {
+            "scenario": "edit-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.0645786030014512,
+              "ci95": [
+                0.9298900970212838,
+                1.2187758592105764
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 6438.5981495,
+            "other_median_ms": 6140.211112000001
+          }
+        },
+        "revert-header-settled": {
+          "now": {
+            "scenario": "revert-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 4.133176815674003,
+              "ci95": [
+                3.5892527131754624,
+                4.759528502107444
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 71.1181105,
+            "other_median_ms": 17.188359
+          },
+          "previous": {
+            "scenario": "revert-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 2.0680710009758005,
+              "ci95": [
+                1.8947608246683247,
+                2.257233530161105
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 34.3404635,
+            "other_median_ms": 17.046909499999998
+          }
+        },
+        "edit-source-immediate": {
+          "now": {
+            "scenario": "edit-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.1461430164403907,
+              "ci95": [
+                1.0303868878663374,
+                1.2749034654888627
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 2281.9473095000003,
+            "other_median_ms": 2044.7642295
+          },
+          "previous": {
+            "scenario": "edit-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.0550381636781039,
+              "ci95": [
+                0.9261708048572149,
+                1.2018361202703534
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 2051.988515,
+            "other_median_ms": 1998.130144
+          }
+        },
+        "revert-source-immediate": {
+          "now": {
+            "scenario": "revert-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 3.0716783180366476,
+              "ci95": [
+                2.707457646805196,
+                3.48489576582297
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 21.703643,
+            "other_median_ms": 7.507245
+          },
+          "previous": {
+            "scenario": "revert-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.5173196857040745,
+              "ci95": [
+                1.2289019697876729,
+                1.8734277307919773
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 11.178263000000001,
+            "other_median_ms": 6.9834925000000005
+          }
+        },
+        "relocated": {
+          "now": {
+            "scenario": "relocated",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 3.9224475114202213,
+              "ci95": [
+                3.436329071263318,
+                4.477334434734561
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 70.72822450000001,
+            "other_median_ms": 18.566513
+          },
+          "previous": {
+            "scenario": "relocated",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 2.046472058974647,
+              "ci95": [
+                1.7930512005471528,
+                2.335710149763677
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 33.747688,
+            "other_median_ms": 16.901567
+          }
+        }
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "acceptance": {
+        "complete_pairs": 10,
+        "eligible": true,
+        "verdict": "fail",
+        "reasons": [
+          "cold vs ccache: Some(Fail) (geomean 1.453, target 1.1)",
+          "cold vs raw: Some(Fail) (geomean 1.667, target 1.15)",
+          "warm vs ccache: Some(Inconclusive) (geomean 1.278, target 1.15)",
+          "edit-source-settled vs ccache: Some(Inconclusive) (geomean 1.300, target 1.15)",
+          "revert-source-settled vs ccache: Some(Inconclusive) (geomean 1.053, target 1.15)",
+          "edit-header-settled vs ccache: Some(Inconclusive) (geomean 1.129, target 1.15)",
+          "revert-header-settled vs ccache: Some(Fail) (geomean 1.439, target 1.15)",
+          "edit-source-immediate vs ccache: Some(Inconclusive) (geomean 1.253, target 1.15)",
+          "revert-source-immediate vs ccache: Some(Inconclusive) (geomean 1.090, target 1.15)",
+          "relocated vs ccache: Some(Fail) (geomean 1.293, target 1.15)"
+        ]
+      },
+      "validation_failures": 0,
+      "input_digest_matches_99": true,
+      "timed_replays": 30,
+      "admitted_replays": 30,
+      "eligible_replays": 30,
+      "timed_build_intervals": 270,
+      "eligible_build_intervals": 264,
+      "replay_activity": [
+        {
+          "pair": 0,
+          "arm": "raw",
+          "unrelated_cores": 0.0520926388757049,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 0,
+          "arm": "kache",
+          "unrelated_cores": 0.13799847512806923,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 0,
+          "arm": "ccache",
+          "unrelated_cores": 0.08174752064688585,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "kache",
+          "unrelated_cores": 0.12986136269974685,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "raw",
+          "unrelated_cores": 0.10595472636190022,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 1,
+          "arm": "ccache",
+          "unrelated_cores": 0.1888259272775183,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "raw",
+          "unrelated_cores": 0.10746123749324599,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "kache",
+          "unrelated_cores": 0.19201096559560674,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 2,
+          "arm": "ccache",
+          "unrelated_cores": 0.11174826692133982,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "ccache",
+          "unrelated_cores": 0.10266387098518408,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "kache",
+          "unrelated_cores": 0.21426880735119955,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 3,
+          "arm": "raw",
+          "unrelated_cores": 0.07007967717656549,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "raw",
+          "unrelated_cores": 0.08871000839180604,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "ccache",
+          "unrelated_cores": 0.19221716029601207,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 4,
+          "arm": "kache",
+          "unrelated_cores": 0.13061283392801068,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "raw",
+          "unrelated_cores": 0.08137282173663103,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "ccache",
+          "unrelated_cores": 0.10958770415981803,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 5,
+          "arm": "kache",
+          "unrelated_cores": 0.13118139450284477,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "kache",
+          "unrelated_cores": 0.21434362001909973,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "ccache",
+          "unrelated_cores": 0.13387002776959653,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 6,
+          "arm": "raw",
+          "unrelated_cores": 0.0868616857042575,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "kache",
+          "unrelated_cores": 0.16390098796233668,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "ccache",
+          "unrelated_cores": 0.12030915015575723,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 7,
+          "arm": "raw",
+          "unrelated_cores": 0.13262236623366988,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "raw",
+          "unrelated_cores": 0.13680403471292807,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "ccache",
+          "unrelated_cores": 0.07601085575640285,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 8,
+          "arm": "kache",
+          "unrelated_cores": 0.11717536628001436,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "raw",
+          "unrelated_cores": 0.07535551702609018,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "ccache",
+          "unrelated_cores": 0.09776864444370352,
+          "eligible": true,
+          "admitted": true
+        },
+        {
+          "pair": 9,
+          "arm": "kache",
+          "unrelated_cores": 0.1248031904800065,
+          "eligible": true,
+          "admitted": true
+        }
+      ],
+      "ratios": {
+        "cold": {
+          "now": {
+            "scenario": "cold",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.452511636388195,
+              "ci95": [
+                1.373834736566786,
+                1.5356942124752782
+              ]
+            },
+            "target": 1.1,
+            "verdict": "FAIL",
+            "kache_median_ms": 878.9737825,
+            "other_median_ms": 616.8690895
+          },
+          "previous": {
+            "scenario": "cold",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.1416549524259505,
+              "ci95": [
+                1.010644930912999,
+                1.289647818468997
+              ]
+            },
+            "target": 1.1,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 782.838046,
+            "other_median_ms": 684.6910349999999
+          }
+        },
+        "warm": {
+          "now": {
+            "scenario": "warm",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.27845941277237,
+              "ci95": [
+                1.12592343392409,
+                1.451660406791452
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 115.8295675,
+            "other_median_ms": 96.8953815
+          },
+          "previous": {
+            "scenario": "warm",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.1661965583452443,
+              "ci95": [
+                0.7763641742534794,
+                1.7517737909583837
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 103.618264,
+            "other_median_ms": 84.75015499999999
+          }
+        },
+        "edit-source-settled": {
+          "now": {
+            "scenario": "edit-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.299686716842447,
+              "ci95": [
+                1.0701557107372939,
+                1.5784483930594726
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 222.815833,
+            "other_median_ms": 183.9590275
+          },
+          "previous": {
+            "scenario": "edit-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.157018211452657,
+              "ci95": [
+                1.070620072149016,
+                1.2503886079269932
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 198.70142900000002,
+            "other_median_ms": 168.68729900000002
+          }
+        },
+        "revert-source-settled": {
+          "now": {
+            "scenario": "revert-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.0532974717214145,
+              "ci95": [
+                0.828579456421831,
+                1.3389609835678922
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 88.00986,
+            "other_median_ms": 86.024714
+          },
+          "previous": {
+            "scenario": "revert-source-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.014828332534177,
+              "ci95": [
+                0.8434300693235602,
+                1.2210574201368818
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 87.938031,
+            "other_median_ms": 78.467815
+          }
+        },
+        "edit-header-settled": {
+          "now": {
+            "scenario": "edit-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.1288527829658936,
+              "ci95": [
+                1.0442585860164928,
+                1.2202998593202057
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 638.275445,
+            "other_median_ms": 590.958783
+          },
+          "previous": {
+            "scenario": "edit-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.0505403203987949,
+              "ci95": [
+                0.8816360353643428,
+                1.2518033752187967
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 585.115194,
+            "other_median_ms": 543.234336
+          }
+        },
+        "revert-header-settled": {
+          "now": {
+            "scenario": "revert-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.4392369229431994,
+              "ci95": [
+                1.1805371833737655,
+                1.754627426849282
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 118.9646055,
+            "other_median_ms": 88.342938
+          },
+          "previous": {
+            "scenario": "revert-header-settled",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.1169993287988995,
+              "ci95": [
+                1.0280852157592273,
+                1.2136031930152709
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 97.174338,
+            "other_median_ms": 87.65257
+          }
+        },
+        "edit-source-immediate": {
+          "now": {
+            "scenario": "edit-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.2530845726157496,
+              "ci95": [
+                1.142963572026874,
+                1.3738153905841857
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 217.59157299999998,
+            "other_median_ms": 176.44664649999999
+          },
+          "previous": {
+            "scenario": "edit-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.21215775713124,
+              "ci95": [
+                0.8777238073854027,
+                1.6740191114905771
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 211.86471600000002,
+            "other_median_ms": 162.02048499999998
+          }
+        },
+        "revert-source-immediate": {
+          "now": {
+            "scenario": "revert-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.0895086953674398,
+              "ci95": [
+                0.9488698670405397,
+                1.2509926160723428
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 90.7639355,
+            "other_median_ms": 82.571736
+          },
+          "previous": {
+            "scenario": "revert-source-immediate",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.1669799951860267,
+              "ci95": [
+                0.9687036530869371,
+                1.4058399643943114
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 88.50510799999999,
+            "other_median_ms": 78.603851
+          }
+        },
+        "relocated": {
+          "now": {
+            "scenario": "relocated",
+            "against": "ccache",
+            "summary": {
+              "pairs": 10,
+              "geomean": 1.2929218030778742,
+              "ci95": [
+                1.2263401528040758,
+                1.3631183689548563
+              ]
+            },
+            "target": 1.15,
+            "verdict": "FAIL",
+            "kache_median_ms": 114.9104045,
+            "other_median_ms": 87.3478595
+          },
+          "previous": {
+            "scenario": "relocated",
+            "against": "ccache",
+            "summary": {
+              "pairs": 5,
+              "geomean": 1.2571878443682027,
+              "ci95": [
+                1.0127568831856224,
+                1.5606127218367016
+              ]
+            },
+            "target": 1.15,
+            "verdict": "INCONCLUSIVE",
+            "kache_median_ms": 101.439688,
+            "other_median_ms": 77.565639
+          }
+        }
+      },
+      "untimed_configure_events": 30,
+      "event_partition_filter": "Exclude ztest configure probes and unknown invocations without object_output; preserve example/minigzip link events. Full original stream is retained."
+    }
+  ],
+  "losses": [
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 724.768808,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 675.7506158,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 515.2340285,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 493.94825570000006,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 332.7401367999998,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 330.12818959999976,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 315.0540893,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 290.7382534,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 194.6584109,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 184.7264169,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 172.9040056,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 165.8204109,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 160.55010399999992,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 153.7458565,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 150.0459271,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 76.070269,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 74.8470827,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 60.15120320000001,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 60.125174900000005,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 56.2445442,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 54.1090151,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 49.5019959,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 47.160612000000015,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 44.6253743,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 42.3366841,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 41.787565099999995,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 34.4986696,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 33.0657055,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 29.540543899999996,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 26.844162999999998,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 25.0736447,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 21.102292899999995,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 18.8284138,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 16.832767499999953,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 16.6927932,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 15.971842800000001,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 12.654374599999997,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 10.5616267,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 10.2435801,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 8.865619200000003,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "unit-daemon-start",
+      "mean_paired_excess_ms": 7.6524607,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 7.414856000000002,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "unit-daemon-start",
+      "mean_paired_excess_ms": 7.1946996,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 6.469944900000001,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 5.434541600000008,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 5.316942899999996,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "unit-steady",
+      "mean_paired_excess_ms": 5.2550407,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "unit-steady",
+      "mean_paired_excess_ms": 4.7196596,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 4.320391300000001,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 4.2332662,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 4.092136,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 3.9632795000000005,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 3.9201940999999993,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 2.168986900000003,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": -1.3040982000000667,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": -3.294066400000002,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": -54.67189499999999,
+      "pairs": 10,
+      "workload_eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "cold",
+      "mean_paired_excess_ms": -183.9538636000003,
+      "pairs": 10,
+      "workload_eligible": true
+    }
+  ],
+  "event_phases": [
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "cold",
+      "wall_ms": 1199.2442569999998,
+      "events": 48,
+      "results": {
+        "miss": 48
+      },
+      "sums": {
+        "compiler_runs": 48,
+        "preprocessor_runs": 0,
+        "probe_runs": 1,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 103,
+        "startup_ms": 2,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "warm",
+      "wall_ms": 224.767519,
+      "events": 48,
+      "results": {
+        "local_hit": 48
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 1,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 59520,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "edit-source-settled",
+      "wall_ms": 29.83149,
+      "events": 1,
+      "results": {
+        "dup": 1
+      },
+      "sums": {
+        "compiler_runs": 1,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 3,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "revert-source-settled",
+      "wall_ms": 9.318493,
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 1240,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "edit-header-settled",
+      "wall_ms": 1326.3863840000001,
+      "events": 48,
+      "results": {
+        "dup": 48
+      },
+      "sums": {
+        "compiler_runs": 48,
+        "preprocessor_runs": 48,
+        "probe_runs": 0,
+        "key_ms": 303,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 96,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "revert-header-settled",
+      "wall_ms": 219.61945599999999,
+      "events": 48,
+      "results": {
+        "local_hit": 48
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 59520,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "edit-source-immediate",
+      "wall_ms": 27.251778,
+      "events": 1,
+      "results": {
+        "dup": 1
+      },
+      "sums": {
+        "compiler_runs": 1,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 1,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "revert-source-immediate",
+      "wall_ms": 9.72455,
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 1240,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "relocated",
+      "wall_ms": 234.410037,
+      "events": 48,
+      "results": {
+        "local_hit": 48
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 2,
+        "copied_bytes": 59520,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "unit-daemon-start",
+      "wall_ms": 9.625942,
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 2,
+        "copied_bytes": 1240,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "unit-steady",
+      "wall_ms": 8.748657999999999,
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 1240,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "cold",
+      "wall_ms": 5389.32273,
+      "events": 12,
+      "results": {
+        "miss": 12
+      },
+      "sums": {
+        "compiler_runs": 12,
+        "preprocessor_runs": 0,
+        "probe_runs": 2,
+        "key_ms": 256,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 61,
+        "startup_ms": 8,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "warm",
+      "wall_ms": 51.226959,
+      "events": 12,
+      "results": {
+        "local_hit": 12
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 110,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 3367304,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "edit-source-settled",
+      "wall_ms": 1850.0834770000001,
+      "events": 1,
+      "results": {
+        "dup": 1
+      },
+      "sums": {
+        "compiler_runs": 1,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 23,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 18,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "revert-source-settled",
+      "wall_ms": 18.075916,
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 9,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 280616,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "edit-header-settled",
+      "wall_ms": 7255.308597,
+      "events": 12,
+      "results": {
+        "dup": 12
+      },
+      "sums": {
+        "compiler_runs": 12,
+        "preprocessor_runs": 12,
+        "probe_runs": 0,
+        "key_ms": 1429,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 64,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "revert-header-settled",
+      "wall_ms": 64.45943,
+      "events": 12,
+      "results": {
+        "local_hit": 12
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 144,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 2,
+        "restore_ms": 1,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 3367304,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "edit-source-immediate",
+      "wall_ms": 2095.637124,
+      "events": 1,
+      "results": {
+        "dup": 1
+      },
+      "sums": {
+        "compiler_runs": 1,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 21,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 4,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "revert-source-immediate",
+      "wall_ms": 34.976864000000006,
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 13,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 280616,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "relocated",
+      "wall_ms": 68.08631299999999,
+      "events": 12,
+      "results": {
+        "local_hit": 12
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 154,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 1,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 9,
+        "copied_bytes": 3367304,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "cold",
+      "wall_ms": 671.454543,
+      "events": 19,
+      "results": {
+        "miss": 17,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 19,
+        "preprocessor_runs": 0,
+        "probe_runs": 5,
+        "key_ms": 114,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 59,
+        "startup_ms": 8,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "warm",
+      "wall_ms": 140.386542,
+      "events": 19,
+      "results": {
+        "local_hit": 17,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 2,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 74,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 1,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 167552,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "edit-source-settled",
+      "wall_ms": 195.85003600000002,
+      "events": 3,
+      "results": {
+        "dup": 1,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 3,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 6,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 3,
+        "startup_ms": 1,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "revert-source-settled",
+      "wall_ms": 68.611961,
+      "events": 3,
+      "results": {
+        "local_hit": 1,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 2,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 4,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 3896,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "edit-header-settled",
+      "wall_ms": 839.504943,
+      "events": 11,
+      "results": {
+        "dup": 9,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 11,
+        "preprocessor_runs": 9,
+        "probe_runs": 0,
+        "key_ms": 289,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 31,
+        "startup_ms": 21,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "revert-header-settled",
+      "wall_ms": 89.320311,
+      "events": 11,
+      "results": {
+        "local_hit": 9,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 2,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 37,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 109128,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "edit-source-immediate",
+      "wall_ms": 141.531952,
+      "events": 3,
+      "results": {
+        "dup": 1,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 3,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 5,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 4,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "revert-source-immediate",
+      "wall_ms": 67.26752599999999,
+      "events": 3,
+      "results": {
+        "local_hit": 1,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 2,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 4,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 3896,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "relocated",
+      "wall_ms": 93.879223,
+      "events": 19,
+      "results": {
+        "local_hit": 17,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 2,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 72,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 8,
+        "copied_bytes": 167552,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "cold",
+      "wall_ms": 2854.8041350000003,
+      "events": 48,
+      "results": {
+        "miss": 48
+      },
+      "sums": {
+        "compiler_runs": 48,
+        "preprocessor_runs": 48,
+        "probe_runs": 1,
+        "key_ms": 1061,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 120,
+        "startup_ms": 2,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "warm",
+      "wall_ms": 253.78543399999998,
+      "events": 48,
+      "results": {
+        "local_hit": 48
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 2,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 1,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 51824,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "edit-source-settled",
+      "wall_ms": 71.59346099999999,
+      "events": 1,
+      "results": {
+        "dup": 1
+      },
+      "sums": {
+        "compiler_runs": 1,
+        "preprocessor_runs": 1,
+        "probe_runs": 0,
+        "key_ms": 24,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 2,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "revert-source-settled",
+      "wall_ms": 9.228292000000001,
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 1080,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "edit-header-settled",
+      "wall_ms": 2837.1104860000005,
+      "events": 48,
+      "results": {
+        "dup": 48
+      },
+      "sums": {
+        "compiler_runs": 48,
+        "preprocessor_runs": 48,
+        "probe_runs": 0,
+        "key_ms": 989,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 140,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "revert-header-settled",
+      "wall_ms": 208.13488999999998,
+      "events": 48,
+      "results": {
+        "local_hit": 48
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 51824,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "edit-source-immediate",
+      "wall_ms": 70.403293,
+      "events": 1,
+      "results": {
+        "dup": 1
+      },
+      "sums": {
+        "compiler_runs": 1,
+        "preprocessor_runs": 1,
+        "probe_runs": 0,
+        "key_ms": 28,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 2,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "revert-source-immediate",
+      "wall_ms": 9.808281000000001,
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 1080,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "relocated",
+      "wall_ms": 213.027341,
+      "events": 48,
+      "results": {
+        "local_hit": 48
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 2,
+        "copied_bytes": 51824,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "unit-daemon-start",
+      "wall_ms": 10.362787,
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 2,
+        "copied_bytes": 1064,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "pair": 9,
+      "scenario": "unit-steady",
+      "wall_ms": 13.970597,
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 0,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 1064,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "cold",
+      "wall_ms": 6576.562634,
+      "events": 12,
+      "results": {
+        "miss": 12
+      },
+      "sums": {
+        "compiler_runs": 12,
+        "preprocessor_runs": 24,
+        "probe_runs": 4,
+        "key_ms": 2576,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 60,
+        "startup_ms": 8,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "warm",
+      "wall_ms": 47.091215,
+      "events": 12,
+      "results": {
+        "local_hit": 12
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 110,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 3667008,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "edit-source-settled",
+      "wall_ms": 2173.1651460000003,
+      "events": 1,
+      "results": {
+        "dup": 1
+      },
+      "sums": {
+        "compiler_runs": 1,
+        "preprocessor_runs": 2,
+        "probe_runs": 0,
+        "key_ms": 209,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 4,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "revert-source-settled",
+      "wall_ms": 18.5773,
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 9,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 305584,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "edit-header-settled",
+      "wall_ms": 6673.646119,
+      "events": 12,
+      "results": {
+        "dup": 12
+      },
+      "sums": {
+        "compiler_runs": 12,
+        "preprocessor_runs": 24,
+        "probe_runs": 0,
+        "key_ms": 2225,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 62,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "revert-header-settled",
+      "wall_ms": 77.857233,
+      "events": 12,
+      "results": {
+        "local_hit": 12
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 175,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 8,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 3667008,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "edit-source-immediate",
+      "wall_ms": 2219.499429,
+      "events": 1,
+      "results": {
+        "dup": 1
+      },
+      "sums": {
+        "compiler_runs": 1,
+        "preprocessor_runs": 2,
+        "probe_runs": 0,
+        "key_ms": 190,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 5,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "revert-source-immediate",
+      "wall_ms": 19.944736000000002,
+      "events": 1,
+      "results": {
+        "local_hit": 1
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 10,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 305584,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "pair": 9,
+      "scenario": "relocated",
+      "wall_ms": 60.739309999999996,
+      "events": 12,
+      "results": {
+        "local_hit": 12
+      },
+      "sums": {
+        "compiler_runs": 0,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 131,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 10,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 10,
+        "copied_bytes": 3667008,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "cold",
+      "wall_ms": 797.9364949999999,
+      "events": 19,
+      "results": {
+        "miss": 17,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 19,
+        "preprocessor_runs": 34,
+        "probe_runs": 5,
+        "key_ms": 1066,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 37,
+        "startup_ms": 10,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "warm",
+      "wall_ms": 113.297987,
+      "events": 19,
+      "results": {
+        "local_hit": 17,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 2,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 62,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 159512,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "edit-source-settled",
+      "wall_ms": 210.333679,
+      "events": 3,
+      "results": {
+        "dup": 1,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 3,
+        "preprocessor_runs": 2,
+        "probe_runs": 0,
+        "key_ms": 60,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 3,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "revert-source-settled",
+      "wall_ms": 84.741749,
+      "events": 3,
+      "results": {
+        "local_hit": 1,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 2,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 3,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 2800,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "edit-header-settled",
+      "wall_ms": 586.342167,
+      "events": 11,
+      "results": {
+        "dup": 9,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 11,
+        "preprocessor_runs": 18,
+        "probe_runs": 0,
+        "key_ms": 463,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 24,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "revert-header-settled",
+      "wall_ms": 102.213677,
+      "events": 11,
+      "results": {
+        "local_hit": 9,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 2,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 36,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 1,
+        "copied_bytes": 104112,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "edit-source-immediate",
+      "wall_ms": 197.092952,
+      "events": 3,
+      "results": {
+        "dup": 1,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 3,
+        "preprocessor_runs": 2,
+        "probe_runs": 0,
+        "key_ms": 59,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 2,
+        "startup_ms": 0,
+        "copied_bytes": 0,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "revert-source-immediate",
+      "wall_ms": 80.809339,
+      "events": 3,
+      "results": {
+        "local_hit": 1,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 2,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 4,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 0,
+        "copied_bytes": 2800,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "pair": 9,
+      "scenario": "relocated",
+      "wall_ms": 103.714073,
+      "events": 19,
+      "results": {
+        "local_hit": 17,
+        "passthrough": 2
+      },
+      "sums": {
+        "compiler_runs": 2,
+        "preprocessor_runs": 0,
+        "probe_runs": 0,
+        "key_ms": 70,
+        "key_hash_hits": 0,
+        "key_hash_misses": 0,
+        "key_hash_bytes": 0,
+        "lookup_ms": 0,
+        "restore_ms": 0,
+        "store_ms": 0,
+        "startup_ms": 9,
+        "copied_bytes": 159512,
+        "reflinked_bytes": 0,
+        "hardlinked_bytes": 0
+      }
+    }
+  ],
+  "files_sha256": {
+    "events/clang-corpus-cxx-headers.jsonl": "3199262f4c2d155a56fffc6bc8aed2cee94334ef2b968d1892a00486b44354c3",
+    "events/gcc-corpus-c-tiny.jsonl": "ac1c2494a713932369f48ef6c09bb15445fe2be96a9aecfecf03b71e75881114",
+    "events/gcc-corpus-cxx-headers.jsonl": "b0d7675bb36ae07b97015df51ccb6130951969eea6922fe1251b97f95733945b",
+    "events/clang-zlib.jsonl": "d6e1636c7d86aa1600e0822d5d0f2a3674493bad93c1db326c884220b228e313",
+    "events/clang-corpus-c-tiny.jsonl": "7bd2e7fe2a611c71beaa5ae549ec99a743dbc00bc7579578fe9036d68231955f",
+    "events/gcc-zlib.jsonl": "c7e015a0d0288a9445240d07d5b9d800c55798a9ae2715b334990808b920ef7c",
+    "gcc/report.json": "c9a776f0edaa38696a2caead8f0a2b5e8833e2308a560202a234541410e7c262",
+    "gcc/report.md": "0807a9a4c3b26a85911bdce4e000066ede809dc58d01ca6ea7b09531ad8d7fca",
+    "clang/report.json": "4ac8a0233cae21fc9a9c6a58f0b37eead7f1613eca699ca28ccefcf7422e38e4",
+    "clang/report.md": "130a487a5a689fbfbee967e73d4481307ae860dbb101027071483ac7179e11f5"
+  }
+}

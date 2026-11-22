@@ -1,5 +1,332 @@
 use super::*;
 
+fn wp_args_for_family(args: &[&str], family: Option<crate::probe::ProbedFamily>) -> CcArgs {
+    let dir = tempfile::tempdir().unwrap();
+    let env = InvocationEnv::from_parts(
+        [("PATH", OsStr::new(""))],
+        Some(dir.path().to_owned()),
+        None,
+        dir.path().to_owned(),
+    );
+    let mut parsed = CcArgs::parse_for(&s(args), &env).unwrap();
+    parsed.probed_family = family;
+    if parsed.depinfo.is_none() {
+        parsed.depinfo = cc_wp_dependency_spec(&parsed);
+    }
+    parsed
+}
+
+#[test]
+fn wp_depfiles_use_the_existing_depinfo_model() {
+    for program in ["gcc", "clang"] {
+        for (flag, system) in [("-Wp,-MD,deps.tmp", true), ("-Wp,-MMD,deps.tmp", false)] {
+            let family = if program == "gcc" {
+                crate::probe::ProbedFamily::Gnu
+            } else {
+                crate::probe::ProbedFamily::Clang
+            };
+            let parsed = wp_args_for_family(
+                &[program, flag, "-c", "src/unit.c", "-o", "out.o"],
+                Some(family),
+            );
+            assert!(parsed.refuse_reasons(&[]).is_empty());
+            assert_eq!(
+                parsed.depinfo_output_path(),
+                Some(PathBuf::from("deps.tmp"))
+            );
+            assert_eq!(parsed.depinfo.as_ref().unwrap().include_system, system);
+            assert_eq!(
+                parsed.depinfo.as_ref().unwrap().targets,
+                if program == "gcc" {
+                    vec![("unit.o".into(), false)]
+                } else {
+                    vec![]
+                }
+            );
+            assert_eq!(cc_direct_key_shape_ok(&parsed), system);
+            assert_eq!(build_preprocess_args(&parsed), s(&["-E", "src/unit.c"]));
+            assert!(
+                !parsed
+                    .probe_args()
+                    .iter()
+                    .any(|arg| arg.starts_with("-Wp,"))
+            );
+            assert!(
+                parsed
+                    .compiler_output_paths()
+                    .contains(&PathBuf::from("deps.tmp"))
+            );
+            assert_eq!(
+                cc_depinfo_object_target(&parsed),
+                if program == "gcc" {
+                    None
+                } else {
+                    Some("out.o".into())
+                }
+            );
+        }
+    }
+    for flag in ["-Wp,-MD", "-Wp,-MMD"] {
+        let parsed = wp_args_for_family(
+            &["clang", flag, "-c", "unit.c", "-o", "out.o"],
+            Some(crate::probe::ProbedFamily::Clang),
+        );
+        assert!(parsed.refuse_reasons(&[]).is_empty());
+        assert_eq!(parsed.depinfo_output_path(), Some(PathBuf::from("out.d")));
+    }
+}
+
+#[test]
+fn wp_depfiles_refuse_unsafe_or_ambiguous_forms() {
+    for program in ["gcc", "clang"] {
+        for flag in [
+            "-Wp,-MMD,",
+            "-Wp,-MD,",
+            "-Wp,-MMD,-",
+            "-Wp,-MMD,u.d,-MT,u.o",
+            "-Wp,-MMD,u.d,-DVALUE=1",
+            "-Wp,-DVALUE=1",
+        ] {
+            let parsed = wp_args_for_family(
+                &[program, flag, "-c", "unit.c", "-o", "out.o"],
+                Some(crate::probe::ProbedFamily::Gnu),
+            );
+            assert!(!parsed.refuse_reasons(&[]).is_empty(), "{program} {flag}");
+        }
+        for other in [
+            "-MD",
+            "-MMD",
+            "-MP",
+            "-MG",
+            "-MF",
+            "-MT",
+            "-MQ",
+            "-Xclang",
+            "-Xpreprocessor",
+            "-Wp,-MD,other.d",
+        ] {
+            let parsed = wp_args_for_family(
+                &[
+                    program,
+                    "-Wp,-MMD,u.d",
+                    other,
+                    "other",
+                    "-c",
+                    "unit.c",
+                    "-o",
+                    "out.o",
+                ],
+                Some(crate::probe::ProbedFamily::Gnu),
+            );
+            assert!(!parsed.refuse_reasons(&[]).is_empty(), "{program} {other}");
+        }
+    }
+    for program in ["gcc", "cc", "c++", "clang-cl"] {
+        for flag in ["-Wp,-MMD", "-Wp,-MD"] {
+            let parsed = wp_args_for_family(
+                &[program, flag, "-c", "unit.c", "-o", "out.o"],
+                Some(crate::probe::ProbedFamily::Gnu),
+            );
+            assert!(!parsed.refuse_reasons(&[]).is_empty(), "{program} {flag}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn wp_depfiles_use_the_probed_family_of_cc_aliases() {
+    for name in ["cc", "c++"] {
+        for (marker, family) in [
+            ("KACHE_PROBE_GNU", Some(crate::probe::ProbedFamily::Gnu)),
+            ("KACHE_PROBE_CLANG", Some(crate::probe::ProbedFamily::Clang)),
+            ("unknown", None),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let program = root.path().join(name);
+            fs::write(&program, format!("#!/bin/sh\nprintf '%s\\n' '{marker}'\n")).unwrap();
+            let mut perms = fs::metadata(&program).unwrap().permissions();
+            std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+            fs::set_permissions(&program, perms).unwrap();
+            let cache = root.path().join("cache");
+            let env = InvocationEnv::from_parts(
+                [("KACHE_CACHE_DIR", cache.as_os_str())],
+                Some(root.path().to_owned()),
+                None,
+                root.path().to_owned(),
+            );
+            for flag in ["-Wp,-MD,u.d", "-Wp,-MMD,u.d", "-Wp,-MD", "-Wp,-MMD"] {
+                let parsed = CcArgs::parse_for(
+                    &s(&[
+                        program.to_str().unwrap(),
+                        flag,
+                        "-c",
+                        "unit.c",
+                        "-o",
+                        "out.o",
+                    ]),
+                    &env,
+                )
+                .unwrap();
+                assert_eq!(parsed.probed_family, family);
+                let safe = family.is_some()
+                    && (flag.ends_with(",u.d")
+                        || family == Some(crate::probe::ProbedFamily::Clang));
+                assert_eq!(
+                    parsed.refuse_reasons(&[]).is_empty(),
+                    safe,
+                    "{name} {marker} {flag}"
+                );
+                if safe {
+                    assert_eq!(
+                        parsed.depinfo_output_path(),
+                        Some(PathBuf::from(if flag.ends_with(",u.d") {
+                            "u.d"
+                        } else {
+                            "out.d"
+                        }))
+                    );
+                    assert_eq!(
+                        parsed.depinfo.as_ref().unwrap().targets,
+                        if family == Some(crate::probe::ProbedFamily::Gnu) {
+                            vec![("unit.o".into(), false)]
+                        } else {
+                            vec![]
+                        }
+                    );
+                }
+            }
+        }
+    }
+}
+#[test]
+fn dependency_output_env_refuses_gcc_but_preserves_clang() {
+    let root = tempfile::tempdir().unwrap();
+    for variable in ["DEPENDENCIES_OUTPUT", "SUNPRO_DEPENDENCIES"] {
+        for value in ["u.d", "u.d custom-target", "", "missing/u.d target"] {
+            let env = InvocationEnv::from_parts(
+                [(variable, value)],
+                Some(root.path().to_owned()),
+                None,
+                root.path().to_owned(),
+            );
+            for program in ["gcc", "g++", "cc"] {
+                let parsed = CcArgs::parse_for(&s(&[program, "-c", "u.c", "-o", "u.o"]), &env).unwrap();
+                assert!(
+                    parsed.refuse_reasons(&[]).iter().any(|reason| reason.description().contains(variable)),
+                    "{program} must pass through with {variable}={value:?}",
+                );
+            }
+            let parsed = CcArgs::parse_for(&s(&["clang", "-c", "u.c", "-o", "u.o"]), &env).unwrap();
+            assert!(parsed.refuse_reasons(&[]).is_empty());
+        }
+    }
+    let env = InvocationEnv::from_parts(
+        std::iter::empty::<(&str, &str)>(),
+        Some(root.path().to_owned()),
+        None,
+        root.path().to_owned(),
+    );
+    let parsed = CcArgs::parse_for(&s(&["gcc", "-c", "u.c", "-o", "u.o"]), &env).unwrap();
+    assert!(parsed.refuse_reasons(&[]).is_empty());
+}
+
+#[test]
+fn trailing_language_options_distinguish_driver_diagnostics() {
+    let raw = |args: &[&str]| {
+        cc_raw_flags_for_key(&CcArgs::parse(&s(args)).unwrap(), &[])
+    };
+    let plain = ["gcc", "-c", "u.c", "-o", "a.o"];
+    let trailing = ["gcc", "-c", "u.c", "-o", "b.o", "-x", "c"];
+    assert_ne!(raw(&plain), raw(&trailing));
+    assert_ne!(raw(&trailing), raw(&["gcc", "-x", "c", "-c", "u.c", "-o", "b.o"]));
+    assert_ne!(raw(&plain), raw(&["gcc", "-c", "u.c", "-xc++"]));
+    assert_ne!(raw(&trailing), raw(&["gcc", "-c", "u.c", "-o", "b.o", "-x", "c++"]));
+    assert_eq!(raw(&trailing), raw(&["gcc", "-c", "u.c", "-o", "a.o", "-x", "c"]));
+    assert_eq!(raw(&plain), raw(&["gcc", "-c", "u.c", "-o", "-xc.o"]));
+    assert_eq!(raw(&trailing), raw(&["gcc", "-o", "other.o", "-c", "u.c", "-x", "c"]));
+    assert_eq!(raw(&trailing), raw(&["gcc", "-c", "u.c", "-x", "c"]));
+    assert_ne!(raw(&["gcc", "-c", "u.c", "-x", "c", "-x", "c++"]), raw(&["gcc", "-c", "u.c", "-x", "c++", "-x", "c"]));
+    let parsed = CcArgs::parse(&s(&["gcc", "-c", "u.c", "-x", "c++"])).unwrap();
+    assert_eq!(build_preprocess_args(&parsed), s(&["-E", "u.c", "-x", "c++"]));
+}
+
+#[test]
+fn leading_language_options_do_not_add_raw_key_material() {
+    let raw = |args: &[&str]| {
+        cc_raw_flags_for_key(&CcArgs::parse(&s(args)).unwrap(), &[])
+    };
+    let leading = raw(&["gcc", "-x", "c", "u.c", "-c"]);
+    assert!(leading.is_empty());
+    assert_eq!(leading, raw(&["gcc", "-o", "other.o", "-x", "c", "u.c", "-c"]));
+    assert_eq!(leading, raw(&["gcc", "-c", "-o", "other.o", "-x", "c", "u.c"]));
+    assert!(raw(&["gcc", "-x", "c++", "foo.cpp", "-c"]).is_empty());
+    assert!(raw(&["gcc", "-x", "c", "first.c", "-x", "c++", "last.cpp", "-c"]).is_empty());
+}
+
+#[test]
+fn cc_time_macro_scan_fails_closed_on_hidden_identifiers_and_pastes() {
+    for bytes in [
+        b"__DATE__".as_slice(), b"__TIME__", b"__TIMESTAMP__",
+        b"#define JOIN(a,b) a##b", b"a%:%:b", b"??=define X 1",
+        b"__TI\\\nME__", b"__TI\\ \r\nME__", b"__T\\u0049ME__",
+        b"non-ascii: \xff", b"binary\0input",
+    ] {
+        assert!(cc_may_reference_time_macro(bytes), "{bytes:?}");
+    }
+    for bytes in [b"".as_slice(), b"int value;", b"#define COMMON_SCALE 3\n"] {
+        assert!(!cc_may_reference_time_macro(bytes), "{bytes:?}");
+    }
+}
+
+#[test]
+fn cc_time_macro_scan_requires_a_complete_readable_native_read_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let env = InvocationEnv::from_parts([("PATH", "/usr/bin:/bin")], Some(root.into()), None, root.into());
+    let parsed = CcArgs::parse_for(&s(&["cc", "-c", "unit.c"]), &env).unwrap();
+    let mut driver = crate::probe::ResolvedConfig {
+        native_driver: true,
+        schema_version: crate::probe::PROBE_SCHEMA_VERSION,
+        prober: "cc".into(),
+        compiler_name: "cc".into(),
+        version_line: "clang version 14".into(),
+        resolved_tokens: Some(Vec::new()),
+        host_version_line: None,
+    };
+    let hasher = crate::cache_key::FileHasher::new();
+    let dep = root.join("inputs.d");
+    let scan = |driver: &crate::probe::ResolvedConfig| {
+        cc_time_macro_free_inputs(&parsed, Some(driver), Some(&dep), &hasher)
+    };
+    assert!(scan(&driver).is_none());
+    fs::write(&dep, "out: unit.c value.h\n").unwrap();
+    fs::write(root.join("unit.c"), "#include \"value.h\"\nint x;\n").unwrap();
+    assert!(scan(&driver).is_none());
+    fs::write(root.join("value.h"), "#define VALUE 42\n").unwrap();
+    assert_eq!(scan(&driver).unwrap().len(), 2);
+    driver.resolved_tokens = Some(s(&["-fdebug-compilation-dir=<path>", "-D", "VALUE=42"]));
+    assert_eq!(scan(&driver).unwrap().len(), 2);
+    driver.native_driver = false;
+    assert!(scan(&driver).is_none());
+    driver.native_driver = true;
+    for args in [
+        s(&["-DVALUE=__TIME__"]), s(&["-D", "VALUE=<path>"]),
+        s(&["-include-pch", "value.pch"]), s(&["-imacros", "value.h"]),
+        s(&["-fmodules"]), s(&["-fplugin=plugin.so"]), s(&["-Xclang", "-load"]),
+        s(&["-specs=driver.specs"]), s(&["-finput-charset=UTF-7"]), s(&["@flags.rsp"]),
+    ] {
+        driver.resolved_tokens = Some(args);
+        assert!(scan(&driver).is_none(), "{:?}", driver.resolved_tokens);
+    }
+    driver.resolved_tokens = None;
+    assert!(scan(&driver).is_none());
+    driver.resolved_tokens = Some(Vec::new());
+    fs::write(&dep, "out: value.h\n").unwrap();
+    assert!(scan(&driver).is_none());
+    fs::write(&dep, "invalid dependency data").unwrap();
+    assert!(scan(&driver).is_none());
+}
+
 #[test]
 fn header_availability_uses_each_clients_relative_paths_and_include_environment() {
     let root = tempfile::tempdir().unwrap();
@@ -126,7 +453,7 @@ fi
         assert_eq!(parsed.sources, vec![PathBuf::from("unit.c")]);
         let maps = cc_prefix_maps(&parsed, &[]);
         let expansion =
-            preprocess_hash(&parsed, &maps, &crate::cache_key::FileHasher::new()).unwrap();
+            preprocess_hash(&parsed, &maps, &crate::cache_key::FileHasher::new(), None).unwrap();
         let token = env.var("CLIENT_TOKEN").unwrap();
         let epoch = env.var("SOURCE_DATE_EPOCH").unwrap();
         assert_eq!(
@@ -1799,10 +2126,11 @@ fn diagnostics_written_to_files_refuse() {
 
 #[test]
 fn sidecar_flags_cache_as_object_compiles_only() {
-    let cases: [&[&str]; 5] = [
+    let cases: [&[&str]; 6] = [
         &["--coverage"],
         &["-fprofile-arcs"],
         &["-ftest-coverage"],
+        &["-fprofile-generate=profiles"],
         &["-g", "-gsplit-dwarf"],
         &["--serialize-diagnostics", "u.dia"],
     ];
@@ -1894,6 +2222,44 @@ fn serialized_diagnostics_path_stays_out_of_the_preprocess_and_probe_argv() {
 }
 
 #[test]
+fn profile_directories_preserve_paths_and_generation_locations() {
+    for program in ["gcc", "clang", "cc"] {
+        for flags in [
+            vec!["--coverage", "-fprofile-dir=profiles"],
+            vec!["-fprofile-arcs", "-ftest-coverage", "-fprofile-dir=profiles"],
+            vec!["-fprofile-generate=profiles"],
+            vec!["-fprofile-generate=/absolute/profiles", "-ftest-coverage"],
+        ] {
+            let parse = |cwd: &str, object, flags: &[&str]| {
+                let env = InvocationEnv::from_parts([("PATH", "")], Some(PathBuf::from(cwd)), None, PathBuf::from(cwd));
+                let mut args = vec![program, "-c", "u.c", "-o", object];
+                args.extend_from_slice(flags);
+                CcArgs::parse_for(&s(&args), &env).unwrap()
+            };
+            let parsed = parse("/a", "out/u.o", &flags);
+            assert!(parsed.refuse_reasons(&[]).is_empty(), "{program} {flags:?}");
+            assert_ne!(cc_sidecar_key(&parsed), cc_sidecar_key(&parse("/b", "out/u.o", &flags)), "cwd must distinguish runtime paths: {flags:?}");
+            assert_ne!(cc_sidecar_key(&parsed), cc_sidecar_key(&parse("/a", "other/u.o", &flags)), "the object selects the gcda filename: {flags:?}");
+            let maps = vec![CcPrefixMap { from: "/absolute".into(), to: "/mapped".into() }];
+            let raw = cc_raw_flags_for_key(&parsed, &maps);
+            assert_eq!(raw, flags.iter().map(|flag| flag.as_bytes().to_vec()).collect::<Vec<_>>());
+            let changed: Vec<_> = flags.iter().map(|flag| flag.replace("profiles", "other")).collect();
+            let changed: Vec<_> = changed.iter().map(String::as_str).collect();
+            assert_ne!(raw, cc_raw_flags_for_key(&parse("/a", "out/u.o", &changed), &maps));
+            let notes = flags.iter().any(|flag| ["--coverage", "-ftest-coverage"].contains(flag));
+            assert_eq!(parsed.sidecar_outputs().len(), usize::from(notes));
+            if notes {
+                assert_eq!(parsed.sidecar_outputs()[0].path, PathBuf::from("out/u.gcno"));
+                assert_eq!(parsed.sidecar_outputs()[0].presence, CcSidecarPresence::Required);
+            }
+        }
+        for flag in ["-fprofile-dir=", "-fprofile-generate=", "-fprofile-generate", "-fprofile-prefix-path=/a"] {
+            assert!(!CcArgs::parse(&s(&[program, flag, "-c", "u.c", "-o", "u.o"])).unwrap().refuse_reasons(&[]).is_empty(), "{flag} must refuse");
+        }
+    }
+}
+
+#[test]
 fn sidecar_key_folds_the_locations_outputs_embed() {
     let key = |cwd: &str, args: &[&str]| {
         let env = InvocationEnv::from_parts([("PATH", "")], Some(PathBuf::from(cwd)), None, PathBuf::from(cwd));
@@ -1963,6 +2329,146 @@ fn sidecars_store_only_when_this_compile_wrote_them() {
     fs::write(&notes, "fresh notes").unwrap();
     let error = discover_cc_sidecars(before).unwrap_err();
     assert!(error.contains("unchanged"), "a .dwo an earlier build left must not be stored: {error}");
+}
+
+#[test]
+fn report_outputs_key_literal_paths_and_restore_each_role() {
+    use crate::probe::ProbedFamily;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let env = InvocationEnv::from_parts([("PATH", "")], Some(root.clone()), None, root.clone());
+    for (flag, family, path, role) in [
+        ("-fstack-usage", ProbedFamily::Gnu, "a.b.su", CcSidecar::StackUsage),
+        ("-fsave-optimization-record", ProbedFamily::Clang, "a.b.opt.yaml", CcSidecar::OptimizationRecord),
+        ("-fcallgraph-info=su,da", ProbedFamily::Gnu, "a.b.ci", CcSidecar::Callgraph),
+        ("-Wa,-adhln=listing.txt", ProbedFamily::Gnu, "listing.txt", CcSidecar::AssemblerListing),
+    ] {
+        let mut parsed = CcArgs::parse_for(&s(&["cc", "-c", "src/u.c", "-o", "a.b.o", flag]), &env).unwrap();
+        parsed.probed_family = Some(family);
+        assert!(parsed.refuse_reasons(&[]).is_empty(), "{flag}");
+        assert!(!cc_direct_key_shape_ok(&parsed));
+        assert_eq!(parsed.sidecar_outputs(), [CcSidecarOutput { role, path: path.into(), presence: CcSidecarPresence::Required }]);
+        assert!(parsed.compiler_output_paths().contains(&PathBuf::from(path)));
+        assert!(!build_preprocess_args(&parsed).contains(&flag.to_string()));
+        assert!(!parsed.config_args().contains(&flag.to_string()));
+        let key = cc_raw_flags_for_key(&parsed, &[]);
+        let mut changed = parsed.clone();
+        *changed.rest.iter_mut().find(|arg| *arg == "a.b.o").unwrap() = "other.o".into();
+        assert_ne!(key, cc_raw_flags_for_key(&changed, &[]));
+        let snapshots = snapshot_cc_sidecars(&parsed);
+        assert!(discover_cc_sidecars(snapshots.clone()).is_err());
+        fs::write(root.join(path), "report\n").unwrap();
+        let artifacts = discover_cc_sidecars(snapshots).unwrap();
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].store_name, role.store_name());
+        assert_eq!(CcSidecar::from_store_name(role.store_name()), Some(role));
+        assert!(discover_cc_sidecars(snapshot_cc_sidecars(&parsed)).is_err());
+    }
+    let mut aux = CcArgs::parse_for(&s(&["gcc", "-c", "u.c", "-aux-info", "declarations.c", "-o", "u.o"]), &env).unwrap();
+    aux.probed_family = Some(ProbedFamily::Gnu);
+    assert_eq!(aux.sources, [PathBuf::from("u.c")]);
+    assert!(aux.refuse_reasons(&[]).is_empty());
+    assert_eq!(aux.sidecar_outputs()[0].path, PathBuf::from("declarations.c"));
+    assert!(discover_cc_sidecars(snapshot_cc_sidecars(&aux)).unwrap().is_empty());
+    for args in [build_preprocess_args(&aux), aux.config_args()] {
+        assert!(!args.iter().any(|arg| arg == "-aux-info" || arg == "declarations.c"));
+    }
+    for flag in ["-fopt-info", "-Wa,-adhln"] {
+        let mut parsed = CcArgs::parse_for(&s(&["gcc", "-c", "u.c", flag]), &env).unwrap();
+        parsed.probed_family = Some(ProbedFamily::Gnu);
+        assert!(parsed.refuse_reasons(&[]).is_empty());
+        assert!(parsed.sidecar_outputs().is_empty());
+    }
+}
+
+#[test]
+fn listing_sources_must_be_tracked_and_memos_literal() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let env = InvocationEnv::from_parts([("SOURCE_DATE_EPOCH", "1")], Some(root.clone()), None, root.clone());
+    let program = std::env::current_exe().unwrap();
+    let parse = |flags: &[&str]| {
+        let mut args = vec![program.to_string_lossy().into_owned()];
+        args.extend(s(&["-g", "-c", "u.c", "-o", "u.o"]));
+        args.extend(s(flags));
+        CcArgs::parse_for(&args, &env).unwrap()
+    };
+    let plain = parse(&[]);
+    for flag in ["-Wa,-adhln", "-Wa,-adhln=listing.txt"] {
+        let parsed = parse(&[flag]);
+        let inputs = vec![root.join("u.c")];
+        for text in ["", "# 0 \"<built-in>\"\n# 1 \"u.c\"\nint u;\n"] {
+            cc_check_listing_inputs(&parsed, text.as_bytes(), &inputs).unwrap();
+        }
+        for text in ["# 1 \"orig.y\"\nint u;\n", "#line 1 \"<built-in>\"\nint u;\n", "# 1 \"u.c\"\n.file 2 \"orig.y\"\n", "# 1 \"u.c\"\nasm(\".fi\" \"le 2 \\\"orig.y\\\"\");\n"] {
+            assert!(cc_check_listing_inputs(&parsed, text.as_bytes(), &inputs).is_err(), "{text}");
+            cc_check_listing_inputs(&plain, text.as_bytes(), &inputs).unwrap();
+        }
+        cc_check_listing_inputs(&parsed, b"# 1 \"orig.y\"\nint u;\n", &[root.join("orig.y")]).unwrap();
+        let key = cc_preprocess_memo_key(&parsed, &[], "test").unwrap();
+        assert_ne!(key, cc_preprocess_memo_key(&plain, &[], "test").unwrap());
+        let mut changed = parsed.clone();
+        *changed.rest.iter_mut().find(|arg| *arg == "u.o").unwrap() = "elsewhere.o".into();
+        assert_ne!(key, cc_preprocess_memo_key(&changed, &[], "test").unwrap());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn real_probe_refuses_untracked_listing_sources() {
+    let _lock = crate::test_support::process_state_test_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let env = InvocationEnv::from_parts(std::env::vars_os(), Some(root.clone()), None, root.clone());
+    let source = root.join("u.c");
+    let outside = root.join("orig.y");
+    for flag in ["-Wa,-adhln", "-Wa,-adhln=listing.txt"] {
+        let parsed = CcArgs::parse_for(&s(&["cc", "-g", flag, "-c", "u.c", "-o", "u.o"]), &env).unwrap();
+        let probe = || preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new_for(&env), None);
+        for text in ["int u;\n", "\n"] {
+            fs::write(&source, text).unwrap();
+            probe().unwrap();
+        }
+        fs::write(&source, "#line 1 \"orig.y\"\nint u;\n").unwrap();
+        let error = probe().unwrap_err().to_string();
+        assert!(error.contains("outside the read set"), "{error}");
+        fs::write(&outside, "/* NEW */\n").unwrap();
+        let error = probe().unwrap_err().to_string();
+        assert!(error.contains("outside the read set"), "{error}");
+        fs::write(&source, "#include \"orig.y\"\n#line 1 \"orig.y\"\nint u;\n").unwrap();
+        probe().unwrap();
+    }
+}
+
+#[test]
+fn report_outputs_refuse_unproven_shapes() {
+    use crate::probe::ProbedFamily;
+    for flags in [
+        vec!["-fstack-usage", "-flto"],
+        vec!["-fstack-usage", "-dumpbase", "other"],
+        vec!["-fopt-info-optimized=remarks.txt"],
+        vec!["-aux-info"], vec!["-aux-info", ""], vec!["-aux-info", "-"],
+        vec!["-Wa,-adhln="], vec!["-Wa,-adhln=-"],
+        vec!["-Wa,-adhln", "-Wa,-adhln=other.txt"],
+        vec!["-fstack-usage", "-Xclang", "-emit-llvm"],
+    ] {
+        let mut args = s(&["gcc", "-c", "u.c"]);
+        args.extend(s(&flags));
+        let mut parsed = CcArgs::parse(&args).unwrap();
+        parsed.probed_family = Some(ProbedFamily::Gnu);
+        assert!(!parsed.refuse_reasons(&[]).is_empty(), "{flags:?}");
+    }
+    for flag in ["-fstack-usage", "-fsave-optimization-record", "-fcallgraph-info", "-Wa,-adhln", "-fopt-info"] {
+        for mode in ["-E", "-S"] {
+            let parsed = CcArgs::parse(&s(&["gcc", mode, "u.c", "-o", "u.out", flag])).unwrap();
+            assert!(parsed.refuse_reasons(&[]).iter().any(|r| r.description().contains("outside -c")));
+        }
+        let mut parsed = CcArgs::parse(&s(&["cc", "-c", "u.c", flag])).unwrap();
+        parsed.probed_family = None;
+        assert!(!parsed.refuse_reasons(&[]).is_empty());
+        parsed.probed_family = Some(if flag == "-fsave-optimization-record" { ProbedFamily::Gnu } else { ProbedFamily::Clang });
+        assert!(!parsed.refuse_reasons(&[]).is_empty());
+    }
 }
 
 #[test]
@@ -2205,6 +2711,83 @@ fn refuses_modules() {
 }
 
 #[test]
+fn recorded_switches_key_the_literal_invocation() {
+    let key = |cwd: &str, args: &[&str], maps: &[CcPrefixMap]| {
+        let env = InvocationEnv::from_parts([("PATH", "")], Some(PathBuf::from(cwd)), None, PathBuf::from(cwd));
+        let parsed = CcArgs::parse_for(&s(args), &env).unwrap();
+        assert!(parsed.refuse_reasons(&[]).is_empty());
+        assert!(!cc_direct_key_shape_ok(&parsed));
+        cc_raw_flags_for_key(&parsed, maps)
+    };
+    let args = ["clang", "-frecord-gcc-switches", "-Ia", "-c", "u.c", "-o", "a.o"];
+    let original = key("/a", &args, &[]);
+    assert_eq!(original, key("/a", &args, &[]));
+    for changed in [
+        ["clang", "-frecord-gcc-switches", "-Ib", "-c", "u.c", "-o", "a.o"],
+        ["clang", "-frecord-gcc-switches", "-Ia", "-c", "u.c", "-o", "b.o"],
+        ["clang", "-frecord-gcc-switches", "-Ia", "-c", "./u.c", "-o", "a.o"],
+    ] {
+        assert_ne!(original, key("/a", &changed, &[]));
+    }
+    assert_ne!(original, key("/b", &args, &[]));
+    assert_ne!(original, key("/a", &args, &[CcPrefixMap { from: "/a".into(), to: "/mapped".into() }]));
+    let plain = CcArgs::parse(&s(&["clang", "-Ia", "-c", "u.c", "-o", "a.o"])).unwrap();
+    assert!(cc_raw_flags_for_key(&plain, &[]).is_empty());
+    assert!(cc_direct_key_shape_ok(&plain));
+}
+
+#[test]
+fn llvm_emission_keys_literal_source_paths_and_models_outputs() {
+    for (mode, ext) in [("-c", "bc"), ("-S", "ll")] {
+        let parse = |source: &str, cwd: &str| {
+            let env = InvocationEnv::from_parts([("PATH", "")], Some(PathBuf::from(cwd)), None, PathBuf::from(cwd));
+            let mut parsed = CcArgs::parse_for(&s(&["cc", "-emit-llvm", mode, source]), &env).unwrap();
+            parsed.probed_family = Some(crate::probe::ProbedFamily::Clang);
+            parsed
+        };
+        let parsed = parse("u.c", "/a");
+        assert!(parsed.refuse_reasons(&[]).is_empty(), "{:?}", parsed.refuse_reasons(&[]));
+        let expected = PathBuf::from(format!("u.{ext}"));
+        assert_eq!(parsed.object_output_path(), Some(expected.clone()));
+        assert_eq!(parsed.compiler_output_paths(), vec![expected]);
+        assert!(!cc_direct_key_shape_ok(&parsed));
+        assert!(!build_preprocess_args(&parsed).contains(&"-emit-llvm".to_string()));
+        let key = cc_raw_flags_for_key(&parsed, &[]);
+        assert_eq!(key, cc_raw_flags_for_key(&parse("u.c", "/a"), &[]));
+        assert_ne!(key, cc_raw_flags_for_key(&parse("./u.c", "/a"), &[]));
+        assert_ne!(key, cc_raw_flags_for_key(&parse("u.c", "/b"), &[]));
+        assert_ne!(key, cc_raw_flags_for_key(&parsed, &[CcPrefixMap { from: "/a".into(), to: "/mapped".into() }]));
+        for family in [None, Some(crate::probe::ProbedFamily::Gnu)] {
+            let mut unknown = parsed.clone();
+            unknown.probed_family = family;
+            assert!(!unknown.refuse_reasons(&[]).is_empty());
+        }
+        for lto in ["-flto", "-flto=thin", "-fno-lto"] {
+            let mut changed = parsed.clone();
+            changed.rest.push(lto.into());
+            assert!(changed.refuse_reasons(&[]).is_empty());
+            assert_ne!(key, cc_raw_flags_for_key(&changed, &[]));
+        }
+    }
+    let mut invalid = wp_args_for_family(&["cc", "-emit-llvm", "-E", "u.c"], Some(crate::probe::ProbedFamily::Clang));
+    assert!(!invalid.refuse_reasons(&[]).is_empty());
+    invalid.sources.clear();
+    assert!(!invalid.refuse_reasons(&[]).is_empty());
+}
+
+#[test]
+fn sanitizer_coverage_lists_are_raw_keyed() {
+    for flag in ["-fsanitize-coverage=trace-pc", "-fsanitize-coverage=trace-pc-guard", "-fsanitize-coverage=inline-8bit-counters,pc-table,trace-cmp"] {
+        let parsed = CcArgs::parse(&s(&["clang", flag, "-fsanitize=fuzzer-no-link", "-c", "u.c", "-o", "u.o"])).unwrap();
+        assert!(parsed.refuse_reasons(&[]).is_empty());
+        assert_eq!(cc_raw_flags_for_key(&parsed, &[]), vec![flag.as_bytes().to_vec(), b"-fsanitize=fuzzer-no-link".to_vec()]);
+    }
+    for flag in ["-fsanitize-coverage=", "-fsanitize-coverage=trace-cmp,", "-fsanitize-coverage=trace-loads"] {
+        assert!(!refuse_descriptions(&["clang", flag, "-c", "u.c", "-o", "u.o"]).is_empty());
+    }
+}
+
+#[test]
 fn refuses_output_to_stdout() {
     let descs = refuse_descriptions(&["cc", "-c", "foo.c", "-o", "-"]);
     assert!(
@@ -2224,7 +2807,7 @@ fn refuses_flags_unclassified_in_cc_flags_table() {
         // unmodeled -f… / -m… codegen flags. (-ffast-math / -fno-finite-math-only
         // / -mrecip= are now CapturedByProbe — modeled from the Firefox bench — so
         // they are deliberately NOT here; these remain genuinely unmodeled.)
-        "-fsanitize-coverage=trace-pc",
+        "-fsanitize-coverage=trace-loads",
         "-fno-pic",
         "-mtune=skylake",
         // unmodeled optimization / debug variants
@@ -3884,7 +4467,7 @@ fn refuse_reason_names_the_rejected_flags() {
         "-o",
         "foo.o",
         "-mtune=skylake",
-        "-fsanitize-coverage=trace-pc",
+        "-fsanitize-coverage=trace-loads",
     ]);
     let detail = descs
         .iter()
@@ -3895,7 +4478,7 @@ fn refuse_reason_names_the_rejected_flags() {
         "reason should name the flag: {detail}"
     );
     assert!(
-        detail.contains("-fsanitize-coverage=trace-pc"),
+        detail.contains("-fsanitize-coverage=trace-loads"),
         "reason should name every rejected flag: {detail}"
     );
 }
@@ -4803,6 +5386,169 @@ fn cc_mapped_content_hash_digests_the_mapped_bytes() {
     );
 }
 
+#[test]
+fn timestamp_key_tracks_invocation_and_header_mtimes() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("unit.c");
+    let header = dir.path().join("unit.h");
+    fs::write(&source, "const char *stamp = STAMP;\n").unwrap();
+    fs::write(&header, "#define STAMP __TIMESTAMP__\n").unwrap();
+    let parsed = CcArgs::parse_for(
+        &s(&["gcc", "-c", "unit.c"]),
+        &InvocationEnv::from_parts(
+            [("SOURCE_DATE_EPOCH", "0")],
+            Some(dir.path().to_owned()),
+            None,
+            dir.path().to_owned(),
+        ),
+    ).unwrap();
+    let inputs = [source.clone(), header.clone()];
+    let key = || cc_timestamp_key(&parsed, &inputs, &[], None).unwrap().unwrap();
+    let first = key();
+    assert_eq!(first, key(), "unchanged inputs retain reuse");
+    for path in &inputs {
+        let before = key();
+        fs::File::open(path).unwrap().set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+        ).unwrap();
+        assert_ne!(before, key(), "{} mtime matters", path.display());
+    }
+    assert_eq!(cc_timestamp_key(&parsed, &[], &[], None).unwrap(), None);
+    assert!(cc_timestamp_key(&parsed, &[dir.path().join("absent")], &[], None).is_err());
+    fs::write(&header, "#define STAMP 1\n").unwrap();
+    assert_eq!(cc_timestamp_key(&parsed, &inputs, &[], None).unwrap(), None);
+    for bytes in [b"__TIMESTAMP__".as_slice(), b"__TIME ## STAMP__", b"__TIME %:%: STAMP__", b"__TIME\\\nSTAMP__", b"__TIME\\\r\nSTAMP__"] {
+        assert!(cc_timestamp_may_expand(bytes));
+    }
+    assert!(!cc_timestamp_may_expand(b"__DATE__ __TIME__"));
+}
+
+#[test]
+fn timestamp_detector_preserves_filtered_spelling_semantics() {
+    fn previous(bytes: &[u8]) -> bool {
+        let spelling: Vec<u8> = bytes.iter().copied()
+            .filter(|byte| byte.is_ascii_alphanumeric() || *byte == b'_').collect();
+        spelling.windows(b"__TIMESTAMP__".len()).any(|word| word == b"__TIMESTAMP__")
+    }
+    let cases: &[&[u8]] = &[
+        b"", b"ordinary text", b"__DATE__ __TIME__", b"__TIMESTAMP__",
+        b"prefix___TIMESTAMP___suffix", b"__TIME ## STAMP__", b"__TIME %:%: STAMP__",
+        b"__TIME\\\nSTAMP__", b"__TIME\\\r\nSTAMP__", b"__TIME??/\nSTAMP__",
+        b"_/**/_TIME/**/STAMP__", b"__TIME\\STAMP__", b"__TIME\\u0053TAMP__",
+        b"__TIME\\x53TAMP__", b"__TIME\x00STAMP__", b"__TIME\xffSTAMP__",
+        b"___TIMESTAMx__ __TIMESTAMP__", b"__TIMESTAM", b"__TIMESTAMPS__",
+        b"#define STAMP __TIMESTAMP__\n", b"-DSTAMP=__TIME##STAMP__",
+    ];
+    for bytes in cases {
+        assert_eq!(cc_timestamp_may_expand(bytes), previous(bytes), "{bytes:?}");
+    }
+    for separator in [b"".as_slice(), b" ", b"/**/", b"##", b"%:%:", b"\\\n", b"\\\r\n", b"\\", b"??/\n", b"\0", b"\xff"] {
+        for split in 0..=b"__TIMESTAMP__".len() {
+            let bytes = [&b"__TIMESTAMP__"[..split], separator, &b"__TIMESTAMP__"[split..]].concat();
+            assert_eq!(cc_timestamp_may_expand(&bytes), previous(&bytes), "{bytes:?}");
+            assert!(cc_timestamp_may_expand(&bytes));
+        }
+    }
+}
+
+#[test]
+fn timestamp_scan_records_reject_corruption_and_other_contents() {
+    let content = "a".repeat(64);
+    for sensitive in [false, true] {
+        let record = cc_timestamp_scan_record(&content, sensitive);
+        assert!(cc_timestamp_scan_valid(&content, &record));
+        assert!(!cc_timestamp_scan_valid(&"b".repeat(64), &record));
+        let mut corrupted = record.into_bytes();
+        corrupted[0] = if sensitive { b'0' } else { b'1' };
+        assert!(!cc_timestamp_scan_valid(&content, std::str::from_utf8(&corrupted).unwrap()));
+    }
+    for record in ["", "0", "1:broken", "garbage"] {
+        assert!(!cc_timestamp_scan_valid(&content, record));
+    }
+}
+
+#[test]
+fn timestamp_analysis_survives_a_fresh_hasher_without_reading_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("unique-timestamp-negative.h");
+    fs::write(&path, format!("/* {} */\n#define STAMP 42\n", dir.path().display())).unwrap();
+    let paths = [path.clone()];
+    let db = dir.path().join("index.sqlite");
+    let first = crate::cache_key::FileHasher::persistent(&db);
+    assert!(!cc_timestamp_inputs_sensitive(&paths, Some(&first)).unwrap());
+    let content = first.cc_content_hashes(&paths).unwrap().pop().unwrap();
+    cc_header_scan_cache().lock().unwrap().scans.remove(&content);
+    let warm = crate::cache_key::FileHasher::persistent(&db);
+    warm.hash(&path).unwrap();
+    let hashed = warm.stats().bytes_hashed;
+    fs::rename(&path, dir.path().join("hidden.h")).unwrap();
+    assert!(!cc_timestamp_inputs_sensitive(&paths, Some(&warm)).unwrap());
+    assert_eq!(warm.stats().bytes_hashed, hashed);
+    assert!(!cc_timestamp_inputs_sensitive(&[], Some(&warm)).unwrap());
+    assert!(cc_timestamp_inputs_sensitive(&paths, None).is_err());
+}
+
+#[test]
+fn timestamp_analysis_repairs_corrupt_records_and_observes_new_contents() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("stamp.h");
+    fs::write(&path, format!("/* {} */\n#define STAMP __TIMESTAMP__\n", dir.path().display())).unwrap();
+    let paths = [path.clone()];
+    let db = dir.path().join("index.sqlite");
+    let hasher = crate::cache_key::FileHasher::persistent(&db);
+    let corrupt = CcHeaderAnalysis {
+        probes: None,
+        timestamp: cc_timestamp_scan_record(&"0".repeat(64), false),
+    };
+    hasher.cc_header_scans(&paths, CC_HEADER_SCAN_VERSION, &|path| {
+        Ok((crate::cache_key::hash_file(path)?, deser_json::to_string(&corrupt)?))
+    }).unwrap();
+    assert!(cc_timestamp_inputs_sensitive(&paths, Some(&hasher)).unwrap());
+    fs::write(&path, "#define STAMP 42\n").unwrap();
+    let fresh = crate::cache_key::FileHasher::persistent(&db);
+    assert!(!cc_timestamp_inputs_sensitive(&paths, Some(&fresh)).unwrap());
+    fs::write(&path, "#define STAMP __TIMESTAMP__\n").unwrap();
+    let changed = crate::cache_key::FileHasher::persistent(&db);
+    assert!(cc_timestamp_inputs_sensitive(&paths, Some(&changed)).unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn timestamp_touch_changes_cc_cache_key_with_unchanged_contents() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("unit.c");
+    fs::write(&source, "const char *stamp = __TIMESTAMP__;\n").unwrap();
+    let fake_cc = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_cc_constant_output.sh");
+    let env = InvocationEnv::from_parts(
+        [("SOURCE_DATE_EPOCH", "0")],
+        Some(dir.path().to_owned()),
+        None,
+        dir.path().to_owned(),
+    );
+    let parsed = CcArgs::parse_for(
+        &[fake_cc.to_string_lossy().into_owned(), "-c".into(), source.to_string_lossy().into_owned()],
+        &env,
+    ).unwrap();
+    let compiler = CcCompiler::new();
+    let normalizer = crate::path_normalizer::PathNormalizer::empty();
+    let cache = dir.path().join("cache");
+    let key = || {
+        let file_hasher = crate::cache_key::FileHasher::new();
+        let ctx = KeyCtx {
+            invocation_env: &env, file_hasher: &file_hasher, path_normalizer: &normalizer,
+            cache_dir: &cache, key_salt: None, key_env_vars: &[],
+            extra_inputs_digest: None, build_script_inputs_digest: None,
+        };
+        compiler.key_for_test(&parsed, &ctx)
+    };
+    let first = key();
+    assert_eq!(first, key());
+    fs::File::open(&source).unwrap().set_modified(
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+    ).unwrap();
+    assert_ne!(first, key(), "content-only keys lose GCC's timestamp expansion");
+}
+
 /// A recorded name has to come back as the path this checkout uses, and
 /// the memo key must not move when only the checkout root does.
 #[test]
@@ -5151,7 +5897,7 @@ fn preprocess_hash_bails_on_empty_stdout() {
     // it is a safe non-cache, the conservative trade-off.)
     let parsed = CcArgs::parse(&s(&["true", "-c", "a.c"])).unwrap();
     let err =
-        preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new()).unwrap_err();
+        preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new(), None).unwrap_err();
     assert!(err.to_string().contains("no output"), "got: {err}");
 }
 
@@ -5202,7 +5948,7 @@ fn real_probe_separates_file_macro_from_literal_roots() {
         let parsed = CcArgs::parse(&args).unwrap();
         let maps = cc_prefix_maps_for(&parsed, &root);
         let hasher = crate::cache_key::FileHasher::persistent(&root.join("idx.sqlite"));
-        let hashed = preprocess_hash(&parsed, &maps, &hasher).unwrap();
+        let hashed = preprocess_hash(&parsed, &maps, &hasher, None).unwrap();
         (tree, hashed)
     };
 
@@ -5568,7 +6314,7 @@ fn real_probe_refuses_a_directive_behind_a_delimited_escape() {
     )
     .unwrap();
     let parsed = CcArgs::parse(&s(&["cc", "-c", source.to_str().unwrap(), "-o", "out.o"])).unwrap();
-    let refused = preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new())
+    let refused = preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new(), None)
         .unwrap_err()
         .to_string();
     assert!(refused.contains(".incbin"), "{refused}");
@@ -5691,7 +6437,7 @@ fn real_probe_refuses_sources_that_incbin_a_file() {
     std::fs::write(dir.path().join("payload.bin"), "one").unwrap();
     let probe = |source: String| {
         let parsed = CcArgs::parse(&s(&["cc", "-c", source.as_str(), "-o", "out.o"])).unwrap();
-        preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new())
+        preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new(), None)
     };
 
     let asm = write(
@@ -10599,7 +11345,10 @@ fn the_header_scan_cache_starts_over_at_its_budget() {
         scans: Default::default(),
         bytes: 0,
     };
-    let scan = || std::sync::Arc::new(None);
+    let scan = || std::sync::Arc::new(CcHeaderAnalysis {
+        probes: None,
+        timestamp: cc_timestamp_scan_record("content", false),
+    });
     cache.insert("a".into(), scan(), 6, 20);
     cache.insert("b".into(), scan(), 6, 20);
     assert_eq!(cache.bytes, 12);

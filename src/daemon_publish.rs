@@ -367,12 +367,11 @@ pub(crate) fn drain_publications(
             last_change.elapsed() < stall * 10 + tick,
             "drain kept waiting past its stall window"
         );
-        if done.try_recv().is_ok() {
-            return progress.pending();
-        }
-        std::thread::sleep(tick);
-        if done.try_recv().is_ok() {
-            return progress.pending();
+        match done.recv_timeout(tick) {
+            Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return progress.pending();
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
         let now_done = progress.done();
         if now_done != last_done {
@@ -1388,6 +1387,29 @@ mod tests {
         assert_eq!(seen.pending(), 1);
         queue.progress.finished();
         assert_eq!((seen.pending(), seen.done()), (0, 1));
+    }
+
+    #[test]
+    fn shutdown_accepts_a_completed_empty_worker() {
+        let progress = PublishProgress::default();
+        let (done_tx, done) = std::sync::mpsc::channel();
+        done_tx.send(()).unwrap();
+        assert_eq!(drain_publications(done, &progress, PUBLISH_DRAIN_STALL), 0);
+    }
+
+    #[test]
+    fn shutdown_counts_pending_jobs_when_the_worker_disconnects() {
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let progress = PublishProgress::default();
+            progress.accepted();
+            let (done_tx, done) = std::sync::mpsc::channel::<()>();
+            drop(done_tx);
+            result_tx.send(drain_publications(done, &progress, PUBLISH_DRAIN_STALL)).unwrap();
+        });
+        let result = result_rx.recv_timeout(Duration::from_secs(2));
+        worker.join().unwrap();
+        assert_eq!(result.unwrap(), 1);
     }
 
     /// A queue that takes longer than any fixed budget to drain is still

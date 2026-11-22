@@ -49,7 +49,7 @@ use crate::invocation::process::CommandExt as _;
 use anyhow::{Context, Result};
 use regex_lite::Regex;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{ErrorKind, Write};
@@ -273,6 +273,7 @@ pub struct CcArgs {
     pub language_override: Option<String>,
     /// Detected compiler driver family (selects the flag dialect).
     pub family: ToolFamily,
+    pub(crate) probed_family: Option<crate::probe::ProbedFamily>,
     /// Path ownership captured at parse time for portable dependency sidecars.
     pub(crate) depinfo_roots: Vec<(PathBuf, String, u8)>,
     /// clang's `--serialize-diagnostics <path>` output.
@@ -335,6 +336,7 @@ enum CcArgAction {
     DepTarget,
     LanguageOverride,
     SerializeDiagnostics,
+    AuxInfo,
     IncludePch,
     Include,
     /// clang-cl `/imsvc`: a system include directory. Its headers reach the
@@ -391,14 +393,24 @@ pub(crate) enum CcSidecar {
     SplitDwarf,
     SerializedDiagnostics,
     JsonDiagnostics,
+    StackUsage,
+    OptimizationRecord,
+    Callgraph,
+    AssemblerListing,
+    AuxInfo,
 }
 
 impl CcSidecar {
-    const ALL: [CcSidecar; 4] = [
+    const ALL: [CcSidecar; 9] = [
         CcSidecar::CoverageNotes,
         CcSidecar::SplitDwarf,
         CcSidecar::SerializedDiagnostics,
         CcSidecar::JsonDiagnostics,
+        CcSidecar::StackUsage,
+        CcSidecar::OptimizationRecord,
+        CcSidecar::Callgraph,
+        CcSidecar::AssemblerListing,
+        CcSidecar::AuxInfo,
     ];
 
     pub(crate) fn store_name(self) -> &'static str {
@@ -407,6 +419,11 @@ impl CcSidecar {
             CcSidecar::SplitDwarf => "sidecar.dwo",
             CcSidecar::SerializedDiagnostics => "sidecar.dia",
             CcSidecar::JsonDiagnostics => "sidecar.gcc.json",
+            CcSidecar::StackUsage => "sidecar.su",
+            CcSidecar::OptimizationRecord => "sidecar.opt.yaml",
+            CcSidecar::Callgraph => "sidecar.ci",
+            CcSidecar::AssemblerListing => "sidecar.listing",
+            CcSidecar::AuxInfo => "sidecar.aux",
         }
     }
 
@@ -431,6 +448,14 @@ pub(crate) struct CcSidecarOutput {
 }
 
 static CC_ARG_SPECS: &[CcArgSpec] = &[
+    CcArgSpec {
+        matcher: Matcher::Exact("-aux-info"),
+        value_form: CcArgValueForm::Separated,
+        action: CcArgAction::AuxInfo,
+        bucket: CcArgBucket::RawKeyed,
+        source: "GCC auxiliary declarations output",
+        dialect: Some(Dialect::Gnu),
+    },
     CcArgSpec {
         matcher: Matcher::Exact("-c"),
         value_form: CcArgValueForm::Flag,
@@ -781,6 +806,15 @@ impl CcArgs {
             .context("cc invocation missing argv[0]")?;
 
         let family = ToolFamily::detect(program, rest);
+        let probed_family = if family.dialect() == Dialect::Gnu
+            && rest
+                .iter()
+                .any(|arg| arg.starts_with("-Wp,") || arg == "-emit-llvm" || cc_report_flag(arg))
+        {
+            crate::probe::probe_compiler_family_for(program, env)
+        } else {
+            None
+        };
 
         let mut parsed = CcArgs {
             invocation_env: env.clone(),
@@ -798,6 +832,7 @@ impl CcArgs {
             depinfo: None,
             language_override: None,
             family,
+            probed_family,
             depinfo_roots: Vec::new(),
             serialize_diagnostics: None,
             include_pch: None,
@@ -824,6 +859,9 @@ impl CcArgs {
             idx += 1;
         }
         parsed.depinfo = depinfo;
+        if parsed.depinfo.is_none() {
+            parsed.depinfo = cc_wp_dependency_spec(&parsed);
+        }
         let header_language = parsed
             .language_override
             .as_deref()
@@ -874,6 +912,33 @@ impl CcArgs {
     pub fn refuse_reasons(&self, extra_allowlist_flags: &[String]) -> Vec<RefuseReason> {
         let mut reasons = Vec::new();
 
+        if self.emits_llvm()
+            && (self.probed_family != Some(crate::probe::ProbedFamily::Clang)
+                || !matches!(self.mode, CompileMode::Compile | CompileMode::Assemble)
+                || self.is_universal())
+        {
+            reasons.push(RefuseReason::Unsupported("cc LLVM emission requires a verified single-target Clang -c or -S invocation — not yet"));
+        }
+
+        if self.rest.iter().any(|arg| arg.starts_with("-Wp,"))
+            && cc_wp_dependency_spec(self).is_none()
+        {
+            reasons.push(RefuseReason::Unsupported(
+                "cc mixed or unsafe -Wp dependency options — not yet",
+            ));
+        }
+
+        if self.family == ToolFamily::Gnu {
+            for (variable, reason) in [
+                ("DEPENDENCIES_OUTPUT", "cc DEPENDENCIES_OUTPUT dependency output — not yet"),
+                ("SUNPRO_DEPENDENCIES", "cc SUNPRO_DEPENDENCIES dependency output — not yet"),
+            ] {
+                if self.invocation_env.var_os(variable).is_some() {
+                    reasons.push(RefuseReason::Unsupported(reason));
+                }
+            }
+        }
+
         // ── Non-`-c` mode refusals (short-circuit) ──
         //
         // First, check whether the invocation is the `-c` object
@@ -899,7 +964,7 @@ impl CcArgs {
             // the expansion is the artifact. `-o -` is still refused below.
             CompileMode::Preprocess => {}
             // `-S` to a named file is a single-output compile like `-c`.
-            CompileMode::Assemble if self.output.is_some() && self.family.dialect() == Dialect::Gnu => {}
+            CompileMode::Assemble if (self.output.is_some() || self.emits_llvm()) && self.family.dialect() == Dialect::Gnu => {}
             CompileMode::Assemble => reasons.push(RefuseReason::Unsupported(
                 "cc assembly mode -S without -o — not yet",
             )),
@@ -981,12 +1046,39 @@ impl CcArgs {
             ));
         }
 
+        if self.emits_reports() {
+            let supported = self.probed_family.is_some_and(|family| {
+                self.rest.iter().filter(|arg| cc_report_flag(arg)).all(|arg| {
+                    if arg == "-fsave-optimization-record" {
+                        family == crate::probe::ProbedFamily::Clang
+                    } else {
+                        family == crate::probe::ProbedFamily::Gnu
+                    }
+                })
+            });
+            let unsafe_option = self.rest.iter().any(|arg| {
+                arg.starts_with("-flto") || arg.starts_with("-dump")
+                    || arg.starts_with("-Xclang") || arg.starts_with("-Xassembler")
+                    || (arg.starts_with("-fopt-info") && arg.contains('='))
+                    || arg == "-Wa,-adhln=" || arg == "-Wa,-adhln=-"
+            });
+            let invalid_aux = self.rest.iter().enumerate().any(|(i, arg)| {
+                arg == "-aux-info" && self.rest.get(i + 1).is_none_or(|path| path.is_empty() || path.starts_with('-'))
+            });
+            let repeated_output = self.rest.iter().filter(|arg| arg.starts_with("-Wa,-adhln")).count() > 1
+                || self.rest.iter().filter(|arg| *arg == "-aux-info").count() > 1;
+            if !supported || unsafe_option || invalid_aux || repeated_output {
+                reasons.push(RefuseReason::Unsupported("cc reports with unknown compiler family, append outputs, LTO, dump overrides or invalid output paths — not yet"));
+            }
+        }
+
         // Universal objects are keyed slice by slice. Sidecars would need
         // one file per slice.
         if self.is_universal()
             && (self.family.dialect() != Dialect::Gnu
                 || !self.sidecar_outputs().is_empty()
-                || self.coverage_instrumented())
+                || self.coverage_instrumented()
+                || self.emits_reports())
         {
             reasons.push(RefuseReason::Unsupported(
                 "cc multi-arch -arch X -arch Y outside a plain clang compile — not yet",
@@ -1018,7 +1110,8 @@ impl CcArgs {
         if self.mode != CompileMode::Compile
             && (self.coverage_instrumented()
                 || self.splits_dwarf()
-                || self.serialize_diagnostics.is_some())
+                || self.serialize_diagnostics.is_some()
+                || self.emits_reports())
         {
             reasons.push(RefuseReason::Unsupported(
                 "cc coverage, split DWARF or serialized diagnostics outside -c — not yet",
@@ -1159,6 +1252,8 @@ impl CcArgs {
         let stem = self.sources.first()?.file_stem()?;
         let ext = match self.family.dialect() {
             Dialect::Cl => "obj",
+            Dialect::Gnu if self.emits_llvm() && self.mode == CompileMode::Assemble => "ll",
+            Dialect::Gnu if self.emits_llvm() => "bc",
             Dialect::Gnu => "o",
         };
         Some(PathBuf::from(format!("{}.{ext}", stem.to_string_lossy())))
@@ -1275,6 +1370,21 @@ impl CcArgs {
                 presence: CcSidecarPresence::Required,
             });
         }
+        for (flag, role, extension) in [
+            ("-fstack-usage", CcSidecar::StackUsage, "su"),
+            ("-fsave-optimization-record", CcSidecar::OptimizationRecord, "opt.yaml"),
+            ("-fcallgraph-info", CcSidecar::Callgraph, "ci"),
+        ] {
+            if self.rest.iter().any(|arg| arg == flag || (flag == "-fcallgraph-info" && arg.starts_with("-fcallgraph-info="))) {
+                outputs.push(CcSidecarOutput { role, path: object.with_extension(extension), presence: CcSidecarPresence::Required });
+            }
+        }
+        if let Some(path) = self.rest.iter().rev().find_map(|arg| arg.strip_prefix("-Wa,-adhln=")) {
+            outputs.push(CcSidecarOutput { role: CcSidecar::AssemblerListing, path: PathBuf::from(path), presence: CcSidecarPresence::Required });
+        }
+        if let Some(path) = self.rest.windows(2).rev().find_map(|pair| (pair[0] == "-aux-info").then(|| PathBuf::from(&pair[1]))) {
+            outputs.push(CcSidecarOutput { role: CcSidecar::AuxInfo, path, presence: CcSidecarPresence::IfWritten });
+        }
         outputs
     }
 
@@ -1302,7 +1412,24 @@ impl CcArgs {
     fn coverage_instrumented(&self) -> bool {
         self.rest.iter().any(|arg| {
             matches!(arg.as_str(), "--coverage" | "-fprofile-arcs" | "-ftest-coverage")
+                || arg.starts_with("-fprofile-generate=")
         })
+    }
+
+    fn records_switches(&self) -> bool {
+        self.rest.iter().any(|arg| arg == "-frecord-gcc-switches")
+    }
+
+    fn emits_llvm(&self) -> bool {
+        self.rest.iter().any(|arg| arg == "-emit-llvm")
+    }
+
+    fn lists_assembler_source(&self) -> bool {
+        self.rest.iter().any(|arg| arg == "-Wa,-adhln" || arg.starts_with("-Wa,-adhln="))
+    }
+
+    fn emits_reports(&self) -> bool {
+        self.rest.iter().any(|arg| cc_report_flag(arg))
     }
 
     /// Split DWARF: the object names its `.dwo` as the output was spelled.
@@ -1320,6 +1447,8 @@ impl CcArgs {
     pub(crate) fn compiler_output_paths(&self) -> Vec<PathBuf> {
         let ext = match (self.mode, self.family.dialect()) {
             (CompileMode::Compile, Dialect::Cl) => "obj",
+            (CompileMode::Compile, Dialect::Gnu) if self.emits_llvm() => "bc",
+            (CompileMode::Assemble, Dialect::Gnu) if self.emits_llvm() => "ll",
             (CompileMode::Compile, Dialect::Gnu) => "o",
             (CompileMode::Assemble, _) => "s",
             (CompileMode::Precompile, _) => {
@@ -1461,7 +1590,17 @@ impl CcArgs {
     /// Terminal formatting must not enter the resolved cc1 tokens either.
     /// Keep the original argv for preprocessing and compiler execution.
     fn probe_args(&self) -> Vec<String> {
-        self.split_diagnostic_format_args().0
+        let mut args = self.split_diagnostic_format_args().0;
+        let mut skip = false;
+        args.retain(|arg| {
+            if skip { skip = false; return false; }
+            if arg == "-aux-info" { skip = true; }
+            !cc_report_flag(arg)
+        });
+        if cc_wp_dependency_spec(self).is_some() {
+            args.retain(|arg| cc_wp_dependency_option(arg).is_none());
+        }
+        args
     }
 
     /// The formatting flags [`Self::probe_args`] leaves out. They shape the
@@ -1727,7 +1866,7 @@ fn apply_cc_arg(parsed: &mut CcArgs, depinfo: &mut Option<DepInfoSpec>, arg: &Pa
                 parsed.defines.push(parse_define(value));
             }
         }
-        CcArgAction::SystemInclude => {}
+        CcArgAction::SystemInclude | CcArgAction::AuxInfo => {}
     }
 }
 
@@ -1828,6 +1967,87 @@ fn cc_target_arch(parsed: &CcArgs) -> String {
     }
 }
 
+fn cc_report_flag(arg: &str) -> bool {
+    matches!(arg, "-fstack-usage" | "-fsave-optimization-record" | "-aux-info" | "-Wa,-adhln")
+        || arg.starts_with("-fopt-info")
+        || arg.starts_with("-fcallgraph-info")
+        || arg.starts_with("-Wa,-adhln=")
+}
+
+fn cc_wp_dependency_option(arg: &str) -> Option<(bool, Option<&str>)> {
+    let option = arg.strip_prefix("-Wp,")?;
+    let (mode, output) = match option.split_once(',') {
+        Some((mode, output)) if !output.is_empty() && !output.contains(',') && output != "-" => {
+            (mode, Some(output))
+        }
+        Some(_) => return None,
+        None => (option, None),
+    };
+    match mode {
+        "-MD" => Some((true, output)),
+        "-MMD" => Some((false, output)),
+        _ => None,
+    }
+}
+
+fn cc_wp_dependency_spec(parsed: &CcArgs) -> Option<DepInfoSpec> {
+    if parsed.family.dialect() != Dialect::Gnu || parsed.mode != CompileMode::Compile {
+        return None;
+    }
+    let family = parsed.probed_family?;
+    let mut wp = None;
+    let mut idx = 0;
+    while idx < parsed.rest.len() {
+        let token = &parsed.rest[idx];
+        if matches!(token.as_str(), "-Xclang" | "-Xpreprocessor") {
+            return None;
+        }
+        if token.starts_with("-Wp,") {
+            if wp.is_some() {
+                return None;
+            }
+            wp = Some(cc_wp_dependency_option(token)?);
+        } else if let Some(arg) = parse_cc_arg_at(&parsed.rest, idx, parsed.family.dialect()) {
+            if matches!(
+                arg.spec.action,
+                CcArgAction::DepIncludeSystem(_)
+                    | CcArgAction::DepOutput
+                    | CcArgAction::DepTarget
+                    | CcArgAction::DepPhonyTargets
+                    | CcArgAction::DepMissingGenerated
+            ) {
+                return None;
+            }
+            idx += arg.consumed;
+            continue;
+        }
+        idx += if takes_separate_value(&parsed.rest, idx, parsed.family.dialect()) {
+            2
+        } else {
+            1
+        };
+    }
+    let (include_system, output) = wp?;
+    if family == crate::probe::ProbedFamily::Gnu && output.is_none() {
+        return None;
+    }
+    let targets = if family == crate::probe::ProbedFamily::Gnu {
+        vec![(
+            format!("{}.o", parsed.sources.first()?.file_stem()?.to_str()?),
+            false,
+        )]
+    } else {
+        Vec::new()
+    };
+    Some(DepInfoSpec {
+        emit: true,
+        include_system,
+        output: output.map(PathBuf::from),
+        targets,
+        ..DepInfoSpec::default()
+    })
+}
+
 /// Build the argv for a preprocess-only run, dialect-dependent.
 ///
 /// **Gnu dialect** — the original args with mode/output/dep-info flags
@@ -1854,9 +2074,15 @@ fn build_preprocess_args(parsed: &CcArgs) -> Vec<String> {
         Dialect::Gnu => {
             let mut out = vec!["-E".to_string()];
             let mut iter = parsed.rest.iter();
+            let wp_dependency = cc_wp_dependency_spec(parsed).is_some();
             while let Some(arg) = iter.next() {
+                if arg == "-aux-info" { iter.next(); continue; }
+                if cc_report_flag(arg) { continue; }
+                if wp_dependency && cc_wp_dependency_option(arg).is_some() {
+                    continue;
+                }
                 match arg.as_str() {
-                    "-c" | "-S" | "-P" => {}
+                    "-c" | "-S" | "-P" | "-emit-llvm" => {}
                     "-o" | "-MF" | "-MT" | "-MQ" | "--serialize-diagnostics"
                     | "-serialize-diagnostics" => {
                         iter.next(); // also drop the flag's value
@@ -2129,6 +2355,34 @@ fn is_line_marker(line: &[u8]) -> bool {
     line.strip_prefix(b"# ")
         .or_else(|| line.strip_prefix(b"#line "))
         .is_some_and(|rest| rest.first().is_some_and(u8::is_ascii_digit))
+}
+
+fn cc_check_listing_inputs(parsed: &CcArgs, expansion: &[u8], inputs: &[PathBuf]) -> Result<()> {
+    if !parsed.lists_assembler_source() {
+        return Ok(());
+    }
+    let literals = cc_string_literals(expansion);
+    anyhow::ensure!(
+        [expansion, literals.text.as_slice()].into_iter().all(|text| {
+            cc_directive_operands(text, b".file").next().is_none()
+        }),
+        "cc: assembler listing with inline .file — not yet"
+    );
+    let mut source = None;
+    for line in expansion.split(|&byte| byte == b'\n') {
+        if is_line_marker(line) {
+            let decoded = cc_string_literals(line).text;
+            let name = std::str::from_utf8(decoded.strip_prefix(b"\n").context("listing source marker has no file")?)?;
+            source = Some(parsed.invocation_env.resolve(Path::new(name)).context("resolving listing source marker")?);
+        } else if !line.trim_ascii().is_empty() {
+            let source = source.as_ref().context("listing text has no source marker")?;
+            anyhow::ensure!(
+                inputs.contains(source),
+                "cc: assembler listing source outside the read set: {} — not yet", source.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Fold an expansion's line layout into its text hash. Two expansions whose
@@ -2628,7 +2882,7 @@ fn preprocess_universal_hash(
     let mut fingerprints: Vec<crate::cache_key::CcPreprocessMemoInput> = Vec::new();
     let mut path_bound = false;
     for arch in parsed.arch_slices() {
-        let slice = preprocess_hash(&parsed.single_slice(&arch)?, prefix_maps, file_hasher)?;
+        let slice = preprocess_hash(&parsed.single_slice(&arch)?, prefix_maps, file_hasher, None)?;
         let inputs = slice
             .fingerprints
             .with_context(|| format!("cc: the {arch} slice gave no read set to key"))?;
@@ -2971,10 +3225,69 @@ fn cc_implicit_pch_key(
     Ok((!fields.is_empty()).then(|| fields.join("\x1f")))
 }
 
+fn cc_may_reference_time_macro(bytes: &[u8]) -> bool {
+    // Escapes, trigraphs and digraphs can hide an identifier or paste operator.
+    bytes.iter().any(|b| !b.is_ascii() || matches!(b, 0 | b'\\'))
+        || [b"__DATE__".as_slice(), b"__TIME__", b"__TIMESTAMP__", b"##", b"%:", b"??"]
+            .iter()
+            .any(|needle| memchr::memmem::find(bytes, needle).is_some())
+}
+
+fn cc_time_macro_free_inputs(
+    parsed: &CcArgs,
+    resolved: Option<&crate::probe::ResolvedConfig>,
+    dep_path: Option<&Path>,
+    file_hasher: &crate::cache_key::FileHasher<'_>,
+) -> Option<BTreeMap<PathBuf, String>> {
+    let resolved = resolved.filter(|driver| driver.native_driver)?;
+    let tokens = resolved.resolved_tokens.as_ref()?;
+    let elided_macro = tokens.iter().enumerate().any(|(index, arg)| {
+        (arg.starts_with("-D") || (index > 0 && tokens[index - 1] == "-D"))
+            && arg.contains('<')
+    });
+    if parsed.family.dialect() != Dialect::Gnu
+        || parsed.mode == CompileMode::Precompile
+        || parsed.sources.is_empty()
+        || parsed.include_pch.is_some()
+        || elided_macro
+        || parsed.rest.iter().chain(tokens).any(|arg| {
+            cc_may_reference_time_macro(arg.as_bytes()) || arg.starts_with('@')
+                || [
+                    "-fmodule", "-fprebuilt-module", "-include", "-imacros", "-fpch",
+                    "-fplugin", "-plugin", "-load", "-specs", "--specs",
+                    "-finput-charset", "-traditional", "-Xclang", "-Xpreprocessor", "-Wp,",
+                    "-add-plugin", "-wrapper",
+                ].iter().any(|prefix| arg.starts_with(prefix))
+        })
+    {
+        return None;
+    }
+    let cwd = parsed.invocation_env.cwd()?;
+    let dependencies = parse_preprocess_dependencies(&fs::read_to_string(dep_path?).ok()?, cwd).ok()?;
+    if !parsed.sources.iter().all(|source| {
+        parsed.invocation_env.resolve(source).is_some_and(|source| dependencies.contains(&source))
+    }) {
+        return None;
+    }
+    let mut scanned = BTreeMap::new();
+    for path in dependencies {
+        let bytes = fs::read(&path).ok()?;
+        if cc_may_reference_time_macro(&bytes) {
+            return None;
+        }
+        scanned.insert(path, blake3::hash(&bytes).to_hex().to_string());
+    }
+    if cc_implicit_pch_key(parsed, file_hasher).ok()?.is_some() {
+        return None;
+    }
+    Some(scanned)
+}
+
 fn preprocess_hash(
     parsed: &CcArgs,
     prefix_maps: &[CcPrefixMap],
     file_hasher: &crate::cache_key::FileHasher<'_>,
+    resolved: Option<&crate::probe::ResolvedConfig>,
 ) -> Result<PreprocessHash> {
     let pp_args = key_preprocess_args(parsed, prefix_maps);
     let dep_temp = match tempfile::Builder::new()
@@ -3011,6 +3324,7 @@ fn preprocess_hash(
             .with_context(|| format!("running preprocessor `{}`", parsed.program))
     };
     let mut output = run(&pp_args)?;
+    let captured_dependencies = output.status.success();
     if !output.status.success() && dep_path.is_some() {
         // An otherwise supported compiler may not implement the private
         // dependency flags. Preserve the existing cache-key behavior and just
@@ -3040,7 +3354,13 @@ fn preprocess_hash(
         // nothing → passthrough.
         anyhow::bail!("cc -E key probe produced no output");
     }
-    if !cc_source_date_epoch_is_pinned(parsed) {
+    let unpinned = !cc_source_date_epoch_is_pinned(parsed);
+    let time_macro_free = unpinned.then(|| {
+        cc_time_macro_free_inputs(
+            parsed, resolved, dep_path.as_ref().map(|(path, _)| path.as_path()).filter(|_| captured_dependencies), file_hasher,
+        )
+    }).flatten();
+    if unpinned && time_macro_free.is_none() {
         let check_args = compose_cc_args(
             &pp_args,
             vec![
@@ -3103,6 +3423,21 @@ fn preprocess_hash(
             }
         }
     });
+    if let Some(scanned) = time_macro_free {
+        anyhow::ensure!(
+            fingerprints.as_ref().is_some_and(|inputs| {
+                inputs.len() == scanned.len() && inputs.iter().all(|input| {
+                    scanned.get(Path::new(input.local_path())) == Some(&input.content)
+                })
+            }),
+            "cc: inputs changed during the time macro scan"
+        );
+    }
+    if parsed.lists_assembler_source() {
+        let inputs = fingerprints.as_ref().context("listing requires a dependency read set")?
+            .iter().map(|input| PathBuf::from(input.local_path())).collect::<Vec<_>>();
+        cc_check_listing_inputs(parsed, &output.stdout, &inputs)?;
+    }
     Ok(PreprocessHash {
         hash,
         fingerprints,
@@ -3164,11 +3499,20 @@ fn parse_define(s: &str) -> (String, Option<String>) {
 /// the safety signal: a flag kache has never seen could miscache,
 /// so the conservative default is to passthrough.
 pub static CC_FLAGS: &[FlagSpec] = &[
+    FlagSpec { matcher: Matcher::Exact("-fstack-usage"), class: FlagClass::RawKeyed, source: "GCC object-derived .su; reports key literal argv/cwd/maps and original input content; LTO and dump overrides refuse", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-fsave-optimization-record"), class: FlagClass::RawKeyed, source: "Clang object-derived .opt.yaml; source locations bind reports to literal paths and input content; format/file overrides remain unmodeled", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-fopt-info(-optimized)?(=.*)?"), class: FlagClass::RawKeyed, source: "GCC bare/optimized stderr only; bounded modes because other verbosity is unverified; =file variants refuse because GCC appends instead of replacing existing output", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-fcallgraph-info(=(su|da)(,(su|da))*)?"), class: FlagClass::RawKeyed, source: "GCC object-derived .ci; bounded marker lists only; literal paths and original input content are keyed; LTO/dump overrides refuse", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-Wa,-adhln(=[^,]+)?"), class: FlagClass::RawKeyed, source: "GCC/GAS stdout or explicit listing; h reads debug source files, so line-marker targets outside the dependency read set and inline .file refuse; only literal, local, validated read sets may reuse the memo; mixed forwarding and LTO refuse", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-aux-info"), class: FlagClass::RawKeyed, source: "GCC explicit auxiliary declarations output, if written (C++ ignores it); literal argv/cwd/maps and original input content keyed", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-fsanitize-coverage=(trace-pc|trace-pc-guard|inline-8bit-counters|pc-table|trace-cmp)(,(trace-pc|trace-pc-guard|inline-8bit-counters|pc-table|trace-cmp))*"), class: FlagClass::RawKeyed, source: "argv-only sanitizer instrumentation, including fuzzer-no-link combinations; other modes remain unmodeled", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-frecord-gcc-switches"), class: FlagClass::RawKeyed, source: "Clang records input/output/include paths and prefix-map operands; key the full literal argv, cwd and injected maps, bind to this checkout, and disable private dependency capture", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fno-delete-null-pointer-checks"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fno-strict-overflow"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fno-ident"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fno-lifetime-dse"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-flto"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-emit-llvm"), class: FlagClass::RawKeyed, source: "verified Clang -c/-S only; source_filename and textual ModuleID retain literal input spelling, so key argv/cwd/maps and bind to the checkout; disable private dependency capture; LTO flags retain their existing raw keying; universal and other modes refuse", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Regex(r"-flto=(thin|full)"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fsplit-lto-unit"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fwhole-program-vtables"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
@@ -3191,6 +3535,8 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Exact("--coverage"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov instrumentation and notes; the sidecar key folds the paths the outputs embed", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fprofile-arcs"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov arc instrumentation; the object names its absolute .gcda path", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-ftest-coverage"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov notes file", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-fprofile-dir=.+"), class: FlagClass::RawKeyed, source: "profile directory keyed verbatim; coverage keys the exact cwd and object spelling, retaining GCC path mangling; -fprofile-prefix-path remains unmodeled and GCC profile-use directories refuse", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-fprofile-generate=.+"), class: FlagClass::RawKeyed, source: "generation directory keyed verbatim and bound to cwd/object like gcov; notes, when requested, use the coverage sidecar model; bare/empty generation and profile-prefix-path remain unmodeled", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-gsplit-dwarf"), class: FlagClass::RawKeyed, source: "CCP-05 — split DWARF; the object names its .dwo as the output was spelled", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("--serialize-diagnostics"), class: FlagClass::NoObjectEffect, source: "CCP-05 — clang serialized diagnostics output path", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-serialize-diagnostics"), class: FlagClass::NoObjectEffect, source: "CCP-05 — clang serialized diagnostics output path", dialect: Some(Dialect::Gnu) },
@@ -3902,6 +4248,12 @@ pub static CC_FLAGS: &[FlagSpec] = &[
         class: FlagClass::CapturedByProbe,
         source: "Issue #115 — language override (separate-arg form).",
         dialect: None,
+    },
+    FlagSpec {
+        matcher: Matcher::Regex(r"-Wp,-M(?:M)?D(?:,[^,]+)?"),
+        class: FlagClass::NoObjectEffect,
+        source: "isolated depfile modelled by DepInfoSpec using the verified compiler family; mixed lists/options and unknown families refuse; bare GCC overwrites its source",
+        dialect: Some(Dialect::Gnu),
     },
     FlagSpec {
         // Sticky language override forms. The parser records the
@@ -4963,6 +5315,9 @@ fn cc_supported_mllvm_value(value: &str) -> bool {
 fn cc_raw_flags_for_key(parsed: &CcArgs, prefix_maps: &[CcPrefixMap]) -> Vec<Vec<u8>> {
     let dialect = parsed.family.dialect();
     let mut flags = Vec::new();
+    if parsed.records_switches() || parsed.emits_llvm() || parsed.emits_reports() {
+        flags.push(format!("recorded.argv.v1={:?}", (&parsed.program, &parsed.rest, parsed.invocation_env.cwd(), file_prefix_map_args(prefix_maps))).into_bytes());
+    }
     let mut args = parsed.rest.iter();
     while let Some(arg) = args.next() {
         if arg == "-mllvm" || arg.starts_with("-Xarch_") {
@@ -4974,6 +5329,22 @@ fn cc_raw_flags_for_key(parsed: &CcArgs, prefix_maps: &[CcPrefixMap]) -> Vec<Vec
             flags.push(normalize_raw_keyed_cc_flag(arg, prefix_maps));
         }
     }
+    let mut trailing_language_flags = Vec::new();
+    let mut idx = 0;
+    while idx < parsed.rest.len() {
+        if let Some(arg) = parse_cc_arg_at(&parsed.rest, idx, dialect) {
+            if matches!(arg.spec.action, CcArgAction::LanguageOverride) {
+                trailing_language_flags.extend(parsed.rest[idx..idx + arg.consumed].iter().map(|token| token.as_bytes().to_vec()));
+            }
+            idx += arg.consumed;
+        } else {
+            if !parsed.rest[idx].starts_with('-') || parsed.rest[idx] == "-" {
+                trailing_language_flags.clear();
+            }
+            idx += if takes_separate_value(&parsed.rest, idx, dialect) { 2 } else { 1 };
+        }
+    }
+    flags.extend(trailing_language_flags);
     flags
 }
 
@@ -5715,7 +6086,7 @@ fn parse_cc_normalize_toggle(value: Option<&str>) -> bool {
 
 /// The effective `SOURCE_DATE_EPOCH` kache pins on *both* the `-E` key probe
 /// and the real compile, so a translation unit that bakes
-/// `__DATE__` / `__TIME__` / `__TIMESTAMP__` into its object produces bytes
+/// `__DATE__` / `__TIME__` into its object produces bytes
 /// that match the time-stable cache key — no stale-timestamp false hit (#423).
 ///
 /// Resolution (see [`resolve_source_date_epoch`]):
@@ -5992,6 +6363,11 @@ fn cc_preprocess_memo_key_as(
     let compiler_metadata = std::fs::metadata(&compiler_path).ok()?;
     let mut hasher = blake3::Hasher::new();
     fold_cc_memo_field(&mut hasher, b"schema", schema);
+    if parsed.lists_assembler_source() {
+        // A relocated or older memo has not checked this invocation's listing sources.
+        fold_cc_memo_field(&mut hasher, b"listing-inputs-v1",
+            format!("{:?}", (&parsed.rest, cwd, file_prefix_map_args(prefix_maps))).as_bytes());
+    }
     // The name alone: it selects the driver mode, and `compiler-path` below
     // says which binary it found, so `cc` and `/usr/bin/cc` share a memo.
     let compiler_name = Path::new(&parsed.program)
@@ -6786,7 +7162,7 @@ fn cc_shadowing_names(
 }
 
 /// Version of the header scans [`cc_resolve_read_set_probes`] reads.
-const CC_HEADER_SCAN_VERSION: i64 = 5;
+const CC_HEADER_SCAN_VERSION: i64 = 6;
 
 /// The probes a read set's headers make once every header's aliases are
 /// known. A function of the headers' bytes and the command-line
@@ -6819,9 +7195,14 @@ fn cc_probe_read_set(contents: &[String], definitions: &str) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-/// A header's probe scan, parsed. `None` is a header whose probes cannot be
-/// read from its literal text.
-type CcParsedHeaderScan = std::sync::Arc<Option<CcHeaderProbeScan>>;
+/// Content-addressed header analysis, parsed.
+type CcParsedHeaderScan = std::sync::Arc<CcHeaderAnalysis>;
+
+#[derive(deser::Serialize, deser::Deserialize)]
+struct CcHeaderAnalysis {
+    probes: Option<CcHeaderProbeScan>,
+    timestamp: String,
+}
 
 /// Parsed scans by content hash, kept for the life of the process. A scan
 /// depends on the header's bytes alone, and the store holds the macOS SDK's
@@ -6888,19 +7269,36 @@ fn cc_parsed_header_scans(
         .iter()
         .map(|&index| read_inputs[index].clone())
         .collect::<Vec<_>>();
-    let serialized = file_hasher.cc_header_scans(&paths, CC_HEADER_SCAN_VERSION, &|path| {
+    let scan = |path: &Path| -> Result<(String, String)> {
         let bytes = fs::read(path)
             .with_context(|| format!("reading header availability input {}", path.display()))?;
-        let probes = cc_header_probe_scan(&cc_splice_lines(&bytes));
-        Ok((
-            blake3::hash(&bytes).to_hex().to_string(),
-            deser_json::to_string(&probes)?,
-        ))
-    })?;
+        let content = blake3::hash(&bytes).to_hex().to_string();
+        let analysis = CcHeaderAnalysis {
+            probes: cc_header_probe_scan(&cc_splice_lines(&bytes)),
+            timestamp: cc_timestamp_scan_record(&content, cc_timestamp_may_expand(&bytes)),
+        };
+        Ok((content, deser_json::to_string(&analysis)?))
+    };
+    let mut serialized = file_hasher.cc_header_scans(&paths, CC_HEADER_SCAN_VERSION, &scan)?;
     let parsed = serialized
-        .iter()
-        .map(|scan| deser_json::from_str::<Option<CcHeaderProbeScan>>(scan).map(std::sync::Arc::new))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+        .iter_mut()
+        .zip(&missing)
+        .map(|(text, &index)| -> Result<CcParsedHeaderScan> {
+            let parsed = deser_json::from_str::<CcHeaderAnalysis>(text).ok()
+                .filter(|analysis| cc_timestamp_scan_valid(&contents[index], &analysis.timestamp));
+            let analysis = match parsed {
+                Some(analysis) => analysis,
+                None => {
+                    let (content, fresh) = scan(&read_inputs[index])?;
+                    anyhow::ensure!(content == contents[index], "cc: input changed while repairing header analysis");
+                    let analysis = deser_json::from_str(&fresh)?;
+                    *text = fresh;
+                    analysis
+                }
+            };
+            Ok(std::sync::Arc::new(analysis))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut cache = cc_header_scan_cache()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -6930,7 +7328,7 @@ fn cc_resolve_read_set_probes(
     let all_scans = || {
         scans
             .iter()
-            .filter_map(|scan| scan.as_ref().as_ref())
+            .filter_map(|scan| scan.probes.as_ref())
             .chain(std::iter::once(&argument_scan))
     };
     let aliases = cc_header_probe_aliases(all_scans());
@@ -6946,8 +7344,7 @@ fn cc_resolve_read_set_probes(
     let mut seen = HashSet::new();
     for ((input, content), scan) in read_inputs.iter().zip(contents).zip(scans) {
         let Some(probes) = scan
-            .as_ref()
-            .as_ref()
+            .probes.as_ref()
             .and_then(|scan| cc_resolve_header_probes(scan, &aliases))
         else {
             anyhow::bail!(
@@ -8151,6 +8548,85 @@ fn cc_direct_inputs_digest(fingerprints: &[crate::cache_key::CcPreprocessMemoInp
     hasher.finalize().to_hex().to_string()
 }
 
+fn cc_timestamp_may_expand(bytes: &[u8]) -> bool {
+    const NAME: &[u8] = b"__TIMESTAMP__";
+    memchr::memchr_iter(b'_', bytes).any(|start| {
+        bytes[start..].iter().copied()
+            .filter(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            .take(NAME.len())
+            .eq(NAME.iter().copied())
+    })
+}
+
+fn cc_timestamp_scan_record(content: &str, sensitive: bool) -> String {
+    let value = if sensitive { "1" } else { "0" };
+    let mut hash = blake3::Hasher::new();
+    hash.update(b"kache.cc.timestamp-scan.v1\0");
+    hash.update(content.as_bytes());
+    hash.update(value.as_bytes());
+    format!("{value}:{}", hash.finalize().to_hex())
+}
+
+fn cc_timestamp_scan_valid(content: &str, record: &str) -> bool {
+    match record.as_bytes().first() {
+        Some(b'0') => record == cc_timestamp_scan_record(content, false),
+        Some(b'1') => record == cc_timestamp_scan_record(content, true),
+        _ => false,
+    }
+}
+
+fn cc_timestamp_inputs_sensitive(
+    inputs: &[PathBuf],
+    file_hasher: Option<&crate::cache_key::FileHasher<'_>>,
+) -> Result<bool> {
+    let scan = |path: &Path| -> Result<(String, String)> {
+        let bytes = fs::read(path)
+            .with_context(|| format!("reading timestamp input {}", path.display()))?;
+        let content = blake3::hash(&bytes).to_hex().to_string();
+        let record = cc_timestamp_scan_record(&content, cc_timestamp_may_expand(&bytes));
+        Ok((content, record))
+    };
+    if let Some(file_hasher) = file_hasher {
+        let analyses = file_hasher.cc_content_hashes(inputs)
+            .and_then(|contents| cc_parsed_header_scans(inputs, &contents, file_hasher));
+        match analyses {
+            Ok(scans) => return Ok(scans.iter().any(|scan| scan.timestamp.starts_with('1'))),
+            Err(error) => log::debug!("cc timestamp analysis unavailable: {error}"),
+        }
+    }
+    let mut sensitive = false;
+    for path in inputs {
+        sensitive |= scan(path)?.1.starts_with('1');
+    }
+    Ok(sensitive)
+}
+
+fn cc_timestamp_key(
+    parsed: &CcArgs,
+    inputs: &[PathBuf],
+    prefix_maps: &[CcPrefixMap],
+    file_hasher: Option<&crate::cache_key::FileHasher<'_>>,
+) -> Result<Option<String>> {
+    let sensitive = parsed.rest.iter().any(|arg| cc_timestamp_may_expand(arg.as_bytes()))
+        || cc_timestamp_inputs_sensitive(inputs, file_hasher)?;
+    if !sensitive {
+        return Ok(None);
+    }
+    let mut stamps = Vec::with_capacity(inputs.len());
+    for path in inputs {
+        let metadata = fs::metadata(path)?;
+        stamps.push((cc_mapped_path(path, prefix_maps), crate::cache_key::metadata_mtime_ns(&metadata)));
+    }
+    // A macro defined in a header expands with the invoking file's mtime.
+    stamps.sort_unstable();
+    let mut hasher = blake3::Hasher::new();
+    for (name, mtime) in stamps {
+        fold_cc_memo_field(&mut hasher, b"name", name.as_bytes());
+        fold_cc_memo_field(&mut hasher, b"mtime", &mtime.to_le_bytes());
+    }
+    Ok(Some(hasher.finalize().to_hex().to_string()))
+}
+
 /// The memo's hash column for a read-set digest, flagged when path-bound.
 fn cc_memo_hash(digest: &str, path_bound: bool) -> String {
     if path_bound {
@@ -8188,6 +8664,9 @@ pub(crate) fn cc_direct_key_eligible(parsed: &CcArgs) -> bool {
 /// read set, so it keeps the classic path.
 fn cc_direct_key_shape_ok(parsed: &CcArgs) -> bool {
     parsed.family.dialect() == Dialect::Gnu
+        && !parsed.records_switches()
+        && !parsed.emits_llvm()
+        && !parsed.emits_reports()
         && parsed.mode == CompileMode::Compile
         && parsed.sources.len() == 1
         && parsed
@@ -9435,7 +9914,7 @@ impl CcCompiler {
                 ctx.file_hasher.cc_preprocess_memo_lookup(
                     key,
                     |name| cc_unmapped_path_candidates(name, &prefix_maps),
-                    &|path| cc_mapped_content_hash(path, &prefix_maps),
+                    &|path| (!parsed.lists_assembler_source()).then(|| cc_mapped_content_hash(path, &prefix_maps)).flatten(),
                 )
             })
         };
@@ -9521,7 +10000,7 @@ impl CcCompiler {
             let preprocessed = if parsed.is_universal() {
                 preprocess_universal_hash(parsed, &prefix_maps, ctx.file_hasher)?
             } else {
-                preprocess_hash(parsed, &prefix_maps, ctx.file_hasher)?
+                preprocess_hash(parsed, &prefix_maps, ctx.file_hasher, Some(&resolved))?
             };
             self.key_path_bound.set(preprocessed.path_bound);
             let read_inputs = preprocessed.fingerprints.as_ref().map(|inputs| {
@@ -9569,6 +10048,28 @@ impl CcCompiler {
         hasher.update(b"preprocessed:");
         hasher.update(pp_hash.as_bytes());
         hasher.update(b"\n");
+        if parsed.emits_reports() {
+            let inputs = read_inputs.as_deref().context("report key requires the original read set")?;
+            let contents = ctx.file_hasher.cc_content_hashes(inputs)?;
+            let mut fields = inputs.iter().zip(contents).map(|(path, content)| {
+                (parsed.invocation_env.resolve(path).unwrap_or_else(|| path.clone()), content)
+            }).collect::<Vec<_>>();
+            fields.sort_unstable();
+            hasher.update(b"cc_report_inputs.v1:");
+            hasher.update(format!("{fields:?}").as_bytes());
+            hasher.update(b"\n");
+            log::trace!(target: "kache::cache_key", "[key:{trace_name}] report_inputs={fields:?}");
+        }
+        if let Some(timestamp) = cc_timestamp_key(
+            parsed,
+            read_inputs.as_deref().unwrap_or_default(),
+            &prefix_maps,
+            Some(ctx.file_hasher),
+        )? {
+            hasher.update(b"timestamp_mtimes.v1:");
+            hasher.update(timestamp.as_bytes());
+            hasher.update(b"\n");
+        }
         if let Some(pch) = cc_pch_key(parsed, read_inputs.as_deref())? {
             hasher.update(b"pch.v1:");
             hasher.update(pch.as_bytes());
@@ -9583,7 +10084,7 @@ impl CcCompiler {
         );
         // PCH and coverage outputs can record absolute paths that prefix maps
         // do not rewrite, even when the preprocessor expansion is portable.
-        if parsed.mode == CompileMode::Precompile || parsed.coverage_instrumented() {
+        if parsed.mode == CompileMode::Precompile || parsed.coverage_instrumented() || parsed.records_switches() || parsed.emits_llvm() || parsed.emits_reports() {
             self.key_path_bound.set(true);
         }
         // A read set whose object spells a checkout root is keyed to that
@@ -9853,7 +10354,7 @@ impl CcCompiler {
         let args = compose_cc_args(&parsed.rest, appended);
         command.args(&args);
         // Pin the same effective SOURCE_DATE_EPOCH the `-E` key probe used, so a
-        // TU baking __DATE__/__TIME__/__TIMESTAMP__ produces an object whose date
+        // TU baking __DATE__/__TIME__ produces an object whose date
         // matches its time-stable cache key. Mirrors the existing __FILE__
         // normalization (we already rewrite paths via -ffile-prefix-map); pinning
         // the date is the same stance. Opt out with
@@ -9877,6 +10378,7 @@ impl CcCompiler {
         // takes its real destination from the current invocation
         // (kunobi-ninja/kache#655).
         let discovers_outputs = matches!(parsed.mode, CompileMode::Compile)
+            || (parsed.emits_llvm() && parsed.mode == CompileMode::Assemble)
             || (matches!(
                 parsed.mode,
                 CompileMode::Preprocess | CompileMode::Assemble | CompileMode::Precompile

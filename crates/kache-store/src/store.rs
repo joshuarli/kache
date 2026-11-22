@@ -2306,8 +2306,9 @@ pub struct CrateHistoryEntry {
 }
 
 /// A non-positive SQLite column value means "not recorded", not "zero".
+#[deny(clippy::cast_sign_loss)]
 fn positive_or_none(value: i64) -> Option<u64> {
-    (value > 0).then_some(value as u64)
+    u64::try_from(value).ok().filter(|&value| value > 0)
 }
 
 impl<P: ArtifactPolicy> ArtifactStore<P> {

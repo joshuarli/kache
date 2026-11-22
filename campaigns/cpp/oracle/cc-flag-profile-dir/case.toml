@@ -1,0 +1,65 @@
+summary = "Profile directories remain literal key material; cwd/object binding preserves mangled gcda paths, coverage notes restore with their original object, and changing DIR or object path misses (GCC stamps are normalized as in cc-out-gcno)"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["coverage/u.o","coverage/u.gcno","coverage-next/u.o","coverage-next/u.gcno","arcs/u.o","arcs/u.gcno","arcs-next/u.o","arcs-next/u.gcno","generate/u.o","generate/u.gcno","generate-next/u.o","generate-next/u.gcno"]
+
+[[compile]]
+argv = ["{cc}", "@coverage.rsp", "-c", "u.c"]
+source = "u.c"
+also_names = ["@coverage.rsp"]
+
+[[compile]]
+argv = ["{cc}", "@arcs.rsp", "-c", "u.c"]
+source = "u.c"
+also_names = ["@arcs.rsp"]
+
+[[compile]]
+argv = ["{cc}", "@generate.rsp", "-c", "u.c"]
+source = "u.c"
+also_names = ["@generate.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [
+  { op = "delete-outputs" }
+]
+
+[[step]]
+name = "dir-change"
+reuse = "miss"
+action = [
+  { op = "delete-outputs" },
+  { op = "write", path = "coverage.rsp", content = "--coverage -fprofile-dir=profiles-next -o coverage/u.o\n" },
+  { op = "write", path = "arcs.rsp", content = "-fprofile-arcs -ftest-coverage -fprofile-dir=/kache-profile-b -o arcs/u.o\n" },
+  { op = "write", path = "generate.rsp", content = "-ftest-coverage -fprofile-generate=profiles-next -o generate/u.o\n" }
+]
+
+[[step]]
+name = "restore-new-dir"
+reuse = "hit"
+action = [
+  { op = "delete-outputs" }
+]
+
+[[step]]
+name = "object-path-change"
+reuse = "miss"
+action = [
+  { op = "delete-outputs" },
+  { op = "write", path = "coverage.rsp", content = "--coverage -fprofile-dir=profiles-next -o coverage-next/u.o\n" },
+  { op = "write", path = "arcs.rsp", content = "-fprofile-arcs -ftest-coverage -fprofile-dir=/kache-profile-b -o arcs-next/u.o\n" },
+  { op = "write", path = "generate.rsp", content = "-ftest-coverage -fprofile-generate=profiles-next -o generate-next/u.o\n" }
+]
+
+[[step]]
+name = "restore-new-object"
+reuse = "hit"
+action = [
+  { op = "delete-outputs" }
+]
+

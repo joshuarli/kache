@@ -541,7 +541,9 @@ fn configured_instance_matches(
             }
         }
     }
-    let socket = runtime.unwrap_or(store).join("daemon.sock");
+    let explicit = runtime.is_some();
+    let runtime = runtime.unwrap_or_else(|| store.clone());
+    let socket = kache_config::resolve_runtime(&store, runtime, explicit, None)?.join("daemon.sock");
     Ok(canonical_or_original(requested_socket) == canonical_or_original(&socket))
 }
 
@@ -1107,6 +1109,41 @@ mod tests {
                 .to_string()
                 .contains("reading login service configuration")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_service_matches_the_daemons_relocated_default_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        let store = root.path().join("deep-cache-".repeat(13)).join("store");
+        let file = root.path().join("config.toml");
+        fs::write(&file, format!("[cache]\nlocal_store = {store:?}\n")).unwrap();
+        let invocation = kache_config::InvocationEnv::from_parts(
+            [
+                ("KACHE_CONFIG", file.clone().into_os_string()),
+                ("KACHE_HOST_CONFIG", "".into()),
+            ],
+            Some(root.path().to_owned()),
+            None,
+            root.path().to_owned(),
+        );
+        let config = crate::config::Config::load_for(&invocation).unwrap();
+        let socket = config.socket_path();
+        assert_ne!(socket, store.join("daemon.sock"));
+        let matched = configured_instance_matches(&socket, store.clone(), [file.clone()]);
+        let matched_default = configured_instance_matches(&socket, store.clone(), []);
+        let unmatched = configured_instance_matches(&socket, root.path().join("other-cache"), []);
+        fs::write(
+            &file,
+            format!("[cache]\nlocal_store = {store:?}\nruntime_dir = {store:?}\n"),
+        )
+        .unwrap();
+        let explicit = configured_instance_matches(&socket, store, [file]);
+        fs::remove_dir(&config.runtime_dir).unwrap();
+        assert!(matched.unwrap());
+        assert!(matched_default.unwrap());
+        assert!(!unmatched.unwrap());
+        assert!(explicit.is_err());
     }
 
     #[test]

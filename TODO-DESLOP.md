@@ -219,7 +219,7 @@ Not started.
 ### DSLP-102 · P4 · kache-config's file-write feature, EnvOverrides and FileConfig writers have no consumer in the tree
 
 - **Area:** Needs owner · kache-config
-- **Where:** crates/kache-config/src/config.rs (update_file_config_at, save_file_config_to, EnvOverrides, load_raw_file_config_from, user_bypass_reason, cache_dir_for_path, user_config_path, host_config_path_for, config_file_fingerprint, volume_store_for, DEFAULT_* constants); docs/deslop-config.md (DSLP-5 Dead code)
+- **Where:** crates/kache-config/src/config.rs (update_file_config_at, save_file_config_to, EnvOverrides, load_raw_file_config_from, user_bypass_reason, cache_dir_for_path, user_config_path, host_config_path_for, config_file_fingerprint, volume_store_for, DEFAULT_* constants); docs/deslop-config.md and docs/deslop-kache-config-dead-code.md (DSLP-5 Dead code)
 - **Problem:** kache-config is publishable and no workspace caller uses the file-write surface (Config::update_file_config_at, Config::save_file_config_to) or EnvOverrides; several public items have no reference anywhere in the tree (Config::cache_dir_for_path, DEFAULT_DAEMON_IDLE_TIMEOUT_SECS, DEFAULT_GC_MAX_AGE_HOURS, DEFAULT_MIN_STORE_COMPILE_MS), and the unused set looks like the remains of a config editor. Deleting them is a decision about supported API, not a dead-code cut.
 - **Recommendation:** Decide whether file-write, EnvOverrides and the FileConfig writers are supported API; if they are not, delete them with their tests in one commit.
 - **Fix with:** dead-code-archaeology

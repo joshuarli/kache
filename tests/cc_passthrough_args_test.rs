@@ -289,6 +289,12 @@ fn exchanged_header_contents_compile_current_output_and_keep_checkout_hits() {
                 fs::write(clone.join("b.h"), header(expected)).unwrap();
             }
             let _ = fs::remove_file(clone.join("unit.o"));
+            let event_path = cache.join("events.jsonl");
+            let previous_events = match fs::read_to_string(&event_path) {
+                Ok(events) => events.lines().count(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+                Err(error) => panic!("reading {}: {error}", event_path.display()),
+            };
             let compiled = cacheable_cc_command(&clone)
                 .args(["cc", "-c", "unit.c", "-o", "unit.o"])
                 .env("HOME", root.join("home"))
@@ -317,9 +323,17 @@ fn exchanged_header_contents_compile_current_output_and_keep_checkout_hits() {
                 "{phase}: exchanging header contents must compile their current meaning \
                  (discovery={discovery})"
             );
-            let events = fs::read_to_string(cache.join("events.jsonl")).unwrap();
-            let event: deser_value::Value =
-                deser_json::from_str(events.lines().last().unwrap()).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let event: deser_value::Value = loop {
+                if let Ok(events) = fs::read_to_string(&event_path)
+                    && events.ends_with('\n')
+                    && let Some(line) = events.lines().nth(previous_events)
+                {
+                    break deser_json::from_str(line).unwrap();
+                }
+                assert!(std::time::Instant::now() < deadline, "{phase}: event not published");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            };
             assert_eq!(event["result"], result, "{phase}: {event:?}");
         }
     }
@@ -1002,8 +1016,199 @@ fn cc_ignoring_source_date_epoch_does_not_restore_a_stale_time() {
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
-        assert_eq!(last_cc_event(&root)["result"], expected);
+        let event = last_cc_event(&root);
+        assert_eq!(event["result"], expected);
+        if expected == "miss" {
+            assert_eq!(event["preprocessor_runs"], 2, "{event:?}");
+        }
     }
+}
+
+fn unpinned_cc_driver(root: &std::path::Path) -> std::path::PathBuf {
+    fs::write(root.join("driver.c"), r#"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    unsetenv("SOURCE_DATE_EPOCH");
+    int probing = 0;
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "-###") || !strcmp(argv[i], "--version")) probing = 1;
+    if (!probing && access("fail-deps.txt", F_OK) == 0) {
+        for (int i = 1; i + 1 < argc; i++) {
+            if (!strcmp(argv[i], "-MF")) {
+                FILE *deps = fopen(argv[i + 1], "w");
+                if (!deps) return 2;
+                fputs("out: unit.c\n", deps);
+                fclose(deps);
+                return 1;
+            }
+        }
+    }
+    FILE *clock = probing ? NULL : fopen("clock.txt", "r");
+    char value[32], definitions[3][128];
+    char *args[argc + 5];
+    int n = 0;
+    args[n++] = "cc";
+    if (clock) {
+        if (fscanf(clock, "%31s", value) != 1) return 2;
+        fclose(clock);
+        const char *names[] = {"__DATE__", "__TIME__", "__TIMESTAMP__"};
+        args[n++] = "-Wno-builtin-macro-redefined";
+        for (int i = 0; i < 3; i++) {
+            snprintf(definitions[i], sizeof definitions[i], "-D%s=\"%s\"", names[i], value);
+            args[n++] = definitions[i];
+        }
+    }
+    for (int i = 1; i < argc; i++) args[n++] = argv[i];
+    args[n] = NULL;
+    execvp(args[0], args);
+    return 127;
+}
+"#).unwrap();
+    let compiler = root.join("cc");
+    let output = Command::new("cc").current_dir(root)
+        .args(["driver.c", "-o", "cc"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    compiler
+}
+
+#[test]
+fn cc_time_macro_scan_preserves_volatile_direct_header_and_command_line_inputs() {
+    let cases: &[(&str, &str, &str, &[&str])] = &[
+        ("date", "const char value[] = __DATE__;\n", "", &[]),
+        ("time", "const char value[] = __TIME__;\n", "", &[]),
+        ("timestamp", "const char value[] = __TIMESTAMP__;\n", "", &[]),
+        ("paste", "#include \"value.h\"\nconst char value[] = VALUE;\n",
+         "#define CAT_(a,b) a##b\n#define CAT(a,b) CAT_(a,b)\n#define VALUE CAT(__TI,ME__)\n", &[]),
+        ("define", "const char value[] = VALUE;\n", "", &["-DVALUE=__TIME__"]),
+        ("response", "const char value[] = VALUE;\n", "", &["@flags.rsp"]),
+        ("forced", "const char value[] = VALUE;\n", "#define VALUE __TIME__\n", &["-include", "value.h"]),
+        ("spliced", "const char value[] = __TI\\\nME__;\n", "", &[]),
+        ("partial-deps", "#include \"value.h\"\nconst char value[] = VALUE;\n",
+         "#define VALUE __TIME__\n", &[]),
+    ];
+    for (name, source, header, args) in cases {
+        let dir = FixtureDir::new();
+        let root = dir.path().canonicalize().unwrap();
+        fs::write(root.join("kache.toml"), "").unwrap();
+        fs::write(root.join("unit.c"), source).unwrap();
+        fs::write(root.join("value.h"), header).unwrap();
+        fs::write(root.join("flags.rsp"), "-DVALUE=__TIME__\n").unwrap();
+        if *name == "partial-deps" {
+            fs::write(root.join("fail-deps.txt"), "").unwrap();
+        }
+        let compiler = unpinned_cc_driver(&root);
+        let mut objects = Vec::new();
+        for clock in ["one", "two"] {
+            fs::write(root.join("clock.txt"), clock).unwrap();
+            let output = cacheable_cc_command(&root).arg(&compiler)
+                .args(["-c", "unit.c", "-o", "unit.o"]).args(*args)
+                .env("KACHE_CC_PATH_NORMALIZE", "0").output().unwrap();
+            assert!(output.status.success(), "{name}: {output:?}");
+            objects.push(fs::read(root.join("unit.o")).unwrap());
+        }
+        assert_ne!(objects[0], objects[1], "{name}: a stale object was restored");
+        let event = last_cc_event(&root);
+        assert_eq!(event["result"], "passthrough", "{name}: {event:?}");
+        let expected_runs = if *name == "partial-deps" { 3 } else { 2 };
+        assert_eq!(event["preprocessor_runs"], expected_runs, "{name}: {event:?}");
+    }
+}
+
+#[test]
+fn cc_time_macro_scan_uses_one_expansion_for_an_ordinary_native_unit() {
+    let dir = FixtureDir::new();
+    let root = dir.path().canonicalize().unwrap();
+    fs::write(root.join("kache.toml"), "").unwrap();
+    fs::write(root.join("unit.c"), "#include \"value.h\"\nint value = VALUE;\n").unwrap();
+    fs::write(root.join("value.h"), "#define VALUE 42\n").unwrap();
+    let compiler = unpinned_cc_driver(&root);
+    // Apple Clang's default SDK adds escaped SDKSettings.json metadata to the read set.
+    let compile = || {
+        let output = cacheable_cc_command(&root).arg(&compiler)
+            .args(["-c", "unit.c", "-o", "unit.o"])
+            .arg("-isysroot").arg(&root).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        last_cc_event(&root)
+    };
+    let cold = compile();
+    assert_eq!(cold["result"], "miss", "{cold:?}");
+    assert_eq!(cold["preprocessor_runs"], 1, "{cold:?}\n{}", cc_time_macro_scan_diagnostics(&root, &compiler));
+    let object = fs::read(root.join("unit.o")).unwrap();
+    fs::remove_file(root.join("unit.o")).unwrap();
+    let warm = compile();
+    assert_eq!(warm["result"], "local_hit", "{warm:?}");
+    assert_eq!(warm["preprocessor_runs"], 0, "{warm:?}");
+    assert_eq!(fs::read(root.join("unit.o")).unwrap(), object);
+}
+
+fn cc_time_macro_scan_diagnostics(root: &std::path::Path, compiler: &std::path::Path) -> String {
+    let mut details = String::new();
+    if let Ok(entries) = fs::read_dir(root.join("cache/probes")) {
+        for entry in entries.flatten() {
+            if let Ok(record) = fs::read_to_string(entry.path()) {
+                details.push_str(&format!("probe: {record}\n"));
+            }
+        }
+    }
+    for args in [
+        &["-###", "-c", "unit.c"][..],
+        &["-E", "-H", "-MD", "-MF", "diagnostic.d", "unit.c"][..],
+    ] {
+        let output = Command::new(compiler).current_dir(root).args(args).output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        details.push_str(&format!("{args:?}: {}\n{stderr}\n", output.status));
+        for line in stderr.lines().filter(|line| line.starts_with('.')) {
+            let path = line.trim_start_matches('.').trim();
+            if let Ok(bytes) = fs::read(root.join(path)) {
+                let hazards: Vec<_> = ["__DATE__", "__TIME__", "__TIMESTAMP__", "##", "%:", "??", "\\"]
+                    .into_iter().filter(|needle| bytes.windows(needle.len()).any(|w| w == needle.as_bytes())).collect();
+                details.push_str(&format!("header: {path}, hazards: {hazards:?}\n"));
+            }
+        }
+    }
+    details.push_str(&format!("dependencies: {:?}\n", fs::read_to_string(root.join("diagnostic.d"))));
+    details
+}
+
+#[test]
+fn cc_timestamp_header_addition_and_mtime_change_do_not_restore_stale_objects() {
+    let dir = FixtureDir::new();
+    let root = dir.path().canonicalize().unwrap();
+    fs::write(root.join("kache.toml"), "").unwrap();
+    let source = root.join("unit.c");
+    let header = root.join("stamp.h");
+    fs::write(&source, "#include \"stamp.h\"\nconst char *stamp = STAMP;\n").unwrap();
+    fs::write(&header, "#define STAMP \"ordinary\"\n").unwrap();
+    let touch = |seconds| {
+        fs::File::open(&source).unwrap().set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+        ).unwrap();
+    };
+    touch(1_700_000_000);
+    let compile = || {
+        let _ = fs::remove_file(root.join("unit.o"));
+        let output = cacheable_cc_command(&root).args(["cc", "-c", "unit.c", "-o", "unit.o"])
+            .env("SOURCE_DATE_EPOCH", "0").output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        fs::read(root.join("unit.o")).unwrap()
+    };
+    let ordinary = compile();
+    assert_eq!(ordinary, compile());
+    fs::write(&header, "#define STAMP __TIMESTAMP__\n").unwrap();
+    let stamped = compile();
+    assert_ne!(ordinary, stamped, "adding a timestamp macro must rekey");
+    assert_eq!(stamped, compile());
+    assert_eq!(stamped, compile());
+    touch(1_700_086_400);
+    let restored = compile();
+    let raw = Command::new("cc").current_dir(&root)
+        .args(["-c", "unit.c", "-o", "expected.o"])
+        .env("SOURCE_DATE_EPOCH", "0").output().unwrap();
+    assert!(raw.status.success(), "{raw:?}");
+    assert_eq!(restored, fs::read(root.join("expected.o")).unwrap(), "stale timestamp object restored");
 }
 
 #[test]
