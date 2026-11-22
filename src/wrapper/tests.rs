@@ -6051,7 +6051,15 @@ fn cc_response_file_execution_preserves_arguments(uncached: bool) {
     let root = dir.path();
     let program = root.join("gcc");
     let capture = root.join("argv");
-    kache_fs::testutil::write_executable(&program, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n", capture.display()));
+    let body_capture = root.join("body");
+    kache_fs::testutil::write_executable(
+        &program,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\ncase \"$1\" in @*) cat \"${{1#@}}\" > '{}';; esac\n",
+            capture.display(),
+            body_capture.display()
+        ),
+    );
     std::fs::write(root.join("u.c"), "int answer;\n").unwrap();
     std::fs::write(root.join("outer.rsp"), "@inner.rsp -c u.c -o u.o\n").unwrap();
     let env = crate::invocation::InvocationEnv::from_parts(
@@ -6059,17 +6067,28 @@ fn cc_response_file_execution_preserves_arguments(uncached: bool) {
     );
     let compiler = CcCompiler::for_invocation(Vec::new(), &env);
     let config = test_config(root.join("cache"));
-    for body in [format!("-DX={}", "a".repeat(204800)), (0..150).map(|i| format!("-DX{i}={}", "a".repeat(4096))).collect::<Vec<_>>().join(" "), String::new(), "-DX=1".into()] {
-        std::fs::write(root.join("inner.rsp"), body).unwrap();
+    for body in [format!("-DX={}", "a".repeat(204800)), (0..150).map(|i| format!("-DX{i}={}", "a".repeat(4096))).collect::<Vec<_>>().join(" "), String::new(), "-DX=1".into(), "'-DY=a b' -DQ=\\' \"-DZ=x\\\\y\"".into()] {
+        std::fs::write(root.join("inner.rsp"), &body).unwrap();
+        let _ = std::fs::remove_file(&body_capture);
         let parsed = compiler.parse(&[program.to_string_lossy().into_owned(), "@outer.rsp".into()]).unwrap();
         assert!(parsed.refuse_reasons(&[]).is_empty());
+        std::fs::write(root.join("inner.rsp"), "-DEDITED_AFTER_KEYING").unwrap();
         let status = if uncached {
             cc_passthrough(&config, &parsed).unwrap().exit_code
         } else {
             compiler.execute(&parsed).unwrap().exit_code
         };
         assert_eq!(status, 0);
-        assert_eq!(std::fs::read_to_string(&capture).unwrap(), "@outer.rsp\n");
+        let argv = std::fs::read_to_string(&capture).unwrap();
+        if uncached {
+            assert_eq!(argv, "@outer.rsp\n");
+            continue;
+        }
+        let snapshot = argv.strip_suffix('\n').and_then(|arg| arg.strip_prefix('@')).unwrap();
+        assert!(!snapshot.contains('\n') && snapshot != "outer.rsp", "{argv:?}");
+        assert!(!std::path::Path::new(snapshot).exists(), "the snapshot outlives the compile");
+        let executed = crate::compiler::cc::gnu_response_file_arguments(&std::fs::read_to_string(&body_capture).unwrap()).unwrap();
+        assert_eq!(executed, parsed.rest);
     }
 }
 
