@@ -8744,6 +8744,12 @@ pub(crate) fn cc_direct_key_eligible(parsed: &CcArgs) -> bool {
         })
 }
 
+fn cc_hash_driver_policy(hasher: &mut blake3::Hasher, native_driver: bool) {
+    if !native_driver {
+        hasher.update(b"opaque_driver.v1\n");
+    }
+}
+
 /// Only the GNU dialect adds a private `-MD -MF`; a caller that asked for
 /// `-MMD` gets a depfile without system headers, which is not a complete
 /// read set, so it keeps the classic path.
@@ -9664,6 +9670,7 @@ impl CcCompiler {
         hasher.update(b"compiler_version:");
         hasher.update(resolved.version_line.as_bytes());
         hasher.update(b"\n");
+        cc_hash_driver_policy(&mut hasher, resolved.native_driver);
         log::trace!(
             target: "kache::cache_key",
             "[key:{}] compiler_version={}",

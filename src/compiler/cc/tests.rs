@@ -279,6 +279,19 @@ fn cc_time_macro_scan_fails_closed_on_hidden_identifiers_and_pastes() {
 }
 
 #[test]
+fn opaque_driver_keys_retire_legacy_artifacts_without_changing_native_keys() {
+    let mut legacy = blake3::Hasher::new();
+    legacy.update(b"compiler_version:clang version 18\n");
+    let old_key = legacy.finalize();
+    let mut native = legacy.clone();
+    cc_hash_driver_policy(&mut native, true);
+    assert_eq!(native.finalize(), old_key);
+    let mut opaque = legacy;
+    cc_hash_driver_policy(&mut opaque, false);
+    assert_ne!(opaque.finalize(), old_key);
+}
+
+#[test]
 fn cc_time_macro_scan_requires_a_complete_readable_native_read_set() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
