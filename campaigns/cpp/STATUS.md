@@ -729,12 +729,13 @@ its header revert from 8.69x to 1.41x. **Losses now, ranked:**
    arrives, not after a 5 ms sleep`), and a warm single-unit hit went from
    14.2 ms to 7.8 ms (hyperfine, loaded host). The worker's own 2.7 ms and
    about 1 ms of protocol round trips remain. KACH-29 now keys identified
-   native ELF/Mach-O GCC/Clang probes on documented driver inputs plus
+   self-identifying native ELF/Mach-O Clang probes on documented driver inputs plus
    declared `key_env_vars`; the preprocessor memo shares the input set.
    Hyperfine's `HYPERFINE_*` unsetting workaround can go for those drivers.
-   Opaque drivers (including scripts named `gcc`), known launchers and other
+   GCC (which lacks an OS-derived self path), non-self-identifying drivers,
+   forwarding wrappers, Apple's xcrun shim, known launchers and other
    binary formats retain whole-environment keying and still need it.
-   Probe schema 6 and fresh preprocessing/direct-capability memo schemas
+   Probe schema 8, preprocess memo v11, direct-capability material v4 and epoch probe v2
    keep records from the previous policy separate.
    Local Ubuntu 22.04 verification (GCC 11, Clang 14): 967 focused tests
    passed (2 ignored), `make check` passed, and all five negative controls
@@ -949,9 +950,9 @@ host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
       fixture (`make cc-project-autotools`); provision and run other host
       cells before calling the matrix complete. Meson launchers remain open.
       zlib, LLVM and cc-rs build scripts already cache fully.
-   5. KACH-29 is implemented for identified native GCC/Clang: documented
+   5. KACH-29 is implemented for self-identifying native Clang: documented
       driver environment inputs and declared patterns key the probe;
-      opaque drivers retain whole-environment keying. Native hits no longer
+      GCC and non-self-identifying drivers retain whole-environment keying. Native hits no longer
       need the hyperfine environment workaround. Cross-host timing remains
       part of the acceptance rerun, not inferred from this key change.
 4. All campaign work runs in isolated worktrees under `.work/wt/`

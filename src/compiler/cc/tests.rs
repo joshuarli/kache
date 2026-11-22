@@ -5324,9 +5324,32 @@ fn a_memo_key_from_before_the_settle_rules_is_never_todays() {
             path: "/old/memo-source.c".into(), size: 1, mtime_ns: 1, ctime_ns: 1, inode: 1,
         }, observed_ns: 0,
     };
-    cache.put_cc_preprocess_memo_inputs(&unchecked_timestamp, "stale-v10-digest", &[input]).unwrap();
+    cache.put_cc_preprocess_memo_inputs(&unchecked_timestamp, "stale-v10-digest", std::slice::from_ref(&input)).unwrap();
     assert!(cache.get_cc_preprocess_memo(&unchecked_timestamp).unwrap().is_some());
+    for schema in [b"cc-preprocess-memo-v11", b"cc-preprocess-memo-v12"] {
+        let old_native_env = cc_preprocess_memo_key_as(
+            schema, &parsed, &[], "test compiler version",
+        ).unwrap();
+        assert_ne!(today, old_native_env, "old memos did not distinguish opaque drivers");
+        cache.put_cc_preprocess_memo_inputs(&old_native_env, "stale-native-env-digest", std::slice::from_ref(&input)).unwrap();
+        assert!(cache.get_cc_preprocess_memo(&old_native_env).unwrap().is_some());
+    }
     assert!(cache.get_cc_preprocess_memo(&today).unwrap().is_none());
+}
+
+#[test]
+fn opaque_preprocess_memo_keys_arbitrary_environment() {
+    let compiler = std::env::current_exe().unwrap().to_string_lossy().into_owned();
+    let mut parsed = CcArgs::parse(&[compiler, "-c".into(), "unit.c".into()]).unwrap();
+    let key = |parsed: &CcArgs, native| cc_preprocess_memo_key_for_driver(
+        CC_PREPROCESS_MEMO_SCHEMA, parsed, &[], "clang version test", native,
+    ).unwrap();
+    parsed.invocation_env.set("BUILD_VARIANT", "signed");
+    let native = key(&parsed, true);
+    let opaque = key(&parsed, false);
+    parsed.invocation_env.set("BUILD_VARIANT", "unsigned");
+    assert_eq!(native, key(&parsed, true));
+    assert_ne!(opaque, key(&parsed, false));
 }
 
 #[test]
@@ -9564,7 +9587,10 @@ fn direct_probe_material_separates_clients_paths_and_include_environment() {
     }
     let mut unrelated = first.clone();
     unrelated.set("CLIENT_NOTE", "unrelated client value");
-    assert_eq!(material(&unrelated), expected);
+    assert_ne!(material(&unrelated), expected, "opaque drivers can read arbitrary variables");
+    let mut internal = first.clone();
+    internal.set("KACHE_LOG", "debug");
+    assert_eq!(material(&internal), expected);
     let mut reversed_variables = variables;
     reversed_variables.reverse();
     let reversed = client(reversed_variables.into_iter());
@@ -9667,6 +9693,16 @@ fn source_date_epoch_support_requires_successful_matching_expansions() {
             dir.path().join("runs").display(),
         ),
     );
+    let memo_dir = crate::config::probe_memo_dir_for(&env).unwrap();
+    let digest = cc_direct_probe_material(&supported.program, &env).unwrap();
+    let current = crate::probe_memo::memo_path(&memo_dir, CC_SOURCE_DATE_EPOCH_PROBE_SCHEMA, "txt", &digest);
+    for (schema, body) in [("cc-source-date-epoch-v1", "ok"), ("cc-source-date-epoch-v2", "all")] {
+        let old = crate::probe_memo::memo_path(&memo_dir, schema, "txt", &digest);
+        assert_ne!(current, old);
+        crate::probe_memo::write_verified(&old, &digest, body);
+        assert_eq!(crate::probe_memo::read_verified(&old, &digest).as_deref(), Some(body));
+    }
+    assert_eq!(cc_driver_source_date_epoch_support(&supported), CcSourceDateEpochSupport::DateTime);
     assert!(cc_driver_honors_source_date_epoch(&supported));
     assert!(cc_driver_honors_source_date_epoch(&supported));
     assert_eq!(

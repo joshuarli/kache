@@ -55,6 +55,12 @@ pub fn extract_cc1_line(stderr: &str) -> Option<&str> {
         .find(|line| line.contains("\"-cc1\""))
 }
 
+pub(super) fn cc1_executable(stderr: &str) -> Option<String> {
+    let tokens = tokenize(extract_cc1_line(stderr)?);
+    (tokens.get(1).map(String::as_str) == Some("-cc1"))
+        .then(|| tokens[0].clone())
+}
+
 /// Split one `-###` command line into its tokens.
 ///
 /// `-###` quotes every argument with `"`, escaping an embedded `"` or
@@ -457,6 +463,14 @@ pub fn resolved_semantic_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cc1_identity_path_is_not_the_banner_or_another_argument() {
+        assert_eq!(cc1_executable(r#" "/opt/clang bin/clang" "-cc1" "-triple" "x86_64""#), Some("/opt/clang bin/clang".into()));
+        assert_eq!(cc1_executable("clang version 18"), None);
+        assert_eq!(cc1_executable(""), None);
+        assert_eq!(cc1_executable(r#" "other" "-flag" "-cc1""#), None);
+    }
 
     #[test]
     fn prefix_map_paths_remain_semantic_in_both_driver_forms() {

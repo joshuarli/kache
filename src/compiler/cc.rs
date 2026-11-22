@@ -6380,10 +6380,13 @@ const CC_ARTIFACT_SCHEMA: &[u8] = b"cc_artifact_schema:4\n";
 /// proven independent of time macros.
 /// v10: the driver and preprocessing memos share expanded environment inputs.
 /// v11: pinned expansions also check for token-pasted timestamp macros.
-const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v12";
+/// v12: memos preserve timestamp sensitivity and force mtime keying on reuse.
+/// v13: opaque drivers key the whole invocation environment.
+const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v13";
 
 /// Local identity for a preprocessor invocation. The environment is included
 /// as selected by [`cc_memo_env_is_keyed`].
+#[cfg(test)]
 fn cc_preprocess_memo_key(
     parsed: &CcArgs,
     prefix_maps: &[CcPrefixMap],
@@ -6398,11 +6401,22 @@ fn cc_preprocess_memo_key(
 }
 
 /// [`cc_preprocess_memo_key`] under `schema`.
+#[cfg(test)]
 fn cc_preprocess_memo_key_as(
     schema: &[u8],
     parsed: &CcArgs,
     prefix_maps: &[CcPrefixMap],
     compiler_version: &str,
+) -> Option<String> {
+    cc_preprocess_memo_key_for_driver(schema, parsed, prefix_maps, compiler_version, true)
+}
+
+fn cc_preprocess_memo_key_for_driver(
+    schema: &[u8],
+    parsed: &CcArgs,
+    prefix_maps: &[CcPrefixMap],
+    compiler_version: &str,
+    native: bool,
 ) -> Option<String> {
     let epoch = effective_source_date_epoch_for(&parsed.invocation_env)?;
     let cwd = parsed.invocation_env.cwd()?;
@@ -6412,6 +6426,7 @@ fn cc_preprocess_memo_key_as(
     let compiler_metadata = std::fs::metadata(&compiler_path).ok()?;
     let mut hasher = blake3::Hasher::new();
     fold_cc_memo_field(&mut hasher, b"schema", schema);
+    fold_cc_memo_field(&mut hasher, b"native-driver", &[u8::from(native)]);
     if parsed.lists_assembler_source() {
         // A relocated or older memo has not checked this invocation's listing sources.
         fold_cc_memo_field(&mut hasher, b"listing-inputs-v1",
@@ -6512,7 +6527,7 @@ fn cc_preprocess_memo_key_as(
     let mut environment: Vec<(Vec<u8>, Vec<u8>)> = parsed
         .invocation_env
         .vars_os()
-        .filter(|(name, _)| cc_memo_env_is_keyed(name))
+        .filter(|(name, _)| if native { cc_memo_env_is_keyed(name) } else { crate::probe::opaque_env_is_keyed(name) })
         .map(|(name, value)| {
             // Mapped as text, then encoded like every other memo field: on
             // Windows the field encoding is UTF-16 and the maps are UTF-8.
@@ -8793,6 +8808,10 @@ enum CcSourceDateEpochSupport {
     All,
 }
 
+/// v2: distinguishes DATE/TIME pinning from TIMESTAMP pinning.
+/// v3: probe material keys the whole nonvolatile invocation environment.
+const CC_SOURCE_DATE_EPOCH_PROBE_SCHEMA: &str = "cc-source-date-epoch-v3";
+
 fn cc_driver_honors_source_date_epoch(parsed: &CcArgs) -> bool {
     cc_driver_source_date_epoch_support(parsed) != CcSourceDateEpochSupport::None
 }
@@ -8805,7 +8824,7 @@ fn cc_driver_source_date_epoch_support(parsed: &CcArgs) -> CcSourceDateEpochSupp
     let Some(digest) = cc_direct_probe_material(&parsed.program, env) else {
         return CcSourceDateEpochSupport::None;
     };
-    let path = crate::probe_memo::memo_path(&memo_dir, "cc-source-date-epoch-v2", "txt", &digest);
+    let path = crate::probe_memo::memo_path(&memo_dir, CC_SOURCE_DATE_EPOCH_PROBE_SCHEMA, "txt", &digest);
     if let Some(body) = crate::probe_memo::read_verified(&path, &digest) {
         match body.trim() {
             "none" => return CcSourceDateEpochSupport::None,
@@ -8871,7 +8890,7 @@ fn cc_direct_probe_material(program: &str, env: &InvocationEnv) -> Option<String
     let resolved = env.resolve_program(Path::new(program))?;
     let canonical = std::fs::canonicalize(&resolved).ok()?;
     let metadata = std::fs::metadata(&canonical).ok()?;
-    let mut material = crate::probe_memo::Material::new("cc-direct-capture-v3");
+    let mut material = crate::probe_memo::Material::new("cc-direct-capture-v4");
     material.push(program.as_bytes());
     material.push(canonical.as_os_str().as_encoded_bytes());
     material.push(&metadata.len().to_le_bytes());
@@ -8879,15 +8898,7 @@ fn cc_direct_probe_material(program: &str, env: &InvocationEnv) -> Option<String
     // Driver support may depend on its selected toolchain and environment.
     let mut environment: Vec<_> = env
         .vars_os()
-        .filter(|(name, _)| {
-            cc_memo_env_is_keyed(name)
-                || name.to_str().is_some_and(|name| {
-                    matches!(
-                        name.to_ascii_uppercase().as_str(),
-                        "PATH" | "PATHEXT" | "HOME" | "USERPROFILE" | "TMPDIR" | "TMP" | "TEMP"
-                    )
-                })
-        })
+        .filter(|(name, _)| crate::probe::opaque_env_is_keyed(name))
         .collect();
     environment.sort();
     for (name, value) in environment {
@@ -10013,7 +10024,9 @@ impl CcCompiler {
         let memo_key = ctx
             .file_hasher
             .supports_cc_preprocess_memo()
-            .then(|| cc_preprocess_memo_key(parsed, &prefix_maps, &resolved.version_line))
+            .then(|| cc_preprocess_memo_key_for_driver(
+                CC_PREPROCESS_MEMO_SCHEMA, parsed, &prefix_maps, &resolved.version_line, resolved.native_driver,
+            ))
             .filter(|_| !parsed.is_universal())
             .flatten();
         drop(trace_memo_key);

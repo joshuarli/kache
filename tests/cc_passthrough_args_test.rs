@@ -921,6 +921,68 @@ fn cacheable_cc_command(root: &std::path::Path) -> Command {
 }
 
 #[test]
+fn compiled_forwarding_wrappers_key_arbitrary_environment() {
+    for compiler in ["gcc", "clang"] {
+        if !Command::new(compiler).arg("--version").output()
+            .is_ok_and(|output| output.status.success()) {
+            eprintln!("skipping forwarding wrapper: {compiler} unavailable");
+            continue;
+        }
+        for discovery in ["0", "1"] {
+            let dir = FixtureDir::new();
+            let root = dir.path().canonicalize().unwrap();
+            fs::write(root.join("kache.toml"), "").unwrap();
+            fs::write(root.join("unit.c"), "int char_is_signed(void) { return (char)-1 < 0; }\n").unwrap();
+            fs::write(root.join("wrap.c"), r#"
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    const char *variant = getenv("BUILD_VARIANT");
+    char **args = calloc(argc + 2, sizeof *args);
+    args[0] = "@COMPILER@";
+    args[1] = variant && !strcmp(variant, "unsigned") ? "-funsigned-char" : "-fsigned-char";
+    for (int i = 1; i < argc; ++i) args[i + 1] = argv[i];
+    execvp(args[0], args);
+    return 127;
+}
+"#.replace("@COMPILER@", compiler)).unwrap();
+            let built = Command::new(compiler).current_dir(&root)
+                .args(["wrap.c", "-o", "mycc"]).output().unwrap();
+            assert!(built.status.success(), "{built:?}");
+            let raw = |variant: &str| {
+                let output = Command::new("./mycc").current_dir(&root)
+                    .env("BUILD_VARIANT", variant).env("SOURCE_DATE_EPOCH", "0")
+                    .args(["-O2", "-c", "unit.c", "-o", "unit.o"]).output().unwrap();
+                assert!(output.status.success(), "{output:?}");
+                fs::read(root.join("unit.o")).unwrap()
+            };
+            let signed = raw("signed");
+            let unsigned = raw("unsigned");
+            assert_ne!(signed, unsigned);
+            for (variant, expected, result) in [
+                ("signed", &signed, "miss"),
+                ("signed", &signed, "local_hit"),
+                ("unsigned", &unsigned, "miss"),
+                ("signed", &signed, "local_hit"),
+            ] {
+                fs::remove_file(root.join("unit.o")).unwrap();
+                let output = cacheable_cc_command(&root)
+                    .args(["./mycc", "-O2", "-c", "unit.c", "-o", "unit.o"])
+                    .env("BUILD_VARIANT", variant).env("SOURCE_DATE_EPOCH", "0")
+                    .env("KACHE_DEFERRED_DISCOVERY", discovery)
+                    .env("KACHE_CC_PATH_NORMALIZE", "0")
+                    .output().unwrap();
+                assert!(output.status.success(), "{output:?}");
+                let event = last_cc_event(&root);
+                assert_eq!(event["result"].as_str().unwrap(), result, "{compiler}, discovery={discovery}, {variant}: {event:?}");
+                assert_eq!(&fs::read(root.join("unit.o")).unwrap(), expected, "{compiler}, {variant}");
+            }
+        }
+    }
+}
+
+#[test]
 fn coverage_preprocess_fallback_restores_object_and_notes() {
     if !Command::new("clang")
         .arg("--version")
@@ -1118,7 +1180,7 @@ fn cc_time_macro_scan_preserves_volatile_direct_header_and_command_line_inputs()
 }
 
 #[test]
-fn cc_time_macro_scan_uses_one_expansion_for_an_ordinary_native_unit() {
+fn cc_time_macro_scan_checks_expansion_for_an_ordinary_opaque_unit() {
     let dir = FixtureDir::new();
     let root = dir.path().canonicalize().unwrap();
     fs::write(root.join("kache.toml"), "").unwrap();
@@ -1135,7 +1197,7 @@ fn cc_time_macro_scan_uses_one_expansion_for_an_ordinary_native_unit() {
     };
     let cold = compile();
     assert_eq!(cold["result"], "miss", "{cold:?}");
-    assert_eq!(cold["preprocessor_runs"], 1, "{cold:?}\n{}", cc_time_macro_scan_diagnostics(&root, &compiler));
+    assert_eq!(cold["preprocessor_runs"], 2, "{cold:?}\n{}", cc_time_macro_scan_diagnostics(&root, &compiler));
     let object = fs::read(root.join("unit.o")).unwrap();
     fs::remove_file(root.join("unit.o")).unwrap();
     let warm = compile();
