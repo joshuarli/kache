@@ -10510,8 +10510,9 @@ fn stage_cc_stdout_artifact(
 /// separates arguments, a backslash takes the next character literally, and
 /// single or double quotes group text. Where they differ the file is refused:
 /// an empty quoted argument (GCC keeps it, Clang drops it), a backslash
-/// before a line break or at the end, and carriage returns. Both drivers
-/// resolve nested `@file` paths from cwd in GNU mode, not the containing file.
+/// before a line break or at the end, carriage returns, vertical tabs, and
+/// form feeds (GCC splits on vertical tabs and form feeds; Clang does not).
+/// Both drivers resolve nested `@file` paths from cwd in GNU mode, not the containing file.
 /// Clang config/quoting overrides, hidden `--`, cycles, excessive expansion, and missing
 /// or non-UTF-8 files are refused.
 fn expand_cc_response_files(args: &[String], env: &InvocationEnv) -> Result<Vec<String>> {
@@ -10613,7 +10614,7 @@ fn cc_response_file_snapshot(
 
 pub(crate) fn gnu_response_file_arguments(body: &str) -> Result<Vec<String>> {
     anyhow::ensure!(!body.contains('\r'), "carriage returns split differently between GCC and Clang");
-    anyhow::ensure!(!body.contains('\x0B'), "GCC splits on vertical tab and Clang does not");
+    anyhow::ensure!(!body.contains(['\x0B', '\x0C']), "GCC splits on vertical tab and form feed and Clang does not");
     let mut tokens = Vec::new();
     let mut chars = body.chars().peekable();
     loop {
