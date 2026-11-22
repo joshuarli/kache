@@ -1174,6 +1174,92 @@ fn cc_time_macro_scan_diagnostics(root: &std::path::Path, compiler: &std::path::
 }
 
 #[test]
+fn pinned_timestamp_detection_uses_one_preprocess() {
+    if !Command::new("gcc").arg("--version").output().is_ok_and(|o| o.status.success()) {
+        return;
+    }
+    for source in ["int value = 42;\n", "const char *stamp = __TIMESTAMP__;\n"] {
+        let dir = FixtureDir::new();
+        let root = dir.path().canonicalize().unwrap();
+        fs::write(root.join("kache.toml"), "").unwrap();
+        fs::write(root.join("unit.c"), source).unwrap();
+        let output = cacheable_cc_command(&root)
+            .args(["gcc", "-MMD", "-c", "unit.c", "-o", "unit.o"])
+            .env("SOURCE_DATE_EPOCH", "946684800")
+            .env("KACHE_DEFERRED_DISCOVERY", "0").output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let event = last_cc_event(&root);
+        assert_eq!(event["result"], "miss", "{event:?}");
+        assert_eq!(event["preprocessor_runs"], 1, "{event:?}");
+    }
+}
+
+#[test]
+fn cc_token_pasted_timestamp_mtime_changes_miss() {
+    if Command::new("gcc").arg("--version").output().is_err() {
+        return;
+    }
+    for discovery in ["0", "1"] {
+        for variant in ["source", "header", "commandline"] {
+            let dir = FixtureDir::new();
+            let root = dir.path().canonicalize().unwrap();
+            fs::write(root.join("kache.toml"), "").unwrap();
+            let definitions = "#define LEFT __TIME\n#define RIGHT STAMP__\n";
+            fs::write(root.join("parts.h"), definitions).unwrap();
+            let pieces = match variant {
+                "source" => definitions,
+                "header" => "#include \"parts.h\"\n",
+                _ => "",
+            };
+            fs::write(root.join("unit.c"), format!(
+                "#define JOIN_INNER(a,b) a##b\n#define JOIN(a,b) JOIN_INNER(a,b)\n{pieces}const char *stamp = JOIN(LEFT, RIGHT);\n"
+            )).unwrap();
+            let extra: &[&str] = if variant == "commandline" {
+                &["-DLEFT=__TIME", "-DRIGHT=STAMP__"]
+            } else { &[] };
+            let discovery_args: &[&str] = if discovery == "0" { &["-MMD"] } else { &[] };
+            let touch = |seconds| {
+                fs::File::open(root.join("unit.c")).unwrap().set_modified(
+                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+                ).unwrap();
+            };
+            let compile = || {
+                let _ = fs::remove_file(root.join("unit.o"));
+                let output = cacheable_cc_command(&root).arg("gcc").args(extra)
+                    .args(discovery_args)
+                    .arg(format!("-ffile-prefix-map={}=/portable", root.display()))
+                    .args(["-c", "unit.c", "-o", "unit.o"])
+                    .env("SOURCE_DATE_EPOCH", "946684800")
+                    .env("TZ", "UTC").env("KACHE_CC_PATH_NORMALIZE", "1")
+                    .env("KACHE_DEFERRED_DISCOVERY", discovery).output().unwrap();
+                assert!(output.status.success(), "{output:?}");
+                fs::read(root.join("unit.o")).unwrap()
+            };
+            touch(978_307_200);
+            let first = compile();
+            assert_eq!(last_cc_event(&root)["result"], "miss");
+            assert_eq!(first, compile());
+            assert_eq!(last_cc_event(&root)["result"], "local_hit");
+            assert_eq!(index_rows(&root, "cc_preprocess_memos"), 1);
+            assert_eq!(last_cc_event(&root)["preprocessor_runs"], 0, "{variant} {discovery}");
+            touch(1_012_608_000);
+            let changed = compile();
+            let event = last_cc_event(&root);
+            let raw = Command::new("gcc").current_dir(&root).args(extra)
+                .arg(format!("-ffile-prefix-map={}=/portable", root.display()))
+                .args(["-c", "unit.c", "-o", "expected.o"])
+                .env("SOURCE_DATE_EPOCH", "946684800").env("TZ", "UTC").output().unwrap();
+            assert!(raw.status.success(), "{raw:?}");
+            let expected = fs::read(root.join("expected.o")).unwrap();
+            if first != expected {
+                assert!(!matches!(event["result"].as_str(), Some("local_hit" | "remote_hit")), "{variant}, discovery={discovery}: {event:?}");
+            }
+            assert_eq!(changed, expected);
+        }
+    }
+}
+
+#[test]
 fn cc_timestamp_header_addition_and_mtime_change_do_not_restore_stale_objects() {
     let dir = FixtureDir::new();
     let root = dir.path().canonicalize().unwrap();
@@ -1324,7 +1410,7 @@ exec cc "$@"
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(last_cc_event(&root)["preprocessor_runs"], 1, "keyed first");
+    assert_eq!(last_cc_event(&root)["preprocessor_runs"], 1, "keyed first with timestamp check");
     assert!(
         Command::new("cc")
             .args(["main.c", "unit.o", "-o", "check-value"])
@@ -1409,7 +1495,7 @@ exec cc "$@"
         assert_eq!(
             last_cc_event(&root)["preprocessor_runs"],
             1,
-            "{phase}: keyed first"
+            "{phase}: keyed first with timestamp check"
         );
         assert!(
             Command::new("cc")

@@ -5312,6 +5312,21 @@ fn a_memo_key_from_before_the_settle_rules_is_never_todays() {
         "test compiler version",
     ).unwrap();
     assert_ne!(today, old_env, "an old memo omitted driver environment inputs");
+    let unchecked_timestamp = cc_preprocess_memo_key_as(
+        b"cc-preprocess-memo-v10", &parsed, &[], "test compiler version",
+    ).unwrap();
+    assert_ne!(today, unchecked_timestamp, "an old memo skipped the pinned timestamp check");
+    let root = tempfile::tempdir().unwrap();
+    let cache = kache_store::file_hash::FileHashCache::open(&root.path().join("index.db")).unwrap();
+    let input = crate::cache_key::CcPreprocessMemoInput {
+        name: "memo-source.c".into(), content: "old-content".into(), mapped: "old-content".into(),
+        fingerprint: crate::cache_key::FileFingerprint {
+            path: "/old/memo-source.c".into(), size: 1, mtime_ns: 1, ctime_ns: 1, inode: 1,
+        }, observed_ns: 0,
+    };
+    cache.put_cc_preprocess_memo_inputs(&unchecked_timestamp, "stale-v10-digest", &[input]).unwrap();
+    assert!(cache.get_cc_preprocess_memo(&unchecked_timestamp).unwrap().is_some());
+    assert!(cache.get_cc_preprocess_memo(&today).unwrap().is_none());
 }
 
 #[test]
@@ -10469,15 +10484,27 @@ fn a_memo_identity_is_portable_only_when_every_root_is_mapped() {
 }
 
 #[test]
+fn source_date_epoch_support_distinguishes_timestamp_pinning() {
+    assert_eq!(cc_source_date_epoch_support(b"\"Jan  1 2000\" \"00:00:00\"\n\"Sat Jan  1 00:00:00 2000\"\n"), CcSourceDateEpochSupport::All);
+    assert_eq!(cc_source_date_epoch_support(b"\"Jan  1 2000\" \"00:00:00\"\n\"Mon Jan  1 00:00:00 2001\"\n"), CcSourceDateEpochSupport::DateTime);
+    assert_eq!(cc_source_date_epoch_support(b""), CcSourceDateEpochSupport::None);
+    assert_eq!(cc_source_date_epoch_support(b"compiler error"), CcSourceDateEpochSupport::None);
+}
+
+#[test]
 fn a_memo_hash_carries_the_path_bound_flag() {
     let digest = "a".repeat(64);
-    assert_eq!(cc_memo_hash(&digest, false), digest);
-    assert_eq!(cc_memo_hash(&digest, true), format!("pb:{digest}"));
-    assert_eq!(cc_memo_hash_parts(&digest), (digest.as_str(), false));
-    assert_eq!(
-        cc_memo_hash_parts(&format!("pb:{digest}")),
-        (digest.as_str(), true)
-    );
+    for path_bound in [false, true] {
+        for timestamp_sensitive in [false, true] {
+            let encoded = cc_memo_hash(&digest, path_bound, timestamp_sensitive);
+            assert_eq!(cc_memo_hash_parts(&encoded), (digest.as_str(), path_bound, timestamp_sensitive));
+        }
+    }
+    assert_eq!(cc_memo_hash(&digest, false, false), digest);
+    assert_eq!(cc_memo_hash(&digest, true, false), format!("pb:{digest}"));
+    assert_eq!(cc_memo_hash(&digest, true, true), format!("ts:pb:{digest}"));
+    assert_eq!(cc_memo_hash_parts(""), ("", false, false));
+    assert_eq!(cc_memo_hash_parts("unknown:hash"), ("unknown:hash", false, false));
 }
 
 /// The memo identity folds the mapping targets as a set: two checkouts
