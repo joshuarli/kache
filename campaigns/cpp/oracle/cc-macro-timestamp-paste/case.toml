@@ -1,0 +1,19 @@
+summary = "token-pasted __TIMESTAMP__ follows source mtime with a pinned epoch"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+env = { SOURCE_DATE_EPOCH = "946684800" }
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+[[step]]
+name = "populate"
+reuse = "miss"
+[[step]]
+name = "warm"
+reuse = "any"
+action = [{ op = "delete-outputs" }]
+[[step]]
+name = "touch"
+reuse = "miss"
+action = [{ op = "touch", path = "u.c" }, { op = "delete-outputs" }]

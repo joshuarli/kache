@@ -2272,6 +2272,7 @@ fn parse_preprocess_dependencies(raw: &str, cwd: &Path) -> Result<Vec<PathBuf>> 
 #[derive(Debug)]
 struct PreprocessHash {
     hash: String,
+    timestamp_sensitive: bool,
     fingerprints: Option<Vec<crate::cache_key::CcPreprocessMemoInput>>,
     /// The expansion spells out a checkout root, so its object does too and
     /// the key is bound to this checkout (see [`hash_cc_expansion`]).
@@ -2894,6 +2895,7 @@ fn preprocess_universal_hash(
     let mut slices = Vec::new();
     let mut fingerprints: Vec<crate::cache_key::CcPreprocessMemoInput> = Vec::new();
     let mut path_bound = false;
+    let mut timestamp_sensitive = false;
     for arch in parsed.arch_slices() {
         let slice = preprocess_hash(&parsed.single_slice(&arch)?, prefix_maps, file_hasher, None)?;
         let inputs = slice
@@ -2901,6 +2903,7 @@ fn preprocess_universal_hash(
             .with_context(|| format!("cc: the {arch} slice gave no read set to key"))?;
         slices.push(format!("{arch}={}+{}", cc_direct_inputs_digest(&inputs), slice.hash));
         path_bound |= slice.path_bound;
+        timestamp_sensitive |= slice.timestamp_sensitive;
         for input in inputs {
             if !fingerprints.iter().any(|known| known.local_path() == input.local_path()) {
                 fingerprints.push(input);
@@ -2909,6 +2912,7 @@ fn preprocess_universal_hash(
     }
     Ok(PreprocessHash {
         hash: slices.join(";"),
+        timestamp_sensitive,
         fingerprints: Some(fingerprints),
         path_bound,
     })
@@ -3252,6 +3256,17 @@ fn cc_time_macro_free_inputs(
     dep_path: Option<&Path>,
     file_hasher: &crate::cache_key::FileHasher<'_>,
 ) -> Option<BTreeMap<PathBuf, String>> {
+    let cwd = parsed.invocation_env.cwd()?;
+    let dependencies = parse_preprocess_dependencies(&fs::read_to_string(dep_path?).ok()?, cwd).ok()?;
+    cc_time_macro_free_read_set(parsed, resolved, &dependencies, file_hasher)
+}
+
+fn cc_time_macro_free_read_set(
+    parsed: &CcArgs,
+    resolved: Option<&crate::probe::ResolvedConfig>,
+    dependencies: &[PathBuf],
+    file_hasher: &crate::cache_key::FileHasher<'_>,
+) -> Option<BTreeMap<PathBuf, String>> {
     let resolved = resolved.filter(|driver| driver.native_driver)?;
     let tokens = resolved.resolved_tokens.as_ref()?;
     let elided_macro = tokens.iter().enumerate().any(|(index, arg)| {
@@ -3275,8 +3290,6 @@ fn cc_time_macro_free_inputs(
     {
         return None;
     }
-    let cwd = parsed.invocation_env.cwd()?;
-    let dependencies = parse_preprocess_dependencies(&fs::read_to_string(dep_path?).ok()?, cwd).ok()?;
     if !parsed.sources.iter().all(|source| {
         parsed.invocation_env.resolve(source).is_some_and(|source| dependencies.contains(&source))
     }) {
@@ -3284,11 +3297,11 @@ fn cc_time_macro_free_inputs(
     }
     let mut scanned = BTreeMap::new();
     for path in dependencies {
-        let bytes = fs::read(&path).ok()?;
+        let bytes = fs::read(path).ok()?;
         if cc_may_reference_time_macro(&bytes) {
             return None;
         }
-        scanned.insert(path, blake3::hash(&bytes).to_hex().to_string());
+        scanned.insert(path.clone(), blake3::hash(&bytes).to_hex().to_string());
     }
     if cc_implicit_pch_key(parsed, file_hasher).ok()?.is_some() {
         return None;
@@ -3368,11 +3381,19 @@ fn preprocess_hash(
         anyhow::bail!("cc -E key probe produced no output");
     }
     let unpinned = !cc_source_date_epoch_is_pinned(parsed);
-    let time_macro_free = unpinned.then(|| {
-        cc_time_macro_free_inputs(
-            parsed, resolved, dep_path.as_ref().map(|(path, _)| path.as_path()).filter(|_| captured_dependencies), file_hasher,
-        )
-    }).flatten();
+    let time_macro_free = cc_time_macro_free_inputs(
+        parsed, resolved, dep_path.as_ref().map(|(path, _)| path.as_path()).filter(|_| captured_dependencies), file_hasher,
+    );
+    let mut timestamp_sensitive = false;
+    if !unpinned && time_macro_free.is_none() {
+        let check_args = compose_cc_args(&pp_args, vec![
+            "-Wno-builtin-macro-redefined".into(),
+            "-D__TIMESTAMP__=\"kache-pinned-timestamp\"".into(),
+        ]);
+        let checked = run(&check_args)?;
+        timestamp_sensitive = !checked.status.success()
+            || checked.stdout != output.stdout || checked.stderr != output.stderr;
+    }
     if unpinned && time_macro_free.is_none() {
         let check_args = compose_cc_args(
             &pp_args,
@@ -3453,6 +3474,7 @@ fn preprocess_hash(
     }
     Ok(PreprocessHash {
         hash,
+        timestamp_sensitive,
         fingerprints,
         path_bound,
     })
@@ -6347,7 +6369,8 @@ const CC_ARTIFACT_SCHEMA: &[u8] = b"cc_artifact_schema:4\n";
 /// v9: drivers that ignore SOURCE_DATE_EPOCH may only memoize expansions
 /// proven independent of time macros.
 /// v10: the driver and preprocessing memos share expanded environment inputs.
-const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v10";
+/// v11: pinned expansions also check for token-pasted timestamp macros.
+const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v11";
 
 /// Local identity for a preprocessor invocation. The environment is included
 /// as selected by [`cc_memo_env_is_keyed`].
@@ -8617,13 +8640,24 @@ fn cc_timestamp_inputs_sensitive(
     Ok(sensitive)
 }
 
+#[cfg(test)]
 fn cc_timestamp_key(
     parsed: &CcArgs,
     inputs: &[PathBuf],
     prefix_maps: &[CcPrefixMap],
     file_hasher: Option<&crate::cache_key::FileHasher<'_>>,
 ) -> Result<Option<String>> {
-    let sensitive = parsed.rest.iter().any(|arg| cc_timestamp_may_expand(arg.as_bytes()))
+    cc_timestamp_key_for(parsed, inputs, prefix_maps, file_hasher, false)
+}
+
+fn cc_timestamp_key_for(
+    parsed: &CcArgs,
+    inputs: &[PathBuf],
+    prefix_maps: &[CcPrefixMap],
+    file_hasher: Option<&crate::cache_key::FileHasher<'_>>,
+    force: bool,
+) -> Result<Option<String>> {
+    let sensitive = force || parsed.rest.iter().any(|arg| cc_timestamp_may_expand(arg.as_bytes()))
         || cc_timestamp_inputs_sensitive(inputs, file_hasher)?;
     if !sensitive {
         return Ok(None);
@@ -9958,6 +9992,18 @@ impl CcCompiler {
         // The read set comes back with the expansion, from the memo when it
         // answers and from the dependency capture otherwise. It is what makes
         // the shadowing resolution below possible.
+        let discovery = if let CcKeyDiscovery::Captured(ref captured) = discovery {
+            let inputs = captured.fingerprints.iter()
+                .map(|input| PathBuf::from(input.local_path())).collect::<Vec<_>>();
+            if cc_time_macro_free_read_set(parsed, Some(&resolved), &inputs, ctx.file_hasher).is_none() {
+                CcKeyDiscovery::Expansion
+            } else {
+                discovery
+            }
+        } else {
+            discovery
+        };
+        let mut timestamp_sensitive = false;
         let (pp_hash, read_inputs) = if let CcKeyDiscovery::Captured(captured) = discovery {
             // The compile already ran and this is what it read: the digest
             // of that read set stands where the expansion hash would, and
@@ -10023,6 +10069,7 @@ impl CcCompiler {
                 preprocess_hash(parsed, &prefix_maps, ctx.file_hasher, Some(&resolved))?
             };
             self.key_path_bound.set(preprocessed.path_bound);
+            timestamp_sensitive = preprocessed.timestamp_sensitive;
             let read_inputs = preprocessed.fingerprints.as_ref().map(|inputs| {
                 inputs
                     .iter()
@@ -10047,7 +10094,7 @@ impl CcCompiler {
             } else {
                 format!("{digest}+{}", preprocessed.hash)
             };
-            if let (Some(memo_key), Some(fingerprints)) = (memo_key, preprocessed.fingerprints) {
+            if let (Some(memo_key), Some(fingerprints)) = (memo_key.filter(|_| !timestamp_sensitive), preprocessed.fingerprints) {
                 self.pending_preprocess_memo
                     .borrow_mut()
                     .replace(PendingCcPreprocessMemo {
@@ -10080,11 +10127,12 @@ impl CcCompiler {
             hasher.update(b"\n");
             log::trace!(target: "kache::cache_key", "[key:{trace_name}] report_inputs={fields:?}");
         }
-        if let Some(timestamp) = cc_timestamp_key(
+        if let Some(timestamp) = cc_timestamp_key_for(
             parsed,
             read_inputs.as_deref().unwrap_or_default(),
             &prefix_maps,
             Some(ctx.file_hasher),
+            timestamp_sensitive,
         )? {
             hasher.update(b"timestamp_mtimes.v1:");
             hasher.update(timestamp.as_bytes());

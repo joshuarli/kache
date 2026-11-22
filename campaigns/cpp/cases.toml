@@ -465,6 +465,15 @@ ccache.suite = "source_date_epoch.bash"
 status = "oracle"
 
 [[case]]
+id = "cc-macro-timestamp-paste"
+package = "CCP-02"
+summary = "token-pasted __TIMESTAMP__ follows source mtime with a pinned epoch"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "source_date_epoch.bash"
+status = "oracle"
+
+[[case]]
 id = "cc-diagnostic-locale"
 package = "CCP-02"
 summary = "LC_ALL/diagnostic locale affecting diagnostics is accounted for"

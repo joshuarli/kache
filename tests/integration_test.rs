@@ -3702,11 +3702,11 @@ fn test_cc_hit_follows_include_shadowing_search_order_and_same_length_edits() {
     assert_eq!(rebuild(&a_first), "8\n");
 }
 
-/// Without a memo the key comes from what the compile read, so a cold
-/// object costs one compiler run and no preprocess; the memo it leaves
-/// makes the next build a hit, and a changed header a miss.
+/// A compile-first read set with system-header pastes needs a timestamp
+/// check before publishing its memo. The checked memo makes warm builds
+/// hits, and a changed header needs another check.
 #[test]
-fn test_cc_direct_key_compiles_once_without_a_preprocess() {
+fn test_cc_direct_key_checks_timestamp_before_memoizing_system_headers() {
     build_kache();
 
     let project = TempDir::new().unwrap();
@@ -3730,7 +3730,7 @@ fn test_cc_direct_key_compiles_once_without_a_preprocess() {
     );
     let report = kache_report(cache_dir.path());
     assert_last_cc_event(&report, "miss", 1);
-    assert_last_cc_preprocessor_runs(&report, 0);
+    assert_last_cc_preprocessor_runs(&report, 2);
 
     std::fs::remove_file(project.path().join("foo.o")).unwrap();
     run_kache_cc(project.path(), cache_dir.path(), &args);
@@ -3746,7 +3746,7 @@ fn test_cc_direct_key_compiles_once_without_a_preprocess() {
     run_kache_cc(project.path(), cache_dir.path(), &args);
     let report = kache_report(cache_dir.path());
     assert_last_cc_event(&report, "miss", 1);
-    assert_last_cc_preprocessor_runs(&report, 1);
+    assert_last_cc_preprocessor_runs(&report, 2);
 
     // Reverting the header returns to a read set the memo still keeps, so
     // the earlier entry is found without the preprocessor.

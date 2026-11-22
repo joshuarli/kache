@@ -5312,6 +5312,10 @@ fn a_memo_key_from_before_the_settle_rules_is_never_todays() {
         "test compiler version",
     ).unwrap();
     assert_ne!(today, old_env, "an old memo omitted driver environment inputs");
+    let unchecked_timestamp = cc_preprocess_memo_key_as(
+        b"cc-preprocess-memo-v10", &parsed, &[], "test compiler version",
+    ).unwrap();
+    assert_ne!(today, unchecked_timestamp, "an old memo skipped the pinned timestamp check");
 }
 
 #[test]
