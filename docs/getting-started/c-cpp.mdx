@@ -203,6 +203,7 @@ Kache currently passes through:
 - precompiled headers built without `-o` or from another precompiled header, `-include-pch` outside `-c`, `-include` naming a `.pch` or `.gch`, building module files, and implicit modules
 - coverage, split DWARF and serialized diagnostics outside `-c`, such as `-S --coverage`
 - assembly, including inline `asm` in C, that reads another file with `.incbin` or `.include`
+- GCC high-level assembler listings (`-Wa,-adhln`) with user `-ffile-prefix-map` or `-fdebug-prefix-map`, since GAS can read the mapped source outside the compiler's dependency list
 - assembly that uses macros or repetitions (`.macro`, `.irp`, `.irpc`, `.rept`, `.altmacro`) able to generate those directives
 - inline `asm` whose text is a computed expression rather than a string literal
 - header availability probes with macro header names, quoted probes inside macro bodies, wrappers that transform the argument, or trigraph line continuations

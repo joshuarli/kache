@@ -1078,6 +1078,11 @@ impl CcArgs {
             if !supported || unsafe_option || invalid_aux || repeated_output {
                 reasons.push(RefuseReason::Unsupported("cc reports with unknown compiler family, append outputs, LTO, dump overrides or invalid output paths — not yet"));
             }
+            if self.lists_assembler_source() && self.rest.iter().any(|arg| {
+                arg.starts_with("-ffile-prefix-map=") || arg.starts_with("-fdebug-prefix-map=")
+            }) {
+                reasons.push(RefuseReason::Unsupported("cc assembler listing with user prefix mapping may read an untracked source — not yet"));
+            }
         }
 
         // Universal objects are keyed slice by slice. Sidecars would need
