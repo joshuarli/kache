@@ -1,0 +1,47 @@
+summary = "Clang rejects flags joined by vertical tab or form feed; a supported response snapshot preserves a real compiler error"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+families = ["clang"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "@args.rsp", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+also_names = ["@args.rsp"]
+
+[[step]]
+name = "populate-from-tab-and-newline"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "carriage-return"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "args.rsp", content = "-fno-common\r-fno-strict-aliasing\n-DVALUE=8\n" }]
+
+[[step]]
+name = "vertical-tab-error"
+reuse = "miss"
+status = 1
+action = [{ op = "delete-outputs" }, { op = "write", path = "args.rsp", content = "-fno-common\u000B-fno-strict-aliasing\n-DVALUE=8\n" }]
+
+[[step]]
+name = "form-feed-error"
+reuse = "miss"
+status = 1
+action = [{ op = "delete-outputs" }, { op = "write", path = "args.rsp", content = "-fno-common\u000C-fno-strict-aliasing\n-DVALUE=8\n" }]
+
+[[step]]
+name = "snapshot-compile-error"
+reuse = "miss"
+status = 1
+action = [{ op = "delete-outputs" }, { op = "write", path = "args.rsp", content = "-fno-common\t-fno-strict-aliasing\n-DVALUE=missing\n" }]
+
+[[step]]
+name = "restore-after-errors"
+reuse = "hit"
+action = [{ op = "delete-outputs" }, { op = "write", path = "args.rsp", content = "-fno-common\t-fno-strict-aliasing\n-DVALUE=7\n" }]

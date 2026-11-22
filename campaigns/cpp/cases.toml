@@ -555,6 +555,24 @@ ccache.suite = "kache-original"
 status = "oracle"
 
 [[case]]
+id = "cc-rsp-gcc-control-bytes"
+package = "CCP-03"
+summary = "GCC splits literal form feed and vertical tab in response files"
+profiles = ["both"]
+compilers = ["gcc"]
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-rsp-clang-control-bytes"
+package = "CCP-03"
+summary = "Clang preserves literal form feed and vertical tab in response flags, unlike GCC"
+profiles = ["both"]
+compilers = ["clang", "apple-clang"]
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
 id = "cc-rsp-basic"
 package = "CCP-03"
 summary = "a compile whose arguments come from an @response file caches like ccache, and editing the file invalidates"

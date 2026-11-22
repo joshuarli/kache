@@ -1,0 +1,2 @@
+-fno-common	-fno-strict-aliasing
+-DVALUE=7

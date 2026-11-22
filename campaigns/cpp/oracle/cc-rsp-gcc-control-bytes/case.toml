@@ -1,0 +1,34 @@
+summary = "GCC splits control whitespace in response files, including literal vertical tab and form feed"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+families = ["gcc"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "@args.rsp", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+also_names = ["@args.rsp"]
+
+[[step]]
+name = "populate-from-tab-and-newline"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "form-feed-and-vertical-tab"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "args.rsp", content = "-fno-common\u000C-fno-strict-aliasing\u000B-DVALUE=8\n" }]
+
+[[step]]
+name = "form-feed-alone"
+reuse = "miss"
+action = [{ op = "delete-outputs" }, { op = "write", path = "args.rsp", content = "-fno-common\u000C-fno-strict-aliasing\t-DVALUE=8\n" }]
+
+[[step]]
+name = "restore-after-control-bytes"
+reuse = "hit"
+action = [{ op = "delete-outputs" }, { op = "write", path = "args.rsp", content = "-fno-common\t-fno-strict-aliasing\n-DVALUE=7\n" }]

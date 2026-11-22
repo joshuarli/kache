@@ -10978,7 +10978,7 @@ fn gnu_response_files_split_like_gcc_and_clang() {
     assert_eq!(split("-DNAME='a b' \"-I dir/with space\""), ["-DNAME=a b", "-I dir/with space"]);
     assert_eq!(split(r#"a\ b "c\"d" 'e\'f' g"h i"j"#), ["a b", "c\"d", "e'f", "gh ij"]);
     assert!(split("  \n").is_empty());
-    for refused in ["a \"\" b", "a ''", "a\\\nb", "a\\", "a\r\nb"] {
+    for refused in ["a \"\" b", "a ''", "a\\\nb", "a\\", "a\r\nb", "a\x0Bb", "a\x0Cb"] {
         assert!(gnu_response_file_arguments(refused).is_err(), "{refused:?}");
     }
 }
