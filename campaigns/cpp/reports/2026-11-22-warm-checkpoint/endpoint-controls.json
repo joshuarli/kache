@@ -1,0 +1,242 @@
+[
+  {
+    "tc": "gcc",
+    "mode": "fallback",
+    "pair": 0,
+    "ms": 25.254955
+  },
+  {
+    "tc": "gcc",
+    "mode": "fallback",
+    "pair": 1,
+    "ms": 17.694837
+  },
+  {
+    "tc": "gcc",
+    "mode": "fallback",
+    "pair": 2,
+    "ms": 18.126099
+  },
+  {
+    "tc": "gcc",
+    "mode": "fallback",
+    "pair": 3,
+    "ms": 19.837302
+  },
+  {
+    "tc": "gcc",
+    "mode": "fallback",
+    "pair": 4,
+    "ms": 13.690529
+  },
+  {
+    "tc": "gcc",
+    "mode": "fallback",
+    "pair": 5,
+    "ms": 13.865724
+  },
+  {
+    "tc": "gcc",
+    "mode": "fallback",
+    "pair": 6,
+    "ms": 17.170018
+  },
+  {
+    "tc": "gcc",
+    "mode": "fallback",
+    "pair": 7,
+    "ms": 13.498423
+  },
+  {
+    "tc": "gcc",
+    "mode": "fallback",
+    "pair": 8,
+    "ms": 15.978196
+  },
+  {
+    "tc": "gcc",
+    "mode": "fallback",
+    "pair": 9,
+    "ms": 14.505236
+  },
+  {
+    "tc": "gcc",
+    "mode": "native",
+    "pair": 0,
+    "ms": 14.164992
+  },
+  {
+    "tc": "gcc",
+    "mode": "native",
+    "pair": 1,
+    "ms": 14.002218
+  },
+  {
+    "tc": "gcc",
+    "mode": "native",
+    "pair": 2,
+    "ms": 16.234892
+  },
+  {
+    "tc": "gcc",
+    "mode": "native",
+    "pair": 3,
+    "ms": 15.738936
+  },
+  {
+    "tc": "gcc",
+    "mode": "native",
+    "pair": 4,
+    "ms": 14.720023
+  },
+  {
+    "tc": "gcc",
+    "mode": "native",
+    "pair": 5,
+    "ms": 15.401996
+  },
+  {
+    "tc": "gcc",
+    "mode": "native",
+    "pair": 6,
+    "ms": 18.224997
+  },
+  {
+    "tc": "gcc",
+    "mode": "native",
+    "pair": 7,
+    "ms": 15.744939
+  },
+  {
+    "tc": "gcc",
+    "mode": "native",
+    "pair": 8,
+    "ms": 14.187225
+  },
+  {
+    "tc": "gcc",
+    "mode": "native",
+    "pair": 9,
+    "ms": 14.663108
+  },
+  {
+    "tc": "clang",
+    "mode": "fallback",
+    "pair": 0,
+    "ms": 15.962552
+  },
+  {
+    "tc": "clang",
+    "mode": "fallback",
+    "pair": 1,
+    "ms": 14.490779
+  },
+  {
+    "tc": "clang",
+    "mode": "fallback",
+    "pair": 2,
+    "ms": 16.585046
+  },
+  {
+    "tc": "clang",
+    "mode": "fallback",
+    "pair": 3,
+    "ms": 18.611403
+  },
+  {
+    "tc": "clang",
+    "mode": "fallback",
+    "pair": 4,
+    "ms": 15.433022
+  },
+  {
+    "tc": "clang",
+    "mode": "fallback",
+    "pair": 5,
+    "ms": 15.816553
+  },
+  {
+    "tc": "clang",
+    "mode": "fallback",
+    "pair": 6,
+    "ms": 17.019447
+  },
+  {
+    "tc": "clang",
+    "mode": "fallback",
+    "pair": 7,
+    "ms": 19.497651
+  },
+  {
+    "tc": "clang",
+    "mode": "fallback",
+    "pair": 8,
+    "ms": 16.216312
+  },
+  {
+    "tc": "clang",
+    "mode": "fallback",
+    "pair": 9,
+    "ms": 20.422349
+  },
+  {
+    "tc": "clang",
+    "mode": "native",
+    "pair": 0,
+    "ms": 16.895993
+  },
+  {
+    "tc": "clang",
+    "mode": "native",
+    "pair": 1,
+    "ms": 17.226051
+  },
+  {
+    "tc": "clang",
+    "mode": "native",
+    "pair": 2,
+    "ms": 14.518254
+  },
+  {
+    "tc": "clang",
+    "mode": "native",
+    "pair": 3,
+    "ms": 19.909383
+  },
+  {
+    "tc": "clang",
+    "mode": "native",
+    "pair": 4,
+    "ms": 17.671243
+  },
+  {
+    "tc": "clang",
+    "mode": "native",
+    "pair": 5,
+    "ms": 15.293204
+  },
+  {
+    "tc": "clang",
+    "mode": "native",
+    "pair": 6,
+    "ms": 15.867735
+  },
+  {
+    "tc": "clang",
+    "mode": "native",
+    "pair": 7,
+    "ms": 14.89531
+  },
+  {
+    "tc": "clang",
+    "mode": "native",
+    "pair": 8,
+    "ms": 24.881585
+  },
+  {
+    "tc": "clang",
+    "mode": "native",
+    "pair": 9,
+    "ms": 16.267105
+  }
+]

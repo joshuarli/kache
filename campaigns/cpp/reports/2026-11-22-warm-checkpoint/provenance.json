@@ -1,0 +1,135 @@
+{
+  "endpoint": {
+    "versions": {
+      "A": {
+        "worktree": "/home/ubuntu/repos/kache/.work/wt/warm-endpoint-da350481",
+        "revision": "da350481a58373829051df9b6eff35400e0ba9a9",
+        "kache_sha256": "4221d290c712fffcd36f45f959dbc083fe91b0a51b203cc52be489c140b36f9d",
+        "engine_sha256": "d6d30410793750b715ad8dad9612335430d4be719355ad33e66ed8823a121220"
+      },
+      "B": {
+        "worktree": "/home/ubuntu/repos/kache/.work/wt/warm-endpoint-c4d2b947",
+        "revision": "c4d2b947f3cd1412decfed602a7ac8ded770df88",
+        "kache_sha256": "4221d290c712fffcd36f45f959dbc083fe91b0a51b203cc52be489c140b36f9d",
+        "engine_sha256": "bc20818712f162c513cbee801342850793cc9e351c272f324463d30cdedc430b"
+      }
+    },
+    "compilers": {
+      "gcc": {
+        "path": "/usr/bin/x86_64-linux-gnu-g++-11",
+        "sha256": "2360901d864cf10bfd6296e261cb2c14053552a80377761ab07146ec9ec9a2c0",
+        "blake3": "e75ee280ff29176930505ba0e25dbc1088e8a9eb7ddbbb3c4b2ac6d55b77738a",
+        "version": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0\nCopyright (C) 2021 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "clang": {
+        "path": "/usr/lib/llvm-14/bin/clang",
+        "sha256": "31925065812631303cf9af9a30b2f56427d2102667a87a9fb4ba03a306104589",
+        "blake3": "b42d6cd7d17d60d97d6a166919d7cdd557f882188ef732ab838038f3e7f22047",
+        "version": "Ubuntu clang version 14.0.0-1ubuntu1.1\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/lib/llvm-14/bin\n"
+      }
+    },
+    "ccache": {
+      "path": "/home/ubuntu/repos/kache/.work/wt/cc-bench-l1-rerun/.work/tmp/ccache/ccache",
+      "sha256": "e3615eb750cf81758366f4de088c00574ad98d5b55ece059095554ec1f7c5188"
+    },
+    "driver_sha256": "a179e59c1e579bac647119c7aea54f70cfef4c60962bfbfa14cf07aa3e60fb18",
+    "pairs": 10,
+    "jobs": 4,
+    "input_digest": "e75e4d58f8b52f6afd64a4a7c4fcbd2ada04dcc1167407a14e5646eca116b189",
+    "timed_region": "subprocess launch through make exit; unlink, hashes, events, start/stop outside",
+    "warm_state": "first warm after a fresh cache and cold 12-TU build; second warm recorded separately"
+  },
+  "bisect": {
+    "compiler": {
+      "path": "/usr/bin/x86_64-linux-gnu-g++-11",
+      "sha256": "2360901d864cf10bfd6296e261cb2c14053552a80377761ab07146ec9ec9a2c0"
+    },
+    "versions": {
+      "da350481a58373829051df9b6eff35400e0ba9a9": {
+        "worktree": "/home/ubuntu/repos/kache/.work/wt/warm-endpoint-da350481",
+        "frontend_sha256": "4221d290c712fffcd36f45f959dbc083fe91b0a51b203cc52be489c140b36f9d",
+        "engine_sha256": "d6d30410793750b715ad8dad9612335430d4be719355ad33e66ed8823a121220"
+      },
+      "934bba052d66a183de084c7b3fad4ab43352d8c0": {
+        "worktree": "/home/ubuntu/repos/kache/.work/wt/warm-probe-934bba05",
+        "frontend_sha256": "4221d290c712fffcd36f45f959dbc083fe91b0a51b203cc52be489c140b36f9d",
+        "engine_sha256": "c7cba6eb136e81600abab99a718601c877815cfbd1d10311c0fe381b3166f035"
+      },
+      "92cb3b3e27ad871bc8aab2866b3cd0cd0555be0e": {
+        "worktree": "/home/ubuntu/repos/kache/.work/wt/warm-probe-92cb3b3e",
+        "frontend_sha256": "4221d290c712fffcd36f45f959dbc083fe91b0a51b203cc52be489c140b36f9d",
+        "engine_sha256": "68745029d3923137aeed5a40dc5c2554bb099f02f6fb5e83c4505c75ce990d56"
+      },
+      "438c5f04080fc8427eb47bb08c873f2763461eb8": {
+        "worktree": "/home/ubuntu/repos/kache/.work/wt/warm-probe-438c5f04",
+        "frontend_sha256": "4221d290c712fffcd36f45f959dbc083fe91b0a51b203cc52be489c140b36f9d",
+        "engine_sha256": "1e07783881faa1e81522ae09e914189a05166a9e37bff87203cb276e8aa2450d"
+      },
+      "7829cedd027c8e19526884671c60d8329ff98e38": {
+        "worktree": "/home/ubuntu/repos/kache/.work/wt/warm-probe-7829cedd",
+        "frontend_sha256": "4221d290c712fffcd36f45f959dbc083fe91b0a51b203cc52be489c140b36f9d",
+        "engine_sha256": "3108a0e1eb9d194553dfd095f71420df8908f45789292a3949bcabe00c06f9f4"
+      },
+      "9553a432f80b8186bd89ed9443ee9c91f29ef16c": {
+        "worktree": "/home/ubuntu/repos/kache/.work/wt/warm-probe-9553a432",
+        "frontend_sha256": "003b4ede45e01ff83d4c9ea4685bf654143c183ccc46ea83a97f9c647662fe11",
+        "engine_sha256": "bf0ce9827f369067b050b8e9f029086e3b3bdbadde5172b40166b29d606c833d"
+      }
+    },
+    "input_digest": "e75e4d58f8b52f6afd64a4a7c4fcbd2ada04dcc1167407a14e5646eca116b189",
+    "driver_sha256": "50639d2df182b0b70a285d3d05c4289096aadfdea1924b299832bf5e3e9f273d",
+    "imported_helper_sha256": "a179e59c1e579bac647119c7aea54f70cfef4c60962bfbfa14cf07aa3e60fb18",
+    "jobs": 4,
+    "bootstrap": {
+      "draws": 50000,
+      "seed": 20261117,
+      "method": "paired percentile, ratio of medians"
+    }
+  },
+  "loss": {
+    "revision": "9553a432f80b8186bd89ed9443ee9c91f29ef16c",
+    "worktree": "/home/ubuntu/repos/kache/.work/wt/warm-probe-9553a432",
+    "binaries": {
+      "kache": {
+        "path": "/home/ubuntu/repos/kache/.work/wt/warm-probe-9553a432/target/release/kache",
+        "sha256": "003b4ede45e01ff83d4c9ea4685bf654143c183ccc46ea83a97f9c647662fe11",
+        "version": "kache 2.0.0-rc.2"
+      },
+      "engine": {
+        "path": "/home/ubuntu/repos/kache/.work/wt/warm-probe-9553a432/target/release/kache-engine",
+        "sha256": "bf0ce9827f369067b050b8e9f029086e3b3bdbadde5172b40166b29d606c833d",
+        "version": "kache 2.0.0-rc.2"
+      },
+      "ccache": {
+        "path": "/home/ubuntu/repos/kache/.work/wt/cc-bench-l1-rerun/.work/tmp/ccache/ccache",
+        "sha256": "e3615eb750cf81758366f4de088c00574ad98d5b55ece059095554ec1f7c5188",
+        "version": "ccache version 4.14.3"
+      },
+      "clang": {
+        "path": "/usr/lib/llvm-14/bin/clang",
+        "sha256": "31925065812631303cf9af9a30b2f56427d2102667a87a9fb4ba03a306104589",
+        "version": "Ubuntu clang version 14.0.0-1ubuntu1.1"
+      },
+      "gcc": {
+        "path": "/usr/bin/x86_64-linux-gnu-g++-11",
+        "sha256": "2360901d864cf10bfd6296e261cb2c14053552a80377761ab07146ec9ec9a2c0",
+        "version": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0"
+      }
+    },
+    "fixtures": {
+      "tiny": "57e4180e948276c652d7eba7a9f99c688b208c92d5cab6a31e4f7f263054fbc7",
+      "headers": "e75e4d58f8b52f6afd64a4a7c4fcbd2ada04dcc1167407a14e5646eca116b189"
+    },
+    "drivers": {
+      "run.py": "b2812ae74a71ef7c74852c73fe0d59ce489bdf34ab45de1530b1319b6213ff30",
+      "observe.c": "58c6f4e76fd46d4a466dd8674d3f9694954928f815cd325931a72f77191a78a0",
+      "analyze.py": "cea2fc4f6a21a5e1846397a07e71e39992df8297a3747b8080956177bbcb31a2",
+      "cpu.py": "a2b4be9d3d828e81bfa8d0873d3f3e9722a9e8fb5212353789cc56b956a40404",
+      "verify.py": "762d3b727e6dab6df5c5e02544405a9c0b7d856009b2cb652f7c30bafabe82ba"
+    },
+    "imported_helper": {
+      "path": "/home/ubuntu/warm-endpoint-ab-evidence/ab.py",
+      "sha256": "a179e59c1e579bac647119c7aea54f70cfef4c60962bfbfa14cf07aa3e60fb18"
+    }
+  }
+}

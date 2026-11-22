@@ -1,0 +1,41 @@
+{
+  "samples": 2511,
+  "pids": 360,
+  "categories": {
+    "cc_timestamp_may_expand": {
+      "count": 0,
+      "percent": 0.0
+    },
+    "cc_parsed_header_scans": {
+      "count": 775,
+      "percent": 30.864197530864196
+    },
+    "sqlite3": {
+      "count": 259,
+      "percent": 10.314615690959776
+    },
+    "deser": {
+      "count": 606,
+      "percent": 24.133811230585422
+    },
+    "cache_key_under": {
+      "count": 1055,
+      "percent": 42.01513341298288
+    },
+    "CcHeaderAnalysis": {
+      "count": 590,
+      "percent": 23.496614894464358
+    },
+    "cc_timestamp_inputs_sensitive": {
+      "count": 0,
+      "percent": 0.0
+    },
+    "CcHeaderAnalysis_and_deserializer": {
+      "count": 573,
+      "percent": 22.819593787335723
+    }
+  },
+  "frequency": 499,
+  "call_graph": "dwarf,16384",
+  "builds": 30
+}

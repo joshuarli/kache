@@ -13,7 +13,7 @@ plan: [C_CPP_PARITY_CAMPAIGN.md](../../C_CPP_PARITY_CAMPAIGN.md); tracking
 entry: KACH-26 in [TODO.md](../../TODO.md). Groundwork branch:
 `feat/ccp00-campaign-groundwork`.
 
-## Current state (L1 acceptance updated 2026-11-21 at `c4d2b947`)
+## Current state (diagnostic checkpoint 2026-11-22 at `9553a432`)
 
 Counts are taken from the files, not carried forward:
 `grep '^status = ' campaigns/cpp/cases.toml | sort | uniq -c` and
@@ -123,8 +123,9 @@ Engineering work still open (not provisioning):
   +872.8 to +330.1 ms. Conversely, eligible C++ warm ratios regressed from
   1.657 to 3.507 (GCC) and 1.560 to 2.825 (Clang), with zero compiler,
   preprocessor or probe runs. This twelve-TU/four-job hit-path regression
-  remains unprofiled; the earlier timestamp single-TU improvement was
-  against #98's newer regression, not #99. LLVM is still **not run**:
+  was unprofiled in that report. The diagnostic checkpoint below now locates
+  the large regression in standalone timestamp scanning, not native daemon
+  serialization. LLVM performance acceptance is still **not run**:
   reserve roughly 6–18 hours for both compilers (high uncertainty, all
   phases included), verify scratch ceilings before launch, and profile
   the demonstrated smaller-workload losses first.
@@ -168,7 +169,8 @@ Provisioning, not engineering:
   native L1 cloud VM is now available (rerun above); being virtualized
   does not itself disqualify it. Linux activity accounting was fixed in
   #101; the rerun has eligible data but fails performance targets. L1 newer-compiler
-  cells, L2 and eligible M1 acceptance remain missing; shared CI correctness
+  cells, native ARM64 L2 acceptance and eligible M1 acceptance remain missing;
+  shared CI correctness
   runners are not acceptance-timing evidence.
 - M1 standalone LLVM clang: not installed on this host, and no authorized
   setup installs it (`brew install llvm` would change the host). Missing
@@ -178,6 +180,38 @@ Provisioning, not engineering:
 - The earlier history of this ledger (groundwork baseline, Linux gate
   assignment, bootstrap PR notes) is in git: `git log -p --
   campaigns/cpp/STATUS.md` before 2026-11-19.
+
+## Diagnostic checkpoint and next actions, 2026-11-22
+
+[Warm checkpoint report](reports/2026-11-22-warm-checkpoint/README.md) preserves
+Steps 1–3, compact observations and portable analysis. **Diagnostic only, not
+formal acceptance. The acceptance rules are unchanged.** Historical L1
+performance remains **FAIL**. There is no replacement native-daemon acceptance
+verdict, eligible M1 verdict, newer-L1-compiler coverage or native ARM64 L2
+acceptance evidence. Green CI correctness does not close those timing gaps.
+
+Both historical endpoints' default sockets exceed Linux's limit. The large
+twelve-TU/four-job warm regression reproduces in standalone fallback, not at
+comparable magnitude with verified private daemons. The bounded bisect identifies
+`438c5f04` (timestamp read-set scanning/allocation). Current `9553a432` retains
+a standalone penalty through full header-analysis loading/deserialization.
+Native Clang tiny-C cold has +332.5 ms median paired excess [62.9, 430.1].
+GCC settled-header-edit is inconclusive: +138.6 ms [−632.2, 904.1]. Its historical
++675.8 ms excess remains **unassigned**, not disproved or explained by phase sums.
+
+Ranked next actions, with correctness safeguards retained:
+
+1. Investigate directive-scanner `memchr_iter` candidate search. Preserve raw and
+   decoded-string checks, boundaries, operands and assembler refusals.
+2. Investigate Clang <16 compile-first for **proven time-macro-free cold misses**.
+   Only Clang 14 was measured. Keep capability probing, complete dependency and
+   race checks, and the existing-memo/revert path. This is an investigated
+   opportunity, not an implemented optimization or permission to skip checks.
+3. Reduce standalone header-analysis load/deserialization cost without weakening
+   content-bound timestamp analysis, prefix-map handling or language-option keying.
+4. Then run locked LLVM performance acceptance on a quiet host with a verified
+   daemon and checked scratch ceilings. Keep M1, newer L1 compilers and native
+   ARM64 L2 acceptance gaps explicit until their own measurements close them.
 
 ## Reference (see [lock.toml](lock.toml))
 

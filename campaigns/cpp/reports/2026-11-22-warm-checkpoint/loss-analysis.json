@@ -1,0 +1,574 @@
+{
+  "tiny": {
+    "timing": {
+      "pairs": 10,
+      "kache_ms": 2754.612183,
+      "kache_ci": [
+        2394.9164,
+        2997.192658
+      ],
+      "ccache_ms": 2475.8169675,
+      "ccache_ci": [
+        2295.1371695,
+        2625.5666840000004
+      ],
+      "paired_median_excess_ms": 332.4846309999999,
+      "excess_ci": [
+        62.894241500000135,
+        430.10422749999975
+      ],
+      "paired_excesses_ms": [
+        -135.00887899999998,
+        107.40757399999984,
+        454.4058649999997,
+        405.8025899999998,
+        262.9258209999998,
+        402.04344100000003,
+        -13.93074200000001,
+        819.6616019999997,
+        429.32131100000015,
+        139.71922500000028
+      ],
+      "mean_excess_ms": 287.23478079999995
+    },
+    "profiles": {
+      "profiled": {
+        "kache": {
+          "wall_ms": 2758.520952,
+          "chain": [
+            "t00.c",
+            "t01.c",
+            "t02.c",
+            "t03.c",
+            "t04.c",
+            "t05.c",
+            "t06.c",
+            "t07.c",
+            "t08.c",
+            "t09.c",
+            "t10.c",
+            "t11.c",
+            "t12.c",
+            "t13.c",
+            "t14.c",
+            "t15.c",
+            "t16.c",
+            "t17.c",
+            "t18.c",
+            "t19.c",
+            "t20.c",
+            "t21.c",
+            "t22.c",
+            "t23.c",
+            "t24.c",
+            "t25.c",
+            "t26.c",
+            "t27.c",
+            "t28.c",
+            "t29.c",
+            "t30.c",
+            "t31.c",
+            "t32.c",
+            "t33.c",
+            "t34.c",
+            "t35.c",
+            "t36.c",
+            "t37.c",
+            "t38.c",
+            "t39.c",
+            "t40.c",
+            "t41.c",
+            "t42.c",
+            "t43.c",
+            "t44.c",
+            "t45.c",
+            "t46.c",
+            "t47.c"
+          ],
+          "critical_chain_budget_ms": {
+            "frontend_or_IPC": 114.00732421875,
+            "backend_other": 28.36376953125,
+            "store_open": 16.325927734375,
+            "preprocessor_process": 888.478271484375,
+            "key_analysis": 112.89697265625,
+            "probe_process": 37.0361328125,
+            "lookup": 1.481201171875,
+            "flight_join": 1.84326171875,
+            "permit_wait": 2.07763671875,
+            "compiler_output_work": 73.820068359375,
+            "compiler_process": 1365.3193359375,
+            "memo_commit": 21.231201171875,
+            "store": 49.849609375,
+            "event_report": 3.13232421875,
+            "make_dispatch_and_tail": 42.663818359375
+          },
+          "driver_processes": {
+            "compile": {
+              "count": 48,
+              "sum_wall_ms": 1365.3193359375,
+              "sum_cpu_ms": 1356.624
+            },
+            "preprocess": {
+              "count": 49,
+              "sum_wall_ms": 888.478271484375,
+              "sum_cpu_ms": 881.237
+            },
+            "probe": {
+              "count": 2,
+              "sum_wall_ms": 37.0361328125,
+              "sum_cpu_ms": 36.709
+            }
+          },
+          "max_compile_concurrency": 1,
+          "max_backend_concurrency": 1,
+          "max_compiler_alignment_error_ms": 6.696533203125
+        },
+        "ccache": {
+          "wall_ms": 2489.976911,
+          "chain": [
+            "t00.c",
+            "t01.c",
+            "t02.c",
+            "t03.c",
+            "t04.c",
+            "t05.c",
+            "t06.c",
+            "t07.c",
+            "t08.c",
+            "t09.c",
+            "t10.c",
+            "t11.c",
+            "t12.c",
+            "t13.c",
+            "t14.c",
+            "t15.c",
+            "t16.c",
+            "t17.c",
+            "t18.c",
+            "t19.c",
+            "t20.c",
+            "t21.c",
+            "t22.c",
+            "t23.c",
+            "t24.c",
+            "t25.c",
+            "t26.c",
+            "t27.c",
+            "t28.c",
+            "t29.c",
+            "t30.c",
+            "t31.c",
+            "t32.c",
+            "t33.c",
+            "t34.c",
+            "t35.c",
+            "t36.c",
+            "t37.c",
+            "t38.c",
+            "t39.c",
+            "t40.c",
+            "t41.c",
+            "t42.c",
+            "t43.c",
+            "t44.c",
+            "t45.c",
+            "t46.c",
+            "t47.c"
+          ],
+          "critical_chain_budget_ms": {
+            "ccache_other": 214.004638671875,
+            "preprocessor_process": 919.60791015625,
+            "compiler_process": 1310.406005859375,
+            "make_dispatch_and_tail": 45.964111328125
+          },
+          "driver_processes": {
+            "compile": {
+              "count": 48,
+              "sum_wall_ms": 1310.406005859375,
+              "sum_cpu_ms": 1294.862
+            },
+            "preprocess": {
+              "count": 48,
+              "sum_wall_ms": 919.60791015625,
+              "sum_cpu_ms": 909.21
+            },
+            "probe": {
+              "count": 0,
+              "sum_wall_ms": 0,
+              "sum_cpu_ms": 0
+            }
+          },
+          "max_compile_concurrency": 1,
+          "max_backend_concurrency": null,
+          "max_compiler_alignment_error_ms": 0
+        }
+      },
+      "cpu-profiled": {
+        "kache": {
+          "wall_ms": 2682.617629,
+          "chain": [
+            "t00.c",
+            "t01.c",
+            "t02.c",
+            "t03.c",
+            "t04.c",
+            "t05.c",
+            "t06.c",
+            "t07.c",
+            "t08.c",
+            "t09.c",
+            "t10.c",
+            "t11.c",
+            "t12.c",
+            "t13.c",
+            "t14.c",
+            "t15.c",
+            "t16.c",
+            "t17.c",
+            "t18.c",
+            "t19.c",
+            "t20.c",
+            "t21.c",
+            "t22.c",
+            "t23.c",
+            "t24.c",
+            "t25.c",
+            "t26.c",
+            "t27.c",
+            "t28.c",
+            "t29.c",
+            "t30.c",
+            "t31.c",
+            "t32.c",
+            "t33.c",
+            "t34.c",
+            "t35.c",
+            "t36.c",
+            "t37.c",
+            "t38.c",
+            "t39.c",
+            "t40.c",
+            "t41.c",
+            "t42.c",
+            "t43.c",
+            "t44.c",
+            "t45.c",
+            "t46.c",
+            "t47.c"
+          ],
+          "critical_chain_budget_ms": {
+            "frontend_or_IPC": 119.1474609375,
+            "backend_other": 31.14501953125,
+            "store_open": 16.791259765625,
+            "preprocessor_process": 910.7724609375,
+            "key_analysis": 115.711669921875,
+            "probe_process": 37.51513671875,
+            "lookup": 1.380859375,
+            "flight_join": 1.888671875,
+            "permit_wait": 2.212646484375,
+            "compiler_output_work": 81.4775390625,
+            "compiler_process": 1248.849609375,
+            "memo_commit": 26.11767578125,
+            "store": 40.835205078125,
+            "event_report": 3.42236328125,
+            "make_dispatch_and_tail": 45.35546875
+          },
+          "driver_processes": {
+            "compile": {
+              "count": 48,
+              "sum_wall_ms": 1248.849609375,
+              "sum_cpu_ms": 1239.409
+            },
+            "preprocess": {
+              "count": 49,
+              "sum_wall_ms": 910.7724609375,
+              "sum_cpu_ms": 895.301
+            },
+            "probe": {
+              "count": 2,
+              "sum_wall_ms": 37.51513671875,
+              "sum_cpu_ms": 37.296
+            }
+          },
+          "max_compile_concurrency": 1,
+          "max_backend_concurrency": 1,
+          "max_compiler_alignment_error_ms": 10.68896484375
+        },
+        "ccache": {
+          "wall_ms": 2769.679977,
+          "chain": [
+            "t00.c",
+            "t01.c",
+            "t02.c",
+            "t03.c",
+            "t04.c",
+            "t05.c",
+            "t06.c",
+            "t07.c",
+            "t08.c",
+            "t09.c",
+            "t10.c",
+            "t11.c",
+            "t12.c",
+            "t13.c",
+            "t14.c",
+            "t15.c",
+            "t16.c",
+            "t17.c",
+            "t18.c",
+            "t19.c",
+            "t20.c",
+            "t21.c",
+            "t22.c",
+            "t23.c",
+            "t24.c",
+            "t25.c",
+            "t26.c",
+            "t27.c",
+            "t28.c",
+            "t29.c",
+            "t30.c",
+            "t31.c",
+            "t32.c",
+            "t33.c",
+            "t34.c",
+            "t35.c",
+            "t36.c",
+            "t37.c",
+            "t38.c",
+            "t39.c",
+            "t40.c",
+            "t41.c",
+            "t42.c",
+            "t43.c",
+            "t44.c",
+            "t45.c",
+            "t46.c",
+            "t47.c"
+          ],
+          "critical_chain_budget_ms": {
+            "ccache_other": 229.664794921875,
+            "preprocessor_process": 969.43994140625,
+            "compiler_process": 1522.822998046875,
+            "make_dispatch_and_tail": 47.75830078125
+          },
+          "driver_processes": {
+            "compile": {
+              "count": 48,
+              "sum_wall_ms": 1522.822998046875,
+              "sum_cpu_ms": 1511.889
+            },
+            "preprocess": {
+              "count": 48,
+              "sum_wall_ms": 969.43994140625,
+              "sum_cpu_ms": 960.77
+            },
+            "probe": {
+              "count": 0,
+              "sum_wall_ms": 0,
+              "sum_cpu_ms": 0
+            }
+          },
+          "max_compile_concurrency": 1,
+          "max_backend_concurrency": null,
+          "max_compiler_alignment_error_ms": 0
+        }
+      }
+    }
+  },
+  "headers": {
+    "timing": {
+      "pairs": 10,
+      "kache_ms": 5697.833167000001,
+      "kache_ci": [
+        5378.472163,
+        6191.285714
+      ],
+      "ccache_ms": 5359.9648445,
+      "ccache_ci": [
+        5162.399899,
+        6279.720068
+      ],
+      "paired_median_excess_ms": 138.60001349999993,
+      "excess_ci": [
+        -632.2465944999999,
+        904.1381345
+      ],
+      "paired_excesses_ms": [
+        -484.9365179999995,
+        1509.4465140000002,
+        63.812103999999636,
+        394.5786019999996,
+        1506.325648,
+        213.38792300000023,
+        -23.982519999999568,
+        301.95062099999996,
+        -1240.5106690000002,
+        -1982.5901429999994
+      ],
+      "mean_excess_ms": 25.748156200000086
+    },
+    "profiles": {
+      "profiled": {
+        "kache": {
+          "wall_ms": 5243.80748,
+          "chain": [
+            "x03.cpp",
+            "x07.cpp",
+            "x10.cpp"
+          ],
+          "critical_chain_budget_ms": {
+            "frontend_or_IPC": 6.080322265625,
+            "backend_other": 4.117431640625,
+            "store_open": 1.800048828125,
+            "key_analysis": 85.2802734375,
+            "preprocessor_process": 162.844482421875,
+            "lookup": 0.14794921875,
+            "flight_join": 0.158935546875,
+            "permit_wait": 0.22802734375,
+            "compiler_output_work": 4.380126953125,
+            "compiler_process": 4958.593017578125,
+            "memo_commit": 10.173828125,
+            "store": 4.427978515625,
+            "event_report": 0.27392578125,
+            "make_dispatch_and_tail": 5.305419921875
+          },
+          "driver_processes": {
+            "compile": {
+              "count": 12,
+              "sum_wall_ms": 19353.75732421875,
+              "sum_cpu_ms": 19351.19
+            },
+            "preprocess": {
+              "count": 12,
+              "sum_wall_ms": 762.219482421875,
+              "sum_cpu_ms": 757.185
+            },
+            "probe": {
+              "count": 0,
+              "sum_wall_ms": 0,
+              "sum_cpu_ms": 0
+            }
+          },
+          "max_compile_concurrency": 4,
+          "max_backend_concurrency": 4,
+          "max_compiler_alignment_error_ms": 1.7294921875
+        },
+        "ccache": {
+          "wall_ms": 5313.233845,
+          "chain": [
+            "x00.cpp",
+            "x07.cpp",
+            "x11.cpp"
+          ],
+          "critical_chain_budget_ms": {
+            "ccache_other": 63.914794921875,
+            "preprocessor_process": 160.2177734375,
+            "compiler_process": 5084.548828125,
+            "make_dispatch_and_tail": 4.5576171875
+          },
+          "driver_processes": {
+            "compile": {
+              "count": 12,
+              "sum_wall_ms": 19624.406494140625,
+              "sum_cpu_ms": 19620.543
+            },
+            "preprocess": {
+              "count": 12,
+              "sum_wall_ms": 654.629150390625,
+              "sum_cpu_ms": 653.002
+            },
+            "probe": {
+              "count": 0,
+              "sum_wall_ms": 0,
+              "sum_cpu_ms": 0
+            }
+          },
+          "max_compile_concurrency": 4,
+          "max_backend_concurrency": null,
+          "max_compiler_alignment_error_ms": 0
+        }
+      },
+      "cpu-profiled": {
+        "kache": {
+          "wall_ms": 6661.985798,
+          "chain": [
+            "x00.cpp",
+            "x05.cpp",
+            "x09.cpp"
+          ],
+          "critical_chain_budget_ms": {
+            "frontend_or_IPC": 7.95263671875,
+            "backend_other": 4.8818359375,
+            "store_open": 2.350830078125,
+            "key_analysis": 100.819091796875,
+            "preprocessor_process": 212.222900390625,
+            "lookup": 0.170166015625,
+            "flight_join": 0.15087890625,
+            "permit_wait": 0.349853515625,
+            "compiler_output_work": 4.880126953125,
+            "compiler_process": 6306.833984375,
+            "memo_commit": 12.333251953125,
+            "store": 4.037841796875,
+            "event_report": 0.244140625,
+            "make_dispatch_and_tail": 4.763427734375
+          },
+          "driver_processes": {
+            "compile": {
+              "count": 12,
+              "sum_wall_ms": 24110.5166015625,
+              "sum_cpu_ms": 24096.632999999998
+            },
+            "preprocess": {
+              "count": 12,
+              "sum_wall_ms": 799.18994140625,
+              "sum_cpu_ms": 790.323
+            },
+            "probe": {
+              "count": 0,
+              "sum_wall_ms": 0,
+              "sum_cpu_ms": 0
+            }
+          },
+          "max_compile_concurrency": 4,
+          "max_backend_concurrency": 4,
+          "max_compiler_alignment_error_ms": 1.854248046875
+        },
+        "ccache": {
+          "wall_ms": 5359.005099,
+          "chain": [
+            "x00.cpp",
+            "x07.cpp",
+            "x11.cpp"
+          ],
+          "critical_chain_budget_ms": {
+            "ccache_other": 72.907470703125,
+            "preprocessor_process": 155.427490234375,
+            "compiler_process": 5126.239013671875,
+            "make_dispatch_and_tail": 4.435546875
+          },
+          "driver_processes": {
+            "compile": {
+              "count": 12,
+              "sum_wall_ms": 19786.3994140625,
+              "sum_cpu_ms": 19781.198
+            },
+            "preprocess": {
+              "count": 12,
+              "sum_wall_ms": 620.77490234375,
+              "sum_cpu_ms": 618.851
+            },
+            "probe": {
+              "count": 0,
+              "sum_wall_ms": 0,
+              "sum_cpu_ms": 0
+            }
+          },
+          "max_compile_concurrency": 4,
+          "max_backend_concurrency": null,
+          "max_compiler_alignment_error_ms": 0
+        }
+      }
+    }
+  }
+}

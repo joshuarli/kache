@@ -1,0 +1,144 @@
+{
+  "endpoint": {
+    "quiet-clang-fallback.json": [
+      {
+        "label": "clang-fallback",
+        "attempt": 0,
+        "active_cores": 0.009999709512454756,
+        "competing_builds": []
+      }
+    ],
+    "quiet-clang-native.json": [
+      {
+        "label": "clang-native",
+        "attempt": 0,
+        "active_cores": 0.00799956468286531,
+        "competing_builds": []
+      }
+    ],
+    "quiet-gcc-fallback.json": [
+      {
+        "label": "gcc-fallback",
+        "attempt": 0,
+        "active_cores": 0.02799942595573322,
+        "competing_builds": []
+      }
+    ],
+    "quiet-gcc-native.json": [
+      {
+        "label": "gcc-native",
+        "attempt": 0,
+        "active_cores": 0.02999910309873996,
+        "competing_builds": []
+      }
+    ]
+  },
+  "bisect": {
+    "quiet-current.json": [
+      {
+        "label": "current",
+        "attempt": 0,
+        "active_cores": 0.027999436735377442,
+        "competing_builds": []
+      }
+    ],
+    "quiet-current2.json": [
+      {
+        "label": "current2",
+        "attempt": 0,
+        "active_cores": 0.045998758355539494,
+        "competing_builds": []
+      }
+    ],
+    "quiet-current3.json": [
+      {
+        "label": "current3",
+        "attempt": 0,
+        "active_cores": 0.17199646265156593,
+        "competing_builds": []
+      }
+    ],
+    "quiet-p05.json": [
+      {
+        "label": "p05",
+        "attempt": 0,
+        "active_cores": 0.16399688966743645,
+        "competing_builds": []
+      }
+    ],
+    "quiet-p07.json": [
+      {
+        "label": "p07",
+        "attempt": 0,
+        "active_cores": 0.1898392038782023,
+        "competing_builds": []
+      }
+    ],
+    "quiet-p10.json": [
+      {
+        "label": "p10",
+        "attempt": 0,
+        "active_cores": 0.02199949952460602,
+        "competing_builds": []
+      }
+    ],
+    "quiet-parent.json": [
+      {
+        "label": "parent",
+        "attempt": 0,
+        "active_cores": 0.02799831047553614,
+        "competing_builds": []
+      }
+    ]
+  },
+  "loss": {
+    "quiet-cpu-profiled-headers.json": [
+      {
+        "label": "cpu-profiled-headers",
+        "attempt": 0,
+        "active_cores": 0.037999141728437935,
+        "competing_builds": []
+      }
+    ],
+    "quiet-cpu-profiled-tiny.json": [
+      {
+        "label": "cpu-profiled-tiny",
+        "attempt": 0,
+        "active_cores": 0.13399694846066915,
+        "competing_builds": []
+      }
+    ],
+    "quiet-paired-headers.json": [
+      {
+        "label": "paired-headers",
+        "attempt": 0,
+        "active_cores": 0.00599987168911272,
+        "competing_builds": []
+      }
+    ],
+    "quiet-paired-tiny.json": [
+      {
+        "label": "paired-tiny",
+        "attempt": 0,
+        "active_cores": 0.01999941000941995,
+        "competing_builds": []
+      }
+    ],
+    "quiet-profiled-headers.json": [
+      {
+        "label": "profiled-headers",
+        "attempt": 0,
+        "active_cores": 0.03799927611380763,
+        "competing_builds": []
+      }
+    ],
+    "quiet-profiled-tiny.json": [
+      {
+        "label": "profiled-tiny",
+        "attempt": 0,
+        "active_cores": 0.041999263794970765,
+        "competing_builds": []
+      }
+    ]
+  }
+}

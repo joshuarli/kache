@@ -1,0 +1,34 @@
+[
+  {
+    "version": "A",
+    "compiler": "gcc",
+    "historical_socket_bytes": 117,
+    "reproduction_cache": "/home/ubuntu/warm-endpoint-ab-evidence/historical-repro/A/gcc/store-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "returncode": 1,
+    "stderr": "failed to start daemon: socket path is 117 bytes, but a Unix socket path can be at most 107 on this platform: /home/ubuntu/warm-endpoint-ab-evidence/historical-repro/A/gcc/store-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/daemon.sock. Point KACHE_SOCKET_PATH at a shorter absolute path, or set a shorter [cache] runtime_dir.\n"
+  },
+  {
+    "version": "A",
+    "compiler": "clang",
+    "historical_socket_bytes": 119,
+    "reproduction_cache": "/home/ubuntu/warm-endpoint-ab-evidence/historical-repro/A/clang/store-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "returncode": 1,
+    "stderr": "failed to start daemon: socket path is 119 bytes, but a Unix socket path can be at most 107 on this platform: /home/ubuntu/warm-endpoint-ab-evidence/historical-repro/A/clang/store-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/daemon.sock. Point KACHE_SOCKET_PATH at a shorter absolute path, or set a shorter [cache] runtime_dir.\n"
+  },
+  {
+    "version": "B",
+    "compiler": "gcc",
+    "historical_socket_bytes": 123,
+    "reproduction_cache": "/home/ubuntu/warm-endpoint-ab-evidence/historical-repro/B/gcc/store-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "returncode": 1,
+    "stderr": "failed to start daemon: socket path is 123 bytes, but a Unix socket path can be at most 107 on this platform: /home/ubuntu/warm-endpoint-ab-evidence/historical-repro/B/gcc/store-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/daemon.sock. Point KACHE_SOCKET_PATH at a shorter absolute path, or set a shorter [cache] runtime_dir.\n"
+  },
+  {
+    "version": "B",
+    "compiler": "clang",
+    "historical_socket_bytes": 125,
+    "reproduction_cache": "/home/ubuntu/warm-endpoint-ab-evidence/historical-repro/B/clang/store-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "returncode": 1,
+    "stderr": "failed to start daemon: socket path is 125 bytes, but a Unix socket path can be at most 107 on this platform: /home/ubuntu/warm-endpoint-ab-evidence/historical-repro/B/clang/store-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/daemon.sock. Point KACHE_SOCKET_PATH at a shorter absolute path, or set a shorter [cache] runtime_dir.\n"
+  }
+]

@@ -1,0 +1,134 @@
+{
+  "tiny": {
+    "samples": 149,
+    "daemon_pid": 3123650,
+    "categories": {
+      "unix_broker": {
+        "count": 26,
+        "percent": 17.449664429530202
+      },
+      "call_with_contents": {
+        "count": 26,
+        "percent": 17.449664429530202
+      },
+      "read_output": {
+        "count": 3,
+        "percent": 2.0134228187919465
+      },
+      "cc_assembler_text_hidden_input": {
+        "count": 0,
+        "percent": 0.0
+      },
+      "cc_word_end": {
+        "count": 0,
+        "percent": 0.0
+      },
+      "apply_cc_prefix_maps_to_bytes": {
+        "count": 0,
+        "percent": 0.0
+      },
+      "preprocess_hash": {
+        "count": 22,
+        "percent": 14.765100671140939
+      },
+      "sqlite3": {
+        "count": 40,
+        "percent": 26.845637583892618
+      },
+      "FileHasher": {
+        "count": 10,
+        "percent": 6.7114093959731544
+      },
+      "Store": {
+        "count": 47,
+        "percent": 31.543624161073826
+      },
+      "cc_preprocess_fingerprints": {
+        "count": 0,
+        "percent": 0.0
+      },
+      "sync_durability_file": {
+        "count": 3,
+        "percent": 2.0134228187919465
+      },
+      "try_wait": {
+        "count": 0,
+        "percent": 0.0
+      },
+      "execute_with_extra_args": {
+        "count": 19,
+        "percent": 12.751677852348994
+      },
+      "cc_parsed_header_scans": {
+        "count": 1,
+        "percent": 0.6711409395973155
+      }
+    }
+  },
+  "headers": {
+    "samples": 381,
+    "daemon_pid": 3124592,
+    "categories": {
+      "unix_broker": {
+        "count": 3,
+        "percent": 0.7874015748031497
+      },
+      "call_with_contents": {
+        "count": 2,
+        "percent": 0.5249343832020997
+      },
+      "read_output": {
+        "count": 22,
+        "percent": 5.774278215223097
+      },
+      "cc_assembler_text_hidden_input": {
+        "count": 71,
+        "percent": 18.635170603674542
+      },
+      "cc_word_end": {
+        "count": 31,
+        "percent": 8.136482939632545
+      },
+      "apply_cc_prefix_maps_to_bytes": {
+        "count": 21,
+        "percent": 5.511811023622047
+      },
+      "preprocess_hash": {
+        "count": 203,
+        "percent": 53.28083989501312
+      },
+      "sqlite3": {
+        "count": 45,
+        "percent": 11.811023622047244
+      },
+      "FileHasher": {
+        "count": 57,
+        "percent": 14.960629921259843
+      },
+      "Store": {
+        "count": 15,
+        "percent": 3.937007874015748
+      },
+      "cc_preprocess_fingerprints": {
+        "count": 14,
+        "percent": 3.674540682414698
+      },
+      "sync_durability_file": {
+        "count": 2,
+        "percent": 0.5249343832020997
+      },
+      "try_wait": {
+        "count": 0,
+        "percent": 0.0
+      },
+      "execute_with_extra_args": {
+        "count": 5,
+        "percent": 1.3123359580052494
+      },
+      "cc_parsed_header_scans": {
+        "count": 0,
+        "percent": 0.0
+      }
+    }
+  }
+}

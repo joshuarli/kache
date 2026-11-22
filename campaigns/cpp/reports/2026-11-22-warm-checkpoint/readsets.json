@@ -1,0 +1,118 @@
+{
+  "events": {
+    "parent-0": {
+      "startup_ms": {
+        "mean": 0.03333333333333333,
+        "minimum": 0,
+        "maximum": 3
+      },
+      "key_ms": {
+        "mean": 1.55,
+        "minimum": 1,
+        "maximum": 11
+      },
+      "flight_wait_ms": {
+        "mean": 0,
+        "minimum": 0,
+        "maximum": 0
+      },
+      "permit_wait_ms": {
+        "mean": 0,
+        "minimum": 0,
+        "maximum": 0
+      }
+    },
+    "parent-1": {
+      "startup_ms": {
+        "mean": 0.058333333333333334,
+        "minimum": 0,
+        "maximum": 7
+      },
+      "key_ms": {
+        "mean": 19.358333333333334,
+        "minimum": 15,
+        "maximum": 48
+      },
+      "flight_wait_ms": {
+        "mean": 0,
+        "minimum": 0,
+        "maximum": 0
+      },
+      "permit_wait_ms": {
+        "mean": 0,
+        "minimum": 0,
+        "maximum": 0
+      }
+    },
+    "current3-0": {
+      "startup_ms": {
+        "mean": 0.2,
+        "minimum": 0,
+        "maximum": 10
+      },
+      "key_ms": {
+        "mean": 11.6,
+        "minimum": 8,
+        "maximum": 30
+      },
+      "flight_wait_ms": {
+        "mean": 0,
+        "minimum": 0,
+        "maximum": 0
+      },
+      "permit_wait_ms": {
+        "mean": 0,
+        "minimum": 0,
+        "maximum": 0
+      }
+    },
+    "current3-1": {
+      "startup_ms": {
+        "mean": 0.08333333333333333,
+        "minimum": 0,
+        "maximum": 3
+      },
+      "key_ms": {
+        "mean": 1.5166666666666666,
+        "minimum": 1,
+        "maximum": 4
+      },
+      "flight_wait_ms": {
+        "mean": 0,
+        "minimum": 0,
+        "maximum": 0
+      },
+      "permit_wait_ms": {
+        "mean": 0,
+        "minimum": 0,
+        "maximum": 0
+      }
+    }
+  },
+  "read_sets": {
+    "92cb3b3e": {
+      "memos": 12,
+      "references": 3300,
+      "total_bytes": 49574462,
+      "inputs_per_tu": [
+        275
+      ],
+      "bytes_per_tu": [
+        4131205,
+        4131206
+      ]
+    },
+    "438c5f04": {
+      "memos": 12,
+      "references": 3300,
+      "total_bytes": 49574462,
+      "inputs_per_tu": [
+        275
+      ],
+      "bytes_per_tu": [
+        4131205,
+        4131206
+      ]
+    }
+  }
+}
