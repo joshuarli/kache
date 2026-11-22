@@ -27,16 +27,17 @@ expected_stdout_contains = ["util v1 src/a/util.c", "util v1 src/b/util.c"]
 [diff]
 artifacts = ["build/a/util.o", "build/b/util.o"]
 
-# Cold: each compile runs; the stdio read set also needs a timestamp check.
+# Cold: opaque drivers can need a timestamp check for each compile.
 [assertions.cold]
 min_misses = 3
 max_compiler_runs = 3
-max_preprocessor_runs = 1
+max_preprocessor_runs = 3
 
 [assertions.warm]
 min_hits = 3
 max_misses = 0
 max_compiler_runs = 0
+max_preprocessor_runs = 0
 
 [assertions.noop]
 should_not_recompile = false
@@ -44,3 +45,4 @@ should_not_recompile = false
 [assertions.relocate]
 min_hits = 3
 max_compiler_runs = 0
+max_preprocessor_runs = 0

@@ -43,16 +43,17 @@ find = "42"
 replace = "17"
 expected_stdout_contains = ["util value 17"]
 
-# Cold: each compile runs; the stdio read set also needs a timestamp check.
+# Cold: opaque drivers can need a timestamp check for each compile.
 [assertions.cold]
 max_compiler_runs = 3
-max_preprocessor_runs = 1
+max_preprocessor_runs = 3
 
 # Warm: build/b/util.o hits through the memo its cold compile recorded.
 [assertions.warm]
 min_hits = 3
 max_misses = 0
 max_compiler_runs = 0
+max_preprocessor_runs = 0
 
 [assertions.noop]
 should_not_recompile = false
@@ -60,6 +61,7 @@ should_not_recompile = false
 [assertions.relocate]
 min_hits = 3
 max_compiler_runs = 0
+max_preprocessor_runs = 0
 
 # Relocate-modified: the first spelling recompiles the edited unit; the
 # second finds that entry.

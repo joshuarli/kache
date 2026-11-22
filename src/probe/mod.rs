@@ -58,12 +58,12 @@ use std::process::Command;
 /// struct's shape or the probe logic changes in a way that would make
 /// an old on-disk record wrong: a mismatch turns the record into a
 /// cache miss (re-probe), never a wrong hit.
-pub const PROBE_SCHEMA_VERSION: u32 = 7;
+pub const PROBE_SCHEMA_VERSION: u32 = 8;
 
 /// The memoized result of probing a compiler.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedConfig {
-    /// A native GCC/Clang driver, eligible for documented-environment keying.
+    /// A self-identifying Clang driver, eligible for documented-environment keying.
     pub native_driver: bool,
     /// Schema of this record — see [`PROBE_SCHEMA_VERSION`].
     pub schema_version: u32,
@@ -178,17 +178,21 @@ impl Prober for CcProber {
             .unwrap_or(req.compiler)
             .to_string();
 
-        let resolved_tokens = resolve_invocation_for(
+        let resolved = resolve_invocation_for(
             req.compiler,
             req.args,
             req.windows_aware,
             req.per_tu_paths,
             env,
         );
+        let compiler_path = env.resolve_program(Path::new(req.compiler))
+            .and_then(|path| path.canonicalize().ok());
         let native_driver = cache::native_probe_key_for(self.id(), req, env).is_some()
-            && (version_line.contains("clang version ")
-                || (String::from_utf8_lossy(&output.stdout).contains("Free Software Foundation")
-                    && resolved_tokens.is_some()));
+            && cc_native_driver_identity(
+                &version_line, compiler_path.as_deref(),
+                resolved.as_ref().and_then(|(_, path)| path.as_deref()),
+            );
+        let resolved_tokens = resolved.map(|(tokens, _)| tokens);
         Ok(ResolvedConfig {
             native_driver,
             schema_version: PROBE_SCHEMA_VERSION,
@@ -199,6 +203,14 @@ impl Prober for CcProber {
             host_version_line: None,
         })
     }
+}
+
+fn cc_native_driver_identity(version: &str, invoked: Option<&Path>, cc1: Option<&Path>) -> bool {
+    version.contains("clang version ") && invoked.is_some() && invoked == cc1
+}
+
+pub(crate) fn opaque_env_is_keyed(name: &std::ffi::OsStr) -> bool {
+    name.to_str().is_none_or(|name| !cache::is_volatile_env_name(name))
 }
 
 /// Compiler family detected via `-E` preprocessing probe.
@@ -440,7 +452,7 @@ fn resolve_invocation_for(
     windows_aware: bool,
     per_tu_paths: &[String],
     env: &InvocationEnv,
-) -> Option<Vec<String>> {
+) -> Option<(Vec<String>, Option<std::path::PathBuf>)> {
     let output = env
         .command(compiler)
         .ok()?
@@ -449,6 +461,9 @@ fn resolve_invocation_for(
         .args(args)
         .invocation_output()
         .ok()?;
+    if !output.status.success() {
+        return None;
+    }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let resolved = resolve::resolved_semantic_tokens(&stderr, windows_aware, per_tu_paths);
     if resolved.is_none() {
@@ -468,7 +483,10 @@ fn resolve_invocation_for(
             probe_stderr_head(&stderr)
         );
     }
-    resolved
+    let executable = resolve::cc1_executable(&stderr)
+        .and_then(|path| env.resolve(Path::new(&path)))
+        .and_then(|path| path.canonicalize().ok());
+    resolved.map(|tokens| (tokens, executable))
 }
 
 /// A bounded, log-safe head of `-###` stderr.
@@ -726,6 +744,65 @@ mod tests {
             windows_aware: true,
             base_dirs: &[],
         }
+    }
+
+    #[test]
+    fn native_driver_identity_requires_clang_self_path() {
+        let clang = Some(Path::new("/toolchain/clang"));
+        let wrapper = Some(Path::new("/build/wrapper"));
+        assert!(cc_native_driver_identity("clang version 18", clang, clang));
+        assert!(!cc_native_driver_identity("clang version 18", wrapper, clang));
+        assert!(!cc_native_driver_identity("gcc 11 Free Software Foundation", clang, clang));
+        assert!(!cc_native_driver_identity("clang version 18", clang, None));
+        assert!(!cc_native_driver_identity("clang version 18", None, None));
+        assert!(!cc_native_driver_identity("", clang, clang));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn real_clang_remains_native() {
+        let root = TempDir::new().unwrap();
+        let env = InvocationEnv::from_parts(
+            [("PATH", "/usr/local/bin:/usr/bin:/bin")],
+            Some(root.path().into()), None, root.path().into(),
+        );
+        let Some(compiler) = env.resolve_program(Path::new("clang")) else {
+            eprintln!("skipping: clang unavailable");
+            return;
+        };
+        let args = ["-c".into(), "-x".into(), "c".into(), "-".into()];
+        let mut request = req(compiler.to_str().unwrap());
+        request.args = &args;
+        let result = CcProber.probe_for(&request, &env).unwrap();
+        assert!(result.native_driver, "{result:?}");
+    }
+
+    #[test]
+    fn old_native_probe_record_cannot_bypass_identity() {
+        let root = TempDir::new().unwrap();
+        let driver = root.path().join("driver");
+        std::fs::write(&driver, b"\x7fELFfixture").unwrap();
+        let env = InvocationEnv::from_parts(
+            std::iter::empty::<(&str, &str)>(), Some(root.path().into()), None, root.path().into(),
+        );
+        let request = req(driver.to_str().unwrap());
+        let key = cache::native_probe_key_for("cc", &request, &env).unwrap();
+        let old = ResolvedConfig {
+            schema_version: 7, native_driver: true, prober: "cc".into(),
+            compiler_name: "clang".into(), version_line: "clang version stale".into(),
+            resolved_tokens: Some(vec!["-fsigned-char".into()]), host_version_line: None,
+        };
+        cache::store(root.path(), &key, &old);
+        let prober = CountingProber::default();
+        struct OpaqueCc<'a>(&'a CountingProber);
+        impl Prober for OpaqueCc<'_> {
+            fn id(&self) -> &'static str { "cc" }
+            fn probe(&self, request: &ProbeRequest<'_>) -> Result<ResolvedConfig> { self.0.probe(request) }
+        }
+        let result = probe_for(root.path(), &OpaqueCc(&prober), &request, &env).unwrap();
+        assert_eq!(prober.runs.load(Ordering::SeqCst), 1);
+        assert!(!result.native_driver);
+        assert_ne!(result.version_line, old.version_line);
     }
 
     #[test]

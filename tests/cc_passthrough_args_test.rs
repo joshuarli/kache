@@ -234,7 +234,10 @@ fn deferred_cc_reuses_setup_and_still_invalidates_changed_headers() {
                 spans.iter().any(|span| span["name"] == "cc_capture"),
                 "the test must exercise compile-first discovery"
             );
-            assert_eq!(event["preprocessor_runs"], 0);
+            // Opaque drivers may need a timestamp-detection preprocess after capture.
+            assert!(matches!(event["preprocessor_runs"].as_u64(), Some(0 | 1)), "{event:?}");
+        } else if phase == "warm" {
+            assert_eq!(event["preprocessor_runs"], 0, "{event:?}");
         }
         assert!(
             Command::new("cc")
@@ -921,6 +924,81 @@ fn cacheable_cc_command(root: &std::path::Path) -> Command {
 }
 
 #[test]
+fn compiled_forwarding_wrappers_key_arbitrary_environment() {
+    for compiler in ["gcc", "clang"] {
+        if !Command::new(compiler).arg("--version").output()
+            .is_ok_and(|output| output.status.success()) {
+            eprintln!("skipping forwarding wrapper: {compiler} unavailable");
+            continue;
+        }
+        for (discovery, preserve_argv0) in [("0", false), ("0", true), ("1", false), ("1", true)] {
+            let dir = FixtureDir::new();
+            let root = dir.path().canonicalize().unwrap();
+            fs::write(root.join("kache.toml"), "").unwrap();
+            fs::write(root.join("unit.c"), "int char_is_signed(void) { return (char)-1 < 0; }\n").unwrap();
+            let backend_dir = if compiler == "gcc" {
+                let backend = Command::new(compiler).arg("-print-prog-name=cc1").output().unwrap();
+                assert!(backend.status.success(), "{backend:?}");
+                Some(std::path::PathBuf::from(String::from_utf8(backend.stdout).unwrap().trim()).parent().unwrap().to_path_buf())
+            } else { None };
+            fs::write(root.join("wrap.c"), r#"
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    const char *variant = getenv("BUILD_VARIANT");
+    char **args = calloc(argc + 2, sizeof *args);
+    const char *compiler = "@COMPILER@";
+    args[0] = @ARGV0@;
+    args[1] = variant && !strcmp(variant, "unsigned") ? "-funsigned-char" : "-fsigned-char";
+    for (int i = 1; i < argc; ++i) args[i + 1] = argv[i];
+    execvp(compiler, args);
+    return 127;
+}
+"#.replace("@COMPILER@", compiler)
+   .replace("@ARGV0@", if preserve_argv0 { "argv[0]" } else { "(char *)compiler" })).unwrap();
+            let built = Command::new(compiler).current_dir(&root)
+                .args(["wrap.c", "-o", "mycc"]).output().unwrap();
+            assert!(built.status.success(), "{built:?}");
+            let raw = |variant: &str| {
+                let output = Command::new("./mycc").current_dir(&root)
+                    .envs(backend_dir.as_ref().map(|path| ("COMPILER_PATH", path)))
+                    .env("BUILD_VARIANT", variant).env("SOURCE_DATE_EPOCH", "0")
+                    .args(["-O2", "-c", "unit.c", "-o", "unit.o"]).output().unwrap();
+                assert!(output.status.success(), "{output:?}");
+                fs::read(root.join("unit.o")).unwrap()
+            };
+            let signed = raw("signed");
+            let unsigned = raw("unsigned");
+            assert_ne!(signed, unsigned);
+            for (variant, expected, result) in [
+                ("signed", &signed, "miss"),
+                ("signed", &signed, "local_hit"),
+                ("unsigned", &unsigned, "miss"),
+                ("signed", &signed, "local_hit"),
+            ] {
+                fs::remove_file(root.join("unit.o")).unwrap();
+                let output = cacheable_cc_command(&root)
+                    .args(["./mycc", "-O2", "-c", "unit.c", "-o", "unit.o"])
+                    .envs(backend_dir.as_ref().map(|path| ("COMPILER_PATH", path)))
+                    .env("BUILD_VARIANT", variant).env("SOURCE_DATE_EPOCH", "0")
+                    .env("KACHE_DEFERRED_DISCOVERY", discovery)
+                    .env("KACHE_CC_PATH_NORMALIZE", "0")
+                    .output().unwrap();
+                assert!(output.status.success(), "{output:?}");
+                let event = last_cc_event(&root);
+                if result == "miss" {
+                    assert!(!matches!(event["result"].as_str(), Some("local_hit" | "remote_hit")), "{compiler}, discovery={discovery}, preserve_argv0={preserve_argv0}, {variant}: {event:?}");
+                } else {
+                    assert_eq!(event["result"].as_str().unwrap(), result, "{compiler}, discovery={discovery}, preserve_argv0={preserve_argv0}, {variant}: {event:?}");
+                }
+                assert_eq!(&fs::read(root.join("unit.o")).unwrap(), expected, "{compiler}, {variant}");
+            }
+        }
+    }
+}
+
+#[test]
 fn coverage_preprocess_fallback_restores_object_and_notes() {
     if !Command::new("clang")
         .arg("--version")
@@ -1118,7 +1196,7 @@ fn cc_time_macro_scan_preserves_volatile_direct_header_and_command_line_inputs()
 }
 
 #[test]
-fn cc_time_macro_scan_uses_one_expansion_for_an_ordinary_native_unit() {
+fn cc_time_macro_scan_checks_expansion_for_an_ordinary_opaque_unit() {
     let dir = FixtureDir::new();
     let root = dir.path().canonicalize().unwrap();
     fs::write(root.join("kache.toml"), "").unwrap();
@@ -1135,7 +1213,7 @@ fn cc_time_macro_scan_uses_one_expansion_for_an_ordinary_native_unit() {
     };
     let cold = compile();
     assert_eq!(cold["result"], "miss", "{cold:?}");
-    assert_eq!(cold["preprocessor_runs"], 1, "{cold:?}\n{}", cc_time_macro_scan_diagnostics(&root, &compiler));
+    assert_eq!(cold["preprocessor_runs"], 2, "{cold:?}\n{}", cc_time_macro_scan_diagnostics(&root, &compiler));
     let object = fs::read(root.join("unit.o")).unwrap();
     fs::remove_file(root.join("unit.o")).unwrap();
     let warm = compile();

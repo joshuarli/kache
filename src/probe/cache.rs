@@ -310,7 +310,7 @@ fn fingerprint_env_for(
 /// with `=` (`=C:`, `=ExitCode`, …), and the per-command shell and build
 /// driver variables of [`crate::invocation::PER_COMMAND_ENV`]. `PWD` stays
 /// keyed: clang can take its debug compilation directory from it.
-fn is_volatile_env_name(name: &str) -> bool {
+pub(super) fn is_volatile_env_name(name: &str) -> bool {
     name.starts_with('=')
         || name.starts_with("KACHE_")
         || crate::invocation::PER_COMMAND_ENV.contains(&name)

@@ -393,6 +393,15 @@ fn assert_last_cc_preprocessor_runs(report: &deser_value::Value, preprocessor_ru
     assert_eq!(last["preprocessor_runs"].as_u64(), Some(preprocessor_runs));
 }
 
+fn assert_last_cc_capture_preprocessor_runs(report: &deser_value::Value) {
+    let last = report["all_events"]
+        .as_seq()
+        .and_then(|events| events.last())
+        .expect("report should include at least one event");
+    // An opaque driver's captured read set can require one timestamp check.
+    assert!(matches!(last["preprocessor_runs"].as_u64(), Some(0 | 1)), "{last:?}");
+}
+
 fn find_depinfo_containing(root: &Path, needle: &str) -> Option<(PathBuf, String)> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -3831,7 +3840,7 @@ fn test_cc_direct_key_uses_the_callers_depfile() {
     assert!(cold.contains("value.h"), "{cold}");
     let report = kache_report(cache_dir.path());
     assert_last_cc_event(&report, "miss", 1);
-    assert_last_cc_preprocessor_runs(&report, 0);
+    assert_last_cc_capture_preprocessor_runs(&report);
 
     std::fs::remove_file(project.path().join("foo.o")).unwrap();
     std::fs::remove_file(project.path().join("foo.d")).unwrap();
@@ -3947,7 +3956,7 @@ fn test_cc_direct_key_binds_a_root_spelling_object_to_its_checkout() {
     run_kache_cc(project.path(), cache_dir.path(), &args);
     let report = kache_report(cache_dir.path());
     assert_last_cc_event(&report, "miss", 1);
-    assert_last_cc_preprocessor_runs(&report, 0);
+    assert_last_cc_capture_preprocessor_runs(&report);
     assert_eq!(
         report["summary"]["misses"].as_u64(),
         Some(1),
