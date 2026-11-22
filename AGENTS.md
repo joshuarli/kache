@@ -4,6 +4,8 @@
 
 ## Verification
 
+`make clean` removes this checkout’s build output in `./target`. It refuses symlinks and ordinary files at those paths.
+
 - Edit (config): `cargo test -p kache-config --all-features --lib NAME`; seconds including incremental build.
 - Change (config component): `cargo test -p kache-config --all-features`; 117 tests, 0.05s execution / 1.73s total
   on Linux x86_64, capped to 4 of 8 CPUs. Explicit invocation snapshots and private temp files; no live-env tests added.

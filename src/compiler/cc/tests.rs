@@ -143,10 +143,10 @@ fn wp_depfiles_use_the_probed_family_of_cc_aliases() {
         ] {
             let root = tempfile::tempdir().unwrap();
             let program = root.path().join(name);
-            fs::write(&program, format!("#!/bin/sh\nprintf '%s\\n' '{marker}'\n")).unwrap();
-            let mut perms = fs::metadata(&program).unwrap().permissions();
-            std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
-            fs::set_permissions(&program, perms).unwrap();
+            kache_fs::testutil::write_executable(
+                &program,
+                format!("#!/bin/sh\nprintf '%s\\n' '{marker}'\n"),
+            );
             let cache = root.path().join("cache");
             let env = InvocationEnv::from_parts(
                 [("KACHE_CACHE_DIR", cache.as_os_str())],

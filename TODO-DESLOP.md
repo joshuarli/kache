@@ -1,5 +1,5 @@
 Prefix: DSLP
-Next: 125
+Next: 126
 
 Deslop campaign backlog ([plan](https://github.com/laputa-systems/stuff/blob/main/docs/campaigns/deslop.md), tier D). One agent works this file with the `deslop` skill: take the lowest-numbered open ticket whose area does not start with `Needs owner ·`. After DSLP-5, work the open P1 and P2 findings, then fill in `## Report` below.
 
@@ -16,6 +16,15 @@ Not started.
 - **Problem:** With TMPDIR inside the checkout, make test fails 11 kache library tests because scratch paths inherit the checkout workspace, toolchain and path-normalization context; the same 11 fail at base aa8df06 (its deeper detached worktree adds two Unix socket path-length failures), and all pass with the system TMPDIR. Separately, with KACHE_CACHE_DIR exported (the isolation the deslop rules require), kache-config's config::tests::probe_memos_live_under_the_configured_cache_dir fails: its second probe_memo_dir() call reads the ambient variable instead of the default. The suite stops at the first failing test binary, so later binaries do not run.
 - **Recommendation:** Make test fixtures explicitly control workspace ancestry, path-normalization roots and socket path length while keeping caches and configuration isolated; run make test with TMPDIR under .work/tmp.
 - **Fix with:** test-audit
+- **Effort:** M
+
+### DSLP-125 · P2 · Keep Cargo test binary paths available through the installed rustc wrapper
+
+- **Area:** Cargo integration
+- **Where:** src/cache_key/tests.rs and src/build_script_inputs.rs
+- **Problem:** On macOS arm64, the kache 2.0.0-rc.2 install recorded as release-2343033e183f5b0d72f4c023400cbdbc099a8450 rejects env! for CARGO_BIN_EXE_oxish-keygen during cargo test --locked --manifest-path client/Cargo.toml --test keygen in laputa-systems/ssh-build at b5046ca. RUSTC_WRAPPER= with the same command passes. Clippy on a second workspace test target hit the same error. Current source behavior still needs reproduction.
+- **Recommendation:** Reproduce with the installed release and current source using a bin plus integration test pair, then require the wrapped build to see the same Cargo-provided binary path as a direct build after a cold invocation and a cache hit.
+- **Fix with:** root-cause
 - **Effort:** M
 
 ### DSLP-87 · P3 · Provision coverage and mutation tools for deslop verification
