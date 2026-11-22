@@ -173,10 +173,11 @@ fn kache_verdict(row: &Row<'_>, ccache: Verdict) -> (Verdict, Vec<String>) {
             unstable.into_iter().map(|d| format!("raw vs raw: {d}")).collect(),
         );
     }
-    // A passthrough runs the case's own command, not the profile's, so
-    // the raw run of that command is what it must match.
+    let expand = |args: &[String]| expand_response_files(args, &row.kache.response_files);
+    let (effective_expanded, passthrough_expanded) = (expand(row.effective_argv), expand(row.passthrough_argv));
+    let is_passthrough = |argv: &[String]| argv == row.passthrough_argv || argv == passthrough_expanded;
     let ran_passthrough = !row.kache.executions.codegen_argv.is_empty()
-        && row.kache.executions.codegen_argv.iter().all(|argv| argv.as_slice() == row.passthrough_argv);
+        && row.kache.executions.codegen_argv.iter().all(|argv| is_passthrough(&argv[row.driver_args.min(argv.len())..]));
     let reference = match row.raw_passthrough {
         Some(raw) if ran_passthrough => raw,
         _ => row.raw,
@@ -220,13 +221,11 @@ fn kache_verdict(row: &Row<'_>, ccache: Verdict) -> (Verdict, Vec<String>) {
         }
         _ => {}
     }
-    let expand = |args: &[String]| expand_response_files(args, &row.kache.response_files);
-    let (effective_expanded, passthrough_expanded) = (expand(row.effective_argv), expand(row.passthrough_argv));
     for argv in &row.kache.executions.codegen_argv {
         let argv = &argv[row.driver_args.min(argv.len())..].to_vec();
         let effective = without_dependency_capture(argv);
         let keyed = effective == row.effective_argv || effective == effective_expanded;
-        let passthrough = argv.as_slice() == row.passthrough_argv || *argv == passthrough_expanded;
+        let passthrough = is_passthrough(argv);
         if !keyed && !passthrough {
             return (
                 Verdict::HarnessError,
@@ -634,6 +633,30 @@ mod tests {
         let mut keyed = raw.clone();
         keyed.executions.codegen_argv = vec![reproducible.clone()];
         assert_eq!(verdict(&keyed), Verdict::Match, "a keyed compile is judged against the profile's command");
+    }
+
+    #[test]
+    fn expanded_passthrough_uses_the_unchanged_reference() {
+        let raw = obs(1);
+        let mut unchanged = obs(1);
+        unchanged.tree.get_mut("a.o").unwrap().digest = "no-prefix-map".into();
+        let mut kache = unchanged.clone();
+        kache.response_files.insert("@args.rsp".into(), argv());
+        let passthrough = vec!["@args.rsp".into()];
+        let effective = vec!["@args.rsp".into(), "-ffile-prefix-map=/f=/kache/cc-root".into()];
+        for driver_args in [0, 1] {
+            kache.executions.codegen_argv = vec![argv()];
+            if driver_args == 1 {
+                kache.executions.codegen_argv[0].insert(0, "--driver-mode=gcc".into());
+            }
+            let judgement = judge(&Row {
+                reuse: Reuse::Miss, expected_status: 0, raw: &raw, raw_repeat: &raw,
+                raw_passthrough: Some(&unchanged), ccache: &raw, ccache_preprocessor: &raw,
+                kache: &kache, effective_argv: &effective, passthrough_argv: &passthrough,
+                driver_args,
+            });
+            assert_eq!(judgement.verdict, Verdict::Match, "{:?}", judgement.reasons);
+        }
     }
 
     #[test]
