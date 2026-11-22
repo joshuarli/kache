@@ -51,6 +51,11 @@ test-only settings would mostly reject intentional setup/assertions rather
 than remove unchecked production trust. Those diagnostics are retained with
 reasons, not reclassified wholesale as bugs or false positives.
 
+This supersedes the `unwrap_used` rejection in
+`docs/deslop-cache-key-submodules.md`, which kept both unwraps because every
+caller passes a length-checked 4-byte slice. The readers now return that
+invariant as an error instead of relying on it.
+
 Specific retained trust:
 
 - `tests.rs` owns process-state fixtures including `ScopedEnv`, whose callers
