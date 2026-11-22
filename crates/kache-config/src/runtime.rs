@@ -56,8 +56,11 @@ fn cache_identity(cache: &Path) -> Result<PathBuf> {
                 return Ok(identity);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                missing.push(ancestor.components().next_back().ok_or(error)?.as_os_str());
-                ancestor = ancestor.parent().expect("non-root path has a parent");
+                let (Some(name), Some(parent)) = (ancestor.components().next_back(), ancestor.parent()) else {
+                    return Err(error.into());
+                };
+                missing.push(name.as_os_str());
+                ancestor = parent;
             }
             Err(error) => return Err(error.into()),
         }
