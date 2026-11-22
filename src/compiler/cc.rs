@@ -2793,11 +2793,8 @@ fn cc_directive_operands<'a>(
     expansion: &'a [u8],
     name: &'a [u8],
 ) -> impl Iterator<Item = &'a [u8]> + 'a {
-    expansion
-        .iter()
-        .enumerate()
-        .filter(|(_, byte)| **byte == b'.')
-        .filter_map(move |(start, _)| {
+    memchr::memchr_iter(b'.', expansion)
+        .filter_map(move |start| {
             let candidate = expansion.get(start..start + name.len())?;
             if !candidate.eq_ignore_ascii_case(name) {
                 return None;

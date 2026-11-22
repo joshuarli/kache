@@ -6281,6 +6281,56 @@ fn object_root_check_reads_the_object() {
     assert!(cc_object_embeds_mapped_root(&dir.path().join("missing.o"), &maps).is_err());
 }
 
+#[test]
+fn assembler_directive_operands_at_buffer_edges() {
+    for text in [b"".as_slice(), b".", b".incbi"] {
+        assert_eq!(cc_directive_operands(text, b".incbin").next(), None);
+    }
+    assert_eq!(cc_directive_operands(b".incbin", b".incbin").collect::<Vec<_>>(), [b"".as_slice()]);
+    assert_eq!(cc_directive_operands(b"end.InCbIn", b".incbin").collect::<Vec<_>>(), [b"".as_slice()]);
+    assert_eq!(
+        cc_directive_operands(b".INCBIN\t\"p\"\r\n", b".incbin").collect::<Vec<_>>(),
+        [b"\t\"p\"\r\n".as_slice()]
+    );
+    assert_eq!(
+        cc_directive_operands(b".incbin\n.InCbIn", b".incbin").collect::<Vec<_>>(),
+        [b"\n.InCbIn".as_slice(), b""]
+    );
+}
+
+#[test]
+fn assembler_directive_operands_keep_embedded_dots_and_ascii_boundaries() {
+    assert_eq!(
+        cc_directive_operands(b"opts.include(\"x\")", b".include").collect::<Vec<_>>(),
+        [b"(\"x\")".as_slice()]
+    );
+    assert_eq!(
+        cc_directive_operands(br#"".include \"p\"""#, b".include").collect::<Vec<_>>(),
+        [br#" \"p\"""#.as_slice()]
+    );
+    assert_eq!(cc_directive_operands(b"..include", b".include").collect::<Vec<_>>(), [b"".as_slice()]);
+    assert_eq!(cc_directive_operands(b".includes .include_ .include0", b".include").next(), None);
+    assert_eq!(cc_directive_operands(b".include\xff", b".include").next(), Some(b"\xff".as_slice()));
+}
+
+#[test]
+fn assembler_directives_preserve_crlf_and_operand_rules() {
+    for (text, expected) in [
+        (".InCbIn\t\"p\"\r\n", Some(".incbin")),
+        (".include\"p\"\r\n", Some(".include")),
+        (".include\r\n\"p\"", None),
+        (".include \t\r\n\"p\"", None),
+        (".include", None),
+        ("opts.include(\"x\");\r\n", None),
+        (".MACRO emit\r\n.ENDM\r\n", Some(".macro")),
+        (".macro\r\n", None),
+        (".ALTMACRO", Some(".altmacro")),
+        (".altmacro\r\n", Some(".altmacro")),
+    ] {
+        assert_eq!(cc_assembler_hidden_input(text.as_bytes()), expected, "{text:?}");
+    }
+}
+
 /// #1015: files the assembler reads never reach a depfile, so a TU that
 /// reads one, or defines a macro that could build such a directive, must
 /// not be cached. Look-alikes must not cost C++ TUs.
