@@ -1,0 +1,1 @@
+-O3 -aux-info declarations.h -o out/aux.o

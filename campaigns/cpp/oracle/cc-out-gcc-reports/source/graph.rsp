@@ -1,0 +1,1 @@
+-O3 -fcallgraph-info=su,da -o out/graph.o

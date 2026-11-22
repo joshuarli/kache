@@ -1,0 +1,1 @@
+-O3 -fopt-info -o out/info.o

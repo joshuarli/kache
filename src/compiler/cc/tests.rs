@@ -2334,6 +2334,146 @@ fn sidecars_store_only_when_this_compile_wrote_them() {
 }
 
 #[test]
+fn report_outputs_key_literal_paths_and_restore_each_role() {
+    use crate::probe::ProbedFamily;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let env = InvocationEnv::from_parts([("PATH", "")], Some(root.clone()), None, root.clone());
+    for (flag, family, path, role) in [
+        ("-fstack-usage", ProbedFamily::Gnu, "a.b.su", CcSidecar::StackUsage),
+        ("-fsave-optimization-record", ProbedFamily::Clang, "a.b.opt.yaml", CcSidecar::OptimizationRecord),
+        ("-fcallgraph-info=su,da", ProbedFamily::Gnu, "a.b.ci", CcSidecar::Callgraph),
+        ("-Wa,-adhln=listing.txt", ProbedFamily::Gnu, "listing.txt", CcSidecar::AssemblerListing),
+    ] {
+        let mut parsed = CcArgs::parse_for(&s(&["cc", "-c", "src/u.c", "-o", "a.b.o", flag]), &env).unwrap();
+        parsed.probed_family = Some(family);
+        assert!(parsed.refuse_reasons(&[]).is_empty(), "{flag}");
+        assert!(!cc_direct_key_shape_ok(&parsed));
+        assert_eq!(parsed.sidecar_outputs(), [CcSidecarOutput { role, path: path.into(), presence: CcSidecarPresence::Required }]);
+        assert!(parsed.compiler_output_paths().contains(&PathBuf::from(path)));
+        assert!(!build_preprocess_args(&parsed).contains(&flag.to_string()));
+        assert!(!parsed.config_args().contains(&flag.to_string()));
+        let key = cc_raw_flags_for_key(&parsed, &[]);
+        let mut changed = parsed.clone();
+        *changed.rest.iter_mut().find(|arg| *arg == "a.b.o").unwrap() = "other.o".into();
+        assert_ne!(key, cc_raw_flags_for_key(&changed, &[]));
+        let snapshots = snapshot_cc_sidecars(&parsed);
+        assert!(discover_cc_sidecars(snapshots.clone()).is_err());
+        fs::write(root.join(path), "report\n").unwrap();
+        let artifacts = discover_cc_sidecars(snapshots).unwrap();
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].store_name, role.store_name());
+        assert_eq!(CcSidecar::from_store_name(role.store_name()), Some(role));
+        assert!(discover_cc_sidecars(snapshot_cc_sidecars(&parsed)).is_err());
+    }
+    let mut aux = CcArgs::parse_for(&s(&["gcc", "-c", "u.c", "-aux-info", "declarations.c", "-o", "u.o"]), &env).unwrap();
+    aux.probed_family = Some(ProbedFamily::Gnu);
+    assert_eq!(aux.sources, [PathBuf::from("u.c")]);
+    assert!(aux.refuse_reasons(&[]).is_empty());
+    assert_eq!(aux.sidecar_outputs()[0].path, PathBuf::from("declarations.c"));
+    assert!(discover_cc_sidecars(snapshot_cc_sidecars(&aux)).unwrap().is_empty());
+    for args in [build_preprocess_args(&aux), aux.config_args()] {
+        assert!(!args.iter().any(|arg| arg == "-aux-info" || arg == "declarations.c"));
+    }
+    for flag in ["-fopt-info", "-Wa,-adhln"] {
+        let mut parsed = CcArgs::parse_for(&s(&["gcc", "-c", "u.c", flag]), &env).unwrap();
+        parsed.probed_family = Some(ProbedFamily::Gnu);
+        assert!(parsed.refuse_reasons(&[]).is_empty());
+        assert!(parsed.sidecar_outputs().is_empty());
+    }
+}
+
+#[test]
+fn listing_sources_must_be_tracked_and_memos_literal() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let env = InvocationEnv::from_parts([("SOURCE_DATE_EPOCH", "1")], Some(root.clone()), None, root.clone());
+    let program = std::env::current_exe().unwrap();
+    let parse = |flags: &[&str]| {
+        let mut args = vec![program.to_string_lossy().into_owned()];
+        args.extend(s(&["-g", "-c", "u.c", "-o", "u.o"]));
+        args.extend(s(flags));
+        CcArgs::parse_for(&args, &env).unwrap()
+    };
+    let plain = parse(&[]);
+    for flag in ["-Wa,-adhln", "-Wa,-adhln=listing.txt"] {
+        let parsed = parse(&[flag]);
+        let inputs = vec![root.join("u.c")];
+        for text in ["", "# 0 \"<built-in>\"\n# 1 \"u.c\"\nint u;\n"] {
+            cc_check_listing_inputs(&parsed, text.as_bytes(), &inputs).unwrap();
+        }
+        for text in ["# 1 \"orig.y\"\nint u;\n", "#line 1 \"<built-in>\"\nint u;\n", "# 1 \"u.c\"\n.file 2 \"orig.y\"\n", "# 1 \"u.c\"\nasm(\".fi\" \"le 2 \\\"orig.y\\\"\");\n"] {
+            assert!(cc_check_listing_inputs(&parsed, text.as_bytes(), &inputs).is_err(), "{text}");
+            cc_check_listing_inputs(&plain, text.as_bytes(), &inputs).unwrap();
+        }
+        cc_check_listing_inputs(&parsed, b"# 1 \"orig.y\"\nint u;\n", &[root.join("orig.y")]).unwrap();
+        let key = cc_preprocess_memo_key(&parsed, &[], "test").unwrap();
+        assert_ne!(key, cc_preprocess_memo_key(&plain, &[], "test").unwrap());
+        let mut changed = parsed.clone();
+        *changed.rest.iter_mut().find(|arg| *arg == "u.o").unwrap() = "elsewhere.o".into();
+        assert_ne!(key, cc_preprocess_memo_key(&changed, &[], "test").unwrap());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn real_probe_refuses_untracked_listing_sources() {
+    let _lock = crate::test_support::process_state_test_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let env = InvocationEnv::from_parts(std::env::vars_os(), Some(root.clone()), None, root.clone());
+    let source = root.join("u.c");
+    let outside = root.join("orig.y");
+    for flag in ["-Wa,-adhln", "-Wa,-adhln=listing.txt"] {
+        let parsed = CcArgs::parse_for(&s(&["cc", "-g", flag, "-c", "u.c", "-o", "u.o"]), &env).unwrap();
+        let probe = || preprocess_hash(&parsed, &[], &crate::cache_key::FileHasher::new_for(&env), None);
+        for text in ["int u;\n", "\n"] {
+            fs::write(&source, text).unwrap();
+            probe().unwrap();
+        }
+        fs::write(&source, "#line 1 \"orig.y\"\nint u;\n").unwrap();
+        let error = probe().unwrap_err().to_string();
+        assert!(error.contains("outside the read set"), "{error}");
+        fs::write(&outside, "/* NEW */\n").unwrap();
+        let error = probe().unwrap_err().to_string();
+        assert!(error.contains("outside the read set"), "{error}");
+        fs::write(&source, "#include \"orig.y\"\n#line 1 \"orig.y\"\nint u;\n").unwrap();
+        probe().unwrap();
+    }
+}
+
+#[test]
+fn report_outputs_refuse_unproven_shapes() {
+    use crate::probe::ProbedFamily;
+    for flags in [
+        vec!["-fstack-usage", "-flto"],
+        vec!["-fstack-usage", "-dumpbase", "other"],
+        vec!["-fopt-info-optimized=remarks.txt"],
+        vec!["-aux-info"], vec!["-aux-info", ""], vec!["-aux-info", "-"],
+        vec!["-Wa,-adhln="], vec!["-Wa,-adhln=-"],
+        vec!["-Wa,-adhln", "-Wa,-adhln=other.txt"],
+        vec!["-fstack-usage", "-Xclang", "-emit-llvm"],
+    ] {
+        let mut args = s(&["gcc", "-c", "u.c"]);
+        args.extend(s(&flags));
+        let mut parsed = CcArgs::parse(&args).unwrap();
+        parsed.probed_family = Some(ProbedFamily::Gnu);
+        assert!(!parsed.refuse_reasons(&[]).is_empty(), "{flags:?}");
+    }
+    for flag in ["-fstack-usage", "-fsave-optimization-record", "-fcallgraph-info", "-Wa,-adhln", "-fopt-info"] {
+        for mode in ["-E", "-S"] {
+            let parsed = CcArgs::parse(&s(&["gcc", mode, "u.c", "-o", "u.out", flag])).unwrap();
+            assert!(parsed.refuse_reasons(&[]).iter().any(|r| r.description().contains("outside -c")));
+        }
+        let mut parsed = CcArgs::parse(&s(&["cc", "-c", "u.c", flag])).unwrap();
+        parsed.probed_family = None;
+        assert!(!parsed.refuse_reasons(&[]).is_empty());
+        parsed.probed_family = Some(if flag == "-fsave-optimization-record" { ProbedFamily::Gnu } else { ProbedFamily::Clang });
+        assert!(!parsed.refuse_reasons(&[]).is_empty());
+    }
+}
+
+#[test]
 fn header_languages_build_a_pch_and_include_pch_consumers_compile() {
     for language in ["c-header", "c++-header", "objective-c-header", "objective-c++-header"] {
         for mode in [&[][..], &["-c"]] {
