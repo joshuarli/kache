@@ -3318,8 +3318,9 @@ fn preprocess_hash(
     resolved: Option<&crate::probe::ResolvedConfig>,
 ) -> Result<PreprocessHash> {
     let unpinned = !cc_source_date_epoch_is_pinned(parsed);
+    let detect_timestamp = !unpinned && !cc_source_date_epoch_pins_timestamp(parsed);
     let pp_args = key_preprocess_args(parsed, prefix_maps);
-    let pp_args = if unpinned {
+    let pp_args = if !detect_timestamp {
         pp_args
     } else {
         compose_cc_args(&pp_args, vec![
@@ -3367,7 +3368,7 @@ fn preprocess_hash(
         // dependency flags. Preserve the existing cache-key behavior and just
         // leave this invocation unmemoized.
         log::debug!("cc preprocess dependency capture failed; retrying without memo capture");
-        pp_args = if unpinned {
+        pp_args = if !detect_timestamp {
             key_preprocess_args(parsed, prefix_maps)
         } else {
             compose_cc_args(&key_preprocess_args(parsed, prefix_maps), vec![
@@ -3401,7 +3402,7 @@ fn preprocess_hash(
     let time_macro_free = unpinned.then(|| cc_time_macro_free_inputs(
         parsed, resolved, dep_path.as_ref().map(|(path, _)| path.as_path()).filter(|_| captured_dependencies), file_hasher,
     )).flatten();
-    let timestamp_sensitive = !unpinned && [&output.stdout, &output.stderr].iter()
+    let timestamp_sensitive = detect_timestamp && [&output.stdout, &output.stderr].iter()
         .any(|bytes| memchr::memmem::find(bytes, CC_TIMESTAMP_SENTINEL.as_bytes()).is_some());
     if unpinned && time_macro_free.is_none() {
         let check_args = compose_cc_args(
@@ -8770,29 +8771,59 @@ fn cc_source_date_epoch_is_pinned(parsed: &CcArgs) -> bool {
         && cc_driver_honors_source_date_epoch(parsed)
 }
 
+fn cc_source_date_epoch_pins_timestamp(parsed: &CcArgs) -> bool {
+    effective_source_date_epoch_for(&parsed.invocation_env).is_some()
+        && cc_driver_source_date_epoch_support(parsed) == CcSourceDateEpochSupport::All
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CcSourceDateEpochSupport {
+    None,
+    DateTime,
+    All,
+}
+
 fn cc_driver_honors_source_date_epoch(parsed: &CcArgs) -> bool {
+    cc_driver_source_date_epoch_support(parsed) != CcSourceDateEpochSupport::None
+}
+
+fn cc_driver_source_date_epoch_support(parsed: &CcArgs) -> CcSourceDateEpochSupport {
     let env = &parsed.invocation_env;
     let Ok(memo_dir) = crate::config::probe_memo_dir_for(env) else {
-        return false;
+        return CcSourceDateEpochSupport::None;
     };
     let Some(digest) = cc_direct_probe_material(&parsed.program, env) else {
-        return false;
+        return CcSourceDateEpochSupport::None;
     };
-    let path = crate::probe_memo::memo_path(&memo_dir, "cc-source-date-epoch-v1", "txt", &digest);
+    let path = crate::probe_memo::memo_path(&memo_dir, "cc-source-date-epoch-v2", "txt", &digest);
     if let Some(body) = crate::probe_memo::read_verified(&path, &digest) {
-        return body.trim() == "ok";
+        match body.trim() {
+            "none" => return CcSourceDateEpochSupport::None,
+            "date-time" => return CcSourceDateEpochSupport::DateTime,
+            "all" => return CcSourceDateEpochSupport::All,
+            _ => {}
+        }
     }
-    let supported = cc_source_date_epoch_probe(parsed).unwrap_or(false);
-    crate::probe_memo::write_verified(&path, &digest, if supported { "ok" } else { "no" });
+    let supported = cc_source_date_epoch_probe(parsed).unwrap_or(CcSourceDateEpochSupport::None);
+    let body = match supported {
+        CcSourceDateEpochSupport::None => "none",
+        CcSourceDateEpochSupport::DateTime => "date-time",
+        CcSourceDateEpochSupport::All => "all",
+    };
+    crate::probe_memo::write_verified(&path, &digest, body);
     supported
 }
 
-fn cc_source_date_epoch_probe(parsed: &CcArgs) -> Result<bool> {
+fn cc_source_date_epoch_probe(parsed: &CcArgs) -> Result<CcSourceDateEpochSupport> {
     let env = &parsed.invocation_env;
     let dir = tempfile::Builder::new()
         .prefix("kache-cc-epoch-probe-")
         .tempdir_in(env.temp_dir())?;
-    fs::write(dir.path().join("epoch.c"), "__DATE__ __TIME__\n")?;
+    let source = dir.path().join("epoch.c");
+    fs::write(&source, "__DATE__ __TIME__\n__TIMESTAMP__\n")?;
+    fs::File::open(&source)?.set_modified(
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(978_307_200),
+    )?;
     let mut command = env.command(&parsed.program)?;
     match parsed.family.dialect() {
         Dialect::Gnu => {
@@ -8807,11 +8838,23 @@ fn cc_source_date_epoch_probe(parsed: &CcArgs) -> Result<bool> {
         .env("KACHE_CC_KEY_PROBE", "1")
         .env("SOURCE_DATE_EPOCH", "946684800")
         .invocation_output()?;
-    Ok(output.status.success()
-        && String::from_utf8_lossy(&output.stdout)
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            == ["\"Jan", "1", "2000\"", "\"00:00:00\""])
+    Ok(if output.status.success() {
+        cc_source_date_epoch_support(&output.stdout)
+    } else {
+        CcSourceDateEpochSupport::None
+    })
+}
+
+fn cc_source_date_epoch_support(stdout: &[u8]) -> CcSourceDateEpochSupport {
+    let text = String::from_utf8_lossy(stdout);
+    let tokens = text.split_whitespace().collect::<Vec<_>>();
+    if !tokens.starts_with(&["\"Jan", "1", "2000\"", "\"00:00:00\""]) {
+        CcSourceDateEpochSupport::None
+    } else if tokens.get(4..) == Some(&["\"Sat", "Jan", "1", "00:00:00", "2000\""]) {
+        CcSourceDateEpochSupport::All
+    } else {
+        CcSourceDateEpochSupport::DateTime
+    }
 }
 
 fn cc_direct_probe_material(program: &str, env: &InvocationEnv) -> Option<String> {
@@ -10004,7 +10047,8 @@ impl CcCompiler {
         let discovery = if let CcKeyDiscovery::Captured(ref captured) = discovery {
             let inputs = captured.fingerprints.iter()
                 .map(|input| PathBuf::from(input.local_path())).collect::<Vec<_>>();
-            if cc_time_macro_free_read_set(parsed, Some(&resolved), &inputs, ctx.file_hasher).is_none() {
+            if !cc_source_date_epoch_pins_timestamp(parsed)
+                && cc_time_macro_free_read_set(parsed, Some(&resolved), &inputs, ctx.file_hasher).is_none() {
                 CcKeyDiscovery::Expansion
             } else {
                 discovery

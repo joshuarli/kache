@@ -10473,6 +10473,14 @@ fn a_memo_identity_is_portable_only_when_every_root_is_mapped() {
 }
 
 #[test]
+fn source_date_epoch_support_distinguishes_timestamp_pinning() {
+    assert_eq!(cc_source_date_epoch_support(b"\"Jan  1 2000\" \"00:00:00\"\n\"Sat Jan  1 00:00:00 2000\"\n"), CcSourceDateEpochSupport::All);
+    assert_eq!(cc_source_date_epoch_support(b"\"Jan  1 2000\" \"00:00:00\"\n\"Mon Jan  1 00:00:00 2001\"\n"), CcSourceDateEpochSupport::DateTime);
+    assert_eq!(cc_source_date_epoch_support(b""), CcSourceDateEpochSupport::None);
+    assert_eq!(cc_source_date_epoch_support(b"compiler error"), CcSourceDateEpochSupport::None);
+}
+
+#[test]
 fn a_memo_hash_carries_the_path_bound_flag() {
     let digest = "a".repeat(64);
     assert_eq!(cc_memo_hash(&digest, false), digest);
