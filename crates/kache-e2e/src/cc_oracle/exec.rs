@@ -117,10 +117,12 @@ pub enum Control {
     CacheDisabled,
     /// Point the raw arms at a compiler that always fails.
     ReferenceFailure,
+    WrongEffectiveArgs,
 }
 
 impl Control {
-    pub const ALL: [Control; 5] = [
+    pub const ALL: [Control; 6] = [
+        Control::WrongEffectiveArgs,
         Control::StaleOutput,
         Control::OmitSidecar,
         Control::DisabledInvalidation,
@@ -135,6 +137,7 @@ impl Control {
             Control::DisabledInvalidation => "disabled-invalidation",
             Control::CacheDisabled => "cache-disabled",
             Control::ReferenceFailure => "reference-failure",
+            Control::WrongEffectiveArgs => "wrong-effective-args",
         }
     }
 
@@ -215,7 +218,7 @@ pub fn write_shims(dir: &Path, toolchain: &Toolchain, real_override: Option<&Pat
     for (name, real) in [(&toolchain.cc_name, &toolchain.cc), (&toolchain.cxx_name, &toolchain.cxx)] {
         let real = real_override.unwrap_or(real);
         let script = format!(
-            "#!/bin/sh\n{{ printf '%s\\037' \"$PWD\"; for a in \"$@\"; do printf '%s\\037' \"$a\"; done; printf '\\n'; }} >> \"$CC_ORACLE_LOG\"\nexec '{}' \"$@\"\n",
+            "#!/bin/sh\ni=0\nfor a in \"$@\"; do\n case \"$a\" in @*) p=${{a#@}}; if [ -n \"$CC_ORACLE_RSP_DIR\" ] && [ -f \"$p\" ] && [ -r \"$p\" ]; then cp -- \"$p\" \"$CC_ORACLE_RSP_DIR/$$.$i\"; fi;; esac\n i=$((i + 1))\ndone\n{{ printf '%s\\037' \"$PWD\" \"$$\"; for a in \"$@\"; do printf '%s\\037' \"$a\"; done; printf '\\n'; }} >> \"$CC_ORACLE_LOG\"\nexec '{}' \"$@\"\n",
             real.display().to_string().replace('\'', "'\\''")
         );
         let path = dir.join(name);
@@ -226,7 +229,18 @@ pub fn write_shims(dir: &Path, toolchain: &Toolchain, real_override: Option<&Pat
 }
 
 /// Classify the shim log records one invocation produced.
+#[cfg(test)]
 pub fn classify(log: &str, fixture: &Path, unit_names: &[String]) -> Executions {
+    classify_captured(log, fixture, unit_names, None, false)
+}
+
+pub(super) fn classify_captured(
+    log: &str,
+    fixture: &Path,
+    unit_names: &[String],
+    captures: Option<&Path>,
+    tamper: bool,
+) -> Executions {
     let mut out = Executions::default();
     let fixture = fixture.to_string_lossy();
     for line in log.lines().filter(|l| !l.is_empty()) {
@@ -234,17 +248,59 @@ pub fn classify(log: &str, fixture: &Path, unit_names: &[String]) -> Executions 
         if fields.last() == Some(&"") {
             fields.pop();
         }
-        let Some((cwd, args)) = fields.split_first() else { continue };
-        let names_unit = *cwd == fixture && args.iter().any(|a| unit_names.iter().any(|n| n == a));
-        let has = |flag: &str| args.contains(&flag);
+        if fields.len() < 2 {
+            continue;
+        }
+        let (cwd, pid) = (fields[0], fields[1]);
+        let mut record = super::judge::Invocation {
+            cwd: cwd.into(),
+            argv: fields[2..].iter().map(|a| a.to_string()).collect(),
+            ..Default::default()
+        };
+        for (i, arg) in record.argv.iter().enumerate() {
+            if arg.starts_with('@')
+                && let Some(body) =
+                    captures.and_then(|dir| std::fs::read(dir.join(format!("{pid}.{i}"))).ok())
+            {
+                record.response_bodies.insert(arg.clone(), body);
+            }
+        }
+        let files = response_evidence(&record.argv, Path::new(cwd), &mut record.response_bodies);
+        record.effective_argv = super::judge::expand_response_files(&record.argv, &files);
+        let names_unit = cwd == fixture && record
+                .argv
+                .iter()
+                .chain(&record.effective_argv)
+                .any(|a| unit_names.contains(a));
+        if tamper
+            && names_unit
+            && !record.effective_argv.iter().any(|a| {
+                matches!(
+                    a.as_str(),
+                    "-E" | "-M" | "-MM" | "-###" | "--version" | "-fsyntax-only"
+                )
+            })
+        {
+            if let Some(body) = record.response_bodies.values_mut().next() {
+                body.extend_from_slice(b" -DORACLE_WRONG_ARG=1");
+            } else {
+                record.argv.push("-DORACLE_WRONG_ARG=1".into());
+            }
+            let files =
+                response_evidence(&record.argv, Path::new(cwd), &mut record.response_bodies);
+            record.effective_argv = super::judge::expand_response_files(&record.argv, &files);
+        }
+        let args = &record.effective_argv;
+        let has = |flag: &str| args.iter().any(|a| a == flag);
         if !names_unit || has("-###") || has("--version") || has("-fsyntax-only") {
             out.probe += 1;
         } else if has("-E") || has("-M") || has("-MM") {
             out.preprocess += 1;
         } else {
             out.codegen += 1;
-            out.codegen_argv.push(args.iter().map(|a| a.to_string()).collect());
+            out.codegen_argv.push(args.clone());
         }
+        out.records.push(record);
     }
     out
 }
@@ -384,7 +440,9 @@ pub fn control_can_inject(control: Control, case: &Case, profile: Profile) -> bo
         .flat_map(|step| case.compiles.iter().map(move |compile| step.reuse_for(compile)));
     match control {
         Control::StaleOutput => !case.outputs.is_empty() && later.any(|reuse| reuse == Reuse::Miss),
-        Control::DisabledInvalidation => later.any(|reuse| reuse == Reuse::Miss),
+        Control::DisabledInvalidation | Control::WrongEffectiveArgs => {
+            later.any(|reuse| reuse == Reuse::Miss)
+        }
         Control::OmitSidecar => !case.outputs.is_empty() && later.any(|reuse| reuse == Reuse::Hit),
         Control::CacheDisabled => cache_disabled_applies(Some(control), profile) && later.any(|reuse| reuse == Reuse::Hit),
         Control::ReferenceFailure => case.steps.iter().any(|step| step.status == 0),
@@ -428,15 +486,30 @@ pub fn split_response_file(body: &str) -> Vec<String> {
 }
 
 fn snapshot_response_files(args: &[String], fixture: &Path) -> BTreeMap<String, Vec<String>> {
+    response_evidence(args, fixture, &mut BTreeMap::new())
+}
+
+fn response_evidence(
+    args: &[String],
+    fixture: &Path,
+    bodies: &mut BTreeMap<String, Vec<u8>>,
+) -> BTreeMap<String, Vec<String>> {
     let mut files = BTreeMap::new();
     let mut pending = args.to_vec();
     while let Some(arg) = pending.pop() {
         if files.contains_key(&arg) || files.len() >= 4096 {
             continue;
         }
-        let Some(path) = arg.strip_prefix('@') else { continue };
-        let Ok(body) = std::fs::read_to_string(fixture.join(path)) else { continue };
-        let tokens = split_response_file(&body);
+        let Some(path) = arg.strip_prefix('@') else {
+            continue;
+        };
+        if !bodies.contains_key(&arg) {
+            let Ok(body) = std::fs::read(fixture.join(path)) else {
+                continue;
+            };
+            bodies.insert(arg.clone(), body);
+        }
+        let tokens = split_response_file(&String::from_utf8_lossy(&bodies[&arg]));
         pending.extend(tokens.iter().cloned());
         files.insert(arg, tokens);
     }
@@ -484,6 +557,8 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
     } else {
         ctx.shims
     };
+    let captures = state.join("response-captures");
+    std::fs::create_dir_all(&captures)?;
     let mut path = OsString::from(shims);
     path.push(":");
     path.push(ctx.system_path);
@@ -495,6 +570,7 @@ pub fn run_arm(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>) ->
         ("LC_ALL", "C".into()),
         ("LANG", "C".into()),
         ("CC_ORACLE_LOG", log.clone().into()),
+        ("CC_ORACLE_RSP_DIR", captures.clone().into()),
     ];
     let store = state.join("store");
     match arm {
@@ -593,6 +669,7 @@ struct ArmEnv<'a> {
 }
 
 fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_env: &ArmEnv<'_>) -> Result<ArmRun> {
+    let captures = ctx.state.join(arm.as_str()).join("response-captures");
     let ArmEnv {
         shims,
         vars: env,
@@ -649,6 +726,8 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
             if step_profile != profile {
                 switch_profile_env(&mut command, case, arm, step_profile);
             }
+            std::fs::remove_dir_all(&captures)?;
+            std::fs::create_dir_all(&captures)?;
             let started = Instant::now();
             let output = command
                 .output()
@@ -659,7 +738,14 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                 .chain(&compile.also_names)
                 .map(|name| expand(name, ctx.fixture))
                 .collect();
-            let mut executions = classify(&log_text, ctx.fixture, &unit_names);
+            let tamper = fault_here
+                && ctx.control == Some(Control::WrongEffectiveArgs)
+                && step.reuse_for(compile) == Reuse::Miss;
+            let mut executions =
+                classify_captured(&log_text, ctx.fixture, &unit_names, Some(&captures), tamper);
+            if tamper && executions.codegen > 0 {
+                run.injected = true;
+            }
             let kache_result = if arm == Arm::Kache {
                 let events = kache_events_since(ctx.kache, store, &mut kache_events)?;
                 events.last().cloned()
@@ -899,7 +985,7 @@ mod tests {
         let restore = case("\n[[step]]\nname = \"restore\"\nreuse = \"hit\"\n");
         let edit = case("\n[[step]]\nname = \"edit\"\nreuse = \"miss\"\n");
         let (t, r) = (Profile::Transparent, Profile::Reproducible);
-        for control in [Control::StaleOutput, Control::DisabledInvalidation] {
+        for control in [Control::StaleOutput, Control::DisabledInvalidation, Control::WrongEffectiveArgs] {
             assert!(!control_can_inject(control, &populate_only, t), "{control:?}");
             assert!(!control_can_inject(control, &restore, t), "{control:?}");
             assert!(control_can_inject(control, &edit, t), "{control:?}");
@@ -924,7 +1010,7 @@ mod tests {
     }
 
     fn record(cwd: &str, args: &[&str]) -> String {
-        let mut s = format!("{cwd}\u{1f}");
+        let mut s = format!("{cwd}\u{1f}123\u{1f}");
         for a in args {
             s.push_str(a);
             s.push('\u{1f}');
@@ -1058,6 +1144,45 @@ mod tests {
             ["-DMSG=\"hello world\"", "-Iinc dir", "a b", "", "-c"]
         );
         assert!(split_response_file(" \n").is_empty());
+    }
+
+    #[test]
+    fn captured_private_response_survives_deletion_and_expands_nested_cwd_tokens() {
+        let root = tempfile::tempdir().unwrap();
+        let captures = root.path().join("captures");
+        std::fs::create_dir(&captures).unwrap();
+        std::fs::create_dir(root.path().join("sub")).unwrap();
+        std::fs::write(root.path().join("sub/nested.rsp"), "-DVALUE=2 'a b.c'").unwrap();
+        let private = root.path().join("private.rsp");
+        let body = b"-c @sub/nested.rsp -o a.o";
+        std::fs::write(&private, body).unwrap();
+        std::fs::copy(&private, captures.join("123.0")).unwrap();
+        std::fs::remove_file(&private).unwrap();
+        let arg = format!("@{}", private.display());
+        let log = record(root.path().to_str().unwrap(), &[&arg]);
+        let observed = classify_captured(&log, root.path(), &["a b.c".into()], Some(&captures), false);
+        assert_eq!(observed.codegen, 1);
+        assert_eq!(observed.codegen_argv[0], ["-c", "-DVALUE=2", "a b.c", "-o", "a.o"]);
+        assert_eq!(observed.records[0].argv, std::slice::from_ref(&arg));
+        assert_eq!(observed.records[0].response_bodies[&arg], body);
+        assert_eq!(observed.records[0].cwd, root.path().to_str().unwrap());
+        assert_eq!(observed.records[0].effective_argv, observed.codegen_argv[0]);
+    }
+
+    #[test]
+    fn response_contents_determine_preprocess_and_probe_classification() {
+        let root = tempfile::tempdir().unwrap();
+        let log = record(root.path().to_str().unwrap(), &["@args.rsp"]);
+        for (body, counts) in [("-E a.c", (0, 1, 0)), ("--version", (0, 0, 1)), ("", (0, 0, 1)), ("-O2", (0, 0, 1))] {
+            std::fs::write(root.path().join("args.rsp"), body).unwrap();
+            let e = classify(&log, root.path(), &["a.c".into()]);
+            assert_eq!((e.codegen, e.preprocess, e.probe), counts, "{body}");
+        }
+        std::fs::remove_file(root.path().join("args.rsp")).unwrap();
+        let e = classify(&log, root.path(), &["a.c".into()]);
+        assert_eq!(e.probe, 1);
+        assert_eq!(e.records[0].effective_argv, ["@args.rsp"]);
+        assert!(e.records[0].response_bodies.is_empty());
     }
 
     #[test]
@@ -1219,6 +1344,23 @@ mod tests {
         let cwd = std::fs::canonicalize(root.path()).unwrap();
         let e = classify(&std::fs::read_to_string(&log).unwrap(), &cwd, &["a b.c".to_string()]);
         assert_eq!(e.codegen_argv, vec![vec!["-c", "a b.c"]]);
+
+        let captures = root.path().join("captures");
+        std::fs::create_dir(&captures).unwrap();
+        let body = b"-c 'a b.c'\n-DVALUE=1\n";
+        std::fs::write(root.path().join("args.rsp"), body).unwrap();
+        std::fs::write(&log, "").unwrap();
+        let out = Command::new(dir.join("cc"))
+            .arg("@args.rsp")
+            .current_dir(root.path())
+            .env("CC_ORACLE_LOG", &log)
+            .env("CC_ORACLE_RSP_DIR", &captures)
+            .output().unwrap();
+        assert!(out.status.success());
+        std::fs::remove_file(root.path().join("args.rsp")).unwrap();
+        let e = classify_captured(&std::fs::read_to_string(&log).unwrap(), &cwd, &["a b.c".into()], Some(&captures), false);
+        assert_eq!(e.codegen_argv, vec![vec!["-c", "a b.c", "-DVALUE=1"]]);
+        assert_eq!(e.records[0].response_bodies["@args.rsp"], body);
 
         write_shims(&dir, &tc, Some(Path::new("/usr/bin/false"))).unwrap();
         let status = Command::new(dir.join("c++")).env("CC_ORACLE_LOG", &log).status().unwrap();

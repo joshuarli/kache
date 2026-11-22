@@ -69,6 +69,7 @@ pub type Inventory = BTreeMap<String, Entry>;
 /// observation shim's log.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Executions {
+    pub records: Vec<Invocation>,
     /// Code generation for the unit: an execution naming the source that is
     /// not preprocessing, dependency listing, syntax checking or a query
     /// (`-c`, `-S`, a header's PCH).
@@ -79,6 +80,14 @@ pub struct Executions {
     pub probe: u32,
     /// Arguments after the driver for each code-generation execution.
     pub codegen_argv: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Invocation {
+    pub cwd: String,
+    pub argv: Vec<String>,
+    pub response_bodies: BTreeMap<String, Vec<u8>>,
+    pub effective_argv: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -164,10 +173,26 @@ fn kache_verdict(row: &Row<'_>, ccache: Verdict) -> (Verdict, Vec<String>) {
             unstable.into_iter().map(|d| format!("raw vs raw: {d}")).collect(),
         );
     }
-    // A passthrough runs the case's own command, not the profile's, so
-    // the raw run of that command is what it must match.
+    let expand = |args: &[String]| expand_response_files(args, &row.kache.response_files);
+    let (effective_expanded, passthrough_expanded) = (expand(row.effective_argv), expand(row.passthrough_argv));
+    let is_passthrough = |argv: &[String]| argv == row.passthrough_argv || argv == passthrough_expanded;
+    for argv in &row.kache.executions.codegen_argv {
+        let argv = &argv[row.driver_args.min(argv.len())..].to_vec();
+        let effective = without_dependency_capture(argv);
+        let keyed = effective == row.effective_argv || effective == effective_expanded;
+        let passthrough = is_passthrough(argv);
+        if !keyed && !passthrough {
+            return (
+                Verdict::HarnessError,
+                vec![format!(
+                    "kache's code generation ran {:?}, the profile's effective command is {:?}",
+                    argv, row.effective_argv
+                )],
+            );
+        }
+    }
     let ran_passthrough = !row.kache.executions.codegen_argv.is_empty()
-        && row.kache.executions.codegen_argv.iter().all(|argv| argv.as_slice() == row.passthrough_argv);
+        && row.kache.executions.codegen_argv.iter().all(|argv| is_passthrough(&argv[row.driver_args.min(argv.len())..]));
     let reference = match row.raw_passthrough {
         Some(raw) if ran_passthrough => raw,
         _ => row.raw,
@@ -210,23 +235,6 @@ fn kache_verdict(row: &Row<'_>, ccache: Verdict) -> (Verdict, Vec<String>) {
             );
         }
         _ => {}
-    }
-    let expand = |args: &[String]| expand_response_files(args, &row.kache.response_files);
-    let (effective_expanded, passthrough_expanded) = (expand(row.effective_argv), expand(row.passthrough_argv));
-    for argv in &row.kache.executions.codegen_argv {
-        let argv = &argv[row.driver_args.min(argv.len())..].to_vec();
-        let effective = without_dependency_capture(argv);
-        let keyed = effective == row.effective_argv || effective == effective_expanded;
-        let passthrough = argv.as_slice() == row.passthrough_argv || *argv == passthrough_expanded;
-        if !keyed && !passthrough {
-            return (
-                Verdict::HarnessError,
-                vec![format!(
-                    "kache's code generation ran {:?}, the profile's effective command is {:?}",
-                    argv, row.effective_argv
-                )],
-            );
-        }
     }
     (Verdict::Match, Vec::new())
 }
@@ -453,6 +461,46 @@ mod tests {
     }
 
     #[test]
+    fn wrong_argument_in_deleted_private_response_is_a_harness_error() {
+        let root = tempfile::tempdir().unwrap();
+        let body = b"-c a.c -o a.o";
+        std::fs::write(root.path().join("123.0"), body).unwrap();
+        let log = "/fx\u{1f}123\u{1f}@/vanished/private.rsp\u{1f}\n";
+        let observe = |tamper| super::super::exec::classify_captured(
+            log, std::path::Path::new("/fx"), &["a.c".into()], Some(root.path()), tamper,
+        );
+        let raw = obs(1);
+        let mut kache = obs(1);
+        kache.executions = observe(false);
+        assert_eq!(run(Reuse::Miss, &raw, &raw, &kache).verdict, Verdict::Match);
+        kache.executions = observe(true);
+        let result = run(Reuse::Miss, &raw, &raw, &kache);
+        assert_eq!(result.verdict, Verdict::HarnessError);
+        assert!(result.reasons[0].contains("-DORACLE_WRONG_ARG=1"));
+        assert!(kache.executions.records[0].response_bodies["@/vanished/private.rsp"].ends_with(b" -DORACLE_WRONG_ARG=1"));
+    }
+
+    #[test]
+    fn private_response_preserves_prefix_map_dependency_capture_and_double_dash_tail() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("123.0"), b"-c -o a.o -ffile-prefix-map=/fx=/kache/cc-root -MD -MF /tmp/readset.d -MT __kache_direct_capture -- a.c").unwrap();
+        let log = "/fx\u{1f}123\u{1f}@/deleted/private.rsp\u{1f}\n";
+        let mut kache = obs(1);
+        kache.executions = super::super::exec::classify_captured(
+            log, std::path::Path::new("/fx"), &["a.c".into()], Some(root.path()), false,
+        );
+        kache.response_files.insert("@args.rsp".into(), ["-c", "-o", "a.o", "-ffile-prefix-map=/fx=/kache/cc-root", "--", "a.c"].map(String::from).to_vec());
+        let expected = vec!["@args.rsp".into()];
+        let raw = obs(1);
+        let result = judge(&Row {
+            reuse: Reuse::Miss, expected_status: 0, raw: &raw, raw_repeat: &raw,
+            raw_passthrough: None, ccache: &raw, ccache_preprocessor: &raw, kache: &kache,
+            effective_argv: &expected, passthrough_argv: &expected, driver_args: 0,
+        });
+        assert_eq!(result.verdict, Verdict::Match, "{:?}", result.reasons);
+    }
+
+    #[test]
     fn status_stream_mode_and_kind_differences_are_reported() {
         let raw = obs(1);
         let mut other = obs(1);
@@ -585,6 +633,35 @@ mod tests {
         let mut keyed = raw.clone();
         keyed.executions.codegen_argv = vec![reproducible.clone()];
         assert_eq!(verdict(&keyed), Verdict::Match, "a keyed compile is judged against the profile's command");
+    }
+
+    #[test]
+    fn expanded_passthrough_uses_the_unchanged_reference() {
+        let raw = obs(1);
+        let mut unchanged = obs(1);
+        unchanged.tree.get_mut("a.o").unwrap().digest = "no-prefix-map".into();
+        let mut kache = unchanged.clone();
+        kache.response_files.insert("@args.rsp".into(), argv());
+        let passthrough = vec!["@args.rsp".into()];
+        let effective = vec!["@args.rsp".into(), "-ffile-prefix-map=/f=/kache/cc-root".into()];
+        for driver_args in [0, 1] {
+            kache.executions.codegen_argv = vec![argv()];
+            if driver_args == 1 {
+                kache.executions.codegen_argv[0].insert(0, "--driver-mode=gcc".into());
+            }
+            let observe = |kache: &Observation| judge(&Row {
+                reuse: Reuse::Miss, expected_status: 0, raw: &raw, raw_repeat: &raw,
+                raw_passthrough: Some(&unchanged), ccache: &raw, ccache_preprocessor: &raw,
+                kache, effective_argv: &effective, passthrough_argv: &passthrough,
+                driver_args,
+            });
+            let judgement = observe(&kache);
+            assert_eq!(judgement.verdict, Verdict::Match, "{:?}", judgement.reasons);
+            kache.executions.codegen_argv[0].push("-DORACLE_WRONG_ARG=1".into());
+            let judgement = observe(&kache);
+            assert_eq!(judgement.verdict, Verdict::HarnessError, "{:?}", judgement.reasons);
+            assert!(judgement.reasons[0].contains("-DORACLE_WRONG_ARG=1"));
+        }
     }
 
     #[test]

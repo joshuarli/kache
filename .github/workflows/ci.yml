@@ -108,7 +108,7 @@ jobs:
   linux-musl:
     name: test (Linux ${{ matrix.arch }} musl)
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
@@ -194,7 +194,7 @@ jobs:
   cc-oracle-linux-glibc:
     name: cc-oracle (Linux ${{ matrix.arch }} glibc)
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     strategy:

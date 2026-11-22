@@ -22,7 +22,13 @@ configuration file:
 
 The compiler each arm runs is an observation shim: a shell script that logs
 its working directory and arguments, then execs the real driver. All arms run
-identical shim bytes. A logged execution in the fixture that names the
+identical shim bytes. Before exec, the shim copies readable top-level response
+files verbatim to `CC_ORACLE_RSP_DIR`, keyed by process ID and argument index.
+Each report retains literal argv, cwd, response bodies and effective argv.
+The observer independently expands response files with libiberty-style quoting
+(nested paths are relative to that cwd), even if the compiler wrapper deletes
+its private snapshot afterward. Missing files stay literal; expansion is bounded.
+A logged execution in the fixture that names the
 case's `source` is preprocessing with `-E`, `-M` or `-MM`, a probe with
 `-###`, `--version` or `-fsyntax-only`, and code generation otherwise (`-c`,
 `-S`, a precompiled header). Every execution elsewhere is a probe.
@@ -111,6 +117,7 @@ expected verdict:
 | `stale-output` | after kache's first required recompilation, put back the populate outputs (only where the bytes differ) | `KACHE_WRONG_OUTPUT` |
 | `omit-sidecar` | after kache's first required restore, delete the last declared output | `KACHE_WRONG_OUTPUT` |
 | `disabled-invalidation` | hide kache's first required recompilation from the observer | `KACHE_WRONG_OUTPUT` |
+| `wrong-effective-args` | add an unexpected define to captured response evidence (or literal argv) on a required miss | `HARNESS_ERROR` |
 | `cache-disabled` | `KACHE_DISABLED=1` in the kache arm, transparent profile only (a disabled kache runs the case's own arguments, which the reproducible reference does not) | `KACHE_MISSED_REUSE` |
 | `reference-failure` | the raw arms run a compiler that always fails | `HARNESS_ERROR` |
 
