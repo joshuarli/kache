@@ -3309,13 +3309,24 @@ fn cc_time_macro_free_read_set(
     Some(scanned)
 }
 
+const CC_TIMESTAMP_SENTINEL: &str = "kache_timestamp_a7164e8c27954e25b05b67a97dfa30e8";
+
 fn preprocess_hash(
     parsed: &CcArgs,
     prefix_maps: &[CcPrefixMap],
     file_hasher: &crate::cache_key::FileHasher<'_>,
     resolved: Option<&crate::probe::ResolvedConfig>,
 ) -> Result<PreprocessHash> {
+    let unpinned = !cc_source_date_epoch_is_pinned(parsed);
     let pp_args = key_preprocess_args(parsed, prefix_maps);
+    let pp_args = if unpinned {
+        pp_args
+    } else {
+        compose_cc_args(&pp_args, vec![
+            "-Wno-builtin-macro-redefined".into(),
+            format!("-D__TIMESTAMP__=\"{CC_TIMESTAMP_SENTINEL}\""),
+        ])
+    };
     let dep_temp = match tempfile::Builder::new()
         .prefix("kache-cc-preprocess-")
         .tempdir_in(parsed.invocation_env.temp_dir())
@@ -3356,7 +3367,14 @@ fn preprocess_hash(
         // dependency flags. Preserve the existing cache-key behavior and just
         // leave this invocation unmemoized.
         log::debug!("cc preprocess dependency capture failed; retrying without memo capture");
-        pp_args = key_preprocess_args(parsed, prefix_maps);
+        pp_args = if unpinned {
+            key_preprocess_args(parsed, prefix_maps)
+        } else {
+            compose_cc_args(&key_preprocess_args(parsed, prefix_maps), vec![
+                "-Wno-builtin-macro-redefined".into(),
+                format!("-D__TIMESTAMP__=\"{CC_TIMESTAMP_SENTINEL}\""),
+            ])
+        };
         output = run(&pp_args)?;
     }
     if !output.status.success() {
@@ -3380,20 +3398,11 @@ fn preprocess_hash(
         // nothing → passthrough.
         anyhow::bail!("cc -E key probe produced no output");
     }
-    let unpinned = !cc_source_date_epoch_is_pinned(parsed);
-    let time_macro_free = cc_time_macro_free_inputs(
+    let time_macro_free = unpinned.then(|| cc_time_macro_free_inputs(
         parsed, resolved, dep_path.as_ref().map(|(path, _)| path.as_path()).filter(|_| captured_dependencies), file_hasher,
-    );
-    let mut timestamp_sensitive = false;
-    if !unpinned && time_macro_free.is_none() {
-        let check_args = compose_cc_args(&pp_args, vec![
-            "-Wno-builtin-macro-redefined".into(),
-            "-D__TIMESTAMP__=\"kache-pinned-timestamp\"".into(),
-        ]);
-        let checked = run(&check_args)?;
-        timestamp_sensitive = !checked.status.success()
-            || checked.stdout != output.stdout || checked.stderr != output.stderr;
-    }
+    )).flatten();
+    let timestamp_sensitive = !unpinned && [&output.stdout, &output.stderr].iter()
+        .any(|bytes| memchr::memmem::find(bytes, CC_TIMESTAMP_SENTINEL.as_bytes()).is_some());
     if unpinned && time_macro_free.is_none() {
         let check_args = compose_cc_args(
             &pp_args,

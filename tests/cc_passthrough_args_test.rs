@@ -1174,6 +1174,27 @@ fn cc_time_macro_scan_diagnostics(root: &std::path::Path, compiler: &std::path::
 }
 
 #[test]
+fn pinned_timestamp_detection_uses_one_preprocess() {
+    if !Command::new("gcc").arg("--version").output().is_ok_and(|o| o.status.success()) {
+        return;
+    }
+    for source in ["int value = 42;\n", "const char *stamp = __TIMESTAMP__;\n"] {
+        let dir = FixtureDir::new();
+        let root = dir.path().canonicalize().unwrap();
+        fs::write(root.join("kache.toml"), "").unwrap();
+        fs::write(root.join("unit.c"), source).unwrap();
+        let output = cacheable_cc_command(&root)
+            .args(["gcc", "-c", "unit.c", "-o", "unit.o"])
+            .env("SOURCE_DATE_EPOCH", "946684800")
+            .env("KACHE_DEFERRED_DISCOVERY", "0").output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let event = last_cc_event(&root);
+        assert_eq!(event["result"], "miss", "{event:?}");
+        assert_eq!(event["preprocessor_runs"], 1, "{event:?}");
+    }
+}
+
+#[test]
 fn cc_token_pasted_timestamp_mtime_changes_miss() {
     if Command::new("gcc").arg("--version").output().is_err() {
         return;
