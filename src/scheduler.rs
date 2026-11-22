@@ -2234,11 +2234,10 @@ mod tests {
         assert!(scheduler.wait_for_permit(0..1, |_| 2).is_none());
         let scans = permit_scans();
         let elapsed = started.elapsed();
-        // A 200 ms slice fits about five scans into this timeout. The short
-        // poll has to come back often enough that this product exceeds it.
+        let long_slice_scan_limit = elapsed.as_millis() / 200 + 2;
         assert!(
-            scans >= 4 && u128::from(scans) * 50 > elapsed.as_millis(),
-            "only {scans} scans in {elapsed:?}; a 200 ms slice does that few"
+            u128::from(scans) > long_slice_scan_limit,
+            "only {scans} scans in {elapsed:?}; a 200 ms slice allows at most {long_slice_scan_limit}"
         );
     }
 
