@@ -10366,8 +10366,17 @@ impl CcCompiler {
         let prefix_maps = cc_prefix_maps(parsed, &self.base_dirs);
         let mut appended = file_prefix_map_args(&prefix_maps);
         appended.extend(extra);
-        let args = compose_cc_args(parsed.execution_args(), appended);
-        command.args(&args);
+        let args = compose_cc_args(&parsed.rest, appended);
+        let _args_snapshot = match cc_response_file_snapshot(parsed, &args)? {
+            Some((snapshot, command_args)) => {
+                command.args(&command_args);
+                Some(snapshot)
+            }
+            None => {
+                command.args(&args);
+                None
+            }
+        };
         // Pin the same effective SOURCE_DATE_EPOCH the `-E` key probe used, so a
         // TU baking __DATE__/__TIME__ produces an object whose date
         // matches its time-stable cache key. Mirrors the existing __FILE__
@@ -10510,6 +10519,7 @@ fn expand_cc_response_files_tracked(args: &[String], env: &InvocationEnv) -> Res
             anyhow::ensure!(expanded.len() < 16_384, "cc response argument limit");
             anyhow::ensure!(!arg.starts_with("--rsp-quoting") && !arg.starts_with("--config"), "cc response config/quoting override — not yet");
             let Some(path) = arg.strip_prefix('@').filter(|path| !path.is_empty()) else {
+                anyhow::ensure!(active.is_empty() || arg != "--", "cc response file hides --");
                 expanded.push(arg.clone());
                 continue;
             };
@@ -10545,8 +10555,7 @@ fn cc_args_with_response_files(args: &[String], env: &InvocationEnv) -> Option<(
         return None;
     }
     match expand_cc_response_files_tracked(rest, env) {
-        Ok((expanded, digests)) if !expanded.iter().any(|arg| arg == "--") => Some((std::iter::once(program.clone()).chain(expanded).collect(), digests)),
-        Ok(_) => None,
+        Ok((expanded, digests)) => Some((std::iter::once(program.clone()).chain(expanded).collect(), digests)),
         Err(error) => {
             log::debug!("cc response file not expanded: {error:#}");
             None
@@ -10554,8 +10563,52 @@ fn cc_args_with_response_files(args: &[String], env: &InvocationEnv) -> Option<(
     }
 }
 
-fn gnu_response_file_arguments(body: &str) -> Result<Vec<String>> {
+/// The keyed arguments of an invocation that named response files, written to
+/// a private response file so the compiler cannot read a body edited after
+/// keying, while argv stays as compact as the caller's. A top-level `--` and
+/// the arguments after it stay on the command line. `None` passes `args`
+/// directly: no response file was expanded, or an empty argument would
+/// tokenize differently under GCC and Clang.
+fn cc_response_file_snapshot(
+    parsed: &CcArgs,
+    args: &[String],
+) -> Result<Option<(tempfile::NamedTempFile, Vec<std::ffi::OsString>)>> {
+    if parsed.response_file_digests.is_empty() || args.iter().any(String::is_empty) {
+        return Ok(None);
+    }
+    let split = args.iter().position(|arg| arg == "--").unwrap_or(args.len());
+    let (flags, tail) = args.split_at(split);
+    let mut body = String::new();
+    for arg in flags {
+        body.push('\'');
+        for c in arg.chars() {
+            if matches!(c, '\\' | '\'') {
+                body.push('\\');
+            }
+            body.push(c);
+        }
+        body.push_str("'\n");
+    }
+    let mut snapshot = tempfile::Builder::new()
+        .prefix("kache-cc-args-")
+        .suffix(".rsp")
+        .tempfile_in(parsed.invocation_env.temp_dir())
+        .context("creating cc response file snapshot")?;
+    snapshot
+        .write_all(body.as_bytes())
+        .and_then(|()| snapshot.flush())
+        .context("writing cc response file snapshot")?;
+    let mut at_file = std::ffi::OsString::from("@");
+    at_file.push(snapshot.path());
+    let command_args = std::iter::once(at_file)
+        .chain(tail.iter().map(std::ffi::OsString::from))
+        .collect();
+    Ok(Some((snapshot, command_args)))
+}
+
+pub(crate) fn gnu_response_file_arguments(body: &str) -> Result<Vec<String>> {
     anyhow::ensure!(!body.contains('\r'), "carriage returns split differently between GCC and Clang");
+    anyhow::ensure!(!body.contains('\x0B'), "GCC splits on vertical tab and Clang does not");
     let mut tokens = Vec::new();
     let mut chars = body.chars().peekable();
     loop {

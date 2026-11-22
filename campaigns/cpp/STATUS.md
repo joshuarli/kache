@@ -19,9 +19,9 @@ Counts are taken from the files, not carried forward:
 `grep '^status = ' campaigns/cpp/cases.toml | sort | uniq -c` and
 `grep -l '^cohort = ' campaigns/cpp/oracle/*/case.toml`.
 
-- Inventory (`cases.toml`): 182 entries, and every oracle directory has
-  one: 89 `oracle`, 83 `planned`, 6 `conditional`, 4 `out_of_scope`.
-- Oracle cases (`oracle/`): 89, of which 85 `blocking` and 4 `open`
+- Inventory (`cases.toml`): 183 entries, and every oracle directory has
+  one: 90 `oracle`, 83 `planned`, 6 `conditional`, 4 `out_of_scope`.
+- Oracle cases (`oracle/`): 90, of which 86 `blocking` and 4 `open`
   (`cc-eqp-comment-only`, `cc-input-clang-config-file`,
   `cc-input-gcc-specs`, `cc-input-token-paste-probe`).
 - Gates: every Linux and macOS CI job is required (PR #50) and green on
