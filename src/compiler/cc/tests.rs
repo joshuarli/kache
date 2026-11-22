@@ -5519,6 +5519,81 @@ fn timestamp_scan_records_reject_corruption_and_other_contents() {
 }
 
 #[test]
+fn timestamp_projection_reads_the_existing_header_analysis_format() {
+    let content = "a".repeat(64);
+    for sensitive in [false, true] {
+        let analysis = CcHeaderAnalysis {
+            probes: cc_header_probe_scan(b"#define HEADER \"some/file.h\"\n#if __has_include(HEADER)\n#endif\n"),
+            timestamp: cc_timestamp_scan_record(&content, sensitive),
+        };
+        let text = deser_json::to_string(&analysis).unwrap();
+        assert_eq!(cc_header_timestamp_sensitive(&text, &content), Some(sensitive));
+        assert_eq!(cc_header_timestamp_sensitive(&text, &"b".repeat(64)), None);
+        let full: CcHeaderAnalysis = deser_json::from_str(&text).unwrap();
+        assert_eq!(full.timestamp, analysis.timestamp);
+    }
+    assert_eq!(cc_header_timestamp_sensitive("", &content), None);
+    assert_eq!(cc_header_timestamp_sensitive("{}", &content), None);
+    for probes in ["[", "{bad}", "\"unterminated", "[true false]"] {
+        let text = format!(r#"{{"probes":{probes},"timestamp":"{}"}}"#, cc_timestamp_scan_record(&content, false));
+        assert_eq!(cc_header_timestamp_sensitive(&text, &content), None, "{text}");
+    }
+}
+
+#[test]
+fn timestamp_only_cache_entries_are_upgraded_before_resolving_probes() {
+    let dir = tempfile::tempdir().unwrap();
+    let header = dir.path().join("probe.h");
+    fs::write(&header, format!("#if __has_include(<{}/absent.h>)\n#endif\n", dir.path().display())).unwrap();
+    let inputs = [header];
+    let hasher = crate::cache_key::FileHasher::persistent(&dir.path().join("index.sqlite"));
+    let contents = hasher.cc_content_hashes(&inputs).unwrap();
+    hasher.cc_header_scans(&inputs, CC_HEADER_SCAN_VERSION, &|_| {
+        Ok((contents[0].clone(), format!(r#"{{"probes":42,"timestamp":"{}"}}"#, cc_timestamp_scan_record(&contents[0], false))))
+    }).unwrap();
+    assert!(!cc_header_timestamps_sensitive(&inputs, &contents, &hasher).unwrap());
+    assert!(matches!(cc_header_scan_cache().lock().unwrap().scans.get(&contents[0]), Some(CcCachedHeaderScan::Timestamp(false))));
+    let probes = cc_resolve_read_set_probes(&inputs, &contents, "", &hasher).unwrap();
+    assert_eq!(probes.inputs.len(), 1);
+    assert_eq!(probes.inputs[0].1.len(), 1);
+    let mut cache = cc_header_scan_cache().lock().unwrap();
+    assert!(matches!(cache.scans.get(&contents[0]), Some(CcCachedHeaderScan::Parsed(_))));
+    cache.insert_timestamp(contents[0].clone(), true, 1);
+    assert!(matches!(cache.scans.get(&contents[0]), Some(CcCachedHeaderScan::Parsed(_))));
+}
+
+#[test]
+fn timestamp_projection_cannot_repair_an_unreadable_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("stamp.h");
+    fs::write(&path, format!("/* {} */\n#define STAMP __TIMESTAMP__\n", dir.path().display())).unwrap();
+    let paths = [path.clone()];
+    let hasher = crate::cache_key::FileHasher::persistent(&dir.path().join("index.sqlite"));
+    hasher.cc_header_scans(&paths, CC_HEADER_SCAN_VERSION, &|path| {
+        Ok((crate::cache_key::hash_file(path)?, "{}".into()))
+    }).unwrap();
+    fs::rename(&path, dir.path().join("hidden.h")).unwrap();
+    assert!(cc_timestamp_inputs_sensitive(&paths, Some(&hasher)).is_err());
+}
+
+#[test]
+fn timestamp_cache_entries_obey_the_shared_budget() {
+    let mut cache = CcHeaderScanCache { scans: Default::default(), bytes: 0 };
+    cache.insert_timestamp("a".into(), false, CC_HEADER_SCAN_CACHE_BYTES);
+    assert_eq!(cache.bytes, 32 << 20);
+    cache.insert_timestamp("b".into(), true, 1);
+    assert_eq!(cache.bytes, 1);
+    assert_eq!(cache.scans.len(), 1);
+    assert!(matches!(cache.scans.get("b"), Some(CcCachedHeaderScan::Timestamp(true))));
+    cache.insert("b".into(), std::sync::Arc::new(CcHeaderAnalysis {
+        probes: None,
+        timestamp: cc_timestamp_scan_record("b", true),
+    }), 1, CC_HEADER_SCAN_CACHE_BYTES);
+    assert_eq!(cache.bytes, 1);
+    assert!(matches!(cache.scans.get("b"), Some(CcCachedHeaderScan::Parsed(_))));
+}
+
+#[test]
 fn timestamp_analysis_survives_a_fresh_hasher_without_reading_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("unique-timestamp-negative.h");

@@ -7265,12 +7265,24 @@ struct CcHeaderAnalysis {
     timestamp: String,
 }
 
+#[derive(deser::Deserialize)]
+struct CcHeaderTimestamp<'a> {
+    #[deser(rename = "probes", as = deser::adapters::Borrowed)]
+    _probes: deser_json::RawJson<'a>,
+    timestamp: &'a str,
+}
+
+enum CcCachedHeaderScan {
+    Parsed(CcParsedHeaderScan),
+    Timestamp(bool),
+}
+
 /// Parsed scans by content hash, kept for the life of the process. A scan
 /// depends on the header's bytes alone, and the store holds the macOS SDK's
 /// as megabytes of JSON: parsing them again was most of the include check on
 /// every memo miss in the daemon.
 struct CcHeaderScanCache {
-    scans: rustc_hash::FxHashMap<String, CcParsedHeaderScan>,
+    scans: rustc_hash::FxHashMap<String, CcCachedHeaderScan>,
     bytes: usize,
 }
 
@@ -7278,6 +7290,16 @@ impl CcHeaderScanCache {
     /// Keep `scan`, whose serialized form is `len` bytes, starting over
     /// first when it would take the cache past `budget`.
     fn insert(&mut self, content: String, scan: CcParsedHeaderScan, len: usize, budget: usize) {
+        self.insert_entry(content, CcCachedHeaderScan::Parsed(scan), len, budget);
+    }
+
+    fn insert_timestamp(&mut self, content: String, sensitive: bool, len: usize) {
+        if !self.scans.contains_key(&content) {
+            self.insert_entry(content, CcCachedHeaderScan::Timestamp(sensitive), len, CC_HEADER_SCAN_CACHE_BYTES);
+        }
+    }
+
+    fn insert_entry(&mut self, content: String, scan: CcCachedHeaderScan, len: usize, budget: usize) {
         if self.bytes + len > budget {
             self.scans.clear();
             self.bytes = 0;
@@ -7315,7 +7337,10 @@ fn cc_parsed_header_scans(
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         contents
             .iter()
-            .map(|content| cache.scans.get(content).cloned())
+            .map(|content| match cache.scans.get(content) {
+                Some(CcCachedHeaderScan::Parsed(scan)) => Some(std::sync::Arc::clone(scan)),
+                _ => None,
+            })
             .collect::<Vec<_>>()
     };
     let missing = scans
@@ -7330,17 +7355,7 @@ fn cc_parsed_header_scans(
         .iter()
         .map(|&index| read_inputs[index].clone())
         .collect::<Vec<_>>();
-    let scan = |path: &Path| -> Result<(String, String)> {
-        let bytes = fs::read(path)
-            .with_context(|| format!("reading header availability input {}", path.display()))?;
-        let content = blake3::hash(&bytes).to_hex().to_string();
-        let analysis = CcHeaderAnalysis {
-            probes: cc_header_probe_scan(&cc_splice_lines(&bytes)),
-            timestamp: cc_timestamp_scan_record(&content, cc_timestamp_may_expand(&bytes)),
-        };
-        Ok((content, deser_json::to_string(&analysis)?))
-    };
-    let mut serialized = file_hasher.cc_header_scans(&paths, CC_HEADER_SCAN_VERSION, &scan)?;
+    let mut serialized = file_hasher.cc_header_scans(&paths, CC_HEADER_SCAN_VERSION, &cc_scan_header_analysis)?;
     let parsed = serialized
         .iter_mut()
         .zip(&missing)
@@ -7350,7 +7365,7 @@ fn cc_parsed_header_scans(
             let analysis = match parsed {
                 Some(analysis) => analysis,
                 None => {
-                    let (content, fresh) = scan(&read_inputs[index])?;
+                    let (content, fresh) = cc_scan_header_analysis(&read_inputs[index])?;
                     anyhow::ensure!(content == contents[index], "cc: input changed while repairing header analysis");
                     let analysis = deser_json::from_str(&fresh)?;
                     *text = fresh;
@@ -7373,6 +7388,61 @@ fn cc_parsed_header_scans(
         scans[index] = Some(scan);
     }
     Ok(scans.into_iter().flatten().collect())
+}
+
+fn cc_scan_header_analysis(path: &Path) -> Result<(String, String)> {
+    let bytes = fs::read(path)
+        .with_context(|| format!("reading header availability input {}", path.display()))?;
+    let content = blake3::hash(&bytes).to_hex().to_string();
+    let analysis = CcHeaderAnalysis {
+        probes: cc_header_probe_scan(&cc_splice_lines(&bytes)),
+        timestamp: cc_timestamp_scan_record(&content, cc_timestamp_may_expand(&bytes)),
+    };
+    Ok((content, deser_json::to_string(&analysis)?))
+}
+
+fn cc_header_timestamp_sensitive(text: &str, content: &str) -> Option<bool> {
+    let scan = deser_json::from_str::<CcHeaderTimestamp<'_>>(text).ok()?;
+    cc_timestamp_scan_valid(content, scan.timestamp).then(|| scan.timestamp.starts_with('1'))
+}
+
+fn cc_header_timestamps_sensitive(
+    inputs: &[PathBuf],
+    contents: &[String],
+    file_hasher: &crate::cache_key::FileHasher<'_>,
+) -> Result<bool> {
+    let known = {
+        let cache = cc_header_scan_cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        contents.iter().map(|content| cache.scans.get(content).map(|scan| match scan {
+            CcCachedHeaderScan::Parsed(scan) => scan.timestamp.starts_with('1'),
+            CcCachedHeaderScan::Timestamp(sensitive) => *sensitive,
+        })).collect::<Vec<_>>()
+    };
+    let mut sensitive = known.iter().flatten().any(|value| *value);
+    let missing = known.iter().enumerate()
+        .filter_map(|(index, value)| value.is_none().then_some(index)).collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(sensitive);
+    }
+    let paths = missing.iter().map(|&index| inputs[index].clone()).collect::<Vec<_>>();
+    let serialized = file_hasher.cc_header_scans(&paths, CC_HEADER_SCAN_VERSION, &cc_scan_header_analysis)?;
+    for (&index, text) in missing.iter().zip(&serialized) {
+        let value = match cc_header_timestamp_sensitive(text, &contents[index]) {
+            Some(value) => value,
+            None => {
+                let scans = cc_parsed_header_scans(
+                    &inputs[index..=index], &contents[index..=index], file_hasher,
+                )?;
+                scans[0].timestamp.starts_with('1')
+            }
+        };
+        sensitive |= value;
+        cc_header_scan_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert_timestamp(contents[index].clone(), value, text.len());
+    }
+    Ok(sensitive)
 }
 
 /// Scan every input (memoised by content) and resolve the probes each makes
@@ -8650,9 +8720,9 @@ fn cc_timestamp_inputs_sensitive(
     };
     if let Some(file_hasher) = file_hasher {
         let analyses = file_hasher.cc_content_hashes(inputs)
-            .and_then(|contents| cc_parsed_header_scans(inputs, &contents, file_hasher));
+            .and_then(|contents| cc_header_timestamps_sensitive(inputs, &contents, file_hasher));
         match analyses {
-            Ok(scans) => return Ok(scans.iter().any(|scan| scan.timestamp.starts_with('1'))),
+            Ok(sensitive) => return Ok(sensitive),
             Err(error) => log::debug!("cc timestamp analysis unavailable: {error}"),
         }
     }
