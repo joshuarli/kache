@@ -176,6 +176,21 @@ fn kache_verdict(row: &Row<'_>, ccache: Verdict) -> (Verdict, Vec<String>) {
     let expand = |args: &[String]| expand_response_files(args, &row.kache.response_files);
     let (effective_expanded, passthrough_expanded) = (expand(row.effective_argv), expand(row.passthrough_argv));
     let is_passthrough = |argv: &[String]| argv == row.passthrough_argv || argv == passthrough_expanded;
+    for argv in &row.kache.executions.codegen_argv {
+        let argv = &argv[row.driver_args.min(argv.len())..].to_vec();
+        let effective = without_dependency_capture(argv);
+        let keyed = effective == row.effective_argv || effective == effective_expanded;
+        let passthrough = is_passthrough(argv);
+        if !keyed && !passthrough {
+            return (
+                Verdict::HarnessError,
+                vec![format!(
+                    "kache's code generation ran {:?}, the profile's effective command is {:?}",
+                    argv, row.effective_argv
+                )],
+            );
+        }
+    }
     let ran_passthrough = !row.kache.executions.codegen_argv.is_empty()
         && row.kache.executions.codegen_argv.iter().all(|argv| is_passthrough(&argv[row.driver_args.min(argv.len())..]));
     let reference = match row.raw_passthrough {
@@ -220,21 +235,6 @@ fn kache_verdict(row: &Row<'_>, ccache: Verdict) -> (Verdict, Vec<String>) {
             );
         }
         _ => {}
-    }
-    for argv in &row.kache.executions.codegen_argv {
-        let argv = &argv[row.driver_args.min(argv.len())..].to_vec();
-        let effective = without_dependency_capture(argv);
-        let keyed = effective == row.effective_argv || effective == effective_expanded;
-        let passthrough = is_passthrough(argv);
-        if !keyed && !passthrough {
-            return (
-                Verdict::HarnessError,
-                vec![format!(
-                    "kache's code generation ran {:?}, the profile's effective command is {:?}",
-                    argv, row.effective_argv
-                )],
-            );
-        }
     }
     (Verdict::Match, Vec::new())
 }
@@ -649,13 +649,18 @@ mod tests {
             if driver_args == 1 {
                 kache.executions.codegen_argv[0].insert(0, "--driver-mode=gcc".into());
             }
-            let judgement = judge(&Row {
+            let observe = |kache: &Observation| judge(&Row {
                 reuse: Reuse::Miss, expected_status: 0, raw: &raw, raw_repeat: &raw,
                 raw_passthrough: Some(&unchanged), ccache: &raw, ccache_preprocessor: &raw,
-                kache: &kache, effective_argv: &effective, passthrough_argv: &passthrough,
+                kache, effective_argv: &effective, passthrough_argv: &passthrough,
                 driver_args,
             });
+            let judgement = observe(&kache);
             assert_eq!(judgement.verdict, Verdict::Match, "{:?}", judgement.reasons);
+            kache.executions.codegen_argv[0].push("-DORACLE_WRONG_ARG=1".into());
+            let judgement = observe(&kache);
+            assert_eq!(judgement.verdict, Verdict::HarnessError, "{:?}", judgement.reasons);
+            assert!(judgement.reasons[0].contains("-DORACLE_WRONG_ARG=1"));
         }
     }
 
