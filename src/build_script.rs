@@ -2060,7 +2060,6 @@ impl Run {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn log(
         &self,
         result: EventResult,

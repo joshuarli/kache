@@ -249,7 +249,12 @@ impl ArtifactKind {
                 LinkStrategy::Copy
             }
             ArtifactKind::Metadata => LinkStrategy::WritableCopy,
-            _ => LinkStrategy::Hardlink,
+            ArtifactKind::Library
+            | ArtifactKind::Object
+            | ArtifactKind::DepInfo
+            | ArtifactKind::DebugSidecar
+            | ArtifactKind::DebugBundle
+            | ArtifactKind::Other(_) => LinkStrategy::Hardlink,
         }
     }
 }
@@ -1884,6 +1889,24 @@ mod tests {
             ArtifactKind::DebugBundle.link_strategy(),
             LinkStrategy::Hardlink
         );
+    }
+
+    #[test]
+    fn every_kind_restores_with_its_mutation_profile() {
+        for (kind, expected) in [
+            (ArtifactKind::Executable, LinkStrategy::Copy),
+            (ArtifactKind::DynamicLibrary, LinkStrategy::Copy),
+            (ArtifactKind::WasmModule, LinkStrategy::Copy),
+            (ArtifactKind::Metadata, LinkStrategy::WritableCopy),
+            (ArtifactKind::Library, LinkStrategy::Hardlink),
+            (ArtifactKind::Object, LinkStrategy::Hardlink),
+            (ArtifactKind::DepInfo, LinkStrategy::Hardlink),
+            (ArtifactKind::DebugSidecar, LinkStrategy::Hardlink),
+            (ArtifactKind::DebugBundle, LinkStrategy::Hardlink),
+            (ArtifactKind::Other("unknown-ext"), LinkStrategy::Hardlink),
+        ] {
+            assert_eq!(kind.link_strategy(), expected, "{kind:?}");
+        }
     }
 
     #[test]

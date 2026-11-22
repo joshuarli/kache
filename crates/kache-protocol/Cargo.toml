@@ -22,4 +22,5 @@ deser-json = "0.10.2"
 deser-value = "0.10.2"
 
 [lints.rust]
+unsafe_code = "forbid"
 warnings = "deny"

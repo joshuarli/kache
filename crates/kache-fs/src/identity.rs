@@ -5,7 +5,7 @@ use std::{fs, io, path::Path};
 /// live objects on this host; an inode can be reused after deletion.
 pub fn file_identity(path: &Path) -> io::Result<InodeId> {
     let metadata = fs::metadata(path)?;
-    metadata_identity(path, &metadata, true).map(|(id, _)| id)
+    Ok(metadata_identity(&metadata).0)
 }
 
 /// Identity of the file an open handle refers to, whatever its path names
@@ -29,23 +29,18 @@ pub fn directory_identity(path: &Path) -> io::Result<InodeId> {
             "path is not a directory",
         ));
     }
-    metadata_identity(path, &metadata, false).map(|(id, _)| id)
+    Ok(metadata_identity(&metadata).0)
 }
 
-pub(crate) fn metadata_identity(
-    path: &Path,
-    metadata: &fs::Metadata,
-    follow: bool,
-) -> io::Result<(InodeId, u64)> {
+pub(crate) fn metadata_identity(metadata: &fs::Metadata) -> (InodeId, u64) {
     use std::os::unix::fs::MetadataExt;
-    let _ = (path, follow);
-    Ok((
+    (
         InodeId {
             dev: metadata.dev(),
             ino: metadata.ino(),
         },
         metadata.nlink(),
-    ))
+    )
 }
 
 #[cfg(test)]

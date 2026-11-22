@@ -579,7 +579,8 @@ def run_phase(
                         flush=True,
                     )
             finally:
-                server_log.close()
+                if server_log is not None:
+                    server_log.close()
     traces = []
     if backend == "mbx":
         traces = capture_mbx_traces(binary, sessions, previous_sessions, dest)
@@ -1115,12 +1116,10 @@ def remove_owned_tree(path):
             raise error
         func(victim)
 
-    kwargs = (
-        {"onexc": restore_dir_and_retry}
-        if sys.version_info >= (3, 12)
-        else {"onerror": restore_dir_and_retry}
-    )
-    shutil.rmtree(path, **kwargs)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=restore_dir_and_retry)
+    else:
+        shutil.rmtree(path, onerror=restore_dir_and_retry)
     if path.is_symlink() or path.exists():
         raise FileExistsError(path)
 

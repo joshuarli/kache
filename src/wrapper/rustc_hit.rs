@@ -22,7 +22,6 @@ impl RustcHitContext<'_> {
     /// Report a hit only after all artifacts restore successfully. Prediction
     /// records belong to the store used for key computation, which can differ
     /// from the store that supplied the artifacts after a volume-shard miss.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn restore_and_finish(
         &self,
         store: &Store,

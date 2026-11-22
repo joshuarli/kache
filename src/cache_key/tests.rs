@@ -5970,6 +5970,95 @@ fn clippy_identity_follows_version_config_and_lint_arguments() {
 }
 
 #[test]
+fn configured_base_dirs_key_the_set_and_not_where_the_roots_are() {
+    let _lock = key_test_lock();
+    if !rustc_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("lib.rs");
+    std::fs::write(&source, "pub fn value() {}\n").unwrap();
+    let root = |name: &str| {
+        let root = dir.path().join(name);
+        std::fs::create_dir_all(&root).unwrap();
+        root.to_string_lossy().into_owned()
+    };
+    let (first, second) = (root("first"), root("second"));
+    let args = RustcArgs::parse(&base_args(&source)).unwrap();
+    let key = |normalizer: &PathNormalizer| {
+        provide_dep_info(
+            DepInfo {
+                source_files: vec![source.clone()],
+                env_deps: vec![],
+            },
+            None,
+        );
+        compute_cache_key(&args, &FileHasher::new(), normalizer, &KeyEnv::default()).unwrap()
+    };
+    let unconfigured = key(&PathNormalizer::empty());
+    let at_first = key(&PathNormalizer::empty().with_base_dirs(std::slice::from_ref(&first)));
+    let at_second = key(&PathNormalizer::empty().with_base_dirs(std::slice::from_ref(&second)));
+    let both = key(&PathNormalizer::empty().with_base_dirs(&[first, second]));
+    assert_ne!(unconfigured, at_first, "a configured client is a different recipe");
+    assert_eq!(at_first, at_second, "the key must not name where the root is");
+    assert_ne!(at_first, both, "the number of configured roots is part of the key");
+}
+
+#[cfg(unix)]
+#[test]
+fn clippy_lint_arguments_key_a_clippy_chain_and_no_other_compile() {
+    let _lock = key_test_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("lib.rs");
+    std::fs::write(&source, "pub fn value() {}\n").unwrap();
+    let driver = dir.path().join("clippy-driver");
+    kache_fs::testutil::write_executable(
+        &driver,
+        "#!/bin/sh\necho 'clippy 0.1.98 (abc 2026-09-01)'\n",
+    );
+    let rustc = dir.path().join("rustc");
+    kache_fs::testutil::write_executable(
+        &rustc,
+        "#!/bin/sh\necho 'rustc 1.101.0-nightly (c1070d693)'\n",
+    );
+    let argv = |launcher: &[&Path]| {
+        let mut argv: Vec<String> = launcher.iter().map(|p| p.display().to_string()).collect();
+        argv.extend(
+            ["--crate-name", "mxcrate"]
+                .map(String::from)
+                .into_iter()
+                .chain([source.display().to_string()])
+                .chain(["--crate-type", "lib", "--edition=2021"].map(String::from)),
+        );
+        argv
+    };
+    let chain = argv(&[&driver, &rustc]);
+    let plain = argv(&[&rustc]);
+    let key = |argv: &[String], env: &KeyEnv| {
+        provide_dep_info(
+            DepInfo {
+                source_files: vec![source.clone()],
+                env_deps: vec![],
+            },
+            None,
+        );
+        key_with(argv, env)
+    };
+    let with = |argv: &[String], lint_args: &str| key(argv, &env_with("CLIPPY_ARGS", lint_args));
+    let without = |argv: &[String]| key(argv, &KeyEnv::default());
+
+    let denied = with(&chain, "-Dclippy::all");
+    assert_eq!(denied, with(&chain, "-Dclippy::all"), "the key is deterministic");
+    assert_ne!(denied, without(&chain), "lint arguments change what clippy prints");
+    assert_ne!(denied, with(&chain, "-Wclippy::pedantic"));
+    assert_eq!(
+        with(&plain, "-Dclippy::all"),
+        without(&plain),
+        "a plain rustc compile never reads clippy's environment"
+    );
+}
+
+#[test]
 fn tool_version_cache_path_is_a_named_file_in_the_cache_dir() {
     let _lock = key_test_lock();
     let dir = tempfile::tempdir().unwrap();
@@ -18261,6 +18350,38 @@ fn linker_script_resolves_through_search_path() {
     let flag = "-Clink-arg=-Tscript.ld";
     let (before, after) = keys_around_rewrite(&unit_args("bin", &tree.deps, &[&search, flag]), &file);
     assert_ne!(before, after);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn linker_arguments_that_cannot_be_modeled_fail_closed() {
+    let env = InvocationEnv::capture();
+    let error = |key: &str, flag: &str| {
+        format!("{:#}", unix_link_arg_inputs(key, flag, &env).unwrap_err())
+    };
+    for flag in [
+        "-Wl,--version-script",
+        "-Wl,-sectcreate,__DATA",
+        "-Wl,-exported_symbols_list",
+        "-L",
+        "-Wl,-l",
+        "-Wl,-filelist",
+    ] {
+        let message = error("link-arg", flag);
+        assert!(message.contains("without a value"), "{flag}: {message}");
+    }
+    for flag in ["-Wl,--library-path=/opt/lib", "-L=/opt/lib"] {
+        let message = error("link-arg", flag);
+        assert!(message.contains("unmodeled library search path"), "{flag}: {message}");
+    }
+    let message = error("link-arg", "--library=");
+    assert!(message.contains("without a library"), "{message}");
+    assert!(error("link-arg", "-filelist=,/objects").contains("invalid linker file list"));
+    assert!(error("link-args", "-sectcreate __DATA __note").contains("without a value"));
+
+    let separated = unix_link_arg_inputs("link-arg", "-Wl,-L,/opt/lib,-l,z", &env).unwrap();
+    assert_eq!(separated.dirs, [PathBuf::from("/opt/lib")]);
+    assert_eq!(separated.libs.len(), 1);
 }
 
 #[cfg(not(windows))]

@@ -338,22 +338,25 @@ fn split_offset(time: &str) -> Option<(&str, i32)> {
         b'+' => (1i32, &zone[1..]),
         _ => (-1i32, &zone[1..]),
     };
-    let (hours, minutes) = match digits.len() {
-        2 => (digits.parse::<i32>().ok()?, 0),
-        4 => (
-            digits[..2].parse::<i32>().ok()?,
-            digits[2..].parse::<i32>().ok()?,
-        ),
-        5 if digits.as_bytes()[2] == b':' => (
-            digits[..2].parse::<i32>().ok()?,
-            digits[3..].parse::<i32>().ok()?,
-        ),
+    let (hours, minutes) = match digits.as_bytes() {
+        [_, _] => (two_digits(digits)?, 0),
+        [_, _, _, _] => (two_digits(digits.get(..2)?)?, two_digits(digits.get(2..)?)?),
+        [_, _, b':', _, _] => (two_digits(digits.get(..2)?)?, two_digits(digits.get(3..)?)?),
         _ => return None,
     };
     if hours > 23 || minutes > 59 {
         return None;
     }
     Some((clock, sign * (hours * 3600 + minutes * 60)))
+}
+
+fn two_digits(text: &str) -> Option<i32> {
+    match text.as_bytes() {
+        [tens @ b'0'..=b'9', ones @ b'0'..=b'9'] => {
+            Some(i32::from(tens - b'0') * 10 + i32::from(ones - b'0'))
+        }
+        _ => None,
+    }
 }
 
 fn split_fraction(second: &str) -> Option<(u8, u32)> {
@@ -674,6 +677,20 @@ mod tests {
             "2026-09-12T24:00:00Z",
             "2026-09-12T12:11:05+25:00",
             "not a time",
+        ] {
+            assert_eq!(UtcTime::parse_rfc3339(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn rfc3339_rejects_malformed_offsets_without_panicking() {
+        for bad in [
+            "2026-09-12T12:11:05+a\u{e9}x",
+            "2026-09-12T12:11:05+\u{e9}\u{e9}:",
+            "2026-09-12T12:11:05+-5",
+            "2026-09-12T12:11:05++5",
+            "2026-09-12T12:11:05+0-5",
+            "2026-09-12T12:11:05+ 5",
         ] {
             assert_eq!(UtcTime::parse_rfc3339(bad), None, "{bad:?}");
         }

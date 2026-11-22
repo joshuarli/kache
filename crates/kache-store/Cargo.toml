@@ -36,7 +36,11 @@ rustc-hash = "2"
 filetime = "0.2"
 deser-value = "0.10.2"
 
+[lints.rust]
+unreachable_pub = "warn"
+
 # Preserve the lint settings of the binary these modules came from.
 [lints.clippy]
+redundant_clone = "warn"
 permissions_set_readonly_false = "allow"
 too_many_arguments = "allow"

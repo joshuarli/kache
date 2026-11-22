@@ -262,6 +262,52 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn stub_refuses_an_install_name_spelled_inside_another_field() {
+        let message = |text: &str| stub(text).unwrap_err().to_string();
+        for text in [
+            "--- !tapi-tbd\nexports:\n  - install-name: /a\ninstall-name: /b\n",
+            "--- !tapi-tbd\nnote: install-name\ninstall-name: /b\n",
+        ] {
+            assert_eq!(message(text), "unsupported install-name field spelling", "{text:?}");
+        }
+    }
+
+    #[test]
+    fn macho_refuses_a_short_or_repeated_dylib_id_command() {
+        let message = |bytes: &[u8]| macho(bytes).unwrap_err().to_string();
+        let mut short = dylib("/a", false, true);
+        short[20..24].copy_from_slice(&16u32.to_le_bytes());
+        short[36..40].copy_from_slice(&16u32.to_le_bytes());
+        assert_eq!(message(&short), "invalid LC_ID_DYLIB command");
+
+        let mut twice = dylib("/a", false, true);
+        let command = twice[32..].to_vec();
+        twice.extend_from_slice(&command);
+        twice[16..20].copy_from_slice(&2u32.to_le_bytes());
+        twice[20..24].copy_from_slice(&64u32.to_le_bytes());
+        assert_eq!(message(&twice), "invalid LC_ID_DYLIB command");
+    }
+
+    #[test]
+    fn file_reader_refuses_load_commands_it_cannot_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let message = |name: &str, bytes: &[u8]| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            format!("{:#}", read(&path).unwrap_err())
+        };
+        let mut huge = dylib("/a", false, true);
+        huge[20..24].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(
+            message("huge.dylib", &huge).contains("Mach-O load commands exceed parser limit")
+        );
+
+        let mut bare = vec![0; 32];
+        bare[..4].copy_from_slice(&[0xce, 0xfa, 0xed, 0xfe]);
+        assert!(message("bare.dylib", &bare).contains("Mach-O has no complete load commands"));
+    }
+
+    #[test]
     fn file_reader_bounds_stubs_and_reads_only_dylib_headers() {
         let dir = tempfile::tempdir().unwrap();
         let library = dir.path().join("libfoo.dylib");

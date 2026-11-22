@@ -108,7 +108,7 @@ impl Fixture {
 
 // Run in a subprocess so assertions can observe the real compiler streams.
 #[test]
-#[ignore]
+#[ignore = "subprocess fixture for the rustc hit completion tests"]
 fn completion_child() {
     let mode = std::env::var("KACHE_TEST_RUSTC_HIT").unwrap();
     let fixture = Fixture::new();
@@ -116,7 +116,6 @@ fn completion_child() {
     if fails {
         std::fs::remove_file(fixture.store.blob_path(&fixture.meta.files[1].hash)).unwrap();
     }
-    let _ = mode.as_str();
     let result = EventResult::LocalHit;
     let restored = fixture.context().restore_and_finish(
         &fixture.store,

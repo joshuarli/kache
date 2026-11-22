@@ -1006,7 +1006,7 @@ fn open_primary_and_fallback_for(
     let primary = Store::open_with_options(&routed, options.clone())?;
     let mut fallbacks = Vec::new();
     if !volume_cache_dirs_match(&routed.cache_dir, &config.cache_dir) {
-        match Store::open_with_options(config, options.clone()) {
+        match Store::open_with_options(config, options) {
             Ok(store) => fallbacks.push(store),
             Err(e) => log::warn!(
                 "main store unavailable for volume-shard fallback ({}): {e:#}",
@@ -3755,7 +3755,7 @@ fn run_parsed_rustc(
         log_event(
             config,
             EventInputs::new(&event_root, crate_name, EventResult::Skipped, elapsed)
-                .rebuilt_observed(rebuilt.clone())
+                .rebuilt_observed(rebuilt)
                 .skip_reason("inputs-changed")
                 .keyed(&cache_key, key_ms, key_hash_stats)
                 .lookup_ms(lookup_ms)
@@ -3779,7 +3779,7 @@ fn run_parsed_rustc(
         log_event(
             config,
             EventInputs::new(&event_root, crate_name, EventResult::Skipped, elapsed)
-                .rebuilt_observed(rebuilt.clone())
+                .rebuilt_observed(rebuilt)
                 .skip_reason("build-script-inputs-changed")
                 .compile_time_ms(compile_time_ms)
                 .keyed(&cache_key, key_ms, key_hash_stats)
@@ -3798,7 +3798,7 @@ fn run_parsed_rustc(
         log_event(
             config,
             EventInputs::new(&event_root, crate_name, EventResult::Skipped, elapsed)
-                .rebuilt_observed(rebuilt.clone())
+                .rebuilt_observed(rebuilt)
                 .skip_reason("out-dir-alias-changed")
                 .compile_time_ms(compile_time_ms)
                 .keyed(&cache_key, key_ms, key_hash_stats)
@@ -3836,7 +3836,7 @@ fn run_parsed_rustc(
         log_event(
             config,
             EventInputs::new(&event_root, crate_name, EventResult::Skipped, elapsed)
-                .rebuilt_observed(rebuilt.clone())
+                .rebuilt_observed(rebuilt)
                 .skip_reason(format!("missing-output: {missing}"))
                 .compile_time_ms(compile_time_ms)
                 .keyed(&cache_key, key_ms, key_hash_stats)
@@ -3873,7 +3873,7 @@ fn run_parsed_rustc(
         log_event(
             config,
             EventInputs::new(&event_root, crate_name, EventResult::Skipped, elapsed)
-                .rebuilt_observed(rebuilt.clone())
+                .rebuilt_observed(rebuilt)
                 .skip_reason(reason)
                 .compile_time_ms(compile_time_ms)
                 .keyed(&cache_key, key_ms, key_hash_stats)
@@ -3896,7 +3896,7 @@ fn run_parsed_rustc(
         log_event(
             config,
             EventInputs::new(&event_root, crate_name, EventResult::Skipped, elapsed)
-                .rebuilt_observed(rebuilt.clone())
+                .rebuilt_observed(rebuilt)
                 .skip_reason("admission-threshold")
                 .compile_time_ms(compile_time_ms)
                 .keyed(&cache_key, key_ms, key_hash_stats)
@@ -4013,7 +4013,7 @@ fn run_parsed_rustc(
             log_event(
                 config,
                 EventInputs::new(&event_root, crate_name, EventResult::Skipped, elapsed)
-                    .rebuilt_observed(rebuilt.clone())
+                    .rebuilt_observed(rebuilt)
                     .skip_reason(format!("dep-info-staging: {error:#}"))
                     .compile_time_ms(compile_time_ms)
                     .keyed(&cache_key, key_ms, key_hash_stats)
@@ -4041,7 +4041,7 @@ fn run_parsed_rustc(
         log_event(
             config,
             EventInputs::new(&event_root, crate_name, EventResult::Skipped, elapsed)
-                .rebuilt_observed(rebuilt.clone())
+                .rebuilt_observed(rebuilt)
                 .skip_reason(compiled_without_lock_reason(peer_committed))
                 .compile_time_ms(compile_time_ms)
                 .keyed(&cache_key, key_ms, key_hash_stats)
@@ -4303,7 +4303,7 @@ fn reclaim_after_declined_handoff(
             crate::invocation::wait_for_committed(store, cache_key, Some(wait))?;
             store.claim_build(cache_key)
         }
-        claim => Ok(claim),
+        claim @ (BuildClaim::Acquired(_) | BuildClaim::Committed(_)) => Ok(claim),
     }
 }
 
@@ -5818,7 +5818,7 @@ fn record_input_prediction(
                 &identity,
                 args.crate_name.as_deref(),
                 dep_info,
-                guard.clone(),
+                guard,
             );
         }
     } else if let Some((identity, record)) =
@@ -6030,7 +6030,6 @@ struct ExtraInputsKey<'a> {
 /// batches hashing through the daemon. The key value is identical either way:
 /// the cache only changes how it's computed. What the event log records of
 /// the computation goes into `key_record`, whether or not a key comes back.
-#[allow(clippy::too_many_arguments)]
 fn compute_rustc_cache_key(
     config: &Config,
     compiler: &RustcCompiler,
@@ -6240,7 +6239,6 @@ fn should_record_closure(predicted: bool, rederived: bool) -> bool {
 /// Used for exactly one thing: turning a predicted key that missed into a key
 /// discovered the slow way, before the invocation is allowed to store, claim
 /// or ask a remote anything.
-#[allow(clippy::too_many_arguments)]
 fn recompute_key_without_prediction(
     config: &Config,
     compiler: &RustcCompiler,
@@ -6519,7 +6517,6 @@ fn restore_from_cache(
     restore_from_cache_with_memo_store(config, compiler, store, store, args, meta, extra_inputs)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn restore_from_cache_with_memo_store(
     config: &Config,
     compiler: &RustcCompiler,
@@ -7090,7 +7087,6 @@ fn reset_adaptive_unit(unit: Option<&AdaptiveUnit>) {
 
 /// Run a user-facing executable that artifact caching already excludes. An
 /// eligible unit keeps isolated incremental state immediately.
-#[allow(clippy::too_many_arguments)]
 fn intentional_passthrough_with_event<R: Into<String>>(
     config: &Config,
     args: &RustcArgs,
@@ -7119,7 +7115,6 @@ fn intentional_passthrough_with_event<R: Into<String>>(
 }
 
 /// Compile under the private lease; no result enters the artifact cache.
-#[allow(clippy::too_many_arguments)]
 fn adaptive_incremental_with_event<R: Into<String>>(
     config: &Config,
     args: &RustcArgs,
@@ -7294,7 +7289,6 @@ fn cc_compile_before_key(
 }
 
 /// The compile ran; whatever stopped the store, its exit code stands.
-#[allow(clippy::too_many_arguments)]
 fn cc_precompiled_skipped(
     config: &Config,
     crate_name: &str,

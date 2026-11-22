@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import TypedDict
 
 from bench import report as perf_gate_report
 from bench.design import ordered, plan
@@ -35,6 +36,19 @@ CONTENTION_SCRIPT = Path(__file__).resolve().parent.parent / "bench-contention.p
 COLLECTOR_MAX_RESOURCES = 4
 COLLECTOR_MAX_SCOPES = 8
 INSTRUMENTS = ("gauge", "sum", "histogram")
+
+
+class SampleRecord(TypedDict):
+    """One measured pass of one arm, an entry of `records` in the run's `samples.json`."""
+
+    sample: int
+    position: int
+    arm: str
+    backend: str
+    started_monotonic_s: float
+    ended_monotonic_s: float
+    cold_reused: bool
+    result: dict[str, object]
 
 
 def group_resources(entries):
@@ -361,14 +375,14 @@ def run(args):
     if getattr(args, "order_seed", None) is None:
         args.order_seed = secrets.randbits(64)
     args.randomization = plan(args.samples, args.cold_every, args.order_seed, family) if has_pair else None
-    records = []
+    records: list[SampleRecord] = []
     started = time.monotonic()
     # Wall-clock seconds since the epoch, so a workflow can set it when its
     # step starts, before this driver's own setup.
     deadline = getattr(args, "deadline_at", None)
     deadline = None if deadline is None else started + (deadline - time.time())
     # Longest pass so far per arm and cold mode: what the next one will need.
-    took = {}
+    took: dict[tuple[str, bool], float] = {}
     payload = {
         "schema_version": 1,
         "project": args.project,

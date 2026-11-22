@@ -406,7 +406,8 @@ fn materialize_blob_with_durability(
     if blob.is_file() {
         return Ok(false);
     }
-    fs::create_dir_all(blob.parent().unwrap()).context("creating blob shard directory")?;
+    fs::create_dir_all(blob.parent().context("blob path has no parent directory")?)
+        .context("creating blob shard directory")?;
     let bytes = fs::metadata(source).map(|m| m.len()).unwrap_or(0);
     let ingest = std::cell::Cell::new(StoreIngest::Copy(StoreCopyReason::Other));
     let ro_failed = std::cell::Cell::new(false);
@@ -798,13 +799,18 @@ fn restore_source_writable_if_unshared(source: &Path, blob: &Path) {
 }
 
 pub fn blob_path_in_store_dir(store_dir: &Path, hash: &str) -> PathBuf {
+    blob_shard_dir_in_store_dir(store_dir, hash).join(hash)
+}
+
+/// The directory that holds `hash`'s blob: `store/blobs/{first 2 chars}`.
+fn blob_shard_dir_in_store_dir(store_dir: &Path, hash: &str) -> PathBuf {
     // Defensive slice: a malformed hash (e.g. from a hand-edited or malicious
     // remote `meta.json`) must not panic. Hash shape is validated at the
     // remote trust boundary (`extract_entry_pack`), so a bad hash never gets
     // stored; this keeps the local path build panic-free even if one slips
     // through (#211).
     let prefix = hash.get(..2).unwrap_or(hash);
-    store_dir.join("blobs").join(prefix).join(hash)
+    store_dir.join("blobs").join(prefix)
 }
 
 /// Open the index database read-only. No schema work, no WAL/synchronous
@@ -2327,7 +2333,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
 
         let store = Self {
             policy: std::marker::PhantomData,
-            config: config.clone(),
+            config,
             options,
             db,
             eviction_pacing: (EVICTION_WRITE_SLICE, EVICTION_WRITE_PAUSE),
@@ -2953,7 +2959,6 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn put_with_compile_time_policy(
         &self,
         cache_key: &str,
@@ -3412,7 +3417,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             if !artifact.is_file() {
                 anyhow::bail!("verified restored blob vanished during batch import");
             }
-            fs::create_dir_all(blob.parent().expect("blob path has a parent"))?;
+            fs::create_dir_all(self.blob_shard_dir(&file.hash))?;
             fs::rename(&artifact, &blob)?;
             set_blob_readonly(&blob);
             return Ok(true);
@@ -3994,6 +3999,10 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         blob_path_in_store_dir(&self.config.store_dir(), hash)
     }
 
+    fn blob_shard_dir(&self, hash: &str) -> PathBuf {
+        blob_shard_dir_in_store_dir(&self.config.store_dir(), hash)
+    }
+
     /// Return the content-addressed blob whose inode a read-only output still
     /// shares, if any.
     ///
@@ -4255,7 +4264,8 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             Self::discard_staged_blob(staged);
             return Ok(PublishRename::LostRace);
         }
-        fs::create_dir_all(blob.parent().unwrap()).context("creating blob shard directory")?;
+        fs::create_dir_all(blob.parent().context("blob path has no parent directory")?)
+            .context("creating blob shard directory")?;
         // Keep SQLite's writer lock from this final existence check through
         // the rename. Plain rename would otherwise overwrite a
         // newly published inode on Unix and undo another entry's flush.
@@ -4770,7 +4780,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             let file = verify_durability_file(&blob, cached, sync_file, |path| {
                 self.open_pending_blob(path, writer_guard)
             })?;
-            crate::atomic::fsync_dir(blob.parent().expect("blob path has a parent"))?;
+            crate::atomic::fsync_dir(&self.blob_shard_dir(&cached.hash))?;
             Ok(file)
         })();
         match checked {
@@ -6548,8 +6558,8 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                     continue; // Already migrated
                 }
                 let blob = self.blob_path(&cached_file.hash);
-                let blob_dir = blob.parent().unwrap();
-                fs::create_dir_all(blob_dir)?;
+                let blob_dir = self.blob_shard_dir(&cached_file.hash);
+                fs::create_dir_all(&blob_dir)?;
 
                 if blob.is_file() {
                     // An unindexed blob can already belong to a publisher. Keep
@@ -6572,7 +6582,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
                         params![cached_file.hash],
                     )?;
                 }
-                crate::atomic::fsync_dir(blob_dir)?;
+                crate::atomic::fsync_dir(&blob_dir)?;
             }
             sync_durability_file(&metadata_file)?;
             crate::atomic::fsync_dir(&entry_dir)?;

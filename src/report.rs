@@ -1330,23 +1330,27 @@ fn load_gc_summary_all(config: &Config, cutoff: UtcTime) -> Option<GcSummary> {
     std::iter::once(config.clone())
         .chain(crate::store_view::shard_configs(config))
         .filter_map(|store| load_gc_summary(&store.cache_dir, cutoff))
-        .reduce(|mut total, next| {
-            // load_gc_summary has already validated both timestamps.
-            total.last_run = [total.last_run, next.last_run]
-                .into_iter()
-                .max_by_key(|time| UtcTime::parse_rfc3339(time).unwrap())
-                .unwrap();
+        .reduce(|(mut total, total_at), (next, next_at)| {
+            if next_at >= total_at {
+                total.last_run = next.last_run;
+            }
             total.entries_evicted += next.entries_evicted;
             total.bytes_freed += next.bytes_freed;
             total.disk_bytes_reclaimed += next.disk_bytes_reclaimed;
             total.shared_bytes_retained += next.shared_bytes_retained;
             total.blobs_removed += next.blobs_removed;
-            total
+            (total, total_at.max(next_at))
         })
+        .map(|(summary, _)| summary)
 }
 
 /// Load GC stats from gc_stats.json if GC ran at or after `cutoff`.
-fn load_gc_summary(cache_dir: &std::path::Path, cutoff: UtcTime) -> Option<GcSummary> {
+///
+/// Returns the summary with the instant its `last_run` names, parsed once.
+fn load_gc_summary(
+    cache_dir: &std::path::Path,
+    cutoff: UtcTime,
+) -> Option<(GcSummary, UtcTime)> {
     let path = cache_dir.join("gc_stats.json");
     let content = std::fs::read_to_string(&path).ok()?;
     let persisted: GcStatsPersisted = deser_json::from_str(&content).ok()?;
@@ -1357,16 +1361,19 @@ fn load_gc_summary(cache_dir: &std::path::Path, cutoff: UtcTime) -> Option<GcSum
         return None;
     }
 
-    Some(GcSummary {
-        last_run: persisted.last_run,
-        entries_evicted: persisted.entries_evicted,
-        bytes_freed: persisted.bytes_freed,
-        disk_bytes_reclaimed: persisted.disk_bytes_reclaimed,
-        shared_bytes_retained: persisted
-            .bytes_freed
-            .saturating_sub(persisted.disk_bytes_reclaimed),
-        blobs_removed: persisted.blobs_removed,
-    })
+    Some((
+        GcSummary {
+            last_run: persisted.last_run,
+            entries_evicted: persisted.entries_evicted,
+            bytes_freed: persisted.bytes_freed,
+            disk_bytes_reclaimed: persisted.disk_bytes_reclaimed,
+            shared_bytes_retained: persisted
+                .bytes_freed
+                .saturating_sub(persisted.disk_bytes_reclaimed),
+            blobs_removed: persisted.blobs_removed,
+        },
+        last_run,
+    ))
 }
 
 fn build_report_timeline(events: &[BuildEvent]) -> ReportTimeline {
@@ -1796,7 +1803,7 @@ pub(crate) fn ran_compiler_uncached(event: &BuildEvent) -> bool {
     match event.result {
         EventResult::Passthrough => !event.fallback && !is_probe_passthrough(event),
         EventResult::Skipped => !event.skip_reason.is_empty(),
-        _ => false,
+        EventResult::LocalHit | EventResult::Dup | EventResult::Miss | EventResult::Error => false,
     }
 }
 
@@ -1902,7 +1909,7 @@ fn bypass_route(e: &BuildEvent) -> &'static str {
         EventResult::Passthrough if e.fallback => "fallback",
         EventResult::Passthrough => "direct",
         EventResult::Skipped => "skipped",
-        _ => "n/a",
+        EventResult::LocalHit | EventResult::Dup | EventResult::Miss | EventResult::Error => "n/a",
     }
 }
 

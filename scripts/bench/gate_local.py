@@ -45,6 +45,8 @@ def renderer_from(staging):
     spec = importlib.util.spec_from_file_location(
         "perf_gate_report", staging / "bench" / "report.py"
     )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load the staged report from {staging}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
