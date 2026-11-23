@@ -1,11 +1,11 @@
-summary = "a GCC -specs file's contents are compile inputs"
-cohort = "open"
+summary = "a GCC -specs file named by path is keyed by its contents: an edit misses and a revert hits"
+cohort = "blocking"
 families = ["gcc"]
 profiles = ["transparent", "reproducible"]
 outputs = ["u.o"]
 
 [[compile]]
-argv = ["{cc}", "-specs=extra.specs", "-c", "u.c", "-o", "u.o"]
+argv = ["{cc}", "-specs=./extra.specs", "-c", "u.c", "-o", "u.o"]
 source = "u.c"
 
 [[step]]
@@ -14,15 +14,15 @@ reuse = "miss"
 
 [[step]]
 name = "restore"
-reuse = "like-ccache"
+reuse = "hit"
 action = [{ op = "delete-outputs" }]
 
 [[step]]
 name = "edit-specs"
 reuse = "miss"
-action = [{ op = "write", path = "extra.specs", content = "*cpp_unique_options:\\n+ -DSPEC=2\\n" }, { op = "delete-outputs" }]
+action = [{ op = "write", path = "extra.specs", content = "*cpp_unique_options:\n+ -DSPEC=2\n" }, { op = "delete-outputs" }]
 
 [[step]]
 name = "revert-specs"
-reuse = "like-ccache"
-action = [{ op = "write", path = "extra.specs", content = "*cpp_unique_options:\\n+ -DSPEC=1\\n" }, { op = "delete-outputs" }]
+reuse = "hit"
+action = [{ op = "write", path = "extra.specs", content = "*cpp_unique_options:\n+ -DSPEC=1\n" }, { op = "delete-outputs" }]

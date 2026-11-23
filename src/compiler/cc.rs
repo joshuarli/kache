@@ -3332,7 +3332,7 @@ fn cc_time_macro_free_read_set(
             cc_may_reference_time_macro(arg.as_bytes()) || arg.starts_with('@')
                 || [
                     "-fmodule", "-fprebuilt-module", "-include", "-imacros", "-fpch",
-                    "-fplugin", "-plugin", "-load", "-specs", "--specs",
+                    "-fplugin", "-plugin", "-load", "-specs", "--specs", "--config",
                     "-finput-charset", "-traditional", "-Xclang", "-Xpreprocessor", "-Wp,",
                     "-add-plugin", "-wrapper",
                 ].iter().any(|prefix| arg.starts_with(prefix))
@@ -3584,6 +3584,23 @@ fn preprocessed_input_hash(
     })
 }
 
+/// Digest of a file the driver reads to change its own options: a GCC
+/// specs file or a Clang config file. A bare name is searched in the
+/// driver's own directories, and a file that pulls in another one hides that
+/// input from the key, so both refuse.
+fn cc_driver_file_digest(parsed: &CcArgs, prefix: &str, path: &str) -> Result<String> {
+    anyhow::ensure!(path.contains('/'), "cc {prefix} names a file the driver searches for");
+    let resolved = parsed.invocation_env.resolve(Path::new(path)).context("resolving cc driver file")?;
+    let bytes = std::fs::read(&resolved).with_context(|| format!("reading cc driver file {}", resolved.display()))?;
+    let text = String::from_utf8_lossy(&bytes);
+    if prefix == "--config=" {
+        anyhow::ensure!(!text.split_whitespace().any(|token| token.starts_with('@')), "cc --config file includes another file");
+    } else {
+        anyhow::ensure!(!text.contains("%include") && !text.contains("%:include"), "cc specs file includes another file");
+    }
+    Ok(blake3::hash(&bytes).to_hex().to_string())
+}
+
 /// Whether a positional argument looks like a C-family source file
 /// (matches one of the recognized extensions in [`SOURCE_EXTENSIONS`]).
 /// Conservative: extensionless files or unknown extensions are NOT
@@ -3666,6 +3683,8 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Prefix("-fprofile-use="), class: FlagClass::ParserHandled, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fprofile-instr-use="), class: FlagClass::ParserHandled, source: "CCP-03 — clang instrumented profile, keyed by content like -fprofile-use=", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fprofile-sample-use="), class: FlagClass::ParserHandled, source: "CCP-03 — clang sample profile, keyed by content", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"--?specs=.+"), class: FlagClass::ParserHandled, source: "CCP-02 — GCC specs file keyed by content; searched names and %include refuse", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("--config="), class: FlagClass::ParserHandled, source: "CCP-02 — clang config file keyed by content; searched names and nested @files refuse", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("--warning-suppression-mappings="), class: FlagClass::ParserHandled, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fsanitize-ignorelist="), class: FlagClass::ParserHandled, source: "clang sanitizer ignorelist, keyed by content", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fcrash-diagnostics-dir="), class: FlagClass::NoObjectEffect, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
@@ -10135,6 +10154,16 @@ impl CcCompiler {
                     hasher.update(b"\n");
                 }
             }
+        }
+
+        for (prefix, arg) in parsed.rest.iter().filter_map(|arg| {
+            ["-specs=", "--specs=", "--config="].into_iter().find(|prefix| arg.starts_with(prefix)).map(|prefix| (prefix, arg))
+        }) {
+            let digest = cc_driver_file_digest(parsed, prefix, &arg[prefix.len()..])?;
+            hasher.update(b"cc_driver_file:");
+            hasher.update(prefix.as_bytes());
+            hasher.update(digest.as_bytes());
+            hasher.update(b"\n");
         }
 
         if let Some(modules) = cc_module_inputs_key(parsed, ctx.file_hasher)? {
