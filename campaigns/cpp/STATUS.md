@@ -215,7 +215,27 @@ losses that current code reproduces.
 
 ### 1. Quoted-macro capture risk (correctness, first)
 
-Suspected collision, not yet reproduced end to end. Identical source in two
+**Result, 2026-11-23: reproduced and fixed** (Linux x86_64, Alpine Clang
+23.1.4). A shared cache served checkout A's object to checkout B on B's cold
+compile under default compile-first capture: `sizeof(ROOT_TEXT)` returned
+A's length (74 vs 100). After the fix, all three variants pass: default
+capture, capture with `SOURCE_DATE_EPOCH=0`, and deferred discovery off.
+The resolved `-cc1` tokens are keyed through the prefix maps, so the two `-D`
+operands agreed, and the capture guard read only file contents. Repair:
+`cc_macro_operands_spell_roots` routes a capture to the existing expansion
+when an explicit or driver-resolved `-D`/`-U` operand spells a mapped root.
+The expansion then binds the key to its checkout if the text survives, and
+an unused rooted macro still hits across checkouts. Preprocessing memos are
+retired to v16. Regressions:
+`quoted_root_macros_compile_each_checkouts_text_from_a_shared_cache`
+(`tests/cc_passthrough_args_test.rs`; compared with raw Clang; checks cold,
+warm and relocated results for both bodies) and
+`macro_operands_spelling_mapped_roots_require_expansion` (driver-injected
+defines). Disabling the guard fails both. Not covered here: GCC compile-first
+(it needs a pinned epoch, same code path) and a real compiler config file
+(clang `--config` is still refused).
+
+Original hypothesis, kept for context: Identical source in two
 checkouts whose roots differ in length:
 
     int path_size(void) { return sizeof(ROOT_TEXT); }

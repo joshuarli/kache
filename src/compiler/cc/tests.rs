@@ -366,7 +366,7 @@ fn unpinned_captured_keys_require_a_complete_proof_or_expansion() {
         let fingerprints = compiler.captured_inputs(&parsed, &dep, &hasher).unwrap();
         cc_captured_key_discovery(&parsed, driver, CcCapturedInputs {
             fingerprints, path_bound: false, inputs_changed: false,
-        }, &hasher)
+        }, &[], &hasher)
     };
     assert!(cc_time_macro_free_sources(&parsed, &driver, &hasher));
     assert!(matches!(check(&driver), CcKeyDiscovery::Captured(_)));
@@ -384,7 +384,7 @@ fn unpinned_captured_keys_require_a_complete_proof_or_expansion() {
     }
     assert!(matches!(cc_captured_key_discovery(&parsed, &driver, CcCapturedInputs {
         fingerprints: Vec::new(), path_bound: false, inputs_changed: false,
-    }, &hasher), CcKeyDiscovery::CapturedExpansion(_)));
+    }, &[], &hasher), CcKeyDiscovery::CapturedExpansion(_)));
     fs::write(root.join("unit.c"), "const char *t = __TIME__;\n").unwrap();
     assert!(!cc_time_macro_free_sources(&parsed, &driver, &hasher));
     fs::remove_file(root.join("unit.c")).unwrap();
@@ -466,12 +466,54 @@ fn captured_keys_expand_headers_whose_contents_spell_mapped_roots() {
         assert_eq!(fingerprints.iter().any(|input| input.content != input.mapped), mapped);
         cc_captured_key_discovery(&parsed, &driver, CcCapturedInputs {
             fingerprints, path_bound: false, inputs_changed: false,
-        }, &hasher)
+        }, &[], &hasher)
     };
     assert!(matches!(check("#define VALUE 1\n", false), CcKeyDiscovery::Captured(_)));
     assert!(matches!(check(
         &format!("#define VALUE \"{}/value.h\"\n", root.path().display()), true,
     ), CcKeyDiscovery::CapturedExpansion(_)));
+}
+
+#[test]
+fn macro_operands_spelling_mapped_roots_require_expansion() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_str().unwrap();
+    let env = InvocationEnv::from_parts(
+        [("PATH", "/absent"), ("KACHE_BASE_DIR", root)], Some(dir.path().into()), None, dir.path().into(),
+    );
+    let driver = |tokens: &[String]| crate::probe::ResolvedConfig {
+        native_driver: true, schema_version: crate::probe::PROBE_SCHEMA_VERSION,
+        prober: "cc".into(), compiler_name: "clang".into(),
+        version_line: "clang version 14".into(),
+        resolved_tokens: Some(tokens.to_vec()), host_version_line: None,
+    };
+    let rooted = format!("ROOT=\"{root}/asset\"");
+    let plain = s(&["clang", "-c", "unit.c", "-DVALUE=1"]);
+    let maps = cc_prefix_maps(&CcArgs::parse_for(&plain, &env).unwrap(), &[]);
+    let spells = |args: &[String], tokens: &[String]| {
+        cc_macro_operands_spell_roots(&CcArgs::parse_for(args, &env).unwrap(), &driver(tokens), &maps)
+    };
+    assert!(!spells(&plain, &s(&["-D", "VALUE=1", "-I", &format!("{root}/include")])));
+    assert!(spells(&s(&["clang", "-c", "unit.c", &format!("-D{rooted}")]), &[]));
+    assert!(spells(&s(&["clang", "-c", "unit.c", "-D", &rooted]), &[]));
+    assert!(spells(&plain, &s(&["-D", &rooted])));
+    assert!(spells(&plain, &s(&[&format!("-U{rooted}")])));
+
+    fs::write(dir.path().join("unit.c"), "int n = 1;\n").unwrap();
+    let dep = dir.path().join("unit.d");
+    fs::write(&dep, "unit.o: unit.c\n").unwrap();
+    let hasher = crate::cache_key::FileHasher::new();
+    let parsed = CcArgs::parse_for(&plain, &env).unwrap();
+    let discovery = |tokens: &[String]| cc_captured_key_discovery(
+        &parsed, &driver(tokens),
+        CcCapturedInputs {
+            fingerprints: CcCompiler::new().captured_inputs(&parsed, &dep, &hasher).unwrap(),
+            path_bound: false, inputs_changed: false,
+        },
+        &maps, &hasher,
+    );
+    assert!(matches!(discovery(&s(&["-D", "VALUE=1"])), CcKeyDiscovery::Captured(_)));
+    assert!(matches!(discovery(&s(&["-D", &rooted])), CcKeyDiscovery::CapturedExpansion(_)));
 }
 
 #[test]

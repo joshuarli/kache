@@ -6381,7 +6381,8 @@ const CC_ARTIFACT_SCHEMA: &[u8] = b"cc_artifact_schema:4\n";
 /// v13: opaque drivers key the whole invocation environment.
 /// v14: captured project text containing mapped roots requires expansion.
 /// v15: all assembler suffixes retain expansion checks for hidden reads.
-const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v15";
+/// v16: captures whose macro operands spell mapped roots require expansion.
+const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v16";
 
 /// Local identity for a preprocessor invocation. The environment is included
 /// as selected by [`cc_memo_env_is_keyed`].
@@ -8827,13 +8828,39 @@ fn cc_time_macro_free_sources(
         })
 }
 
+/// Whether a macro operand, explicit or injected by the driver, spells a
+/// mapped root. `-ffile-prefix-map` does not rewrite string literals, so such
+/// text reaches the object unmapped while the read set stays portable.
+fn cc_macro_operands_spell_roots(
+    parsed: &CcArgs,
+    resolved: &crate::probe::ResolvedConfig,
+    prefix_maps: &[CcPrefixMap],
+) -> bool {
+    let operands = |tokens: &[String]| {
+        let mut found = Vec::new();
+        let mut tokens = tokens.iter();
+        while let Some(token) = tokens.next() {
+            if token == "-D" || token == "-U" {
+                found.extend(tokens.next().cloned());
+            } else if let Some(operand) = token.strip_prefix("-D").or_else(|| token.strip_prefix("-U")) {
+                found.push(operand.to_string());
+            }
+        }
+        found
+    };
+    operands(&parsed.rest).into_iter()
+        .chain(resolved.resolved_tokens.as_deref().map(operands).unwrap_or_default())
+        .any(|operand| apply_cc_prefix_maps_to_bytes(operand.clone().into_bytes(), prefix_maps) != operand.as_bytes())
+}
+
 fn cc_captured_key_discovery(
     parsed: &CcArgs,
     resolved: &crate::probe::ResolvedConfig,
     captured: CcCapturedInputs,
+    prefix_maps: &[CcPrefixMap],
     file_hasher: &crate::cache_key::FileHasher<'_>,
 ) -> CcKeyDiscovery {
-    if captured.fingerprints.iter().any(|input| {
+    if cc_macro_operands_spell_roots(parsed, resolved, prefix_maps) || captured.fingerprints.iter().any(|input| {
         !cc_system_path(input.local_path()) && input.content != input.mapped
     }) {
         return CcKeyDiscovery::CapturedExpansion(captured);
@@ -9839,9 +9866,11 @@ impl CcCompiler {
                 // runner, the bench's cross-clone warm phase) miss. Run them
                 // through the SAME prefix maps as the preprocessor stdout so
                 // the build root collapses to `<CC_ROOT>`/`<CC_BUILD>` and
-                // the key is path-portable. Mapping only ever merges keys
-                // that differ solely in build path (same object, remapped at
-                // compile time via `-ffile-prefix-map`) — never a miscache.
+                // the key is path-portable. `-ffile-prefix-map` does not
+                // rewrite a define's string literal, so a root that reaches
+                // the object through one binds the key to its checkout: the
+                // expansion keeps it (`hash_cc_expansion`), and a capture is
+                // expanded (`cc_macro_operands_spell_roots`).
                 if tok.starts_with("-crash-diagnostics-dir=") {
                     continue;
                 }
@@ -10208,7 +10237,7 @@ impl CcCompiler {
         // the shadowing resolution below possible.
         let discovery = match discovery {
             CcKeyDiscovery::Captured(captured) =>
-                cc_captured_key_discovery(parsed, &resolved, captured, ctx.file_hasher),
+                cc_captured_key_discovery(parsed, &resolved, captured, &prefix_maps, ctx.file_hasher),
             other => other,
         };
         let mut timestamp_sensitive = false;
