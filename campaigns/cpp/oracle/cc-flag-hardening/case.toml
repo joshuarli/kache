@@ -1,0 +1,36 @@
+summary = "distribution hardening flags (-fno-plt, -fcf-protection, -fzero-call-used-regs, -mno-red-zone) are keyed and cached"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["plain.o", "noplt.o", "cf.o", "zero.o", "redzone.o"]
+
+[[compile]]
+argv = ["{cc}", "-O2", "-c", "u.c", "-o", "plain.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-fno-plt", "-c", "u.c", "-o", "noplt.o"]
+source = "u.c"
+reuse = "any"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-fcf-protection=full", "-c", "u.c", "-o", "cf.o"]
+source = "u.c"
+reuse = "any"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-fzero-call-used-regs=all", "-c", "u.c", "-o", "zero.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-mno-red-zone", "-c", "u.c", "-o", "redzone.o"]
+source = "u.c"
+reuse = "any"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

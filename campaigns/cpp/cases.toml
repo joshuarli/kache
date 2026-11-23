@@ -933,13 +933,31 @@ ccache.suite = "kache-original"
 status = "oracle"
 
 [[case]]
+id = "cc-flag-hardening"
+package = "CCP-03"
+summary = "distribution hardening codegen flags (-fno-plt, -fcf-protection, -fzero-call-used-regs, -mno-red-zone) are keyed"
+profiles = ["both"]
+compilers = ["gcc", "clang"]
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-harden-compares-gcc"
+package = "CCP-03"
+summary = "GCC -fharden-compares is keyed"
+profiles = ["both"]
+compilers = ["gcc"]
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
 id = "cc-unknown-flag-passthrough"
 package = "CCP-03"
 summary = "unrecognized invocation shapes fall back to raw compile with raw behavior preserved"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "base.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-eqp-comment-only"

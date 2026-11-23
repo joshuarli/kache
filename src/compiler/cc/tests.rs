@@ -441,6 +441,20 @@ fn debug_detail_and_charset_flags_are_cached() {
 }
 
 #[test]
+fn distribution_hardening_flags_are_probe_captured() {
+    for flag in [
+        "-fno-plt", "-fplt", "-fcf-protection", "-fcf-protection=full", "-fcf-protection=none",
+        "-fzero-call-used-regs=all", "-fzero-call-used-regs=used-gpr", "-mno-red-zone", "-mred-zone",
+        "-fharden-compares", "-fharden-conditional-branches",
+    ] {
+        assert_eq!(classify_cc_flag(flag, Dialect::Gnu), Some(FlagClass::CapturedByProbe), "{flag}");
+    }
+    for flag in ["-fcf-protection=bogus", "-fzero-call-used-regs="] {
+        assert_eq!(classify_cc_flag(flag, Dialect::Gnu), None, "{flag}");
+    }
+}
+
+#[test]
 fn operands_under_an_explicit_language_are_sources_until_x_none() {
     let dir = tempfile::tempdir().unwrap();
     let env = InvocationEnv::from_parts(

@@ -85,7 +85,10 @@ Engineering work still open (not provisioning):
   its bytes; previously refused, and compile-first capture leaked Clang
   "argument unused" warnings), and GCC `-g3` (the time-macro check compared
   the `#define` lines it injected) are cached and blocking oracle cases.
-  `-fprofile-use` and unknown-flag passthrough remain `planned`.
+  Distribution hardening flags (`-f[no-]plt`, `-fcf-protection`,
+  `-fzero-call-used-regs`, `-m[no-]red-zone`, GCC `-fharden-*`) are probe-keyed.
+  Unknown flags pass through with raw side files (`cc-unknown-flag-passthrough`).
+  `-fprofile-use` remains `planned`.
 - CCP-03: the `@file` variants are oracle cases (see the owner ruling
   above); clang `--config` and GCC `-specs` remain open cases with correct
   passthrough.
