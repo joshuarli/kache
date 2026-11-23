@@ -27,12 +27,12 @@ build:
 	$(call cargo,dev) build -p $(NAME) --bin kache --bin kache-engine
 
 test:
-	$(call cargo,test) test --quiet --workspace --lib --tests
+	$(call cargo,test) test --quiet --no-fail-fast --workspace --lib --tests
 
 test-ci:
 	@test -x "target/$(TARGET)/dist/$(NAME)"
 	$(TEST_BINARY_ENV)="$(CURDIR)/target/$(TARGET)/dist/$(NAME)" \
-	$(call cargo,test) test --quiet --release $(TEST_TARGETS)
+	$(call cargo,test) test --quiet --no-fail-fast --release $(TEST_TARGETS)
 
 release:
 	$(call cargo,release-static) clean -p $(NAME) --profile dist --target $(TARGET)
