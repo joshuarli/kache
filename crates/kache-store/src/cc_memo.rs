@@ -288,7 +288,7 @@ impl FileHashCache<'_> {
         let mut found = std::collections::HashMap::new();
         for chunk in contents.chunks(MEMO_LOOKUP_CHUNK) {
             let placeholders = vec!["?"; chunk.len()].join(",");
-            let mut stmt = self.db().prepare_cached(&format!(
+            let mut stmt = self.connection().prepare_cached(&format!(
                 "SELECT content, scan FROM cc_header_scans
                  WHERE version = ?1 AND content IN ({placeholders})"
             ))?;
@@ -311,14 +311,14 @@ impl FileHashCache<'_> {
     /// The header-probe resolution of a read set, keyed by an identity the
     /// compiler derives from the set's contents (versions included).
     pub fn get_cc_probe_resolution(&self, read_set: &str) -> rusqlite::Result<Option<String>> {
-        self.db()
+        self.connection()
             .prepare_cached("SELECT resolution FROM cc_probe_resolutions WHERE read_set = ?1")?
             .query_row([read_set], |row| row.get(0))
             .optional()
     }
 
     pub fn put_cc_probe_resolution(&self, read_set: &str, resolution: &str) -> rusqlite::Result<()> {
-        self.db().execute(
+        self.connection().execute(
             "INSERT OR REPLACE INTO cc_probe_resolutions(read_set, resolution) VALUES (?1, ?2)",
             params![read_set, resolution],
         )?;
@@ -333,7 +333,7 @@ impl FileHashCache<'_> {
         if pairs.is_empty() {
             return Ok(());
         }
-        let tx = Transaction::new_unchecked(self.db(), TransactionBehavior::Immediate)?;
+        let tx = self.connection().transaction_with_behavior(TransactionBehavior::Immediate)?;
         {
             let mut put = tx.prepare_cached(
                 "INSERT INTO cc_header_scans(content, scan, version) VALUES (?1, ?2, ?3)
@@ -360,7 +360,7 @@ impl FileHashCache<'_> {
         // of this lookup.
         for chunk in contents.chunks(MEMO_LOOKUP_CHUNK) {
             let placeholders = vec!["?"; chunk.len()].join(",");
-            let mut stmt = self.db().prepare_cached(&format!(
+            let mut stmt = self.connection().prepare_cached(&format!(
                 "SELECT content, mapped FROM cc_mapped_hashes
                  WHERE maps = ?1 AND content IN ({placeholders}) AND rule >= {CC_MEMO_RULE}"
             ))?;
@@ -386,7 +386,7 @@ impl FileHashCache<'_> {
         let mut found = std::collections::HashMap::new();
         for chunk in contents.chunks(MEMO_LOOKUP_CHUNK) {
             let placeholders = vec!["?"; chunk.len()].join(",");
-            let mut stmt = self.db().prepare_cached(&format!(
+            let mut stmt = self.connection().prepare_cached(&format!(
                 "SELECT content, construct FROM cc_asm_scans
                  WHERE content IN ({placeholders}) AND rule >= {CC_MEMO_RULE}"
             ))?;
@@ -408,7 +408,7 @@ impl FileHashCache<'_> {
         if pairs.is_empty() {
             return Ok(());
         }
-        let tx = Transaction::new_unchecked(self.db(), TransactionBehavior::Immediate)?;
+        let tx = self.connection().transaction_with_behavior(TransactionBehavior::Immediate)?;
         {
             let mut put = tx.prepare_cached(&format!(
                 "INSERT INTO cc_asm_scans(content, construct, rule) VALUES (?1, ?2, {CC_MEMO_RULE})
@@ -433,7 +433,7 @@ impl FileHashCache<'_> {
         if pairs.is_empty() {
             return Ok(());
         }
-        let tx = Transaction::new_unchecked(self.db(), TransactionBehavior::Immediate)?;
+        let tx = self.connection().transaction_with_behavior(TransactionBehavior::Immediate)?;
         {
             let mut put = tx.prepare_cached(&format!(
                 "INSERT INTO cc_mapped_hashes(content, maps, mapped, rule)
@@ -466,7 +466,7 @@ impl FileHashCache<'_> {
     ) -> rusqlite::Result<Vec<CcPreprocessMemo>> {
         // One statement provides a single SQLite read snapshot. Reading the
         // digest separately could pair an old digest with a replacement's inputs.
-        let mut stmt = self.db().prepare_cached(
+        let mut stmt = self.connection().prepare_cached(
             "SELECT m.preprocessed_hash, m.input_count, m.last_used <= unixepoch() - 86400,
                     i.id, i.name, i.content, i.mapped, i.local_path,
                     i.size, i.mtime_ns, i.ctime_ns, i.inode, i.proof, m.id
@@ -492,7 +492,7 @@ impl FileHashCache<'_> {
                 variants.push(memo);
             }
         };
-        while let Some(row) = rows.next()? {
+        while let Some(row) = rows.advance()? {
             let id: i64 = row.get(13)?;
             if current.as_ref().is_none_or(|(open, ..)| *open != id) {
                 finish(current.take(), &mut variants);
@@ -546,7 +546,7 @@ impl FileHashCache<'_> {
         preprocessed_hash: &str,
         inputs: &[CcPreprocessMemoInput],
     ) -> rusqlite::Result<()> {
-        let tx = Transaction::new_unchecked(self.db(), TransactionBehavior::Immediate)?;
+        let tx = self.connection().transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Recorded again, a read set moves to the front: row ids order the
         // variants by when they were last recorded.
         let row_key = variant_key(memo_key, preprocessed_hash);
@@ -655,7 +655,7 @@ impl FileHashCache<'_> {
         memo_key: &str,
         preprocessed_hash: &str,
     ) -> rusqlite::Result<usize> {
-        self.db().execute(
+        self.connection().execute(
             "UPDATE cc_preprocess_memos SET last_used = unixepoch()
              WHERE memo_key = ?1 AND last_used <= unixepoch() - 86400",
             [variant_key(memo_key, preprocessed_hash)],
@@ -663,7 +663,7 @@ impl FileHashCache<'_> {
     }
 
     pub fn prune_cc_preprocess_memos(&self) -> rusqlite::Result<(usize, usize)> {
-        let tx = Transaction::new_unchecked(self.db(), TransactionBehavior::Immediate)?;
+        let tx = self.connection().transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
             "DELETE FROM cc_memo_input_refs WHERE memo_id IN
              (SELECT id FROM cc_preprocess_memos WHERE last_used < unixepoch() - 2592000)",
