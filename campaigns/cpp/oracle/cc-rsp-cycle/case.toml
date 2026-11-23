@@ -1,0 +1,23 @@
+summary = "a cyclic response file fails exactly as raw (status and diagnostics) and is never cached"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+# ccache 4.14.3 never returns on a cyclic @file (GCC and Clang fail at
+# once), so its arm runs disabled and kache is held to the raw compiler.
+ccache_config = { disable = "true" }
+
+[[compile]]
+argv = ["{cc}", "@a.rsp"]
+source = "u.c"
+also_names = ["@a.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+status = 1
+
+[[step]]
+name = "again"
+reuse = "miss"
+status = 1
+action = [{ op = "delete-outputs" }]

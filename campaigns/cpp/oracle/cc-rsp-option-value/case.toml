@@ -1,0 +1,22 @@
+summary = "an @ inside an option value is an ordinary operand, not a response file, and its text is keyed"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o", "-DTAG=@tag.rsp"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "create-namesake"
+reuse = "hit"
+action = [{ op = "write", path = "tag.rsp", content = "-DTAG=other\n" }, { op = "delete-outputs" }]

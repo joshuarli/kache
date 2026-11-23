@@ -13,6 +13,35 @@ plan: [C_CPP_PARITY_CAMPAIGN.md](../../C_CPP_PARITY_CAMPAIGN.md); tracking
 entry: KACH-26 in [TODO.md](../../TODO.md). Groundwork branch:
 `feat/ccp00-campaign-groundwork`.
 
+## Owner ruling, 2026-11-23: performance gates waived
+
+The owner waived the performance acceptance gates. Feature completion now
+comes first: turn `planned` inventory cases into blocking oracle cases and
+fix what they expose. The steps 2-3 measurement work in the focused cycle
+below is suspended, not failed. Scope also now includes co-developing
+gluon (`~/d/gluon`, Meson front end and Ninja executor) through the CCP-07
+Meson launcher cell.
+
+Native L3 host for this work: Alpine 3.25 (edge) x86_64 musl, GCC 15.2.0,
+Alpine Clang 23.1.4 (`cc` is Clang), pinned ccache 4.14.3 musl-static, eight
+CPUs, shared with unrelated workloads (correctness cells only).
+
+**CCP-03 response files, 2026-11-23 (L3):** `cc-rsp-escaped`, `-empty`,
+`-cycle`, `-depth`, `-option-value`, `-relative-paths`, `-encoding`,
+`-content-change` and the new Clang-only `cc-rsp-encoding-bom-clang` are
+blocking oracle cases. All match under GCC 15 and Clang 23 in both profiles,
+and none needed a kache change. Driver difference found: GCC rejects a
+UTF-8 byte-order mark as an argument while Clang accepts it, so the BOM step
+is Clang-only.
+
+**ccache defect (reference, not kache):** ccache 4.14.3 never returns on a
+cyclic response file (`a.rsp` -> `@b.rsp` -> `@a.rsp`), while GCC (`too many
+@-files encountered`) and Clang (`recursive expansion`) fail at once.
+`cc-rsp-cycle` runs its ccache arm with `disable = true`, so kache is held to
+the raw compiler. Reproduce: `CCACHE_DIR=$(mktemp -d) timeout 10 ccache gcc
+@a.rsp` with those two files exits 143. Not reported upstream (third-party;
+needs owner consent).
+
 ## Current state (post-#141 at `ee2402bf`; formal L1 rerun 2026-11-23)
 
 Latest [formal L1 acceptance rerun](reports/2026-11-23-l1-rerun/README.md):
@@ -33,9 +62,9 @@ Counts are taken from the files, not carried forward:
 `grep '^status = ' campaigns/cpp/cases.toml | sort | uniq -c` and
 `grep -l '^cohort = ' campaigns/cpp/oracle/*/case.toml`.
 
-- Inventory (`cases.toml`): 187 entries, and every oracle directory has
-  one: 94 `oracle`, 83 `planned`, 6 `conditional`, 4 `out_of_scope`.
-- Oracle cases (`oracle/`): 94, of which 90 `blocking` and 4 `open`
+- Inventory (`cases.toml`): 188 entries, and every oracle directory has
+  one: 103 `oracle`, 75 `planned`, 6 `conditional`, 4 `out_of_scope`.
+- Oracle cases (`oracle/`): 103, of which 99 `blocking` and 4 `open`
   (`cc-eqp-comment-only`, `cc-input-clang-config-file`,
   `cc-input-gcc-specs`, `cc-input-token-paste-probe`).
 - Gates: every Linux and macOS CI job is required (PR #50);
@@ -49,10 +78,9 @@ Counts are taken from the files, not carried forward:
 
 Engineering work still open (not provisioning):
 
-- CCP-03: additional `@file` variants (`cc-rsp-escaped`,
-  `-empty`, `-cycle`, `-depth`, `-option-value`, `-relative-paths`,
-  `-encoding`, `-content-change` are `planned`); clang `--config` and GCC
-  `-specs` (open cases, correct passthrough).
+- CCP-03: the `@file` variants are oracle cases (see the owner ruling
+  above); clang `--config` and GCC `-specs` remain open cases with correct
+  passthrough.
 - CCP-04: comment-only reuse is declined by decision (LIMIT, below); the
   token-pasted header probe stays an open case.
 - CCP-05: sidecars under `-S` pass through.

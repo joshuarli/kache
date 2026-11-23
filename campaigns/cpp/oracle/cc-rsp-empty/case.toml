@@ -1,0 +1,28 @@
+summary = "an empty response file is accepted and keyed: content added to it invalidates"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o", "-DVALUE=3", "@empty.rsp"]
+source = "u.c"
+also_names = ["@empty.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "fill"
+reuse = "miss"
+action = [{ op = "write", path = "empty.rsp", content = "-UVALUE -DVALUE=4\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "empty-again"
+reuse = "hit"
+action = [{ op = "write", path = "empty.rsp", content = "" }, { op = "delete-outputs" }]

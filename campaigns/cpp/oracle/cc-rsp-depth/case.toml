@@ -1,0 +1,33 @@
+summary = "response files nested within kache's depth bound cache like ccache; nesting past it compiles exactly as raw"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "@s0.rsp"]
+source = "u.c"
+also_names = ["@s0.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-innermost"
+reuse = "miss"
+action = [{ op = "write", path = "s2.rsp", content = "-c u.c -o u.o -DDEPTH=5\n", keep_mtime = true }, { op = "delete-outputs" }]
+
+[[step]]
+name = "past-the-bound"
+reuse = "any"
+action = [{ op = "write", path = "s0.rsp", content = "@d00.rsp\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "past-the-bound-again"
+reuse = "any"
+action = [{ op = "delete-outputs" }]
