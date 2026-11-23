@@ -30,6 +30,8 @@ mod cc_diagnostics;
 mod rustc_hit;
 use rustc_hit::RustcHitContext;
 
+pub(crate) mod store_handles;
+
 /// Check whether progress lines should be shown ([`crate::notice`]).
 ///
 /// Controlled by `KACHE_PROGRESS` env var (off by default):
@@ -1292,8 +1294,8 @@ fn run_cc_inner(
     drop(trace_preflight);
 
     let trace_store_open = crate::phase_trace::phase("store_open");
-    let (store, fallback_stores) =
-        match open_primary_and_fallback_for(
+    let stores =
+        match store_handles::Lease::open(
             config,
             &volume_route_path_cc(&parsed),
             env,
@@ -1319,14 +1321,15 @@ fn run_cc_inner(
     let invocation = CcStoreInvocation {
         compiler,
         parsed,
-        store,
-        fallback_stores,
+        stores,
         crate_name,
         event_root,
         start,
         invocation_start_ns,
     };
-    run_cc_with_store(config, &invocation, None)
+    let result = run_cc_with_store(config, &invocation, None);
+    invocation.stores.accept_return(result.as_ref().is_ok_and(|code| *code == 0));
+    result
 }
 
 /// Reused after a compile-first miss, including the store connection and
@@ -1334,8 +1337,7 @@ fn run_cc_inner(
 struct CcStoreInvocation {
     compiler: CcCompiler,
     parsed: crate::compiler::cc::CcArgs,
-    store: Store,
-    fallback_stores: Vec<Store>,
+    stores: store_handles::Lease,
     crate_name: String,
     event_root: String,
     start: std::time::Instant,
@@ -1350,13 +1352,13 @@ fn run_cc_with_store(
     let CcStoreInvocation {
         compiler,
         parsed,
-        store,
-        fallback_stores,
+        stores,
         crate_name,
         event_root,
         start,
         invocation_start_ns,
     } = invocation;
+    let (store, fallback_stores) = stores.stores();
     let start = *start;
     let invocation_start_ns = *invocation_start_ns;
     let rebuilt_package = parsed.invocation_env.var("CARGO_PKG_NAME").ok();

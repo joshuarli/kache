@@ -135,6 +135,7 @@ const FILE_HASH_LOOKUP_CHUNK: usize = 256;
 
 pub enum FileHashCache<'db> {
     Borrowed(&'db Connection),
+    Monitored(&'db crate::sqlite::Connection),
     #[cfg(any(test, feature = "test-support"))]
     Owned(Connection),
 }
@@ -179,15 +180,25 @@ impl<'db> FileHashCache<'db> {
     pub fn db(&self) -> &Connection {
         match self {
             Self::Borrowed(db) => db,
+            Self::Monitored(db) => db,
             #[cfg(any(test, feature = "test-support"))]
             Self::Owned(db) => db,
+        }
+    }
+
+    pub fn connection(&self) -> crate::sqlite::ConnectionRef<'_> {
+        match self {
+            Self::Borrowed(db) => (*db).into(),
+            Self::Monitored(db) => (*db).into(),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Owned(db) => db.into(),
         }
     }
 
     /// The memoised hash for `fingerprint`: a row whose whole stamp matches,
     /// recorded under [`FILE_HASH_RULE`] or a later rule.
     pub fn get(&self, fingerprint: &FileFingerprint) -> rusqlite::Result<Option<String>> {
-        self.db()
+        self.connection()
             .query_row(
                 "SELECT hash FROM file_hashes
                  WHERE path = ?1 AND size = ?2 AND mtime_ns = ?3 AND ctime_ns = ?4 AND inode = ?5
@@ -219,7 +230,7 @@ impl<'db> FileHashCache<'db> {
             let wanted: std::collections::HashSet<&FileFingerprint> =
                 chunk.iter().copied().collect();
             let placeholders = vec!["?"; chunk.len()].join(",");
-            let mut stmt = self.db().prepare_cached(&format!(
+            let mut stmt = self.connection().prepare_cached(&format!(
                 "SELECT path, size, mtime_ns, ctime_ns, inode, hash FROM file_hashes
                  WHERE path IN ({placeholders}) AND rule >= {FILE_HASH_RULE}"
             ))?;
@@ -249,7 +260,7 @@ impl<'db> FileHashCache<'db> {
     }
 
     pub fn put(&self, fingerprint: &FileFingerprint, hash: &str) -> rusqlite::Result<()> {
-        self.db().execute(
+        self.connection().execute(
             "INSERT OR REPLACE INTO file_hashes
              (path, size, mtime_ns, ctime_ns, inode, hash, updated_at, rule)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), ?7)",
@@ -276,7 +287,7 @@ impl<'db> FileHashCache<'db> {
         var: &str,
         scanner: u32,
     ) -> rusqlite::Result<Option<i64>> {
-        self.db()
+        self.connection()
             .query_row(
                 "SELECT use_kind FROM source_env_dep_uses
                  WHERE content_hash = ?1 AND env_var = ?2 AND scanner = ?3",
@@ -293,7 +304,7 @@ impl<'db> FileHashCache<'db> {
         scanner: u32,
         use_kind: i64,
     ) -> rusqlite::Result<()> {
-        self.db().execute(
+        self.connection().execute(
             "INSERT OR REPLACE INTO source_env_dep_uses
              (content_hash, env_var, scanner, use_kind, updated_at)
              VALUES (?1, ?2, ?3, ?4, datetime('now'))",
@@ -312,13 +323,13 @@ impl<'db> FileHashCache<'db> {
     /// asks about the crate name alone.
     pub fn has_entry_for_unit(&self, crate_name: &str, unit: &str) -> rusqlite::Result<bool> {
         if unit.is_empty() {
-            return self.db().query_row(
+            return self.connection().query_row(
                 "SELECT EXISTS(SELECT 1 FROM entries WHERE crate_name = ?1)",
                 params![crate_name],
                 |row| row.get(0),
             );
         }
-        self.db().query_row(
+        self.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM entries
                            WHERE crate_name = ?1 AND unit_id IN (?2, ''))",
             params![crate_name, unit],
@@ -356,7 +367,7 @@ impl<'db> FileHashCache<'db> {
         // Best-effort: a stamp that cannot be written costs an early prune
         // and a repeated pre-pass, never the hit.
         if prediction_touch_due(last_used, now)
-            && let Err(error) = self.db().execute(
+            && let Err(error) = self.connection().execute(
                 "UPDATE input_predictions SET last_used = ?2 WHERE identity = ?1",
                 params![identity, now],
             )
@@ -373,7 +384,7 @@ impl<'db> FileHashCache<'db> {
         crate_name: Option<&str>,
         prediction_json: &str,
     ) -> rusqlite::Result<()> {
-        self.db().execute(
+        self.connection().execute(
             "INSERT OR REPLACE INTO input_predictions
              (identity, schema, crate_name, prediction_json, updated_at, last_used)
              VALUES (?1, ?2, ?3, ?4, datetime('now'), unixepoch())",
@@ -408,7 +419,7 @@ impl<'db> FileHashCache<'db> {
     /// table without a `rule` column copies its rows at rule 0, which no
     /// lookup serves.
     pub fn rebuild_file_hashes_without_rowid(&self) -> rusqlite::Result<bool> {
-        let tx = Transaction::new_unchecked(self.db(), TransactionBehavior::Immediate)?;
+        let tx = self.connection().transaction_with_behavior(TransactionBehavior::Immediate)?;
         if !file_hashes_has_rowid(&tx)? {
             return Ok(false);
         }
@@ -434,11 +445,11 @@ impl<'db> FileHashCache<'db> {
     fn prune_file_hashes_at(&self, now: i64) -> rusqlite::Result<usize> {
         // Built here, not when a wrapper opens the index, for the reason
         // given in `prune_input_predictions_at`.
-        self.db().execute_batch(
+        self.connection().execute_batch(
             "CREATE INDEX IF NOT EXISTS file_hashes_updated_at
              ON file_hashes(updated_at)",
         )?;
-        self.db().execute(
+        self.connection().execute(
             "DELETE FROM file_hashes WHERE updated_at < datetime(?1, 'unixepoch')",
             params![now.saturating_sub(FILE_HASH_RETENTION_SECS)],
         )
@@ -447,11 +458,11 @@ impl<'db> FileHashCache<'db> {
     fn prune_input_predictions_at(&self, now: i64) -> rusqlite::Result<usize> {
         // Built here, not when a wrapper upgrades the table: indexing a large
         // table takes the write lock for seconds, and this runs off the build.
-        self.db().execute_batch(
+        self.connection().execute_batch(
             "CREATE INDEX IF NOT EXISTS input_predictions_last_used
              ON input_predictions(last_used)",
         )?;
-        self.db().execute(
+        self.connection().execute(
             "DELETE FROM input_predictions WHERE last_used < ?1",
             params![prediction_prune_cutoff(now)],
         )

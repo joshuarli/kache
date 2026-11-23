@@ -523,6 +523,7 @@ impl GcRunReport {
 pub(crate) struct Daemon {
     config: Config,
     store: OnceLock<Mutex<Store>>,
+    pub(crate) compiler_stores: Arc<crate::wrapper::store_handles::Pool>,
     /// Finished cc compiles handed off by wrappers, waiting to be stored.
     publish_queue: crate::daemon_publish::PublishQueue,
     /// In-flight miss compiles keyed by child PID (kunobi-ninja/kache#131).
@@ -569,6 +570,7 @@ impl Daemon {
     ) -> Self {
         Self {
             store: OnceLock::new(),
+            compiler_stores: Arc::new(crate::wrapper::store_handles::Pool::default()),
             publish_queue: crate::daemon_publish::PublishQueue::new(),
             in_flight_compiles: std::sync::Mutex::new(HashMap::new()),
             version: VERSION.to_string(),

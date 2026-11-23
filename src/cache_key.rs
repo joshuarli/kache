@@ -7353,7 +7353,7 @@ impl<'db> FileHasher<'db> {
         let Some(cache) = &self.cache else {
             return;
         };
-        let db = cache.db();
+        let db = cache.connection();
         let _ = db.busy_timeout(std::time::Duration::from_millis(100));
         let written = (|| -> rusqlite::Result<()> {
             db.execute_batch("BEGIN IMMEDIATE")?;

@@ -15,6 +15,7 @@ pub mod markers;
 pub mod opcounts;
 pub mod sharing;
 mod store;
+pub mod sqlite;
 #[cfg(test)]
 mod test_support;
 pub mod workspace;

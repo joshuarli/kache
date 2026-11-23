@@ -1181,12 +1181,18 @@ pub struct ArtifactStore<P: ArtifactPolicy> {
     policy: std::marker::PhantomData<P>,
     config: Config,
     options: StoreOptions,
-    db: Connection,
+    db: crate::sqlite::Connection,
     /// Write slice and pause for eviction sweeps: [`EVICTION_WRITE_SLICE`]
     /// and [`EVICTION_WRITE_PAUSE`] outside tests.
     eviction_pacing: (Duration, Duration),
     /// Opened by [`Self::open_read_only`]: lookups and restores only.
     read_only: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct StoreReuseStamp {
+    files: Vec<(u64, u64)>,
+    schema: (i64, i64, i64, i64),
 }
 
 /// How recently an entry must have been accessed for eviction to treat it as
@@ -1899,10 +1905,11 @@ const INDEX_SCHEMA_GENERATION: i64 = 14;
 /// from a count that only covers the other owners would take one of theirs,
 /// and the blob would be reclaimed while they still need it. Flooring first
 /// can only retain too much, which the blob-index reconcile corrects.
-fn floor_blob_refs_at_mappings(
-    conn: &rusqlite::Connection,
+fn floor_blob_refs_at_mappings<'db>(
+    conn: impl Into<crate::sqlite::ConnectionRef<'db>>,
     cache_key: &str,
 ) -> rusqlite::Result<usize> {
+    let conn = conn.into();
     conn.execute(
         "UPDATE blobs
          SET refcount = MAX(refcount, (
@@ -1918,11 +1925,12 @@ fn floor_blob_refs_at_mappings(
 /// Insert `meta`'s entry row and its blob references, unless a row for
 /// `cache_key` is already there: its owner holds those refcounts. Returns
 /// whether the row was inserted.
-fn register_entry_rows(
-    conn: &rusqlite::Connection,
+fn register_entry_rows<'db>(
+    conn: impl Into<crate::sqlite::ConnectionRef<'db>>,
     cache_key: &str,
     meta: &EntryMeta,
 ) -> Result<bool> {
+    let conn = conn.into();
     let total_size: u64 = meta.files.iter().map(|f| f.size).sum();
     let inserted = conn.execute(
         "INSERT OR IGNORE INTO entries (cache_key, crate_name, crate_type, profile, num_features, size, content_hash, metadata_hash, compile_time_ms, key_schema, committed, durable, compile_time_backfilled) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, 0, 1)",
@@ -1977,7 +1985,8 @@ fn register_entry_rows(
 /// name a blob that has no row (nothing was ever counted for it); released
 /// afterwards, that mapping would consume the reference just taken and
 /// delete the new generation's row.
-fn release_entry_blob_refs(conn: &rusqlite::Connection, cache_key: &str) -> rusqlite::Result<()> {
+fn release_entry_blob_refs<'db>(conn: impl Into<crate::sqlite::ConnectionRef<'db>>, cache_key: &str) -> rusqlite::Result<()> {
+    let conn = conn.into();
     floor_blob_refs_at_mappings(conn, cache_key)?;
     conn.execute(
         "UPDATE blobs
@@ -2017,11 +2026,12 @@ fn has_unmigrated_artifacts(entry_dir: &Path, meta: &EntryMeta) -> bool {
 ///
 /// A publisher that may be replacing a generation calls
 /// [`release_entry_blob_refs`] first, before it takes its own references.
-fn record_entry_blobs(
-    conn: &rusqlite::Connection,
+fn record_entry_blobs<'db>(
+    conn: impl Into<crate::sqlite::ConnectionRef<'db>>,
     cache_key: &str,
     files: &[CachedFile],
 ) -> rusqlite::Result<()> {
+    let conn = conn.into();
     conn.execute(
         "DELETE FROM entry_blobs WHERE cache_key = ?1",
         params![cache_key],
@@ -2312,6 +2322,46 @@ fn positive_or_none(value: i64) -> Option<u64> {
 }
 
 impl<P: ArtifactPolicy> ArtifactStore<P> {
+    pub fn reuse_stamp(&self) -> Result<StoreReuseStamp> {
+        self.db.monitor();
+        anyhow::ensure!(self.db.reusable(), "store connection is not reusable");
+        fn check(db: &Connection) -> Result<()> {
+            let mut moved: std::ffi::c_int = 0;
+            // The connection is exclusively owned by this invocation.
+            unsafe {
+                let code = rusqlite::ffi::sqlite3_errcode(db.handle());
+                anyhow::ensure!(matches!(code, 0 | 100 | 101), "store connection has a SQLite error");
+                let result = rusqlite::ffi::sqlite3_file_control(
+                    db.handle(), std::ptr::null(), rusqlite::ffi::SQLITE_FCNTL_HAS_MOVED,
+                    (&mut moved as *mut std::ffi::c_int).cast(),
+                );
+                anyhow::ensure!(result == rusqlite::ffi::SQLITE_OK && moved == 0, "store index moved");
+            }
+            anyhow::ensure!(db.is_autocommit(), "store has an active transaction");
+            Ok(())
+        }
+        check(&self.db)?;
+        #[cfg(unix)]
+        let files = {
+            use std::os::unix::fs::MetadataExt;
+            [self.config.cache_dir.clone(), self.config.store_dir(), self.config.index_db_path()]
+                .iter().map(|path| {
+                    let meta = fs::metadata(path)?;
+                    Ok((meta.dev(), meta.ino()))
+                }).collect::<std::io::Result<Vec<_>>>()?
+        };
+        #[cfg(not(unix))]
+        anyhow::bail!("store reuse is unavailable on this platform");
+        #[cfg(unix)]
+        {
+            let schema = self.db.prepare_cached(
+                "SELECT schema_version, user_version, application_id, data_version FROM pragma_schema_version, pragma_user_version, pragma_application_id, pragma_data_version"
+            )?.query_row([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?;
+            check(&self.db)?;
+            Ok(StoreReuseStamp { files, schema })
+        }
+    }
+
     pub fn open(config: impl Into<Config>) -> Result<Self> {
         Self::open_with_options(
             config,
@@ -2335,7 +2385,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             policy: std::marker::PhantomData,
             config,
             options,
-            db,
+            db: db.into(),
             eviction_pacing: (EVICTION_WRITE_SLICE, EVICTION_WRITE_PAUSE),
             read_only: false,
         };
@@ -2432,7 +2482,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             policy: std::marker::PhantomData,
             config,
             options,
-            db,
+            db: db.into(),
             eviction_pacing: (EVICTION_WRITE_SLICE, EVICTION_WRITE_PAUSE),
             read_only: true,
         })
@@ -2566,7 +2616,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
 
     /// Borrow the persistent memo without exposing the index connection.
     pub fn file_hash_cache(&self) -> crate::file_hash::FileHashCache<'_> {
-        crate::file_hash::FileHashCache::Borrowed(&self.db)
+        crate::file_hash::FileHashCache::Monitored(&self.db)
     }
 
     /// Check if a committed entry exists for this cache key.
@@ -3281,10 +3331,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         // Content verification above and the strict flush below stay outside it.
         let crate_type_str = meta.crate_types.join(",");
         let num_features = meta.features.len() as i64;
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.db,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx = self.db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         // A second download of a committed key (two daemons, a retried
         // prefetch) replaces a generation that already holds references.
         release_entry_blob_refs(&tx, cache_key)?;
@@ -3378,10 +3425,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         // without weakening the production lock or relying on scheduler
         // sleeps.
         before_write_lock();
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.db,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx = self.db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         after_write_lock();
         let committed: i64 = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM entries WHERE cache_key = ?1 AND committed = 1)",
@@ -3496,10 +3540,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
 
         // Install missing blobs and register the batch under one writer lock.
         // Preflight and the strict durability flush remain outside the lock.
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.db,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx = self.db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let mut imported = 0usize;
         for entry in entries {
             let meta = &entry.meta;
@@ -4256,10 +4297,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         rename: impl FnMut() -> std::io::Result<()>,
         is_transient: impl Fn(&std::io::Error) -> bool,
     ) -> Result<PublishRename> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.db,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx = self.db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if blob.is_file() {
             Self::discard_staged_blob(staged);
             return Ok(PublishRename::LostRace);
@@ -4707,10 +4745,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
             }
         }
         before_promotion();
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.db,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx = self.db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let current_hashes: Option<(Option<String>, Option<String>)> = tx
             .query_row(
                 "SELECT metadata_hash, content_hash FROM entries
@@ -4773,7 +4808,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         cache_key: &str,
         cached: &CachedFile,
         sync_file: &mut impl FnMut(&fs::File) -> std::io::Result<()>,
-        writer_guard: Option<&rusqlite::Transaction<'_>>,
+        writer_guard: Option<&crate::sqlite::Transaction<'_>>,
     ) -> Option<(PathBuf, fs::File)> {
         let blob = self.blob_path(&cached.hash);
         let checked = (|| -> Result<fs::File> {
@@ -4799,7 +4834,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
     fn open_pending_blob(
         &self,
         path: &Path,
-        writer_guard: Option<&rusqlite::Transaction<'_>>,
+        writer_guard: Option<&crate::sqlite::Transaction<'_>>,
     ) -> Result<fs::File> {
         let _ = writer_guard;
         Ok(open_published_file(path)?)
@@ -6131,10 +6166,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         // SQLITE_BUSY_SNAPSHOT) without calling the busy handler. A build
         // writing to the index at that moment then made the sweep skip the
         // entry instead of waiting a few milliseconds for it.
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.db,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx = self.db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
         // Active-pin guard (kunobi-ninja/kache#326, #182): bail out — under
         // the write lock, before any decrement or unlink — if the entry was
@@ -6512,10 +6544,7 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         meta: &EntryMeta,
         after_preflight: impl FnOnce(),
     ) -> Result<bool> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.db,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx = self.db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let committed: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM entries WHERE cache_key = ?1 AND committed = 1)",
             params![meta.cache_key],
