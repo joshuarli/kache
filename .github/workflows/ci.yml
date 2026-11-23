@@ -23,6 +23,7 @@ jobs:
   macos:
     name: test (macOS)
     runs-on: xcode-27
+    if: vars.KACHE_MACOS_CI != 'off'
     timeout-minutes: 30
     permissions:
       contents: read
@@ -44,6 +45,7 @@ jobs:
   e2e-macos:
     name: e2e (macOS)
     runs-on: xcode-27
+    if: vars.KACHE_MACOS_CI != 'off'
     timeout-minutes: 45
     permissions:
       contents: read
@@ -82,6 +84,7 @@ jobs:
   cc-oracle-negative-macos:
     name: cc-oracle negative control (macOS, ${{ matrix.control }})
     runs-on: xcode-27
+    if: vars.KACHE_MACOS_CI != 'off'
     timeout-minutes: 30
     permissions:
       contents: read
