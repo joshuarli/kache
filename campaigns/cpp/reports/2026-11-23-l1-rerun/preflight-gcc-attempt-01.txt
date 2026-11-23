@@ -1,0 +1,40 @@
+Preflight only; unmodified ee2402bf activity.rs; compiler=gcc; TMPDIR/KACHE_CACHE_DIR unset
+Unrelated CPU limit: 0.5 cores
+Activity {
+    wall_ms: 5009.258124999999,
+    unrelated_cpu_ms: 3530,
+    unrelated_system_cpu_ms: Some(
+        3530,
+    ),
+    unrelated_process_cpu_ms: 1760,
+    unrelated_cores: 0.7046951688080558,
+    busiest: [
+        Busy {
+            pid: 1427,
+            cpu_ms: 1570,
+            name: "devin-remote-0.",
+        },
+        Busy {
+            pid: 767039,
+            cpu_ms: 90,
+            name: "amazon-ssm-agen",
+        },
+        Busy {
+            pid: 2371159,
+            cpu_ms: 50,
+            name: "devin-remote-0.",
+        },
+        Busy {
+            pid: 1,
+            cpu_ms: 10,
+            name: "systemd",
+        },
+        Busy {
+            pid: 16,
+            cpu_ms: 10,
+            name: "rcu_sched",
+        },
+    ],
+    eligible: false,
+}
+PREFLIGHT_VERDICT=INELIGIBLE

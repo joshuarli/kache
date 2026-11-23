@@ -13,7 +13,15 @@ plan: [C_CPP_PARITY_CAMPAIGN.md](../../C_CPP_PARITY_CAMPAIGN.md); tracking
 entry: KACH-26 in [TODO.md](../../TODO.md). Groundwork branch:
 `feat/ccp00-campaign-groundwork`.
 
-## Current state (post-#139 at `c5c3d206`; diagnostic checkpoint 2026-11-22)
+## Current state (post-#141 at `ee2402bf`; formal L1 rerun 2026-11-23)
+
+Latest [formal L1 acceptance rerun](reports/2026-11-23-l1-rerun/README.md):
+GCC 11 and Clang 14, all six workloads eligible, ten complete pairs each;
+**all six FAIL overall performance acceptance**. Clang tiny-C cold vs ccache
+now passes, **0.716 [0.619, 0.827]**, but this does not close its other targets.
+Main's exact-source post-merge checks are **11/11 green**. Acceptance rules
+are unchanged; M1, newer-L1 compilers, native ARM64 L2 and LLVM timing gaps
+remain open.
 
 Counts are taken from the files, not carried forward:
 `grep '^status = ' campaigns/cpp/cases.toml | sort | uniq -c` and
@@ -92,7 +100,7 @@ Engineering work still open (not provisioning):
   eligible M1 acceptance verdict exists. Its single-pair ratios are
   diagnostics only. The loaded-host tables under "CCP-09 baseline" predate
   #74/#75 and the acceptance mode.
-- CCP-09 L1 rerun, 2026-11-21, clean `c4d2b947` (includes #101, #105,
+- Previous CCP-09 L1 rerun, 2026-11-21, clean `c4d2b947` (includes #101, #105,
   #109), same three workloads and `--jobs 4` as #99:
   [GCC 11 report](reports/2026-11-21-l1-c4d2b947/gcc/report.json),
   [Clang 14 report](reports/2026-11-21-l1-c4d2b947/clang/report.json),
@@ -184,14 +192,63 @@ Provisioning, not engineering:
   assignment, bootstrap PR notes) is in git: `git log -p --
   campaigns/cpp/STATUS.md` before 2026-11-19.
 
+## Formal L1 acceptance rerun, 2026-11-23
+
+Clean main **`ee2402bfb20c2d018c4036bec5e53a1084f79a9a`** (#141), same native
+Ubuntu 22.04 x86_64 host, GCC 11.4, Clang 14.0, pinned ccache 4.14.3,
+same three workloads, jobs 4, seed and input digests as #99/#114.
+[Report, intervals, raw observations, analysis and native-daemon evidence](reports/2026-11-23-l1-rerun/README.md).
+The unchanged locked runner uses #140's short private runtimes and verifies
+daemon readiness/version/epoch before every replay. Passive records sampled
+62 native daemon PIDs (both socket paths <=32 bytes); separate **untimed**
+strace checks confirm each compiler's twelve warm C++ requests are twelve hits
+with zero compiler/preprocessor or standalone-engine executions.
+
+The first standalone GCC preflight refused a busy host (0.704695 unrelated
+cores), before any benchmark. The next attempt and Clang's first attempt pass
+(0.031940 / 0.025950 cores); runner preflights also pass (0.013966 / 0.033933).
+No timed sample was discarded or repeated. **6/6 workloads eligible, 60/60
+complete pairs, 180/180 admitted/eligible replays**; all correctness/reuse
+validations and complete-pair raw-object comparisons pass. All six reach the
+existing ten-pair cap. Maximum whole-replay unrelated activity is 0.381263
+cores; all 1740 build windows remain, including 172 individually over the
+short-window threshold, under the unchanged time-weighted replay rule.
+
+Ratios below are kache/ccache geomeans. Cold target <=1.10; warm/relocated
+<=1.15. `I` is INCONCLUSIVE, not PASS. Full CIs and every edit/revert target
+are in the report. **All six overall verdicts remain FAIL.**
+
+| Compiler / workload | Cold | Warm | Relocated | Overall |
+|---|---|---|---|---|
+| GCC 11 tiny C | 1.239 FAIL | 2.468 FAIL | 2.356 FAIL | FAIL |
+| GCC 11 C++ headers | 1.086 I | 1.307 FAIL | 1.441 I | FAIL |
+| GCC 11 zlib | 1.192 I | 1.304 FAIL | 1.112 I | FAIL |
+| Clang 14 tiny C | **0.716 PASS** | 2.448 FAIL | 2.287 FAIL | FAIL |
+| Clang 14 C++ headers | 1.058 I | 1.339 FAIL | 1.973 FAIL | FAIL |
+| Clang 14 zlib | 1.332 FAIL | 1.213 I | 1.305 FAIL | FAIL |
+
+Cold-vs-raw <=1.15 is also required: FAIL for both tiny-C and zlib cells,
+INCONCLUSIVE for both C++ header cells. Clang tiny-C cold vs ccache is a real
+passing subcriterion, **0.716 [0.619, 0.827]**, not a passing workload. Relative
+to #114's standalone fallback, C++ warm ratios improve 3.507 ->1.307 (GCC)
+and 2.825 ->1.339 (Clang), but both still fail. These integrated measurements
+are not isolated attribution of #138, #139 or #141. Largest current mean paired
+wall losses include Clang C++ immediate source edit +534.0 ms, GCC C++ cold
++504.9 ms and Clang tiny-C header edit +389.0 ms; these absolute-time rankings
+do not replace the locked interval-based acceptance verdicts.
+
+No eligible M1, newest-L1-compiler, native ARM64 L2 or LLVM subset performance
+acceptance is added here. Those cells remain missing, as does M1 standalone
+LLVM Clang provisioning. The campaign acceptance rules remain unchanged.
+
 ## Diagnostic checkpoint and next actions, 2026-11-22
 
 [Warm checkpoint report](reports/2026-11-22-warm-checkpoint/README.md) preserves
 Steps 1–3, compact observations and portable analysis. **Diagnostic only, not
-formal acceptance. The acceptance rules are unchanged.** Historical L1
-performance remains **FAIL**. There is no replacement native-daemon acceptance
-verdict, eligible M1 verdict, newer-L1-compiler coverage or native ARM64 L2
-acceptance evidence. Green CI correctness does not close those timing gaps.
+formal acceptance. The acceptance rules are unchanged.** The formal rerun
+above now supplies native-daemon GCC 11/Clang 14 verdicts, still **FAIL** overall.
+Eligible M1, newer-L1-compiler and native ARM64 L2 acceptance evidence remains
+missing. Green CI correctness does not close those timing gaps.
 
 Both historical endpoints' default sockets exceed Linux's limit. The large
 twelve-TU/four-job warm regression reproduces in standalone fallback, not at
@@ -202,7 +259,8 @@ Native Clang tiny-C cold has +332.5 ms median paired excess [62.9, 430.1].
 GCC settled-header-edit is inconclusive: +138.6 ms [−632.2, 904.1]. Its historical
 +675.8 ms excess remains **unassigned**, not disproved or explained by phase sums.
 
-Subsequent fixes are merged on main through `c5c3d206`:
+The diagnostic fixes below merged through `c5c3d206`; the latest formal run
+also includes #140 (short native-daemon runtimes) and #141 (safe Clang capture):
 
 - Correctness: #132 passes through prefix-mapped assembler listings; #133
   repairs token-pasted timestamp keying; #134 fixes observation of private
@@ -225,20 +283,24 @@ Subsequent fixes are merged on main through `c5c3d206`:
 
 Ranked next actions, with correctness safeguards retained:
 
-1. Investigate Clang <16 compile-first for **proven time-macro-free cold misses**.
-   Only Clang 14 was measured. Keep capability probing, complete dependency and
-   race checks, and the existing-memo/revert path. This is an investigated
-   opportunity, not an implemented optimization or permission to skip checks.
+1. Profile the **remaining current L1 misses** in the 2026-11-23 formal report:
+   warm/revert/relocation overhead, GCC tiny-C and C++ cold, Clang zlib cold
+   and C++ immediate source edits. #141 implements guarded Clang compile-first;
+   Clang 14 tiny-C cold vs ccache now passes, but its other targets do not.
+   Preserve full read-set/time-macro proofs, expansion fallback, races, mapped
+   path and assembler checks; do not generalize to unmeasured compiler majors.
 2. Reprofile the **remaining standalone header-analysis cost after #139** before
    selecting another optimization. Full persisted JSON is still loaded; do not
    assume the old full-deserialization hotspot survives unchanged. Preserve
    content-bound verdicts, full probe upgrades and all keying safeguards.
-3. Investigate the **unassigned GCC settled-header-edit excess** with controlled
-   compiler/process evidence. Neither #138's microbenchmark nor the inconclusive
-   paired interval explains or proves recovery of the historical +675.8 ms.
-4. Rerun locked **L1 acceptance** after these merged changes with verified working
-   isolated daemons, unchanged jobs/activity thresholds and retained-sample rules.
-   Historical performance stays FAIL until a new eligible verdict replaces it.
+3. Keep the historical **unassigned GCC settled-header-edit excess** explicit.
+   The current C++ header-edit mean is -38.5 ms vs ccache; this does not explain
+   the historical +675.8 ms or identify its cause. Use controlled compiler/
+   process evidence before claiming attribution to a particular optimization.
+4. Rerun only affected locked **L1 acceptance** after a relevant change or a
+   resolved measurement problem. The verified-daemon rerun is complete and
+   all six workloads still FAIL overall; do not rerun unchanged cells to fish
+   for passing intervals or relax admission/targets.
 5. Obtain eligible **M1**, **newer-L1-compiler** and native **ARM64 L2** acceptance
    evidence separately; provision M1 standalone LLVM Clang before claiming its
    missing compiler cell. Shared CI correctness does not fill these timing gaps.

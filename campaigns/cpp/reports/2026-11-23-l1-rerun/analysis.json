@@ -1,0 +1,3628 @@
+{
+  "source_revision": "ee2402bfb20c2d018c4036bec5e53a1084f79a9a",
+  "summary": [
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "acceptance": {
+        "complete_pairs": 10,
+        "eligible": true,
+        "verdict": "fail",
+        "reasons": [
+          "cold vs ccache: Some(Fail) (geomean 1.239, target 1.1)",
+          "cold vs raw: Some(Fail) (geomean 1.994, target 1.15)",
+          "warm vs ccache: Some(Fail) (geomean 2.468, target 1.15)",
+          "edit-source-settled vs ccache: Some(Inconclusive) (geomean 1.192, target 1.15)",
+          "revert-source-settled vs ccache: Some(Fail) (geomean 1.535, target 1.15)",
+          "edit-header-settled vs ccache: Some(Inconclusive) (geomean 1.170, target 1.15)",
+          "revert-header-settled vs ccache: Some(Fail) (geomean 2.598, target 1.15)",
+          "edit-source-immediate vs ccache: Some(Fail) (geomean 1.338, target 1.15)",
+          "revert-source-immediate vs ccache: Some(Fail) (geomean 1.544, target 1.15)",
+          "relocated vs ccache: Some(Fail) (geomean 2.356, target 1.15)"
+        ]
+      },
+      "raw_report_sha256": "8f35e466e8edced727be51f3c41e50081d076975122cd6b47a7a12ddc19b92b1",
+      "all_targets": [
+        {
+          "scenario": "cold",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.238552356467534,
+            "ci95": [
+              1.1668108097491923,
+              1.314704943504097
+            ]
+          },
+          "target": 1.1,
+          "verdict": "FAIL",
+          "kache_median_ms": 1115.8547775000002,
+          "other_median_ms": 890.8516905
+        },
+        {
+          "scenario": "cold",
+          "against": "raw",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.99396870356916,
+            "ci95": [
+              1.8842427814699694,
+              2.110084342587486
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 1115.8547775000002,
+          "other_median_ms": 563.318057
+        },
+        {
+          "scenario": "warm",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.468390979264348,
+            "ci95": [
+              2.3697577805837415,
+              2.571129453159864
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 173.30758250000002,
+          "other_median_ms": 70.88385300000002
+        },
+        {
+          "scenario": "edit-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1919144705414304,
+            "ci95": [
+              0.9946466770989646,
+              1.428306289857244
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 29.755295000000004,
+          "other_median_ms": 23.9562315
+        },
+        {
+          "scenario": "revert-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.5353274956357437,
+            "ci95": [
+              1.2403991678865698,
+              1.900380603182318
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 8.623611,
+          "other_median_ms": 5.5762085
+        },
+        {
+          "scenario": "edit-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.170498068697281,
+            "ci95": [
+              1.1432989667900006,
+              1.1983442377025397
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 1039.3224030000001,
+          "other_median_ms": 885.972237
+        },
+        {
+          "scenario": "revert-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.5980421529640108,
+            "ci95": [
+              2.466663338184072,
+              2.7364184337968918
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 181.8768305,
+          "other_median_ms": 71.482126
+        },
+        {
+          "scenario": "edit-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.3384638297338325,
+            "ci95": [
+              1.2103174718516057,
+              1.4801781062988801
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 32.862776,
+          "other_median_ms": 24.359956
+        },
+        {
+          "scenario": "revert-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.5442319545454652,
+            "ci95": [
+              1.3655745384223843,
+              1.7462630287426417
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 8.3441495,
+          "other_median_ms": 5.3619795
+        },
+        {
+          "scenario": "relocated",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.355596482258683,
+            "ci95": [
+              2.171022853304132,
+              2.555861988640321
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 174.4291955,
+          "other_median_ms": 74.642326
+        }
+      ],
+      "replay_activity": [
+        {
+          "pair": 0,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.23948333303381755
+        },
+        {
+          "pair": 0,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.19114576809261305
+        },
+        {
+          "pair": 0,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.14817693156356063
+        },
+        {
+          "pair": 1,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.12949251522017488
+        },
+        {
+          "pair": 1,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.2031540790519711
+        },
+        {
+          "pair": 1,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.18907891613886338
+        },
+        {
+          "pair": 2,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.22804497543546867
+        },
+        {
+          "pair": 2,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.1984946434654706
+        },
+        {
+          "pair": 2,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.12597327264649158
+        },
+        {
+          "pair": 3,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.19044683388885442
+        },
+        {
+          "pair": 3,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.13690530396597994
+        },
+        {
+          "pair": 3,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.20023723369732332
+        },
+        {
+          "pair": 4,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.19249608088813516
+        },
+        {
+          "pair": 4,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.17845001850070297
+        },
+        {
+          "pair": 4,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.16633545481667159
+        },
+        {
+          "pair": 5,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.23963703961797445
+        },
+        {
+          "pair": 5,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.22399500991910087
+        },
+        {
+          "pair": 5,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.13322605644827185
+        },
+        {
+          "pair": 6,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.2298439779377435
+        },
+        {
+          "pair": 6,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.13678135237856748
+        },
+        {
+          "pair": 6,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.19515844749851702
+        },
+        {
+          "pair": 7,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.19503899884554937
+        },
+        {
+          "pair": 7,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.19908240867669766
+        },
+        {
+          "pair": 7,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.200832677070091
+        },
+        {
+          "pair": 8,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.2568126060586756
+        },
+        {
+          "pair": 8,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.17885245663375415
+        },
+        {
+          "pair": 8,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.20595491019522033
+        },
+        {
+          "pair": 9,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.18070505878006907
+        },
+        {
+          "pair": 9,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.18956036306423468
+        },
+        {
+          "pair": 9,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.21757773789863344
+        }
+      ],
+      "max_unrelated_cores": 0.2568126060586756,
+      "admitted_replays": 30,
+      "eligible_replays": 30,
+      "individual_build_windows_eligible": 281,
+      "individual_build_windows": 330,
+      "comparison_114": {
+        "cold": {
+          "scenario": "cold",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.158361990974122,
+            "ci95": [
+              1.0542584391052454,
+              1.2727453272959586
+            ]
+          },
+          "target": 1.1,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 1197.908446,
+          "other_median_ms": 1066.4554120000003
+        },
+        "warm": {
+          "scenario": "warm",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.9474075857426305,
+            "ci95": [
+              2.504766547205819,
+              3.4682719178696244
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 247.11922199999998,
+          "other_median_ms": 81.1268585
+        },
+        "edit-source-settled": {
+          "scenario": "edit-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.2277835593144173,
+            "ci95": [
+              1.0704863600161243,
+              1.4081939993145483
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 35.0511075,
+          "other_median_ms": 25.75663
+        },
+        "revert-source-settled": {
+          "scenario": "revert-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.6691288443938117,
+            "ci95": [
+              1.3846250154056152,
+              2.0120906875073943
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 9.6851555,
+          "other_median_ms": 5.702908
+        },
+        "edit-header-settled": {
+          "scenario": "edit-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.5088297384009384,
+            "ci95": [
+              1.3356605046264034,
+              1.704450473453073
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 1518.4954815,
+          "other_median_ms": 975.6859285
+        },
+        "revert-header-settled": {
+          "scenario": "revert-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 3.3248070882640874,
+            "ci95": [
+              2.760897370587172,
+              4.0038946365543975
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 251.3534645,
+          "other_median_ms": 79.96722
+        },
+        "edit-source-immediate": {
+          "scenario": "edit-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1432131174289764,
+            "ci95": [
+              0.9694189923224172,
+              1.3481644595498157
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 31.017193,
+          "other_median_ms": 25.6183795
+        },
+        "revert-source-immediate": {
+          "scenario": "revert-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.7692832404148575,
+            "ci95": [
+              1.6890790974958374,
+              1.8532957926327147
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 9.6680365,
+          "other_median_ms": 5.5985375
+        },
+        "relocated": {
+          "scenario": "relocated",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 3.3498833766909626,
+            "ci95": [
+              3.0156110735514834,
+              3.7212088574189495
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 261.0805295,
+          "other_median_ms": 76.55901349999999
+        },
+        "unit-daemon-start": {
+          "scenario": "unit-daemon-start",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.793521462790953,
+            "ci95": [
+              2.4476556444282425,
+              3.188259827659139
+            ]
+          },
+          "target": null,
+          "verdict": null,
+          "kache_median_ms": 10.885392,
+          "other_median_ms": 4.249166
+        },
+        "unit-steady": {
+          "scenario": "unit-steady",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.173392833854558,
+            "ci95": [
+              2.006223080162542,
+              2.354492108558358
+            ]
+          },
+          "target": null,
+          "verdict": null,
+          "kache_median_ms": 8.722970499999999,
+          "other_median_ms": 4.038105
+        }
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "acceptance": {
+        "complete_pairs": 10,
+        "eligible": true,
+        "verdict": "fail",
+        "reasons": [
+          "cold vs ccache: Some(Inconclusive) (geomean 1.086, target 1.1)",
+          "cold vs raw: Some(Inconclusive) (geomean 1.102, target 1.15)",
+          "warm vs ccache: Some(Fail) (geomean 1.307, target 1.15)",
+          "revert-source-settled vs ccache: Some(Fail) (geomean 1.336, target 1.15)",
+          "revert-header-settled vs ccache: Some(Fail) (geomean 1.529, target 1.15)",
+          "revert-source-immediate vs ccache: Some(Fail) (geomean 1.356, target 1.15)",
+          "relocated vs ccache: Some(Inconclusive) (geomean 1.441, target 1.15)"
+        ]
+      },
+      "raw_report_sha256": "8f35e466e8edced727be51f3c41e50081d076975122cd6b47a7a12ddc19b92b1",
+      "all_targets": [
+        {
+          "scenario": "cold",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.0857726578621536,
+            "ci95": [
+              0.9847700955098101,
+              1.197134508791856
+            ]
+          },
+          "target": 1.1,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 5995.3984064999995,
+          "other_median_ms": 5464.396889
+        },
+        {
+          "scenario": "cold",
+          "against": "raw",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.101643587993962,
+            "ci95": [
+              0.9817025829702543,
+              1.2362385675876162
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 5995.3984064999995,
+          "other_median_ms": 5444.281399
+        },
+        {
+          "scenario": "warm",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.3074531239106297,
+            "ci95": [
+              1.1753975105311638,
+              1.454345152093413
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 24.8732195,
+          "other_median_ms": 17.9495145
+        },
+        {
+          "scenario": "edit-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 0.9819158494367876,
+            "ci95": [
+              0.8923643893222889,
+              1.0804540688892839
+            ]
+          },
+          "target": 1.15,
+          "verdict": "PASS",
+          "kache_median_ms": 1789.7933725,
+          "other_median_ms": 1801.5678045
+        },
+        {
+          "scenario": "revert-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.3355917867208182,
+            "ci95": [
+              1.214239434499442,
+              1.4690722192624746
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 9.6317825,
+          "other_median_ms": 7.444437000000001
+        },
+        {
+          "scenario": "edit-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 0.9984783793155639,
+            "ci95": [
+              0.8859023604339511,
+              1.125359992801333
+            ]
+          },
+          "target": 1.15,
+          "verdict": "PASS",
+          "kache_median_ms": 5772.551117999999,
+          "other_median_ms": 5754.730191500001
+        },
+        {
+          "scenario": "revert-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.529272566501409,
+            "ci95": [
+              1.2533953694908881,
+              1.865871407841361
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 26.747446500000002,
+          "other_median_ms": 17.619408999999997
+        },
+        {
+          "scenario": "edit-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 0.9767931284411115,
+            "ci95": [
+              0.9180620876272293,
+              1.039281360845376
+            ]
+          },
+          "target": 1.15,
+          "verdict": "PASS",
+          "kache_median_ms": 1792.771765,
+          "other_median_ms": 1783.613785
+        },
+        {
+          "scenario": "revert-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.3562421299075194,
+            "ci95": [
+              1.202769790162704,
+              1.5292974016975118
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 10.950708500000001,
+          "other_median_ms": 7.637566
+        },
+        {
+          "scenario": "relocated",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.4413671304772093,
+            "ci95": [
+              0.9861675546384473,
+              2.1066797371789225
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 26.051461,
+          "other_median_ms": 16.0960295
+        }
+      ],
+      "replay_activity": [
+        {
+          "pair": 0,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.04726195696136605
+        },
+        {
+          "pair": 0,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.06100430453793262
+        },
+        {
+          "pair": 0,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.03655495462320965
+        },
+        {
+          "pair": 1,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.029683133757949492
+        },
+        {
+          "pair": 1,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.041664001726928426
+        },
+        {
+          "pair": 1,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.05897804697208187
+        },
+        {
+          "pair": 2,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.07999641788738544
+        },
+        {
+          "pair": 2,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.09396793855644502
+        },
+        {
+          "pair": 2,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.04610400622212781
+        },
+        {
+          "pair": 3,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.08783611441301968
+        },
+        {
+          "pair": 3,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.034673698030672495
+        },
+        {
+          "pair": 3,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.0507267078469587
+        },
+        {
+          "pair": 4,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.06490115787905555
+        },
+        {
+          "pair": 4,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.09604237367991156
+        },
+        {
+          "pair": 4,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.043281318718956185
+        },
+        {
+          "pair": 5,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.038804637955245073
+        },
+        {
+          "pair": 5,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.044704409386792196
+        },
+        {
+          "pair": 5,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.07665642832556331
+        },
+        {
+          "pair": 6,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.05436209099529628
+        },
+        {
+          "pair": 6,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.11210198894710577
+        },
+        {
+          "pair": 6,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.04423803522975907
+        },
+        {
+          "pair": 7,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.04436040701089366
+        },
+        {
+          "pair": 7,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.06138259117341261
+        },
+        {
+          "pair": 7,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.032613120307910214
+        },
+        {
+          "pair": 8,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.1307809604497563
+        },
+        {
+          "pair": 8,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.03947183226317922
+        },
+        {
+          "pair": 8,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.05133592664159018
+        },
+        {
+          "pair": 9,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.03450634334042048
+        },
+        {
+          "pair": 9,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.21558399451496502
+        },
+        {
+          "pair": 9,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.04183108587921606
+        }
+      ],
+      "max_unrelated_cores": 0.21558399451496502,
+      "admitted_replays": 30,
+      "eligible_replays": 30,
+      "individual_build_windows_eligible": 238,
+      "individual_build_windows": 270,
+      "comparison_114": {
+        "cold": {
+          "scenario": "cold",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 0.9737690109867593,
+            "ci95": [
+              0.8493071085851569,
+              1.1164702110379854
+            ]
+          },
+          "target": 1.1,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 5523.911738000001,
+          "other_median_ms": 5731.6741725
+        },
+        "warm": {
+          "scenario": "warm",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 3.5073057210264014,
+            "ci95": [
+              2.965323096428427,
+              4.148348433113631
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 57.20041499999999,
+          "other_median_ms": 15.7366305
+        },
+        "edit-source-settled": {
+          "scenario": "edit-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 0.99955299265374,
+            "ci95": [
+              0.9460819795833544,
+              1.0560461003210784
+            ]
+          },
+          "target": 1.15,
+          "verdict": "PASS",
+          "kache_median_ms": 1831.5972245,
+          "other_median_ms": 1806.4932880000001
+        },
+        "revert-source-settled": {
+          "scenario": "revert-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.217300836982228,
+            "ci95": [
+              1.8830705291654555,
+              2.610854413329363
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 19.1905565,
+          "other_median_ms": 8.2382265
+        },
+        "edit-header-settled": {
+          "scenario": "edit-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1030946754436661,
+            "ci95": [
+              0.9769428511063524,
+              1.2455363807761783
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 6066.3288975,
+          "other_median_ms": 5716.196113999999
+        },
+        "revert-header-settled": {
+          "scenario": "revert-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 3.082096704880744,
+            "ci95": [
+              2.131415328771888,
+              4.456813259248823
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 58.423648,
+          "other_median_ms": 16.816726
+        },
+        "edit-source-immediate": {
+          "scenario": "edit-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 0.969169511824851,
+            "ci95": [
+              0.8733241239545854,
+              1.0755337186811356
+            ]
+          },
+          "target": 1.15,
+          "verdict": "PASS",
+          "kache_median_ms": 1735.2962225,
+          "other_median_ms": 1823.545638
+        },
+        "revert-source-immediate": {
+          "scenario": "revert-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 3.1516259721678743,
+            "ci95": [
+              2.3650951925283086,
+              4.199723672781603
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 22.2640295,
+          "other_median_ms": 7.6108744999999995
+        },
+        "relocated": {
+          "scenario": "relocated",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 3.6708313622464805,
+            "ci95": [
+              3.131265640030141,
+              4.3033726419719045
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 63.362492,
+          "other_median_ms": 16.941892000000003
+        }
+      }
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "acceptance": {
+        "complete_pairs": 10,
+        "eligible": true,
+        "verdict": "fail",
+        "reasons": [
+          "cold vs ccache: Some(Inconclusive) (geomean 1.192, target 1.1)",
+          "cold vs raw: Some(Fail) (geomean 1.286, target 1.15)",
+          "warm vs ccache: Some(Fail) (geomean 1.304, target 1.15)",
+          "edit-source-settled vs ccache: Some(Inconclusive) (geomean 1.172, target 1.15)",
+          "revert-source-settled vs ccache: Some(Inconclusive) (geomean 1.106, target 1.15)",
+          "revert-header-settled vs ccache: Some(Inconclusive) (geomean 1.159, target 1.15)",
+          "edit-source-immediate vs ccache: Some(Inconclusive) (geomean 1.067, target 1.15)",
+          "revert-source-immediate vs ccache: Some(Inconclusive) (geomean 1.053, target 1.15)",
+          "relocated vs ccache: Some(Inconclusive) (geomean 1.112, target 1.15)"
+        ]
+      },
+      "raw_report_sha256": "8f35e466e8edced727be51f3c41e50081d076975122cd6b47a7a12ddc19b92b1",
+      "all_targets": [
+        {
+          "scenario": "cold",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1920441913039017,
+            "ci95": [
+              1.086083791797516,
+              1.308342288829858
+            ]
+          },
+          "target": 1.1,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 678.2408635,
+          "other_median_ms": 589.629771
+        },
+        {
+          "scenario": "cold",
+          "against": "raw",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.2859784613590666,
+            "ci95": [
+              1.1709475308898267,
+              1.412309740149263
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 678.2408635,
+          "other_median_ms": 554.186866
+        },
+        {
+          "scenario": "warm",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.3038518210709802,
+            "ci95": [
+              1.191682752717092,
+              1.426578984577871
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 83.680446,
+          "other_median_ms": 67.879704
+        },
+        {
+          "scenario": "edit-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1724483317499728,
+            "ci95": [
+              0.9910334100389602,
+              1.387072400081097
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 156.606725,
+          "other_median_ms": 131.198553
+        },
+        {
+          "scenario": "revert-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1057674488003233,
+            "ci95": [
+              1.0209603027148906,
+              1.1976191900654418
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 70.396086,
+          "other_median_ms": 61.3348485
+        },
+        {
+          "scenario": "edit-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.034851766159171,
+            "ci95": [
+              0.9441581889237813,
+              1.1342571514879982
+            ]
+          },
+          "target": 1.15,
+          "verdict": "PASS",
+          "kache_median_ms": 536.354542,
+          "other_median_ms": 512.793893
+        },
+        {
+          "scenario": "revert-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1588000761671255,
+            "ci95": [
+              1.0528413908393466,
+              1.2754225168279285
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 80.7167865,
+          "other_median_ms": 69.361716
+        },
+        {
+          "scenario": "edit-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.0673391067348663,
+            "ci95": [
+              0.9766867909688535,
+              1.1664054221881168
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 145.5347945,
+          "other_median_ms": 135.792337
+        },
+        {
+          "scenario": "revert-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.053088799848904,
+            "ci95": [
+              0.927157351221055,
+              1.1961249284241455
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 70.9616265,
+          "other_median_ms": 65.5097425
+        },
+        {
+          "scenario": "relocated",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1117030420592247,
+            "ci95": [
+              0.9814882263843241,
+              1.2591935598418436
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 82.73578,
+          "other_median_ms": 68.9938665
+        }
+      ],
+      "replay_activity": [
+        {
+          "pair": 0,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.14698973825593087
+        },
+        {
+          "pair": 0,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.15219800404880388
+        },
+        {
+          "pair": 0,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.17596613029359712
+        },
+        {
+          "pair": 1,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.21049036579009317
+        },
+        {
+          "pair": 1,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.15845787091544158
+        },
+        {
+          "pair": 1,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.12538008749631493
+        },
+        {
+          "pair": 2,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.10957523123729142
+        },
+        {
+          "pair": 2,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.3572556786498903
+        },
+        {
+          "pair": 2,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.16858127103296378
+        },
+        {
+          "pair": 3,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.09451567402208244
+        },
+        {
+          "pair": 3,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.13891302921341803
+        },
+        {
+          "pair": 3,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.08955768520760041
+        },
+        {
+          "pair": 4,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.1260181063081379
+        },
+        {
+          "pair": 4,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.1363132220447906
+        },
+        {
+          "pair": 4,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.13785623802073688
+        },
+        {
+          "pair": 5,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.10635077699508769
+        },
+        {
+          "pair": 5,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.18992575333581596
+        },
+        {
+          "pair": 5,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.1367204297103804
+        },
+        {
+          "pair": 6,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.19102964789184054
+        },
+        {
+          "pair": 6,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.19375349047120086
+        },
+        {
+          "pair": 6,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.10699482018333785
+        },
+        {
+          "pair": 7,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.38126349795249215
+        },
+        {
+          "pair": 7,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.12409603031735755
+        },
+        {
+          "pair": 7,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.12584814111570855
+        },
+        {
+          "pair": 8,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.15350423631516796
+        },
+        {
+          "pair": 8,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.12905326766247074
+        },
+        {
+          "pair": 8,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.25205118591807535
+        },
+        {
+          "pair": 9,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.09480254679037081
+        },
+        {
+          "pair": 9,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.18248847280691458
+        },
+        {
+          "pair": 9,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.14317522878060693
+        }
+      ],
+      "max_unrelated_cores": 0.38126349795249215,
+      "admitted_replays": 30,
+      "eligible_replays": 30,
+      "individual_build_windows_eligible": 258,
+      "individual_build_windows": 270,
+      "comparison_114": {
+        "cold": {
+          "scenario": "cold",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.0285771426924981,
+            "ci95": [
+              0.9267426026649941,
+              1.1416017084216281
+            ]
+          },
+          "target": 1.1,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 656.3749104999999,
+          "other_median_ms": 625.8452300000001
+        },
+        "warm": {
+          "scenario": "warm",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.4562341040998017,
+            "ci95": [
+              1.3604826890946713,
+              1.5587245489720345
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 101.6799735,
+          "other_median_ms": 68.7697405
+        },
+        "edit-source-settled": {
+          "scenario": "edit-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.044705528247701,
+            "ci95": [
+              0.9627585224443697,
+              1.133627607866096
+            ]
+          },
+          "target": 1.15,
+          "verdict": "PASS",
+          "kache_median_ms": 137.291627,
+          "other_median_ms": 130.612562
+        },
+        "revert-source-settled": {
+          "scenario": "revert-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.099461155692522,
+            "ci95": [
+              0.8667927627367202,
+              1.3945834400602877
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 71.369956,
+          "other_median_ms": 77.8386885
+        },
+        "edit-header-settled": {
+          "scenario": "edit-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1401887393612637,
+            "ci95": [
+              0.9917603761086705,
+              1.3108311167533264
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 552.2935635000001,
+          "other_median_ms": 500.8640325
+        },
+        "revert-header-settled": {
+          "scenario": "revert-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.405532850507041,
+            "ci95": [
+              1.1557148539966748,
+              1.7093512184452133
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 89.1416275,
+          "other_median_ms": 67.12832350000001
+        },
+        "edit-source-immediate": {
+          "scenario": "edit-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.009237639596651,
+            "ci95": [
+              0.8812590139492863,
+              1.1558016395361768
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 137.695452,
+          "other_median_ms": 136.3357945
+        },
+        "revert-source-immediate": {
+          "scenario": "revert-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 0.9621295471391695,
+            "ci95": [
+              0.8069016924547726,
+              1.1472193876084964
+            ]
+          },
+          "target": 1.15,
+          "verdict": "PASS",
+          "kache_median_ms": 69.33569550000001,
+          "other_median_ms": 71.7183625
+        },
+        "relocated": {
+          "scenario": "relocated",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.2747293660299208,
+            "ci95": [
+              1.077486194662343,
+              1.5080796066517186
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 94.32112849999999,
+          "other_median_ms": 73.98618149999999
+        }
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "acceptance": {
+        "complete_pairs": 10,
+        "eligible": true,
+        "verdict": "fail",
+        "reasons": [
+          "cold vs raw: Some(Fail) (geomean 1.343, target 1.15)",
+          "warm vs ccache: Some(Fail) (geomean 2.448, target 1.15)",
+          "revert-source-settled vs ccache: Some(Inconclusive) (geomean 1.426, target 1.15)",
+          "edit-header-settled vs ccache: Some(Inconclusive) (geomean 1.158, target 1.15)",
+          "revert-header-settled vs ccache: Some(Fail) (geomean 2.427, target 1.15)",
+          "revert-source-immediate vs ccache: Some(Fail) (geomean 1.597, target 1.15)",
+          "relocated vs ccache: Some(Fail) (geomean 2.287, target 1.15)"
+        ]
+      },
+      "raw_report_sha256": "0c5f99ff79cbde07cd76b27b74695962b0c80dd555bd5b86dac7bbd1c5e048dd",
+      "all_targets": [
+        {
+          "scenario": "cold",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 0.7158266984054538,
+            "ci95": [
+              0.6194444080818272,
+              0.827205565930889
+            ]
+          },
+          "target": 1.1,
+          "verdict": "PASS",
+          "kache_median_ms": 1849.9676964999999,
+          "other_median_ms": 2438.855257
+        },
+        {
+          "scenario": "cold",
+          "against": "raw",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.342612580271266,
+            "ci95": [
+              1.1602484540628633,
+              1.5536401142276375
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 1849.9676964999999,
+          "other_median_ms": 1341.4978025
+        },
+        {
+          "scenario": "warm",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.4477535075156607,
+            "ci95": [
+              2.1198919511362044,
+              2.826321987940913
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 189.7879805,
+          "other_median_ms": 72.4370625
+        },
+        {
+          "scenario": "edit-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 0.6618053038012152,
+            "ci95": [
+              0.5928232899606591,
+              0.7388141922839845
+            ]
+          },
+          "target": 1.15,
+          "verdict": "PASS",
+          "kache_median_ms": 43.651585999999995,
+          "other_median_ms": 62.59457400000001
+        },
+        {
+          "scenario": "revert-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.426056406215074,
+            "ci95": [
+              1.1271175499883843,
+              1.8042810829518268
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 8.83079,
+          "other_median_ms": 5.737745
+        },
+        {
+          "scenario": "edit-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1584987496215722,
+            "ci95": [
+              1.0271971958162096,
+              1.3065839337774867
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 2603.5073025,
+          "other_median_ms": 2292.9746275
+        },
+        {
+          "scenario": "revert-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.426929430188511,
+            "ci95": [
+              2.0042326087167623,
+              2.9387738895667783
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 182.287536,
+          "other_median_ms": 77.1367635
+        },
+        {
+          "scenario": "edit-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 0.7588113446467805,
+            "ci95": [
+              0.5771127361537316,
+              0.9977160798809239
+            ]
+          },
+          "target": 1.15,
+          "verdict": "PASS",
+          "kache_median_ms": 45.015392500000004,
+          "other_median_ms": 59.362706
+        },
+        {
+          "scenario": "revert-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.5972005279307782,
+            "ci95": [
+              1.164684093998486,
+              2.1903360229333337
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 8.942578000000001,
+          "other_median_ms": 5.460401500000001
+        },
+        {
+          "scenario": "relocated",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.2872261612151714,
+            "ci95": [
+              1.718474421183852,
+              3.044213779419068
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 180.798148,
+          "other_median_ms": 72.366657
+        }
+      ],
+      "replay_activity": [
+        {
+          "pair": 0,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.34815129376602405
+        },
+        {
+          "pair": 0,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.10008461890467496
+        },
+        {
+          "pair": 0,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.07136086643812699
+        },
+        {
+          "pair": 1,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.10552936500684901
+        },
+        {
+          "pair": 1,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.17365474497973582
+        },
+        {
+          "pair": 1,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.13277777581980646
+        },
+        {
+          "pair": 2,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.12676104512783978
+        },
+        {
+          "pair": 2,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.3240381050281435
+        },
+        {
+          "pair": 2,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.057778949973844605
+        },
+        {
+          "pair": 3,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.12365420191915266
+        },
+        {
+          "pair": 3,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.0851974697654404
+        },
+        {
+          "pair": 3,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.2838578672480374
+        },
+        {
+          "pair": 4,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.18024136994945744
+        },
+        {
+          "pair": 4,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.10955210252337909
+        },
+        {
+          "pair": 4,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.09094156222840544
+        },
+        {
+          "pair": 5,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.1524939971157246
+        },
+        {
+          "pair": 5,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.09837849421368833
+        },
+        {
+          "pair": 5,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.07617858946031114
+        },
+        {
+          "pair": 6,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.11789177243166986
+        },
+        {
+          "pair": 6,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.07228626780456004
+        },
+        {
+          "pair": 6,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.1614678830821651
+        },
+        {
+          "pair": 7,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.23771498247087747
+        },
+        {
+          "pair": 7,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.12814057991252645
+        },
+        {
+          "pair": 7,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.12228747126522088
+        },
+        {
+          "pair": 8,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.17204514678949168
+        },
+        {
+          "pair": 8,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.0767670182248307
+        },
+        {
+          "pair": 8,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.10038562580014937
+        },
+        {
+          "pair": 9,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.08377067009106165
+        },
+        {
+          "pair": 9,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.0969401045446829
+        },
+        {
+          "pair": 9,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.19559579672716113
+        }
+      ],
+      "max_unrelated_cores": 0.34815129376602405,
+      "admitted_replays": 30,
+      "eligible_replays": 30,
+      "individual_build_windows_eligible": 282,
+      "individual_build_windows": 330,
+      "comparison_114": {
+        "cold": {
+          "scenario": "cold",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.29338922954595,
+            "ci95": [
+              1.1909076071734532,
+              1.4046897416969963
+            ]
+          },
+          "target": 1.1,
+          "verdict": "FAIL",
+          "kache_median_ms": 2899.564233,
+          "other_median_ms": 2304.314082
+        },
+        "warm": {
+          "scenario": "warm",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 3.2841545082856425,
+            "ci95": [
+              2.760951938030818,
+              3.9065043783360927
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 223.729412,
+          "other_median_ms": 71.154545
+        },
+        "edit-source-settled": {
+          "scenario": "edit-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1928783989792924,
+            "ci95": [
+              0.946572926670784,
+              1.5032744278416301
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 73.6237675,
+          "other_median_ms": 60.233874
+        },
+        "revert-source-settled": {
+          "scenario": "revert-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.6909708608512184,
+            "ci95": [
+              1.5111489415920403,
+              1.8921910167474731
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 9.571728,
+          "other_median_ms": 5.6147955
+        },
+        "edit-header-settled": {
+          "scenario": "edit-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.225064631173847,
+            "ci95": [
+              0.991456798184671,
+              1.5137153260747265
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 3067.9981035,
+          "other_median_ms": 2285.005754
+        },
+        "revert-header-settled": {
+          "scenario": "revert-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.750976055753622,
+            "ci95": [
+              2.2857695323986773,
+              3.3108627759982703
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 223.233067,
+          "other_median_ms": 79.470269
+        },
+        "edit-source-immediate": {
+          "scenario": "edit-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1558295708328787,
+            "ci95": [
+              0.9156010413785529,
+              1.4590874588786917
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 73.06182749999999,
+          "other_median_ms": 61.4767135
+        },
+        "revert-source-immediate": {
+          "scenario": "revert-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.6949906163451984,
+            "ci95": [
+              1.38922714408158,
+              2.0680514354602653
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 9.613087499999999,
+          "other_median_ms": 5.820655
+        },
+        "relocated": {
+          "scenario": "relocated",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.90467476425735,
+            "ci95": [
+              2.3321875386275965,
+              3.6176916934726546
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 219.340257,
+          "other_median_ms": 74.245724
+        },
+        "unit-daemon-start": {
+          "scenario": "unit-daemon-start",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.658823331114401,
+            "ci95": [
+              2.22395364941807,
+              3.178726997268166
+            ]
+          },
+          "target": null,
+          "verdict": null,
+          "kache_median_ms": 10.588064500000002,
+          "other_median_ms": 3.9876785000000003
+        },
+        "unit-steady": {
+          "scenario": "unit-steady",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.1402912383454455,
+            "ci95": [
+              1.7001907078886125,
+              2.694313387129977
+            ]
+          },
+          "target": null,
+          "verdict": null,
+          "kache_median_ms": 8.879643000000002,
+          "other_median_ms": 4.0324785
+        }
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "acceptance": {
+        "complete_pairs": 10,
+        "eligible": true,
+        "verdict": "fail",
+        "reasons": [
+          "cold vs ccache: Some(Inconclusive) (geomean 1.058, target 1.1)",
+          "cold vs raw: Some(Inconclusive) (geomean 1.055, target 1.15)",
+          "warm vs ccache: Some(Fail) (geomean 1.339, target 1.15)",
+          "revert-source-settled vs ccache: Some(Fail) (geomean 1.341, target 1.15)",
+          "revert-header-settled vs ccache: Some(Fail) (geomean 1.585, target 1.15)",
+          "edit-source-immediate vs ccache: Some(Inconclusive) (geomean 1.229, target 1.15)",
+          "revert-source-immediate vs ccache: Some(Fail) (geomean 1.906, target 1.15)",
+          "relocated vs ccache: Some(Fail) (geomean 1.973, target 1.15)"
+        ]
+      },
+      "raw_report_sha256": "0c5f99ff79cbde07cd76b27b74695962b0c80dd555bd5b86dac7bbd1c5e048dd",
+      "all_targets": [
+        {
+          "scenario": "cold",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.0577983562480848,
+            "ci95": [
+              0.9779120046862795,
+              1.1442106826780518
+            ]
+          },
+          "target": 1.1,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 6425.4485865,
+          "other_median_ms": 6117.059041
+        },
+        {
+          "scenario": "cold",
+          "against": "raw",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.0551981337902607,
+            "ci95": [
+              0.9179513185470487,
+              1.2129653055205898
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 6425.4485865,
+          "other_median_ms": 5821.106481000001
+        },
+        {
+          "scenario": "warm",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.3391268234283513,
+            "ci95": [
+              1.2362037674176474,
+              1.4506189808588892
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 22.903774,
+          "other_median_ms": 16.652088
+        },
+        {
+          "scenario": "edit-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.0455494254355762,
+            "ci95": [
+              0.9925367459793625,
+              1.1013935811011204
+            ]
+          },
+          "target": 1.15,
+          "verdict": "PASS",
+          "kache_median_ms": 2053.0867655,
+          "other_median_ms": 1935.086178
+        },
+        {
+          "scenario": "revert-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.3414648091014143,
+            "ci95": [
+              1.273551003988418,
+              1.4130002084108597
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 9.945494499999999,
+          "other_median_ms": 7.2526205
+        },
+        {
+          "scenario": "edit-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.0094902691992118,
+            "ci95": [
+              0.9354357880682459,
+              1.0894073292966096
+            ]
+          },
+          "target": 1.15,
+          "verdict": "PASS",
+          "kache_median_ms": 6354.189052,
+          "other_median_ms": 5969.562819
+        },
+        {
+          "scenario": "revert-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.5853844985209442,
+            "ci95": [
+              1.3733584880889982,
+              1.8301441538748668
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 27.070650999999998,
+          "other_median_ms": 17.077655999999998
+        },
+        {
+          "scenario": "edit-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.22902545723222,
+            "ci95": [
+              1.0190808768293838,
+              1.4822214888620249
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 2147.4638175,
+          "other_median_ms": 1935.252395
+        },
+        {
+          "scenario": "revert-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.9059748306316107,
+            "ci95": [
+              1.408267068813026,
+              2.5795817678695654
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 11.219769,
+          "other_median_ms": 7.2323205
+        },
+        {
+          "scenario": "relocated",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.9731320537533614,
+            "ci95": [
+              1.6040263403191057,
+              2.427173422086344
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 28.926321,
+          "other_median_ms": 15.5003955
+        }
+      ],
+      "replay_activity": [
+        {
+          "pair": 0,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.03937774799365471
+        },
+        {
+          "pair": 0,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.058534218085169884
+        },
+        {
+          "pair": 0,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.0317344316451135
+        },
+        {
+          "pair": 1,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.050508270622994296
+        },
+        {
+          "pair": 1,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.03987179078760416
+        },
+        {
+          "pair": 1,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.08967822928831877
+        },
+        {
+          "pair": 2,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.06879692528767739
+        },
+        {
+          "pair": 2,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.04379069800016795
+        },
+        {
+          "pair": 2,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.05583165123410003
+        },
+        {
+          "pair": 3,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.05856397276615807
+        },
+        {
+          "pair": 3,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.038988715728990986
+        },
+        {
+          "pair": 3,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.03886477028171798
+        },
+        {
+          "pair": 4,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.07115772837235969
+        },
+        {
+          "pair": 4,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.03611841827168429
+        },
+        {
+          "pair": 4,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.0525069550178267
+        },
+        {
+          "pair": 5,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.04354178529572536
+        },
+        {
+          "pair": 5,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.03249893331192189
+        },
+        {
+          "pair": 5,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.0521423064625726
+        },
+        {
+          "pair": 6,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.04581595428015812
+        },
+        {
+          "pair": 6,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.16487200362791057
+        },
+        {
+          "pair": 6,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.17586759140130093
+        },
+        {
+          "pair": 7,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.03999714038474649
+        },
+        {
+          "pair": 7,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.07720677430436816
+        },
+        {
+          "pair": 7,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.0363165114850949
+        },
+        {
+          "pair": 8,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.06205173464047206
+        },
+        {
+          "pair": 8,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.0521791392888867
+        },
+        {
+          "pair": 8,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.035137607528218616
+        },
+        {
+          "pair": 9,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.030716057913813787
+        },
+        {
+          "pair": 9,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.055448263712612154
+        },
+        {
+          "pair": 9,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.025524322904380357
+        }
+      ],
+      "max_unrelated_cores": 0.17586759140130093,
+      "admitted_replays": 30,
+      "eligible_replays": 30,
+      "individual_build_windows_eligible": 241,
+      "individual_build_windows": 270,
+      "comparison_114": {
+        "cold": {
+          "scenario": "cold",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.0462860900278634,
+            "ci95": [
+              0.9251490401656378,
+              1.183284567846277
+            ]
+          },
+          "target": 1.1,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 6705.9230845,
+          "other_median_ms": 6658.3483685
+        },
+        "warm": {
+          "scenario": "warm",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.825082708902954,
+            "ci95": [
+              2.497713103215003,
+              3.195359908177349
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 52.024852,
+          "other_median_ms": 18.538998499999998
+        },
+        "edit-source-settled": {
+          "scenario": "edit-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.0283287873662792,
+            "ci95": [
+              0.9651783387275025,
+              1.0956110933036112
+            ]
+          },
+          "target": 1.15,
+          "verdict": "PASS",
+          "kache_median_ms": 2128.498055,
+          "other_median_ms": 2088.170991
+        },
+        "revert-source-settled": {
+          "scenario": "revert-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 2.997030119425238,
+            "ci95": [
+              2.2507703681352966,
+              3.990717873269124
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 19.482879,
+          "other_median_ms": 7.6992035
+        },
+        "edit-header-settled": {
+          "scenario": "edit-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.0483499030317358,
+            "ci95": [
+              0.9479210504064717,
+              1.159418834211329
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 6631.9692255,
+          "other_median_ms": 6395.666795499999
+        },
+        "revert-header-settled": {
+          "scenario": "revert-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 4.133176815674003,
+            "ci95": [
+              3.5892527131754624,
+              4.759528502107444
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 71.1181105,
+          "other_median_ms": 17.188359
+        },
+        "edit-source-immediate": {
+          "scenario": "edit-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1461430164403907,
+            "ci95": [
+              1.0303868878663374,
+              1.2749034654888627
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 2281.9473095000003,
+          "other_median_ms": 2044.7642295
+        },
+        "revert-source-immediate": {
+          "scenario": "revert-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 3.0716783180366476,
+            "ci95": [
+              2.707457646805196,
+              3.48489576582297
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 21.703643,
+          "other_median_ms": 7.507245
+        },
+        "relocated": {
+          "scenario": "relocated",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 3.9224475114202213,
+            "ci95": [
+              3.436329071263318,
+              4.477334434734561
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 70.72822450000001,
+          "other_median_ms": 18.566513
+        }
+      }
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "acceptance": {
+        "complete_pairs": 10,
+        "eligible": true,
+        "verdict": "fail",
+        "reasons": [
+          "cold vs ccache: Some(Fail) (geomean 1.332, target 1.1)",
+          "cold vs raw: Some(Fail) (geomean 1.585, target 1.15)",
+          "warm vs ccache: Some(Inconclusive) (geomean 1.213, target 1.15)",
+          "edit-source-settled vs ccache: Some(Fail) (geomean 1.278, target 1.15)",
+          "revert-source-settled vs ccache: Some(Inconclusive) (geomean 1.208, target 1.15)",
+          "edit-header-settled vs ccache: Some(Inconclusive) (geomean 1.149, target 1.15)",
+          "revert-header-settled vs ccache: Some(Inconclusive) (geomean 1.346, target 1.15)",
+          "edit-source-immediate vs ccache: Some(Inconclusive) (geomean 1.214, target 1.15)",
+          "revert-source-immediate vs ccache: Some(Inconclusive) (geomean 1.225, target 1.15)",
+          "relocated vs ccache: Some(Fail) (geomean 1.305, target 1.15)"
+        ]
+      },
+      "raw_report_sha256": "0c5f99ff79cbde07cd76b27b74695962b0c80dd555bd5b86dac7bbd1c5e048dd",
+      "all_targets": [
+        {
+          "scenario": "cold",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.3320815277472646,
+            "ci95": [
+              1.204329794071383,
+              1.4733847865432046
+            ]
+          },
+          "target": 1.1,
+          "verdict": "FAIL",
+          "kache_median_ms": 806.6948130000001,
+          "other_median_ms": 588.684532
+        },
+        {
+          "scenario": "cold",
+          "against": "raw",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.5851822644823934,
+            "ci95": [
+              1.4055233958802025,
+              1.7878057519319324
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 806.6948130000001,
+          "other_median_ms": 484.07255749999996
+        },
+        {
+          "scenario": "warm",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.2134448026148366,
+            "ci95": [
+              1.0368521087822886,
+              1.420114090062708
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 106.3017405,
+          "other_median_ms": 80.394426
+        },
+        {
+          "scenario": "edit-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.2776395041328135,
+            "ci95": [
+              1.161354958504471,
+              1.4055674284310182
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 213.04429950000002,
+          "other_median_ms": 166.156321
+        },
+        {
+          "scenario": "revert-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.2080657048770191,
+            "ci95": [
+              1.1110991864394029,
+              1.3134945692623843
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 88.99148749999999,
+          "other_median_ms": 73.647176
+        },
+        {
+          "scenario": "edit-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1488999838496994,
+            "ci95": [
+              1.1081377477981025,
+              1.1911616362791133
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 593.7548959999999,
+          "other_median_ms": 518.1470055
+        },
+        {
+          "scenario": "revert-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.346401940718774,
+            "ci95": [
+              1.1059347519058726,
+              1.6391547357086487
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 102.39166349999999,
+          "other_median_ms": 78.158799
+        },
+        {
+          "scenario": "edit-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.2139522771656168,
+            "ci95": [
+              1.1305857752582316,
+              1.303466011589426
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 197.89011849999997,
+          "other_median_ms": 161.09351750000002
+        },
+        {
+          "scenario": "revert-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.224885086998429,
+            "ci95": [
+              1.072534727227266,
+              1.398876361075842
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 90.8064645,
+          "other_median_ms": 76.57779099999999
+        },
+        {
+          "scenario": "relocated",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.3052147573474757,
+            "ci95": [
+              1.1591553151154321,
+              1.469678429268973
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 89.9112005,
+          "other_median_ms": 70.4586865
+        }
+      ],
+      "replay_activity": [
+        {
+          "pair": 0,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.09136552259541816
+        },
+        {
+          "pair": 0,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.2286061931139112
+        },
+        {
+          "pair": 0,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.10446500430617006
+        },
+        {
+          "pair": 1,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.134475641262271
+        },
+        {
+          "pair": 1,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.11523888759627615
+        },
+        {
+          "pair": 1,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.13693328715153194
+        },
+        {
+          "pair": 2,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.10053762823750119
+        },
+        {
+          "pair": 2,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.10091781224446668
+        },
+        {
+          "pair": 2,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.08145328669551155
+        },
+        {
+          "pair": 3,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.09436580409394417
+        },
+        {
+          "pair": 3,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.14529385526439922
+        },
+        {
+          "pair": 3,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.12215663603562811
+        },
+        {
+          "pair": 4,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.10911441624348017
+        },
+        {
+          "pair": 4,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.1287774921400878
+        },
+        {
+          "pair": 4,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.1329214919707123
+        },
+        {
+          "pair": 5,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.12698030254232973
+        },
+        {
+          "pair": 5,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.12970091530427713
+        },
+        {
+          "pair": 5,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.17157190542002967
+        },
+        {
+          "pair": 6,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.12855176629694143
+        },
+        {
+          "pair": 6,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.09972656798933593
+        },
+        {
+          "pair": 6,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.08091022824083154
+        },
+        {
+          "pair": 7,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.13701842012857776
+        },
+        {
+          "pair": 7,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.16834241348833667
+        },
+        {
+          "pair": 7,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.11287616372188883
+        },
+        {
+          "pair": 8,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.1128524574836125
+        },
+        {
+          "pair": 8,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.10400950067761978
+        },
+        {
+          "pair": 8,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.14157658550551167
+        },
+        {
+          "pair": 9,
+          "arm": "raw",
+          "admitted": true,
+          "unrelated_cores": 0.10829532795821671
+        },
+        {
+          "pair": 9,
+          "arm": "ccache",
+          "admitted": true,
+          "unrelated_cores": 0.10776252514580152
+        },
+        {
+          "pair": 9,
+          "arm": "kache",
+          "admitted": true,
+          "unrelated_cores": 0.14959300487548138
+        }
+      ],
+      "max_unrelated_cores": 0.2286061931139112,
+      "admitted_replays": 30,
+      "eligible_replays": 30,
+      "individual_build_windows_eligible": 268,
+      "individual_build_windows": 270,
+      "comparison_114": {
+        "cold": {
+          "scenario": "cold",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.452511636388195,
+            "ci95": [
+              1.373834736566786,
+              1.5356942124752782
+            ]
+          },
+          "target": 1.1,
+          "verdict": "FAIL",
+          "kache_median_ms": 878.9737825,
+          "other_median_ms": 616.8690895
+        },
+        "warm": {
+          "scenario": "warm",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.27845941277237,
+            "ci95": [
+              1.12592343392409,
+              1.451660406791452
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 115.8295675,
+          "other_median_ms": 96.8953815
+        },
+        "edit-source-settled": {
+          "scenario": "edit-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.299686716842447,
+            "ci95": [
+              1.0701557107372939,
+              1.5784483930594726
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 222.815833,
+          "other_median_ms": 183.9590275
+        },
+        "revert-source-settled": {
+          "scenario": "revert-source-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.0532974717214145,
+            "ci95": [
+              0.828579456421831,
+              1.3389609835678922
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 88.00986,
+          "other_median_ms": 86.024714
+        },
+        "edit-header-settled": {
+          "scenario": "edit-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.1288527829658936,
+            "ci95": [
+              1.0442585860164928,
+              1.2202998593202057
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 638.275445,
+          "other_median_ms": 590.958783
+        },
+        "revert-header-settled": {
+          "scenario": "revert-header-settled",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.4392369229431994,
+            "ci95": [
+              1.1805371833737655,
+              1.754627426849282
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 118.9646055,
+          "other_median_ms": 88.342938
+        },
+        "edit-source-immediate": {
+          "scenario": "edit-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.2530845726157496,
+            "ci95": [
+              1.142963572026874,
+              1.3738153905841857
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 217.59157299999998,
+          "other_median_ms": 176.44664649999999
+        },
+        "revert-source-immediate": {
+          "scenario": "revert-source-immediate",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.0895086953674398,
+            "ci95": [
+              0.9488698670405397,
+              1.2509926160723428
+            ]
+          },
+          "target": 1.15,
+          "verdict": "INCONCLUSIVE",
+          "kache_median_ms": 90.7639355,
+          "other_median_ms": 82.571736
+        },
+        "relocated": {
+          "scenario": "relocated",
+          "against": "ccache",
+          "summary": {
+            "pairs": 10,
+            "geomean": 1.2929218030778742,
+            "ci95": [
+              1.2263401528040758,
+              1.3631183689548563
+            ]
+          },
+          "target": 1.15,
+          "verdict": "FAIL",
+          "kache_median_ms": 114.9104045,
+          "other_median_ms": 87.3478595
+        }
+      }
+    }
+  ],
+  "wall_losses": [
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 534.0209612999998,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 504.9206142000001,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 388.99058780000007,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 364.8746072999999,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 217.99318519999997,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 199.88466659999995,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 152.6979705,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "cold",
+      "mean_paired_excess_ms": 116.27281870000003,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 115.20387720000001,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 114.98043750000001,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 113.2632615,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 105.30069280000001,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 104.8742152,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 103.1246132,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 91.24289049999997,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 77.28675809999997,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "unit-daemon-start",
+      "mean_paired_excess_ms": 75.5533918,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "unit-daemon-start",
+      "mean_paired_excess_ms": 60.0088267,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 46.97189510000001,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 35.62178179999999,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 35.11446929999975,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 30.2927088,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 24.1573357,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 22.4951052,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 20.9454961,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 18.889051300000002,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": 18.191493699999995,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 16.861162199999995,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 16.2263964,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "zlib",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 15.8695164,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 11.2706621,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 10.4606384,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-header-settled",
+      "mean_paired_excess_ms": 9.823398500000001,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 8.994304199999997,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": 8.7495123,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 7.853845,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 7.531896899999994,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 6.519739600000003,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "relocated",
+      "mean_paired_excess_ms": 6.1152561,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 5.787786700000001,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "warm",
+      "mean_paired_excess_ms": 5.7226177,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": 4.2295045,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "unit-steady",
+      "mean_paired_excess_ms": 3.7643513,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 3.5102317,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 3.2162089999999997,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "unit-steady",
+      "mean_paired_excess_ms": 3.1624675,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 3.009391,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 2.7682903999999997,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "zlib",
+      "scenario": "revert-source-immediate",
+      "mean_paired_excess_ms": 2.611650600000001,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 2.5969702,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-cxx-headers",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 2.5455601,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "revert-source-settled",
+      "mean_paired_excess_ms": 2.3960915000000003,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": -16.3610991,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": -24.7162369,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-header-settled",
+      "mean_paired_excess_ms": -38.543989800000055,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-source-settled",
+      "mean_paired_excess_ms": -39.83495059999998,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "gcc",
+      "workload": "corpus-cxx-headers",
+      "scenario": "edit-source-immediate",
+      "mean_paired_excess_ms": -44.43113359999988,
+      "pairs": 10,
+      "eligible": true
+    },
+    {
+      "toolchain": "clang",
+      "workload": "corpus-c-tiny",
+      "scenario": "cold",
+      "mean_paired_excess_ms": -739.7995092,
+      "pairs": 10,
+      "eligible": true
+    }
+  ]
+}

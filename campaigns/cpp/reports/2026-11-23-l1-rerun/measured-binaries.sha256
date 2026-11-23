@@ -1,0 +1,3 @@
+003b4ede45e01ff83d4c9ea4685bf654143c183ccc46ea83a97f9c647662fe11  target/release/kache
+df222b5560b52ed9126b63357b60088146a817fe668cb183925eddce9bb64209  target/release/kache-engine
+9920937e5ba671823c195fffbf07ccb52f5544759a62db6fe348bf50b265e96f  target/release/kache-cc-bench

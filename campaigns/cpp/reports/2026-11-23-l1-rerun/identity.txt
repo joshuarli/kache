@@ -1,0 +1,2 @@
+PASS: gcc 12 warm requests, 12 hits, zero compiler/preprocessor/standalone-engine executions; native daemon 935552
+PASS: clang 12 warm requests, 12 hits, zero compiler/preprocessor/standalone-engine executions; native daemon 935609

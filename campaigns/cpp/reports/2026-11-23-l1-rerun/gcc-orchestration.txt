@@ -1,0 +1,58 @@
+Preflight only; unmodified ee2402bf activity.rs; compiler=gcc; TMPDIR/KACHE_CACHE_DIR unset
+Unrelated CPU limit: 0.5 cores
+Activity {
+    wall_ms: 5009.330730000001,
+    unrelated_cpu_ms: 160,
+    unrelated_system_cpu_ms: Some(
+        160,
+    ),
+    unrelated_process_cpu_ms: 150,
+    unrelated_cores: 0.031940394560452584,
+    busiest: [
+        Busy {
+            pid: 772368,
+            cpu_ms: 80,
+            name: "amazon-ssm-agen",
+        },
+        Busy {
+            pid: 2637,
+            cpu_ms: 20,
+            name: "chrome",
+        },
+        Busy {
+            pid: 465,
+            cpu_ms: 10,
+            name: "irqbalance",
+        },
+        Busy {
+            pid: 2586,
+            cpu_ms: 10,
+            name: "chrome",
+        },
+        Busy {
+            pid: 2371159,
+            cpu_ms: 10,
+            name: "devin-remote-0.",
+        },
+    ],
+    eligible: true,
+}
+PREFLIGHT_VERDICT=ELIGIBLE
+
+gcc: ACCEPTANCE_EXIT=2
+gcc corpus-c-tiny {"complete_pairs": 10, "eligible": true, "verdict": "fail", "reasons": ["cold vs ccache: Some(Fail) (geomean 1.239, target 1.1)", "cold vs raw: Some(Fail) (geomean 1.994, target 1.15)", "warm vs ccache: Some(Fail) (geomean 2.468, target 1.15)", "edit-source-settled vs ccache: Some(Inconclusive) (geomean 1.192, target 1.15)", "revert-source-settled vs ccache: Some(Fail) (geomean 1.535, target 1.15)", "edit-header-settled vs ccache: Some(Inconclusive) (geomean 1.170, target 1.15)", "revert-header-settled vs ccache: Some(Fail) (geomean 2.598, target 1.15)", "edit-source-immediate vs ccache: Some(Fail) (geomean 1.338, target 1.15)", "revert-source-immediate vs ccache: Some(Fail) (geomean 1.544, target 1.15)", "relocated vs ccache: Some(Fail) (geomean 2.356, target 1.15)"]}
+gcc corpus-cxx-headers {"complete_pairs": 10, "eligible": true, "verdict": "fail", "reasons": ["cold vs ccache: Some(Inconclusive) (geomean 1.086, target 1.1)", "cold vs raw: Some(Inconclusive) (geomean 1.102, target 1.15)", "warm vs ccache: Some(Fail) (geomean 1.307, target 1.15)", "revert-source-settled vs ccache: Some(Fail) (geomean 1.336, target 1.15)", "revert-header-settled vs ccache: Some(Fail) (geomean 1.529, target 1.15)", "revert-source-immediate vs ccache: Some(Fail) (geomean 1.356, target 1.15)", "relocated vs ccache: Some(Inconclusive) (geomean 1.441, target 1.15)"]}
+gcc zlib {"complete_pairs": 10, "eligible": true, "verdict": "fail", "reasons": ["cold vs ccache: Some(Inconclusive) (geomean 1.192, target 1.1)", "cold vs raw: Some(Fail) (geomean 1.286, target 1.15)", "warm vs ccache: Some(Fail) (geomean 1.304, target 1.15)", "edit-source-settled vs ccache: Some(Inconclusive) (geomean 1.172, target 1.15)", "revert-source-settled vs ccache: Some(Inconclusive) (geomean 1.106, target 1.15)", "revert-header-settled vs ccache: Some(Inconclusive) (geomean 1.159, target 1.15)", "edit-source-immediate vs ccache: Some(Inconclusive) (geomean 1.067, target 1.15)", "revert-source-immediate vs ccache: Some(Inconclusive) (geomean 1.053, target 1.15)", "relocated vs ccache: Some(Inconclusive) (geomean 1.112, target 1.15)"]}
+Traceback (most recent call last):
+  File "/home/ubuntu/l1-acceptance-ee2402bf-evidence/run.py", line 36, in <module>
+    assert not workload['validation_failures'],workload['validation_failures']
+       ^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Daemon observer failed
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/ubuntu/l1-acceptance-ee2402bf-evidence/run.py", line 40, in <module>
+    if watcher is not None:
+               ^^^^^^^^^^^^
+AssertionError

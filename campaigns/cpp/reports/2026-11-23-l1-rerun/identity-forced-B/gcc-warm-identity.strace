@@ -1,0 +1,27 @@
+932901 execve("/usr/bin/make", ["make", "-B", "-j4", "CC=/home/ubuntu/repos/kache/.wor"..., "CXX=/home/ubuntu/repos/kache/.wo"...], 0x7fff2d585508 /* 9 vars */) = 0
+932902 execve("/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache", ["/home/ubuntu/repos/kache/.work/w"..., "/usr/bin/g++", "-std=c++17", "-O1", "-c", "x00.cpp", "-o", "x00.o"], 0x621e3ef335a0 /* 15 vars */) = 0
+932903 execve("/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache", ["/home/ubuntu/repos/kache/.work/w"..., "/usr/bin/g++", "-std=c++17", "-O1", "-c", "x01.cpp", "-o", "x01.o"], 0x621e3ef36770 /* 15 vars */) = 0
+932906 execve("/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache", ["/home/ubuntu/repos/kache/.work/w"..., "/usr/bin/g++", "-std=c++17", "-O1", "-c", "x02.cpp", "-o", "x02.o"], 0x621e3ef350a0 /* 15 vars */) = 0
+932909 execve("/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache", ["/home/ubuntu/repos/kache/.work/w"..., "/usr/bin/g++", "-std=c++17", "-O1", "-c", "x03.cpp", "-o", "x03.o"], 0x621e3ef36010 /* 15 vars */) = 0
+932902 +++ exited with 0 +++
+932901 --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=932902, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---
+932906 +++ exited with 0 +++
+932914 execve("/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache", ["/home/ubuntu/repos/kache/.work/w"..., "/usr/bin/g++", "-std=c++17", "-O1", "-c", "x04.cpp", "-o", "x04.o"], 0x621e3ef30e20 /* 15 vars */) = 0
+932903 +++ exited with 0 +++
+932909 +++ exited with 0 +++
+932915 execve("/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache", ["/home/ubuntu/repos/kache/.work/w"..., "/usr/bin/g++", "-std=c++17", "-O1", "-c", "x05.cpp", "-o", "x05.o"], 0x621e3ef35890 /* 15 vars */) = 0
+932917 execve("/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache", ["/home/ubuntu/repos/kache/.work/w"..., "/usr/bin/g++", "-std=c++17", "-O1", "-c", "x06.cpp", "-o", "x06.o"], 0x621e3ef390d0 /* 15 vars */) = 0
+932914 +++ exited with 0 +++
+932920 execve("/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache", ["/home/ubuntu/repos/kache/.work/w"..., "/usr/bin/g++", "-std=c++17", "-O1", "-c", "x07.cpp", "-o", "x07.o"], 0x621e3ef36e20 /* 15 vars */) = 0
+932915 +++ exited with 0 +++
+932924 execve("/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache", ["/home/ubuntu/repos/kache/.work/w"..., "/usr/bin/g++", "-std=c++17", "-O1", "-c", "x08.cpp", "-o", "x08.o"], 0x621e3ef301c0 /* 15 vars */) = 0
+932917 +++ exited with 0 +++
+932927 execve("/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache", ["/home/ubuntu/repos/kache/.work/w"..., "/usr/bin/g++", "-std=c++17", "-O1", "-c", "x09.cpp", "-o", "x09.o"], 0x621e3ef335a0 /* 15 vars */) = 0
+932920 +++ exited with 0 +++
+932930 execve("/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache", ["/home/ubuntu/repos/kache/.work/w"..., "/usr/bin/g++", "-std=c++17", "-O1", "-c", "x10.cpp", "-o", "x10.o"], 0x621e3ef36770 /* 15 vars */) = 0
+932924 +++ exited with 0 +++
+932933 execve("/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache", ["/home/ubuntu/repos/kache/.work/w"..., "/usr/bin/g++", "-std=c++17", "-O1", "-c", "x11.cpp", "-o", "x11.o"], 0x621e3ef350a0 /* 15 vars */) = 0
+932927 +++ exited with 0 +++
+932930 +++ exited with 0 +++
+932933 +++ exited with 0 +++
+932901 +++ exited with 0 +++

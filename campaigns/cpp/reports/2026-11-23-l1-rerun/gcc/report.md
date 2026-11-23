@@ -1,0 +1,181 @@
+# cc-bench gcc (acceptance)
+
+- source: ee2402bfb20c2d018c4036bec5e53a1084f79a9a
+- compiler: gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+- kache: kache 2.0.0-rc.2
+- ccache: ccache version 4.14.3
+- host: Intel(R) Xeon(R) Processor 8 CPUs, linux
+- jobs: 4, seed: 20261117
+- CPU and RSS: child-process accounting: cpu_ms and max_rss_kib cover the build's process tree only and omit the already-running kache daemon
+- preflight: unrelated processes used 0.01 cores over 5.0 s (eligible)
+
+## corpus-c-tiny
+
+Acceptance: **FAIL** with 10 complete admitted pairs.
+
+- cold vs ccache: Some(Fail) (geomean 1.239, target 1.1)
+- cold vs raw: Some(Fail) (geomean 1.994, target 1.15)
+- warm vs ccache: Some(Fail) (geomean 2.468, target 1.15)
+- edit-source-settled vs ccache: Some(Inconclusive) (geomean 1.192, target 1.15)
+- revert-source-settled vs ccache: Some(Fail) (geomean 1.535, target 1.15)
+- edit-header-settled vs ccache: Some(Inconclusive) (geomean 1.170, target 1.15)
+- revert-header-settled vs ccache: Some(Fail) (geomean 2.598, target 1.15)
+- edit-source-immediate vs ccache: Some(Fail) (geomean 1.338, target 1.15)
+- revert-source-immediate vs ccache: Some(Fail) (geomean 1.544, target 1.15)
+- relocated vs ccache: Some(Fail) (geomean 2.356, target 1.15)
+
+Most unrelated activity around one timed build: 1.44 cores, busiest `devin-remote-0.`.
+
+Validation (untimed, through compiler shims): code generations, then cache hits/misses/other per scenario.
+
+| scenario | raw | ccache | kache |
+|---|---|---|---|
+| cold | 48 cg, 0h/0m/0o | 48 cg, 0h/48m/0o | 48 cg, 0h/48m/0o |
+| warm | 48 cg, 0h/0m/0o | 0 cg, 48h/0m/0o | 0 cg, 48h/0m/0o |
+| edit-source-settled | 1 cg, 0h/0m/0o | 1 cg, 0h/1m/0o | 1 cg, 0h/1m/0o |
+| revert-source-settled | 1 cg, 0h/0m/0o | 0 cg, 1h/0m/0o | 0 cg, 1h/0m/0o |
+| edit-header-settled | 48 cg, 0h/0m/0o | 48 cg, 0h/48m/0o | 48 cg, 0h/48m/0o |
+| revert-header-settled | 48 cg, 0h/0m/0o | 0 cg, 48h/0m/0o | 0 cg, 48h/0m/0o |
+| edit-source-immediate | 1 cg, 0h/0m/0o | 1 cg, 0h/1m/0o | 1 cg, 0h/1m/0o |
+| revert-source-immediate | 1 cg, 0h/0m/0o | 0 cg, 1h/0m/0o | 0 cg, 1h/0m/0o |
+| relocated | 48 cg, 0h/0m/0o | 0 cg, 48h/0m/0o | 0 cg, 48h/0m/0o |
+| unit-daemon-start | 1 cg, 0h/0m/0o | 0 cg, 1h/0m/0o | 1 cg, 0h/1m/0o |
+| unit-steady | 1 cg, 0h/0m/0o | 0 cg, 1h/0m/0o | 0 cg, 1h/0m/0o |
+
+Timed replays: 30 admitted, 0 rejected.
+Host 1-minute load at the start of timed builds: 0.05 to 1.05.
+
+| scenario | kache / | pairs | geomean | 95% CI | target | verdict | kache median ms | other median ms |
+|---|---|---|---|---|---|---|---|---|
+| cold | ccache | 10 | 1.239 | 1.167..1.315 | 1.1 | FAIL | 1115.9 | 890.9 |
+| cold | raw | 10 | 1.994 | 1.884..2.110 | 1.15 | FAIL | 1115.9 | 563.3 |
+| warm | ccache | 10 | 2.468 | 2.370..2.571 | 1.15 | FAIL | 173.3 | 70.9 |
+| warm | raw | 10 | 0.303 | 0.272..0.337 | - | - | 173.3 | 559.3 |
+| edit-source-settled | ccache | 10 | 1.192 | 0.995..1.428 | 1.15 | INCONCLUSIVE | 29.8 | 24.0 |
+| edit-source-settled | raw | 10 | 1.702 | 1.475..1.963 | - | - | 29.8 | 17.0 |
+| revert-source-settled | ccache | 10 | 1.535 | 1.240..1.900 | 1.15 | FAIL | 8.6 | 5.6 |
+| revert-source-settled | raw | 10 | 0.509 | 0.452..0.573 | - | - | 8.6 | 16.9 |
+| edit-header-settled | ccache | 10 | 1.170 | 1.143..1.198 | 1.15 | INCONCLUSIVE | 1039.3 | 886.0 |
+| edit-header-settled | raw | 10 | 1.682 | 1.424..1.986 | - | - | 1039.3 | 568.5 |
+| revert-header-settled | ccache | 10 | 2.598 | 2.467..2.736 | 1.15 | FAIL | 181.9 | 71.5 |
+| revert-header-settled | raw | 10 | 0.316 | 0.292..0.342 | - | - | 181.9 | 577.4 |
+| edit-source-immediate | ccache | 10 | 1.338 | 1.210..1.480 | 1.15 | FAIL | 32.9 | 24.4 |
+| edit-source-immediate | raw | 10 | 1.878 | 1.705..2.069 | - | - | 32.9 | 17.5 |
+| revert-source-immediate | ccache | 10 | 1.544 | 1.366..1.746 | 1.15 | FAIL | 8.3 | 5.4 |
+| revert-source-immediate | raw | 10 | 0.494 | 0.458..0.532 | - | - | 8.3 | 17.2 |
+| relocated | ccache | 10 | 2.356 | 2.171..2.556 | 1.15 | FAIL | 174.4 | 74.6 |
+| relocated | raw | 10 | 0.311 | 0.288..0.335 | - | - | 174.4 | 567.6 |
+| unit-daemon-start | ccache | 10 | 15.957 | 14.283..17.828 | - | - | 62.7 | 3.9 |
+| unit-daemon-start | raw | 10 | 4.472 | 4.112..4.863 | - | - | 62.7 | 14.0 |
+| unit-steady | ccache | 10 | 1.811 | 1.632..2.010 | - | - | 7.1 | 3.8 |
+| unit-steady | raw | 10 | 0.487 | 0.431..0.551 | - | - | 7.1 | 13.8 |
+
+Per unit (48 units): divide the medians by 48.
+
+## corpus-cxx-headers
+
+Acceptance: **FAIL** with 10 complete admitted pairs.
+
+- cold vs ccache: Some(Inconclusive) (geomean 1.086, target 1.1)
+- cold vs raw: Some(Inconclusive) (geomean 1.102, target 1.15)
+- warm vs ccache: Some(Fail) (geomean 1.307, target 1.15)
+- revert-source-settled vs ccache: Some(Fail) (geomean 1.336, target 1.15)
+- revert-header-settled vs ccache: Some(Fail) (geomean 1.529, target 1.15)
+- revert-source-immediate vs ccache: Some(Fail) (geomean 1.356, target 1.15)
+- relocated vs ccache: Some(Inconclusive) (geomean 1.441, target 1.15)
+
+Most unrelated activity around one timed build: 1.86 cores.
+
+Validation (untimed, through compiler shims): code generations, then cache hits/misses/other per scenario.
+
+| scenario | raw | ccache | kache |
+|---|---|---|---|
+| cold | 12 cg, 0h/0m/0o | 12 cg, 0h/12m/0o | 12 cg, 0h/12m/0o |
+| warm | 12 cg, 0h/0m/0o | 0 cg, 12h/0m/0o | 0 cg, 12h/0m/0o |
+| edit-source-settled | 1 cg, 0h/0m/0o | 1 cg, 0h/1m/0o | 1 cg, 0h/1m/0o |
+| revert-source-settled | 1 cg, 0h/0m/0o | 0 cg, 1h/0m/0o | 0 cg, 1h/0m/0o |
+| edit-header-settled | 12 cg, 0h/0m/0o | 12 cg, 0h/12m/0o | 12 cg, 0h/12m/0o |
+| revert-header-settled | 12 cg, 0h/0m/0o | 0 cg, 12h/0m/0o | 0 cg, 12h/0m/0o |
+| edit-source-immediate | 1 cg, 0h/0m/0o | 1 cg, 0h/1m/0o | 1 cg, 0h/1m/0o |
+| revert-source-immediate | 1 cg, 0h/0m/0o | 0 cg, 1h/0m/0o | 0 cg, 1h/0m/0o |
+| relocated | 12 cg, 0h/0m/0o | 0 cg, 12h/0m/0o | 0 cg, 12h/0m/0o |
+
+Timed replays: 30 admitted, 0 rejected.
+Host 1-minute load at the start of timed builds: 1.33 to 2.58.
+
+| scenario | kache / | pairs | geomean | 95% CI | target | verdict | kache median ms | other median ms |
+|---|---|---|---|---|---|---|---|---|
+| cold | ccache | 10 | 1.086 | 0.985..1.197 | 1.1 | INCONCLUSIVE | 5995.4 | 5464.4 |
+| cold | raw | 10 | 1.102 | 0.982..1.236 | 1.15 | INCONCLUSIVE | 5995.4 | 5444.3 |
+| warm | ccache | 10 | 1.307 | 1.175..1.454 | 1.15 | FAIL | 24.9 | 17.9 |
+| warm | raw | 10 | 0.005 | 0.004..0.005 | - | - | 24.9 | 5409.9 |
+| edit-source-settled | ccache | 10 | 0.982 | 0.892..1.080 | 1.15 | PASS | 1789.8 | 1801.6 |
+| edit-source-settled | raw | 10 | 0.993 | 0.838..1.178 | - | - | 1789.8 | 1705.1 |
+| revert-source-settled | ccache | 10 | 1.336 | 1.214..1.469 | 1.15 | FAIL | 9.6 | 7.4 |
+| revert-source-settled | raw | 10 | 0.006 | 0.005..0.006 | - | - | 9.6 | 1717.7 |
+| edit-header-settled | ccache | 10 | 0.998 | 0.886..1.125 | 1.15 | PASS | 5772.6 | 5754.7 |
+| edit-header-settled | raw | 10 | 1.067 | 1.012..1.125 | - | - | 5772.6 | 5497.3 |
+| revert-header-settled | ccache | 10 | 1.529 | 1.253..1.866 | 1.15 | FAIL | 26.7 | 17.6 |
+| revert-header-settled | raw | 10 | 0.005 | 0.005..0.006 | - | - | 26.7 | 5285.9 |
+| edit-source-immediate | ccache | 10 | 0.977 | 0.918..1.039 | 1.15 | PASS | 1792.8 | 1783.6 |
+| edit-source-immediate | raw | 10 | 1.059 | 1.006..1.115 | - | - | 1792.8 | 1681.0 |
+| revert-source-immediate | ccache | 10 | 1.356 | 1.203..1.529 | 1.15 | FAIL | 11.0 | 7.6 |
+| revert-source-immediate | raw | 10 | 0.006 | 0.006..0.007 | - | - | 11.0 | 1722.9 |
+| relocated | ccache | 10 | 1.441 | 0.986..2.107 | 1.15 | INCONCLUSIVE | 26.1 | 16.1 |
+| relocated | raw | 10 | 0.005 | 0.004..0.006 | - | - | 26.1 | 5326.8 |
+
+Per unit (12 units): divide the medians by 12.
+
+## zlib
+
+Acceptance: **FAIL** with 10 complete admitted pairs.
+
+- cold vs ccache: Some(Inconclusive) (geomean 1.192, target 1.1)
+- cold vs raw: Some(Fail) (geomean 1.286, target 1.15)
+- warm vs ccache: Some(Fail) (geomean 1.304, target 1.15)
+- edit-source-settled vs ccache: Some(Inconclusive) (geomean 1.172, target 1.15)
+- revert-source-settled vs ccache: Some(Inconclusive) (geomean 1.106, target 1.15)
+- revert-header-settled vs ccache: Some(Inconclusive) (geomean 1.159, target 1.15)
+- edit-source-immediate vs ccache: Some(Inconclusive) (geomean 1.067, target 1.15)
+- revert-source-immediate vs ccache: Some(Inconclusive) (geomean 1.053, target 1.15)
+- relocated vs ccache: Some(Inconclusive) (geomean 1.112, target 1.15)
+
+Most unrelated activity around one timed build: 1.30 cores, busiest `devin-remote-0.`.
+
+Validation (untimed, through compiler shims): code generations, then cache hits/misses/other per scenario.
+
+| scenario | raw | ccache | kache |
+|---|---|---|---|
+| cold | 17 cg, 0h/0m/0o | 17 cg, 0h/17m/0o | 17 cg, 0h/17m/2o |
+| warm | 17 cg, 0h/0m/0o | 0 cg, 17h/0m/0o | 0 cg, 17h/0m/2o |
+| edit-source-settled | 1 cg, 0h/0m/0o | 1 cg, 0h/1m/0o | 1 cg, 0h/1m/2o |
+| revert-source-settled | 1 cg, 0h/0m/0o | 0 cg, 1h/0m/0o | 0 cg, 1h/0m/2o |
+| edit-header-settled | 9 cg, 0h/0m/0o | 9 cg, 0h/9m/0o | 9 cg, 0h/9m/2o |
+| revert-header-settled | 9 cg, 0h/0m/0o | 0 cg, 9h/0m/0o | 0 cg, 9h/0m/2o |
+| edit-source-immediate | 1 cg, 0h/0m/0o | 1 cg, 0h/1m/0o | 1 cg, 0h/1m/2o |
+| revert-source-immediate | 1 cg, 0h/0m/0o | 0 cg, 1h/0m/0o | 0 cg, 1h/0m/2o |
+| relocated | 17 cg, 0h/0m/0o | 0 cg, 17h/0m/0o | 0 cg, 17h/0m/2o |
+
+Timed replays: 30 admitted, 0 rejected.
+Host 1-minute load at the start of timed builds: 0.14 to 1.08.
+
+| scenario | kache / | pairs | geomean | 95% CI | target | verdict | kache median ms | other median ms |
+|---|---|---|---|---|---|---|---|---|
+| cold | ccache | 10 | 1.192 | 1.086..1.308 | 1.1 | INCONCLUSIVE | 678.2 | 589.6 |
+| cold | raw | 10 | 1.286 | 1.171..1.412 | 1.15 | FAIL | 678.2 | 554.2 |
+| warm | ccache | 10 | 1.304 | 1.192..1.427 | 1.15 | FAIL | 83.7 | 67.9 |
+| warm | raw | 10 | 0.158 | 0.142..0.176 | - | - | 83.7 | 536.6 |
+| edit-source-settled | ccache | 10 | 1.172 | 0.991..1.387 | 1.15 | INCONCLUSIVE | 156.6 | 131.2 |
+| edit-source-settled | raw | 10 | 1.421 | 1.263..1.600 | - | - | 156.6 | 115.3 |
+| revert-source-settled | ccache | 10 | 1.106 | 1.021..1.198 | 1.15 | INCONCLUSIVE | 70.4 | 61.3 |
+| revert-source-settled | raw | 10 | 0.577 | 0.523..0.636 | - | - | 70.4 | 117.1 |
+| edit-header-settled | ccache | 10 | 1.035 | 0.944..1.134 | 1.15 | PASS | 536.4 | 512.8 |
+| edit-header-settled | raw | 10 | 1.123 | 0.971..1.299 | - | - | 536.4 | 457.3 |
+| revert-header-settled | ccache | 10 | 1.159 | 1.053..1.275 | 1.15 | INCONCLUSIVE | 80.7 | 69.4 |
+| revert-header-settled | raw | 10 | 0.173 | 0.155..0.193 | - | - | 80.7 | 473.9 |
+| edit-source-immediate | ccache | 10 | 1.067 | 0.977..1.166 | 1.15 | INCONCLUSIVE | 145.5 | 135.8 |
+| edit-source-immediate | raw | 10 | 1.134 | 0.952..1.352 | - | - | 145.5 | 120.8 |
+| revert-source-immediate | ccache | 10 | 1.053 | 0.927..1.196 | 1.15 | INCONCLUSIVE | 71.0 | 65.5 |
+| revert-source-immediate | raw | 10 | 0.591 | 0.543..0.642 | - | - | 71.0 | 117.2 |
+| relocated | ccache | 10 | 1.112 | 0.981..1.259 | 1.15 | INCONCLUSIVE | 82.7 | 69.0 |
+| relocated | raw | 10 | 0.155 | 0.144..0.167 | - | - | 82.7 | 525.6 |

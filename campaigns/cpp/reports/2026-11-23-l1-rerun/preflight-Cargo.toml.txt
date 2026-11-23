@@ -1,0 +1,11 @@
+[package]
+name = "l1-ee2402bf-preflight"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+deser = { version = "=0.10.2", features = ["derive"] }
+
+[[bin]]
+name = "preflight-only"
+path = "preflight.rs"

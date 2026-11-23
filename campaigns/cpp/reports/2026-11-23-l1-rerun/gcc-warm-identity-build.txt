@@ -1,0 +1,12 @@
+/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache /usr/bin/g++ -std=c++17 -O1 -c x00.cpp -o x00.o
+/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache /usr/bin/g++ -std=c++17 -O1 -c x01.cpp -o x01.o
+/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache /usr/bin/g++ -std=c++17 -O1 -c x02.cpp -o x02.o
+/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache /usr/bin/g++ -std=c++17 -O1 -c x03.cpp -o x03.o
+/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache /usr/bin/g++ -std=c++17 -O1 -c x04.cpp -o x04.o
+/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache /usr/bin/g++ -std=c++17 -O1 -c x05.cpp -o x05.o
+/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache /usr/bin/g++ -std=c++17 -O1 -c x06.cpp -o x06.o
+/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache /usr/bin/g++ -std=c++17 -O1 -c x07.cpp -o x07.o
+/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache /usr/bin/g++ -std=c++17 -O1 -c x08.cpp -o x08.o
+/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache /usr/bin/g++ -std=c++17 -O1 -c x09.cpp -o x09.o
+/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache /usr/bin/g++ -std=c++17 -O1 -c x10.cpp -o x10.o
+/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache /usr/bin/g++ -std=c++17 -O1 -c x11.cpp -o x11.o

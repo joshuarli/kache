@@ -1,0 +1,40 @@
+Preflight only; unmodified ee2402bf activity.rs; compiler=gcc; TMPDIR/KACHE_CACHE_DIR unset
+Unrelated CPU limit: 0.5 cores
+Activity {
+    wall_ms: 5009.330730000001,
+    unrelated_cpu_ms: 160,
+    unrelated_system_cpu_ms: Some(
+        160,
+    ),
+    unrelated_process_cpu_ms: 150,
+    unrelated_cores: 0.031940394560452584,
+    busiest: [
+        Busy {
+            pid: 772368,
+            cpu_ms: 80,
+            name: "amazon-ssm-agen",
+        },
+        Busy {
+            pid: 2637,
+            cpu_ms: 20,
+            name: "chrome",
+        },
+        Busy {
+            pid: 465,
+            cpu_ms: 10,
+            name: "irqbalance",
+        },
+        Busy {
+            pid: 2586,
+            cpu_ms: 10,
+            name: "chrome",
+        },
+        Busy {
+            pid: 2371159,
+            cpu_ms: 10,
+            name: "devin-remote-0.",
+        },
+    ],
+    eligible: true,
+}
+PREFLIGHT_VERDICT=ELIGIBLE

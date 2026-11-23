@@ -1,0 +1,814 @@
+cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized] target(s) in 0.08s
+cargo check --locked -p kache-client -p kache-config -p kache-protocol -p kache-ipc
+    Finished `dev` profile [unoptimized] target(s) in 0.06s
+cargo test --locked -p kache-ipc
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running unittests src/lib.rs (target/debug/build/kache-ipc/7b0a179a1b6e5a59/out/kache_ipc-7b0a179a1b6e5a59)
+
+running 63 tests
+test deadline_io::tests::work_returns_its_result_and_expired_work_never_starts ... ok
+test descriptors::tests::a_wrong_ticket_closes_its_descriptors_without_accepting_the_bundle ... ok
+test descriptors::tests::aligned_control_records_are_visited_once_without_reading_padding ... ok
+test descriptors::tests::an_empty_nonblocking_socket_returns_would_block_without_waiting_for_a_sender ... ok
+test descriptors::tests::control_records_distinguish_short_and_empty_headers ... ok
+test descriptors::tests::control_records_preserve_zero_and_positive_descriptors_in_order ... ok
+test deadline_io::tests::fixed_workers_bound_both_running_and_queued_jobs ... ok
+test descriptors::tests::invalid_packet_headers_and_truncation_close_received_descriptors ... ok
+test descriptors::tests::ordinary_bytes_empty_datagrams_and_streams_are_rejected ... ok
+test descriptors::tests::partial_control_payloads_retain_every_complete_descriptor ... ok
+test descriptors::tests::unrecognized_control_records_do_not_hide_later_descriptors ... ok
+test descriptors::tests::untruncated_control_lengths_only_read_the_delivered_bytes ... ok
+test descriptors::tests::a_full_nonblocking_send_queue_returns_its_error_without_retrying ... ok
+test execution::protocol_tests::execution_commit_write_and_flush_failures_are_always_irrevocable ... ok
+test execution::protocol_tests::execution_reply_frames_are_bounded_and_must_be_complete ... ok
+test execution::protocol_tests::preparation_retries_only_transient_io_and_stops_at_the_deadline ... ok
+test descriptors::tests::rejecting_a_bundle_closes_all_received_descriptors ... ok
+test descriptors::tests::oversized_control_bundle_does_not_leave_received_pipes_open ... ok
+test descriptors::tests::transferred_files_are_owned_close_on_exec_and_share_their_open_description ... ok
+test execution::unix_client::tests::dropping_client_fixture ... ignored, bounded subprocess fixture
+test descriptors::tests::the_largest_protocol_bundle_is_received_in_full ... ok
+test execution::unix_client::tests::interrupted_syscalls_retry_and_other_errors_return_immediately ... ok
+test execution::unix::tests::commit_removes_the_setup_read_deadline_for_long_compiler_runs ... ok
+test execution::tests::execution_disconnect_after_prepared_cannot_report_completion ... ok
+test execution::unix_client::tests::native_child_uses_client_parent_streams_environment_and_directory ... ok
+test execution::unix_client::tests::native_spawn_rejects_relative_paths_and_invalid_encoding ... ok
+test execution::unix_client::tests::jobserver_mapping_keeps_endpoint_order_when_daemon_fd_numbers_are_reversed ... ok
+test execution::unix_client::tests::restricted_client_fixture ... ignored, isolated process installs an additional syscall filter
+test execution::unix_client::tests::restricted_compiler_fixture ... ignored, native compiler verifies the original clients additional filter
+test execution::unix_client::tests::terminal_and_jobserver_descriptors_follow_the_manifest ... ok
+test execution::tests::execution_disconnects_before_commit_allow_local_fallback ... ok
+test execution::unix_client::workspace::tests::client_operations_reject_relative_paths_and_non_regular_timestamp_targets ... ok
+test execution::tests::execution_commit_and_completion_failures_never_allow_local_fallback ... ok
+test execution::unix_client::workspace::tests::client_copy_keeps_the_blob_independent_and_sets_the_requested_mode ... ok
+test execution::unix_client::workspace::tests::rejected_writes_discard_their_payload_before_the_next_operation ... ok
+test execution::unix_client::workspace::tests::touching_outputs_refuses_symlinks_and_never_blocks_on_a_fifo ... ok
+test execution::workspace::tests::copying_and_preparing_files_never_modify_the_cached_blob ... ok
+test execution::unix_client::workspace::tests::staged_publication_keeps_race_winners_and_cleans_unpublished_files ... ok
+test execution::workspace::tests::missing_or_unexpected_contents_fail_before_creating_outputs ... ok
+test jobserver::tests::capture_rejects_a_numeric_endpoint_that_is_not_an_open_descriptor ... ok
+test execution::workspace::tests::every_platform_stages_publishes_and_discards_transformed_contents ... ok
+test execution::unix_client::tests::dropping_the_client_kills_and_reaps_its_live_child_group ... ok
+test jobserver::tests::inherited_jobserver_fixture ... ignored, subprocess fixture for native jobserver inheritance
+test jobserver::tests::jobserver_capacity_leaves_room_for_standard_streams_and_terminal ... ok
+test jobserver::tests::jobserver_scope_restores_the_owned_manifest_after_a_panic ... ok
+test jobserver::tests::only_jobserver_variables_participate_in_descriptor_transfer ... ok
+test jobserver::tests::native_flag_bytes_and_fifo_auth_are_preserved ... ok
+test jobserver::tests::parent_descriptors_must_be_close_on_exec ... ok
+test jobserver::tests::rewrite_rejects_an_incomplete_or_misattributed_descriptor_manifest ... ok
+test tests::a_socket_path_fits_up_to_the_platform_limit_and_not_one_byte_more ... ok
+test tests::binding_an_overlong_path_names_the_limit ... ok
+test tests::finish_by_returns_what_finishes_in_time ... ok
+test tests::is_reachable_is_false_when_nothing_listens ... ok
+test tests::is_reachable_is_true_for_a_live_listener ... ok
+test tests::require_self_peer_rejects_foreign_and_unauthenticated_peers ... ok
+test jobserver::tests::child_inherits_only_its_owned_jobserver_after_scope_exit ... ok
+test execution::unix_client::tests::native_children_keep_the_original_clients_seccomp_and_no_new_privs ... ok
+test tests::same_user_peer_check_accepts_own_connections ... ok
+test execution::tests::client_process_broker_transfers_live_pipes_and_reaps_the_native_child ... ok
+test deadline_io::tests::expired_queued_work_is_discarded_and_saturation_does_not_spawn ... ok
+test execution::unix_client::workspace::tests::transformed_outputs_use_descriptors_instead_of_large_control_frames ... ok
+test execution::unix_client::tests::readiness_waits_for_an_event_and_prioritizes_completion ... ok
+test tests::finish_by_stops_waiting_at_the_deadline ... ok
+
+test result: ok. 59 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+   Doc-tests kache_ipc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+./scripts/test-with-test-resources.sh
+warning: could not raise soft nofile limit 64 to 4096; capping Rust test threads at 1
+warning: could not raise soft nofile limit 64 to 4096; capping Rust test threads at 8
+test-resource guard: all checks passed
+MUSL_TARGET="x86_64-unknown-linux-musl" MUSL_BUILD_MODE="test" cargo test --quiet --workspace --lib --tests
+
+running 3244 tests
+....................................................................................... 87/3244
+..........................................................................cargo:rerun-if-changed=build.rs
+cargo:rustc-link-search=native=/tmp/.tmpz29oq1/b/target/debug/deps
+cargo:rerun-if-changed=build.rs
+cargo:rustc-link-search=/tmp/.tmpz29oq1/stderr/b/target/debug/gn_out/obj
+..........cargo:rerun-if-changed=build.rs
+cargo:rustc-link-search=native=/tmp/.tmpqzos9x/b/target/debug/gn_out/obj
+cargo:rustc-link-search=native=/tmp/.tmpqzos9x/b/target/debug/deps
+cargo:rustc-link-search=/usr/lib
+..cargo:rerun-if-changed=build.rs
+. 174/3244
+cargo:rerun-if-changed=build.rs
+..............cargo:rustc-cfg=x
+.....cargo:rerun-if-changed=build.rs
+cargo:rustc-link-search=/tmp/.tmpE2movU/b/target/debug/gn_out/obj
+...........cargo:rerun-if-changed=build.rs
+.cargo:rerun-if-changed=build.rs
+.......................cargo:rerun-if-changed=build.rs
+.........cargo:rerun-if-changed=build.rs
+........................ 261/3244
+....................................................................................... 348/3244
+....................................................................................... 435/3244
+....................................................................................... 522/3244
+....................................................................................... 609/3244
+...........................................................i..i........................ 696/3244
+....................................................................................... 783/3244
+....................................................................................... 870/3244
+....................................................................................... 957/3244
+......{
+  "schema_version": 1,
+  "command": "cli",
+  "success": true,
+  "skipped": false,
+  "disk": {
+    "store_bytes": 0,
+    "store_limit_bytes": 1048576,
+    "disk_private_bytes": 0,
+    "cloned_into_targets_bytes": 0,
+    "snapshot_retained_bytes": 0,
+    "cloned_coverage": "partial"
+  },
+  "entries": 0,
+  "entries_dropped": 0,
+  "store_bytes_removed": 0,
+  "disk_bytes_reclaimed": 0,
+  "entries_pinned": 0,
+  "entries_unreclaimable": 0,
+  "entries_failed": 0
+}
+..................................................{
+  "schema_version": 1,
+  "command": "explain",
+  "success": true,
+  "crate_name": "ghost",
+  "diagnosis": "no_events",
+  "next": [
+    {
+      "argv": [
+        "cargo",
+        "build",
+        "-p",
+        "ghost"
+      ],
+      "why": "no wrapper events yet; build the crate first"
+    }
+  ]
+}
+..........{
+  "schema_version": 1,
+  "command": "explain",
+  "success": true,
+  "crate_name": "tokio",
+  "diagnosis": "all_hits",
+  "stored_entries": 0,
+  "store_dirs": [],
+  "stores": [
+    {
+      "path": "/tmp/.tmpduib9H/cache",
+      "bytes": 0,
+      "max_size": 1048576,
+      "entries": 0,
+      "blob_stats": {
+        "total_blobs": 0,
+        "total_blob_size": 0,
+        "total_logical_size": 0,
+        "savings": 0
+      },
+      "error": null
+    }
+  ],
+  "latest_uncached_compile": null
+}
+..................... 1044/3244
+.........................................{
+  "schema_version": 1,
+  "command": "explain",
+  "success": true,
+  "crate_name": "serde",
+  "diagnosis": "first_build_now_cached",
+  "last_result": "miss",
+  "cache_key": "serdemisskey",
+  "store_error": "",
+  "lookup_rejection": "",
+  "stored_entries": 1,
+  "store_dirs": [
+    "/tmp/.tmpccM0R5/cache"
+  ],
+  "stores": [
+    {
+      "path": "/tmp/.tmpccM0R5/cache",
+      "bytes": 31,
+      "max_size": 1048576,
+      "entries": 1,
+      "blob_stats": {
+        "total_blobs": 1,
+        "total_blob_size": 31,
+        "total_logical_size": 31,
+        "savings": 0
+      },
+      "error": null
+    }
+  ],
+  "dependency_chain": null,
+  "dependency_recording_missing": true,
+  "checkout_comparison": null,
+  "hints": [],
+  "latest_uncached_compile": null
+}
+...........................{
+  "schema_version": 1,
+  "command": "explain",
+  "success": true,
+  "crate_name": "serde",
+  "diagnosis": "key_mismatch",
+  "last_result": "miss",
+  "cache_key": "misskeymanydiffs",
+  "store_error": "",
+  "lookup_rejection": "",
+  "stored_entries": 4,
+  "store_dirs": [
+    "/tmp/.tmpz369cC/cache"
+  ],
+  "stores": [
+    {
+      "path": "/tmp/.tmpz369cC/cache",
+      "bytes": 146,
+      "max_size": 1048576,
+      "entries": 4,
+      "blob_stats": {
+        "total_blobs": 4,
+        "total_blob_size": 146,
+        "total_logical_size": 146,
+        "savings": 0
+      },
+      "error": null
+    }
+  ],
+  "dependency_chain": null,
+  "dependency_recording_missing": true,
+  "checkout_comparison": null,
+  "hints": [],
+  "latest_uncached_compile": null
+}
+................... 1131/3244
+....................................................................................... 1218/3244
+....................................................................................... 1305/3244
+....................................................................................... 1392/3244
+....................................................................................... 1479/3244
+.............................................................................i..i...... 1566/3244
+................................................................................i..i... 1653/3244
+..iiiiiiiiiiiiiiii.........................................................i..
+running 1 test
+......... 1740/3244
+....................................................................................... 1827/3244
+....................................................................................... 1914/3244
+....................................................................................... 2001/3244
+..............i........................................................................ 2088/3244
+..............i......i................................................................. 2175/3244
+....................................................................................... 2262/3244
+....................................................................................... 2349/3244
+....................................................................................... 2436/3244
+.................i..............i...................................................... 2523/3244
+....................................................................................... 2610/3244
+....................................................................................... 2697/3244
+..................................ii.....
+running 1 test
+............i
+running 1 test
+.
+running 1 test
+................................ 2784/3244
+.
+running 1 test
+...........test scheduler::tests::permit_owner_child_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3243 filtered out; finished in 0.30s
+
+...........................................test scheduler::tests::flight_compile_then_release_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3243 filtered out; finished in 0.21s
+
+......
+[2K.......................... 2871/3244
+....................................................................................... 2958/3244
+.................................................error[E0308]: mismatched types
+.warning: hard linking files in the incremental compilation cache failed
+error[E0308]: mismatched types
+..
+running 1 test
+
+running 1 test
+.error: incremental compilation: could not create session directory lock file
+...error[E0308]: mismatched types
+............................... 3045/3244
+..../tmp/.tmpmEAgk6/broken.c:1:1: error: unknown type name ‘this’
+    1 | this is invalid C source @
+      | ^~~~
+/tmp/.tmpmEAgk6/broken.c:1:9: error: expected ‘=’, ‘,’, ‘;’, ‘asm’ or ‘__attribute__’ before ‘invalid’
+    1 | this is invalid C source @
+      |         ^~~~~~~
+/tmp/.tmpmEAgk6/broken.c:1:9: error: unknown type name ‘invalid’
+/tmp/.tmpmEAgk6/broken.c:1:26: error: stray ‘@’ in program
+    1 | this is invalid C source @
+      |                          ^
+.........................test wrapper::tests::hold_scheduler_flight_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3243 filtered out; finished in 0.21s
+
+test wrapper::tests::hold_scheduler_flight_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3243 filtered out; finished in 0.21s
+
+........................i................................. 3132/3244
+...................................................................i................... 3219/3244
+.HIT-STDOUT
+HIT-STDERR
+HIT-STDOUT
+HIT-STDERR
+............HIT-STDOUT
+HIT-STDERR
+............
+test result: ok. 3211 passed; 0 failed; 33 ignored; 0 measured; 0 filtered out; finished in 12.92s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 9 tests
+.........
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.54s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.17s
+
+
+running 4 tests
+....
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.02s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.54s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+
+running 13 tests
+.............
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.74s
+
+
+running 17 tests
+.................
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.26s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.64s
+
+
+running 6 tests
+......
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s
+
+
+running 29 tests
+.............................
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.49s
+
+
+running 4 tests
+....
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.79s
+
+
+running 122 tests
+....................................................................................... 87/122
+...................................
+test result: ok. 122 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 36.62s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+
+running 6 tests
+......
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+
+
+running 3 tests
+...
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s
+
+
+running 8 tests
+........
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+
+running 3 tests
+i..
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.76s
+
+
+running 3 tests
+...
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+
+
+running 37 tests
+.....................................
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.14s
+
+
+running 51 tests
+....................................   Compiling hello-world v0.1.0 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/test-projects/hello-world)
+.    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
+......   Compiling hello-world v0.1.0 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/test-projects/hello-world)
+DEBUG no closure record for hello_world; compiling before keying
+DEBUG scheduler resource snapshot; resource-aware admission is future work; available=8 cpu_quota_us= cpu_period_us= cpu_rounded_cpus= cpuset_cpus=8 memory_limit_bytes= memory_current_bytes=27571015680 memory_headroom_bytes= ancestor_limits_complete=true current_memory_events_known=true current_memory_low=0 current_memory_high=0 current_memory_max=0 current_memory_oom=0 current_memory_oom_kill=0 current_memory_oom_group_kill=0
+DEBUG running: /home/ubuntu/.rustup/toolchains/nightly-2026-11-09-x86_64-unknown-linux-gnu/bin/rustc --remap-path-prefix=/tmp=/kache/tmp --remap-path-prefix=/home/ubuntu=/kache/home --remap-path-prefix=/home/ubuntu/.rustup=/kache/rustup --remap-path-prefix=/tmp/.tmpfNvbBk=/kache/target --remap-path-prefix=/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/test-projects/hello-world=/proc/self/cwd --remap-path-prefix=/home/ubuntu/.cargo=/kache/.cargo --remap-path-prefix=/home/ubuntu/.rustup/toolchains/nightly-2026-11-09-x86_64-unknown-linux-gnu/lib/rustlib/src/rust=/rustc/5b7b37aefcb5b2fba3c2392bc9065b9e4602d494 --crate-name hello_world --edition=2021 src/main.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C embed-bitcode=no -C debuginfo=2 --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=8b6a0d8d42f51b7a --out-dir /tmp/.tmpfNvbBk/debug/build/hello-world/1f853f628a352522/out --force-warn=unused_crate_dependencies
+DEBUG [kache] discovered 2 output file(s) for hello_world from rustc artifact notifications
+DEBUG cache key for hello_world: 342808a897b0a078
+DEBUG scheduler resource snapshot; resource-aware admission is future work; available=8 cpu_quota_us= cpu_period_us= cpu_rounded_cpus= cpuset_cpus=8 memory_limit_bytes= memory_current_bytes=27577249792 memory_headroom_bytes= ancestor_limits_complete=true current_memory_events_known=true current_memory_low=0 current_memory_high=0 current_memory_max=0 current_memory_oom=0 current_memory_oom_kill=0 current_memory_oom_group_kill=0
+DEBUG cache miss for hello_world, compiling (342808a897b0a078)
+INFO auto-gc: cache or disk pressure, triggering background GC (store 4615763, max 6442450944, slack 10%)
+INFO auto-gc: handed the sweep to the daemon
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Removed 16 files, 8.8MiB total
+   Compiling hello-world v0.1.0 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/test-projects/hello-world)
+.DEBUG cache key for hello_world: 342808a897b0a078
+DEBUG local cache hit for hello_world (342808a897b0a078)
+DEBUG restoring 2 files via platform=linux
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+.......
+test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.86s
+
+
+running 4 tests
+....
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+...
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.98s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+
+running 14 tests
+   Compiling stale-check v0.1.0 (/tmp/.tmphe3PIE)
+   Compiling stale-check v0.1.0 (/tmp/.tmphe3PIE)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Removed 21 files, 8.8MiB total
+     Removed 21 files, 8.8MiB total
+     Removed 21 files, 8.8MiB total
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Removed 21 files, 8.8MiB total
+     Removed 21 files, 8.8MiB total
+     Removed 21 files, 8.8MiB total
+     Removed 21 files, 8.8MiB total
+     Removed 22 files, 8.8MiB total
+.......     Removed 21 files, 8.8MiB total
+.     Removed 21 files, 8.8MiB total
+     Removed 21 files, 8.8MiB total
+     Removed 21 files, 8.8MiB total
+......
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.79s
+
+
+running 3 tests
+...
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.40s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s
+
+
+running 19 tests
+i....ii..i.........
+test result: ok. 15 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 125 tests
+....................................................................................... 87/125
+......................................
+test result: ok. 125 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 11 tests
+...........
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 407 tests
+....................................................................................... 87/407
+....................................................................................... 174/407
+..................  Downloaded a v1.0.0
+\xff
+.........  Downloaded a v1.0.0
+............................................................ 261/407
+........From /tmp/.tmpXMBnVJ/repo
+ * branch            f02b4044adca3dfab4d7ab800e398f96b3396edf -> FETCH_HEAD
+ * branch            c5290cc1370b56fa3841e59f2a13e309d0df2b6f -> FETCH_HEAD
+..............
+running 1 test
+.....................Preparing worktree (detached HEAD f02b404)
+HEAD is now at f02b404 parent
+.test cc_oracle::exec::tests::shims_log_and_exec_the_real_compiler ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 406 filtered out; finished in 0.01s
+
+..........parent...Warning: you are leaving 1 commit behind, not connected to
+any of your branches:
+
+  f02b404 parent
+
+If you want to keep it by creating a new branch, this may be a good time
+to do so with:
+
+ git branch <new-branch-name> f02b404
+
+HEAD is now at c5290cc child
+.........................child..... 348/407
+..........................................From /tmp/.tmpXMBnVJ/repo
+ * branch            f02b4044adca3dfab4d7ab800e398f96b3396edf -> FETCH_HEAD
+ * branch            c5290cc1370b56fa3841e59f2a13e309d0df2b6f -> FETCH_HEAD
+Preparing worktree (detached HEAD f02b404)
+HEAD is now at f02b404 parent
+parent...Warning: you are leaving 1 commit behind, not connected to
+any of your branches:
+
+  f02b404 parent
+
+If you want to keep it by creating a new branch, this may be a good time
+to do so with:
+
+ git branch <new-branch-name> f02b404
+
+.HEAD is now at c5290cc child
+.......child.From /tmp/.tmp4goF4r/upstream
+ * branch            ae9a6c70ac6e422abe4d37d2cc37bd5382aa14e7 -> FETCH_HEAD
+From /tmp/.tmpuRgJsy/upstream
+ * branch            9953f9aa5099712870c25dbc7f8919a8ec8497e9 -> FETCH_HEAD
+ * branch            60141d7cf6a5e97ce2ac99cb8ca3a56536fe505b -> FETCH_HEAD
+Preparing worktree (detached HEAD ae9a6c7)
+HEAD is now at ae9a6c7 pinned
+Preparing worktree (detached HEAD ae9a6c7)
+Preparing worktree (detached HEAD 9953f9a)
+HEAD is now at ae9a6c7 pinned
+HEAD is now at 9953f9a a
+.Warning: you are leaving 1 commit behind, not connected to
+any of your branches:
+
+  9953f9a a
+
+If you want to keep it by creating a new branch, this may be a good time
+to do so with:
+
+ git branch <new-branch-name> 9953f9a
+
+HEAD is now at 60141d7 b
+....
+test result: ok. 407 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+=== kache fixture scenarios ===
+Binary:  /home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/debug/kache-scenario
+Version:
+=== kache fixture scenarios ===
+Binary:  /home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/debug/kache-scenario
+Version:
+Fixtures: === kache fixture scenarios ===
+e2e-missing-tool
+Binary:  /home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/debug/kache-scenario
+Select:   Version: suite:e2e
+
+
+=> e2e-missing-tool: skipped — kache-e2e-tool-that-does-not-exist not on PATH
+
+Results written to /tmp/.tmp4FvsZE/results.json
+FAIL: one or more supported fixtures are missing required tools
+Fixtures: e2e-missing-tool
+Select:   suite:e2e
+
+Fixtures: e2e-other-os
+Select:   suite:e2e
+
+=> e2e-other-os: skipped — not supported on linux (os = ["=> macose2e-missing-tool": skipped — ]kache-e2e-tool-that-does-not-exist)
+ not on PATH
+
+
+Results written to Results written to /tmp/.tmpMFU6QX/results.json/tmp/.tmpZXB94v/results.json
+
+FAIL: every selected fixture was skipped (FAIL: every selected fixture was skipped (11 skipped); nothing was verified
+ skipped); nothing was verified
+...
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 9 tests
+.........
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+....
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 83 tests
+...................................................................................
+test result: ok. 83 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 63 tests
+...................i.......ii............i.....................
+test result: ok. 59 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+
+running 10 tests
+..........
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 8 tests
+........
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 6 tests
+......
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 46 tests
+..............................................
+test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 624 tests
+....................................................................................... 87/624
+....................................................................................... 174/624
+....................................................................i.................. 261/624
+....................................................................................... 348/624
+........................................................................
+running 1 test
+............... 435/624
+....................................................................................... 522/624
+...................................................................................i..
+running 1 test
+test store::tests::wait_for_committed_missing_child_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 623 filtered out; finished in 0.01s
+
+. 609/624
+...............
+test result: ok. 622 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 3.11s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

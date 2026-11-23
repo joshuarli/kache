@@ -1,0 +1,35 @@
+{
+  "toolchain": "clang",
+  "status": {
+    "schema_version": 1,
+    "command": "daemon-status",
+    "success": true,
+    "version": "2.0.0-rc.2",
+    "epoch": 1795409769,
+    "daemon_running": true,
+    "service_installed": false,
+    "service_path": null,
+    "socket": "/tmp/kache-l1-7vmxd_1d/daemon.sock",
+    "daemon_version": "2.0.0-rc.2",
+    "daemon_epoch": 1795409769,
+    "daemon_config_path": "/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/.work/tmp/cc-bench/clang/corpus-cxx-headers/state/kache/kache.toml",
+    "startup_log": "/tmp/kache-l1-7vmxd_1d/daemon.log",
+    "service_executable_mismatch": false
+  },
+  "pid": 935609,
+  "runtime": "/tmp/kache-l1-7vmxd_1d",
+  "engine_sha256": "df222b5560b52ed9126b63357b60088146a817fe668cb183925eddce9bb64209",
+  "client_execs": 12,
+  "engine_execs": 0,
+  "hits": 12,
+  "compiler_runs": 0,
+  "preprocessor_runs": 0,
+  "command": [
+    "make",
+    "-j4",
+    "CC=/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache /usr/bin/clang",
+    "CXX=/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/release/kache /usr/bin/clang++"
+  ],
+  "cwd": "/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/.work/tmp/cc-bench/clang/corpus-cxx-headers/moved",
+  "scope": "untimed post-acceptance identity check, excluded from every performance sample"
+}

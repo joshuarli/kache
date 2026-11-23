@@ -1,0 +1,27 @@
+Measured source: ee2402bfb20c2d018c4036bec5e53a1084f79a9a
+Post-merge main CI: 11 passed, 0 failed, 0 pending, 0 skipped
+Final gate command: env -u TMPDIR -u KACHE_CACHE_DIR KACHE_TEST_SCRATCH_DIR=/home/ubuntu/kache-test-scratch make check
+Initial exact gate refused 108-byte test socket; see make-check-default.txt. Test scratch override is documented in tests/common/mod.rs.
+Repeated nofile=64 warnings are deliberate resource-guard self-tests; actual environment soft/hard limits were 65536/524288.
+Test-log non-UTF8 bytes are rendered as backslash escapes and trailing whitespace trimmed in the committed text copies; original bytes remain in the external evidence directory.
+
+test result: ok. 3211 passed; 0 failed; 33 ignored; 0 measured; 0 filtered out; finished in 12.92s
+test result: ok. 622 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 3.11s
+MAKE_CHECK_EXIT=0
+
+gcc corpus-c-tiny FAIL 10 pairs cold {'pairs': 10, 'geomean': 1.238552356467534, 'ci95': [1.1668108097491923, 1.314704943504097]} warm {'pairs': 10, 'geomean': 2.468390979264348, 'ci95': [2.3697577805837415, 2.571129453159864]}
+gcc corpus-cxx-headers FAIL 10 pairs cold {'pairs': 10, 'geomean': 1.0857726578621536, 'ci95': [0.9847700955098101, 1.197134508791856]} warm {'pairs': 10, 'geomean': 1.3074531239106297, 'ci95': [1.1753975105311638, 1.454345152093413]}
+gcc zlib FAIL 10 pairs cold {'pairs': 10, 'geomean': 1.1920441913039017, 'ci95': [1.086083791797516, 1.308342288829858]} warm {'pairs': 10, 'geomean': 1.3038518210709802, 'ci95': [1.191682752717092, 1.426578984577871]}
+clang corpus-c-tiny FAIL 10 pairs cold {'pairs': 10, 'geomean': 0.7158266984054538, 'ci95': [0.6194444080818272, 0.827205565930889]} warm {'pairs': 10, 'geomean': 2.4477535075156607, 'ci95': [2.1198919511362044, 2.826321987940913]}
+clang corpus-cxx-headers FAIL 10 pairs cold {'pairs': 10, 'geomean': 1.0577983562480848, 'ci95': [0.9779120046862795, 1.1442106826780518]} warm {'pairs': 10, 'geomean': 1.3391268234283513, 'ci95': [1.2362037674176474, 1.4506189808588892]}
+clang zlib FAIL 10 pairs cold {'pairs': 10, 'geomean': 1.3320815277472646, 'ci95': [1.204329794071383, 1.4733847865432046]} warm {'pairs': 10, 'geomean': 1.2134448026148366, 'ci95': [1.0368521087822886, 1.420114090062708]}
+PASS: 116 ratio estimates/95% log-t intervals; all locked target verdicts reproduced
+PASS: 180 retained timed replays, 1740 observer-free observations; complete-pair objects equal raw
+PASS: clean exact revision, jobs/seed/compiler/input-digest continuity with #114; no validation failures
+
+PASS: gcc 12 warm requests, 12 hits, zero compiler/preprocessor/standalone-engine executions; native daemon 935552
+PASS: clang 12 warm requests, 12 hits, zero compiler/preprocessor/standalone-engine executions; native daemon 935609
+
+PASS: raw report JSON copies byte-for-byte unchanged.
+PASS: production code, campaign rules, lock, benchmark implementation and shared config unchanged.
+PASS: all worktree changes confined to campaigns/cpp/STATUS.md and this report directory.

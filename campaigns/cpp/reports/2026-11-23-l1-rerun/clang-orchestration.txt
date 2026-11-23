@@ -1,0 +1,40 @@
+Preflight only; unmodified ee2402bf activity.rs; compiler=clang; TMPDIR/KACHE_CACHE_DIR unset
+Unrelated CPU limit: 0.5 cores
+Activity {
+    wall_ms: 5009.682446,
+    unrelated_cpu_ms: 130,
+    unrelated_system_cpu_ms: Some(
+        130,
+    ),
+    unrelated_process_cpu_ms: 60,
+    unrelated_cores: 0.025949748592108666,
+    busiest: [
+        Busy {
+            pid: 1427,
+            cpu_ms: 30,
+            name: "devin-remote-0.",
+        },
+        Busy {
+            pid: 127,
+            cpu_ms: 10,
+            name: "vda1-8",
+        },
+        Busy {
+            pid: 2586,
+            cpu_ms: 10,
+            name: "chrome",
+        },
+        Busy {
+            pid: 2637,
+            cpu_ms: 10,
+            name: "chrome",
+        },
+    ],
+    eligible: true,
+}
+PREFLIGHT_VERDICT=ELIGIBLE
+
+clang: ACCEPTANCE_EXIT=2
+clang corpus-c-tiny {"complete_pairs": 10, "eligible": true, "verdict": "fail", "reasons": ["cold vs raw: Some(Fail) (geomean 1.343, target 1.15)", "warm vs ccache: Some(Fail) (geomean 2.448, target 1.15)", "revert-source-settled vs ccache: Some(Inconclusive) (geomean 1.426, target 1.15)", "edit-header-settled vs ccache: Some(Inconclusive) (geomean 1.158, target 1.15)", "revert-header-settled vs ccache: Some(Fail) (geomean 2.427, target 1.15)", "revert-source-immediate vs ccache: Some(Fail) (geomean 1.597, target 1.15)", "relocated vs ccache: Some(Fail) (geomean 2.287, target 1.15)"]}
+clang corpus-cxx-headers {"complete_pairs": 10, "eligible": true, "verdict": "fail", "reasons": ["cold vs ccache: Some(Inconclusive) (geomean 1.058, target 1.1)", "cold vs raw: Some(Inconclusive) (geomean 1.055, target 1.15)", "warm vs ccache: Some(Fail) (geomean 1.339, target 1.15)", "revert-source-settled vs ccache: Some(Fail) (geomean 1.341, target 1.15)", "revert-header-settled vs ccache: Some(Fail) (geomean 1.585, target 1.15)", "edit-source-immediate vs ccache: Some(Inconclusive) (geomean 1.229, target 1.15)", "revert-source-immediate vs ccache: Some(Fail) (geomean 1.906, target 1.15)", "relocated vs ccache: Some(Fail) (geomean 1.973, target 1.15)"]}
+clang zlib {"complete_pairs": 10, "eligible": true, "verdict": "fail", "reasons": ["cold vs ccache: Some(Fail) (geomean 1.332, target 1.1)", "cold vs raw: Some(Fail) (geomean 1.585, target 1.15)", "warm vs ccache: Some(Inconclusive) (geomean 1.213, target 1.15)", "edit-source-settled vs ccache: Some(Fail) (geomean 1.278, target 1.15)", "revert-source-settled vs ccache: Some(Inconclusive) (geomean 1.208, target 1.15)", "edit-header-settled vs ccache: Some(Inconclusive) (geomean 1.149, target 1.15)", "revert-header-settled vs ccache: Some(Inconclusive) (geomean 1.346, target 1.15)", "edit-source-immediate vs ccache: Some(Inconclusive) (geomean 1.214, target 1.15)", "revert-source-immediate vs ccache: Some(Inconclusive) (geomean 1.225, target 1.15)", "relocated vs ccache: Some(Fail) (geomean 1.305, target 1.15)"]}

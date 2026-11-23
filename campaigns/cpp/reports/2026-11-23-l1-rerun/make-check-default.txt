@@ -1,0 +1,553 @@
+cargo clippy --workspace --all-targets -- -D warnings
+   Compiling libc v0.2.191
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+    Checking foldhash v0.2.0
+    Checking equivalent v1.0.3
+   Compiling find-msvc-tools v0.1.15
+   Compiling shlex v2.0.1
+   Compiling zmij v1.0.23
+    Checking cfg-if v1.0.5
+    Checking hashbrown v0.17.1
+    Checking simdutf8 v0.1.5
+    Checking itoa v1.0.19
+    Checking bitflags v2.13.2
+   Compiling getrandom v0.4.3
+    Checking once_cell v1.21.4
+   Compiling rustix v1.1.6
+    Checking rustc-hash v2.1.3
+    Checking linux-raw-sys v0.12.1
+    Checking fastrand v2.5.0
+   Compiling anyhow v1.0.104
+    Checking arrayvec v0.7.8
+    Checking indexmap v2.14.2
+   Compiling syn v3.0.10
+    Checking constant_time_eq v0.4.2
+    Checking cpufeatures v0.3.1
+    Checking log v0.4.35
+   Compiling pkg-config v0.3.34
+    Checking lexopt v0.3.2
+    Checking kache-log v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-log)
+   Compiling vcpkg v0.2.15
+   Compiling jobserver v0.1.35
+   Compiling thiserror v2.0.21
+    Checking deser-core v0.10.2
+   Compiling cc v1.11.1
+   Compiling rustversion v1.0.23
+    Checking hashlink v0.12.2
+    Checking fallible-iterator v0.3.0
+    Checking fallible-streaming-iterator v0.1.9
+    Checking smallvec v1.16.5
+    Checking foldhash v0.1.5
+    Checking filetime v0.2.29
+    Checking bytes v1.12.1
+    Checking memchr v2.8.3
+    Checking hashbrown v0.15.5
+    Checking tempfile v3.27.0
+    Checking socket2 v0.6.5
+    Checking glob v0.3.4
+    Checking kache-fs v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-fs)
+   Compiling heck v0.5.0
+   Compiling zstd-safe v8.3.0
+   Compiling autocfg v1.5.1
+    Checking aho-corasick v1.1.5
+    Checking regex-syntax v0.8.11
+   Compiling kache v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun)
+    Checking kache-shims v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-shims)
+   Compiling num-traits v0.2.19
+    Checking tar v0.4.46
+    Checking predicates-core v1.0.10
+   Compiling mutants v0.0.4
+    Checking regex-lite v0.1.9
+    Checking termtree v0.5.1
+    Checking anstyle v1.0.14
+   Compiling deser-derive v0.10.2
+   Compiling thiserror-impl v2.0.21
+   Compiling kache-client v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-client)
+    Checking float-cmp v0.10.0
+   Compiling blake3 v1.8.7
+   Compiling libsqlite3-sys v0.40.0
+   Compiling zstd-sys v2.1.3+zstd.1.5.7
+    Checking regex-automata v0.4.18
+   Compiling assert_cmd v2.2.2
+    Checking normalize-line-endings v0.3.0
+    Checking difflib v0.4.0
+    Checking predicates-tree v1.0.13
+    Checking wait-timeout v0.2.1
+    Checking deser-json v0.10.2
+    Checking deser-value v0.10.2
+    Checking deser-toml v0.10.2
+    Checking buffa v0.9.2
+    Checking kache-proofs v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-proofs)
+    Checking kunobi-daemon v0.10.3
+    Checking regex v1.13.1
+    Checking predicates v3.1.4
+    Checking bstr v1.13.1
+    Checking deser v0.10.2
+    Checking kache-core v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-core)
+    Checking kache-format v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-format)
+    Checking kache-config v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-config)
+    Checking kache-e2e v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-e2e)
+    Checking kache-protocol v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-protocol)
+    Checking zstd v0.14.4
+    Checking kache-ipc v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-ipc)
+    Checking rusqlite v0.42.0
+    Checking kache-store v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-store)
+    Finished `dev` profile [unoptimized] target(s) in 26.61s
+cargo check --locked -p kache-client -p kache-config -p kache-protocol -p kache-ipc
+    Checking deser-core v0.10.2
+   Compiling cc v1.11.1
+    Checking kache-fs v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-fs)
+    Checking hashbrown v0.17.1
+   Compiling kache-client v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-client)
+    Checking kunobi-daemon v0.10.3
+    Checking kache-shims v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-shims)
+    Checking indexmap v2.14.2
+   Compiling blake3 v1.8.7
+    Checking deser v0.10.2
+    Checking deser-value v0.10.2
+    Checking deser-json v0.10.2
+    Checking deser-toml v0.10.2
+    Checking kache-core v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-core)
+    Checking kache-format v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-format)
+    Checking kache-protocol v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-protocol)
+    Checking kache-config v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-config)
+    Checking kache-ipc v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-ipc)
+    Finished `dev` profile [unoptimized] target(s) in 3.58s
+cargo test --locked -p kache-ipc
+   Compiling deser-core v0.10.2
+   Compiling cfg-if v1.0.5
+   Compiling bitflags v2.13.2
+   Compiling linux-raw-sys v0.12.1
+   Compiling once_cell v1.21.4
+   Compiling fastrand v2.5.0
+   Compiling zmij v1.0.23
+   Compiling socket2 v0.6.5
+   Compiling getrandom v0.4.3
+   Compiling simdutf8 v0.1.5
+   Compiling itoa v1.0.19
+   Compiling anyhow v1.0.104
+   Compiling log v0.4.35
+   Compiling kunobi-daemon v0.10.3
+   Compiling rustix v1.1.6
+   Compiling tempfile v3.27.0
+   Compiling kache-fs v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-fs)
+   Compiling deser v0.10.2
+   Compiling deser-json v0.10.2
+   Compiling kache-format v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-format)
+   Compiling kache-core v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-core)
+   Compiling kache-protocol v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-protocol)
+   Compiling kache-ipc v2.0.0-rc.2 (/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/crates/kache-ipc)
+    Finished `test` profile [unoptimized] target(s) in 5.49s
+     Running unittests src/lib.rs (target/debug/build/kache-ipc/7b0a179a1b6e5a59/out/kache_ipc-7b0a179a1b6e5a59)
+
+running 63 tests
+test deadline_io::tests::work_returns_its_result_and_expired_work_never_starts ... ok
+test deadline_io::tests::fixed_workers_bound_both_running_and_queued_jobs ... ok
+test descriptors::tests::a_full_nonblocking_send_queue_returns_its_error_without_retrying ... ok
+test descriptors::tests::aligned_control_records_are_visited_once_without_reading_padding ... ok
+test descriptors::tests::control_records_distinguish_short_and_empty_headers ... ok
+test descriptors::tests::a_wrong_ticket_closes_its_descriptors_without_accepting_the_bundle ... ok
+test descriptors::tests::control_records_preserve_zero_and_positive_descriptors_in_order ... ok
+test descriptors::tests::ordinary_bytes_empty_datagrams_and_streams_are_rejected ... ok
+test descriptors::tests::partial_control_payloads_retain_every_complete_descriptor ... ok
+test descriptors::tests::an_empty_nonblocking_socket_returns_would_block_without_waiting_for_a_sender ... ok
+test descriptors::tests::unrecognized_control_records_do_not_hide_later_descriptors ... ok
+test descriptors::tests::untruncated_control_lengths_only_read_the_delivered_bytes ... ok
+test execution::protocol_tests::execution_commit_write_and_flush_failures_are_always_irrevocable ... ok
+test execution::protocol_tests::execution_reply_frames_are_bounded_and_must_be_complete ... ok
+test execution::protocol_tests::preparation_retries_only_transient_io_and_stops_at_the_deadline ... ok
+test descriptors::tests::rejecting_a_bundle_closes_all_received_descriptors ... ok
+test descriptors::tests::invalid_packet_headers_and_truncation_close_received_descriptors ... ok
+test descriptors::tests::transferred_files_are_owned_close_on_exec_and_share_their_open_description ... ok
+test descriptors::tests::oversized_control_bundle_does_not_leave_received_pipes_open ... ok
+test descriptors::tests::the_largest_protocol_bundle_is_received_in_full ... ok
+test execution::unix_client::tests::dropping_client_fixture ... ignored, bounded subprocess fixture
+test execution::unix_client::tests::interrupted_syscalls_retry_and_other_errors_return_immediately ... ok
+test execution::unix::tests::commit_removes_the_setup_read_deadline_for_long_compiler_runs ... ok
+test execution::tests::execution_disconnect_after_prepared_cannot_report_completion ... ok
+test execution::unix_client::tests::native_child_uses_client_parent_streams_environment_and_directory ... ok
+test execution::unix_client::tests::native_spawn_rejects_relative_paths_and_invalid_encoding ... ok
+test execution::tests::execution_commit_and_completion_failures_never_allow_local_fallback ... ok
+test execution::unix_client::tests::jobserver_mapping_keeps_endpoint_order_when_daemon_fd_numbers_are_reversed ... ok
+test execution::unix_client::tests::restricted_client_fixture ... ignored, isolated process installs an additional syscall filter
+test execution::unix_client::tests::restricted_compiler_fixture ... ignored, native compiler verifies the original clients additional filter
+test execution::tests::execution_disconnects_before_commit_allow_local_fallback ... ok
+test execution::unix_client::tests::terminal_and_jobserver_descriptors_follow_the_manifest ... ok
+test execution::unix_client::workspace::tests::client_operations_reject_relative_paths_and_non_regular_timestamp_targets ... ok
+test execution::unix_client::workspace::tests::client_copy_keeps_the_blob_independent_and_sets_the_requested_mode ... ok
+test execution::unix_client::workspace::tests::rejected_writes_discard_their_payload_before_the_next_operation ... ok
+test execution::unix_client::workspace::tests::touching_outputs_refuses_symlinks_and_never_blocks_on_a_fifo ... ok
+test execution::workspace::tests::copying_and_preparing_files_never_modify_the_cached_blob ... ok
+test execution::unix_client::tests::dropping_the_client_kills_and_reaps_its_live_child_group ... ok
+test execution::workspace::tests::every_platform_stages_publishes_and_discards_transformed_contents ... ok
+test jobserver::tests::capture_rejects_a_numeric_endpoint_that_is_not_an_open_descriptor ... ok
+test execution::unix_client::workspace::tests::staged_publication_keeps_race_winners_and_cleans_unpublished_files ... ok
+test execution::workspace::tests::missing_or_unexpected_contents_fail_before_creating_outputs ... ok
+test jobserver::tests::inherited_jobserver_fixture ... ignored, subprocess fixture for native jobserver inheritance
+test jobserver::tests::jobserver_capacity_leaves_room_for_standard_streams_and_terminal ... ok
+test jobserver::tests::jobserver_scope_restores_the_owned_manifest_after_a_panic ... ok
+test jobserver::tests::only_jobserver_variables_participate_in_descriptor_transfer ... ok
+test jobserver::tests::native_flag_bytes_and_fifo_auth_are_preserved ... ok
+test jobserver::tests::parent_descriptors_must_be_close_on_exec ... ok
+test jobserver::tests::rewrite_rejects_an_incomplete_or_misattributed_descriptor_manifest ... ok
+test tests::a_socket_path_fits_up_to_the_platform_limit_and_not_one_byte_more ... ok
+test tests::binding_an_overlong_path_names_the_limit ... ok
+test tests::finish_by_returns_what_finishes_in_time ... ok
+test tests::is_reachable_is_false_when_nothing_listens ... ok
+test tests::is_reachable_is_true_for_a_live_listener ... ok
+test tests::require_self_peer_rejects_foreign_and_unauthenticated_peers ... ok
+test execution::unix_client::tests::native_children_keep_the_original_clients_seccomp_and_no_new_privs ... ok
+test jobserver::tests::child_inherits_only_its_owned_jobserver_after_scope_exit ... ok
+test tests::same_user_peer_check_accepts_own_connections ... ok
+test execution::tests::client_process_broker_transfers_live_pipes_and_reaps_the_native_child ... ok
+test execution::unix_client::workspace::tests::transformed_outputs_use_descriptors_instead_of_large_control_frames ... ok
+test deadline_io::tests::expired_queued_work_is_discarded_and_saturation_does_not_spawn ... ok
+test execution::unix_client::tests::readiness_waits_for_an_event_and_prioritizes_completion ... ok
+test tests::finish_by_stops_waiting_at_the_deadline ... ok
+
+test result: ok. 59 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+   Doc-tests kache_ipc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+./scripts/test-with-test-resources.sh
+warning: could not raise soft nofile limit 64 to 4096; capping Rust test threads at 1
+warning: could not raise soft nofile limit 64 to 4096; capping Rust test threads at 8
+test-resource guard: all checks passed
+MUSL_TARGET="x86_64-unknown-linux-musl" MUSL_BUILD_MODE="test" cargo test --quiet --workspace --lib --tests
+
+running 3244 tests
+....................................................................................... 87/3244
+..........................................................................cargo:rerun-if-changed=build.rs
+cargo:rustc-link-search=native=/tmp/.tmpnMCe4A/b/target/debug/deps
+cargo:rerun-if-changed=build.rs
+cargo:rustc-link-search=/tmp/.tmpnMCe4A/stderr/b/target/debug/gn_out/obj
+..........cargo:rerun-if-changed=build.rs
+cargo:rustc-link-search=native=/tmp/.tmpDSDNLv/b/target/debug/gn_out/obj
+cargo:rustc-link-search=native=/tmp/.tmpDSDNLv/b/target/debug/deps
+cargo:rustc-link-search=/usr/lib
+..cargo:rerun-if-changed=build.rs
+. 174/3244
+cargo:rerun-if-changed=build.rs
+.........cargo:rerun-if-changed=build.rs
+cargo:rustc-link-search=/tmp/.tmpNYRwdQ/b/target/debug/gn_out/obj
+.....cargo:rustc-cfg=x
+................cargo:rerun-if-changed=build.rs
+cargo:rerun-if-changed=build.rs
+.........................cargo:rerun-if-changed=build.rs
+........cargo:rerun-if-changed=build.rs
+........................ 261/3244
+....................................................................................... 348/3244
+....................................................................................... 435/3244
+....................................................................................... 522/3244
+....................................................................................... 609/3244
+...........................................................i..i........................ 696/3244
+....................................................................................... 783/3244
+....................................................................................... 870/3244
+....................................................................................... 957/3244
+.....{
+  "schema_version": 1,
+  "command": "cli",
+  "success": true,
+  "skipped": false,
+  "disk": {
+    "store_bytes": 0,
+    "store_limit_bytes": 1048576,
+    "disk_private_bytes": 0,
+    "cloned_into_targets_bytes": 0,
+    "snapshot_retained_bytes": 0,
+    "cloned_coverage": "partial"
+  },
+  "entries": 0,
+  "entries_dropped": 0,
+  "store_bytes_removed": 0,
+  "disk_bytes_reclaimed": 0,
+  "entries_pinned": 0,
+  "entries_unreclaimable": 0,
+  "entries_failed": 0
+}
+...................................................{
+  "schema_version": 1,
+  "command": "explain",
+  "success": true,
+  "crate_name": "ghost",
+  "diagnosis": "no_events",
+  "next": [
+    {
+      "argv": [
+        "cargo",
+        "build",
+        "-p",
+        "ghost"
+      ],
+      "why": "no wrapper events yet; build the crate first"
+    }
+  ]
+}
+........{
+  "schema_version": 1,
+  "command": "explain",
+  "success": true,
+  "crate_name": "tokio",
+  "diagnosis": "all_hits",
+  "stored_entries": 0,
+  "store_dirs": [],
+  "stores": [
+    {
+      "path": "/tmp/.tmpArD3Q6/cache",
+      "bytes": 0,
+      "max_size": 1048576,
+      "entries": 0,
+      "blob_stats": {
+        "total_blobs": 0,
+        "total_blob_size": 0,
+        "total_logical_size": 0,
+        "savings": 0
+      },
+      "error": null
+    }
+  ],
+  "latest_uncached_compile": null
+}
+....................... 1044/3244
+..............................{
+  "schema_version": 1,
+  "command": "explain",
+  "success": true,
+  "crate_name": "serde",
+  "diagnosis": "first_build_now_cached",
+  "last_result": "miss",
+  "cache_key": "serdemisskey",
+  "store_error": "",
+  "lookup_rejection": "",
+  "stored_entries": 1,
+  "store_dirs": [
+    "/tmp/.tmp4w4BD2/cache"
+  ],
+  "stores": [
+    {
+      "path": "/tmp/.tmp4w4BD2/cache",
+      "bytes": 31,
+      "max_size": 1048576,
+      "entries": 1,
+      "blob_stats": {
+        "total_blobs": 1,
+        "total_blob_size": 31,
+        "total_logical_size": 31,
+        "savings": 0
+      },
+      "error": null
+    }
+  ],
+  "dependency_chain": null,
+  "dependency_recording_missing": true,
+  "checkout_comparison": null,
+  "hints": [],
+  "latest_uncached_compile": null
+}
+..{
+  "schema_version": 1,
+  "command": "explain",
+  "success": true,
+  "crate_name": "serde",
+  "diagnosis": "key_mismatch",
+  "last_result": "miss",
+  "cache_key": "misskeymanydiffs",
+  "store_error": "",
+  "lookup_rejection": "",
+  "stored_entries": 4,
+  "store_dirs": [
+    "/tmp/.tmp2aPCC4/cache"
+  ],
+  "stores": [
+    {
+      "path": "/tmp/.tmp2aPCC4/cache",
+      "bytes": 146,
+      "max_size": 1048576,
+      "entries": 4,
+      "blob_stats": {
+        "total_blobs": 4,
+        "total_blob_size": 146,
+        "total_logical_size": 146,
+        "savings": 0
+      },
+      "error": null
+    }
+  ],
+  "dependency_chain": null,
+  "dependency_recording_missing": true,
+  "checkout_comparison": null,
+  "hints": [],
+  "latest_uncached_compile": null
+}
+....................................................... 1131/3244
+....................................................................................... 1218/3244
+....................................................................................... 1305/3244
+....................................................................................... 1392/3244
+....................................................................................... 1479/3244
+.............................................................................i..i...... 1566/3244
+................................................................................i..i... 1653/3244
+..iiiiiiiiiiiiiiii.........................................................i..
+running 1 test
+......... 1740/3244
+....................................................................................... 1827/3244
+....................................................................................... 1914/3244
+....................................................................................... 2001/3244
+..............i........................................................................ 2088/3244
+..............i......i................................................................. 2175/3244
+....................................................................................... 2262/3244
+....................................................................................... 2349/3244
+....................................................................................... 2436/3244
+.................i..............i...................................................... 2523/3244
+....................................................................................... 2610/3244
+....................................................................................... 2697/3244
+..................................ii.....
+running 1 test
+............i.
+running 1 test
+
+running 1 test
+................................ 2784/3244
+.
+running 1 test
+...........test scheduler::tests::permit_owner_child_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3243 filtered out; finished in 0.30s
+
+...........................................test scheduler::tests::flight_compile_then_release_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3243 filtered out; finished in 0.21s
+
+......
+[2K.......................... 2871/3244
+....................................................................................... 2958/3244
+..................................................error[E0308]: mismatched types
+warning: hard linking files in the incremental compilation cache failed
+error[E0308]: mismatched types
+..
+running 1 test
+
+running 1 test
+....error: incremental compilation: could not create session directory lock file
+..error[E0308]: mismatched types
+............................. 3045/3244
+............./tmp/.tmplM8KM8/broken.c:1:1: error: unknown type name ‘this’
+    1 | this is invalid C source @
+      | ^~~~
+/tmp/.tmplM8KM8/broken.c:1:9: error: expected ‘=’, ‘,’, ‘;’, ‘asm’ or ‘__attribute__’ before ‘invalid’
+    1 | this is invalid C source @
+      |         ^~~~~~~
+/tmp/.tmplM8KM8/broken.c:1:9: error: unknown type name ‘invalid’
+/tmp/.tmplM8KM8/broken.c:1:26: error: stray ‘@’ in program
+    1 | this is invalid C source @
+      |                          ^
+.......................test wrapper::tests::hold_scheduler_flight_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3243 filtered out; finished in 0.21s
+
+test wrapper::tests::hold_scheduler_flight_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3243 filtered out; finished in 0.21s
+
+.................i................................. 3132/3244
+...................................................................i................... 3219/3244
+............HIT-STDOUT
+HIT-STDERR
+HIT-STDOUT
+HIT-STDERR
+......HIT-STDOUT
+HIT-STDERR
+.......
+test result: ok. 3211 passed; 0 failed; 33 ignored; 0 measured; 0 filtered out; finished in 13.60s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 9 tests
+.........
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.96s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+
+
+running 4 tests
+....
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.74s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.31s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+
+
+running 13 tests
+.............
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.41s
+
+
+running 17 tests
+.................
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.38s
+
+
+running 1 test
+cached_check_outputs_allow_cargo_and_clippy_fix --- FAILED
+
+failures:
+
+---- cached_check_outputs_allow_cargo_and_clippy_fix stdout ----
+
+thread 'cached_check_outputs_allow_cargo_and_clippy_fix' (982100) panicked at tests/cargo_fix_test.rs:22:13:
+private cargo fix child failed:
+
+running 1 test
+test cached_check_outputs_allow_cargo_and_clippy_fix ... FAILED
+
+failures:
+
+failures:
+    cached_check_outputs_allow_cargo_and_clippy_fix
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+
+
+thread 'cached_check_outputs_allow_cargo_and_clippy_fix' (982102) panicked at tests/cargo_fix_test.rs:85:13:
+["check"] failed: error: process didn't exit successfully: `/home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/kache-test-bootstrap/debug/kache /home/ubuntu/.rustup/toolchains/nightly-2026-11-09-x86_64-unknown-linux-gnu/bin/rustc -vV` (exit status: 1)
+--- stderr
+error: socket path is 108 bytes, but a Unix socket path can be at most 107 on this platform: /home/ubuntu/repos/kache/.work/wt/l1-acceptance-rerun/target/kache-test-scratch/.tmp9F6QEq/cache/daemon.sock. Point KACHE_SOCKET_PATH at a shorter absolute path, or set a shorter KACHE_RUNTIME_DIR / [cache] runtime_dir.
+
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cached_check_outputs_allow_cargo_and_clippy_fix
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+error: test failed, to rerun pass `-p kache --test cargo_fix_test`
+make: *** [Makefile:30: test] Error 101

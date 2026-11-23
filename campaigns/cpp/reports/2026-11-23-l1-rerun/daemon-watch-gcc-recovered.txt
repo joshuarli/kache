@@ -1,0 +1,1 @@
+PASS: sampled 18 native benchmark daemon PIDs; executable/digest/private runtime/short sockets verified
