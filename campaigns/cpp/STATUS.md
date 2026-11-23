@@ -13,26 +13,29 @@ plan: [C_CPP_PARITY_CAMPAIGN.md](../../C_CPP_PARITY_CAMPAIGN.md); tracking
 entry: KACH-26 in [TODO.md](../../TODO.md). Groundwork branch:
 `feat/ccp00-campaign-groundwork`.
 
-## Current state (diagnostic checkpoint 2026-11-22 at `9553a432`)
+## Current state (post-#139 at `c5c3d206`; diagnostic checkpoint 2026-11-22)
 
 Counts are taken from the files, not carried forward:
 `grep '^status = ' campaigns/cpp/cases.toml | sort | uniq -c` and
 `grep -l '^cohort = ' campaigns/cpp/oracle/*/case.toml`.
 
-- Inventory (`cases.toml`): 183 entries, and every oracle directory has
-  one: 90 `oracle`, 83 `planned`, 6 `conditional`, 4 `out_of_scope`.
-- Oracle cases (`oracle/`): 90, of which 86 `blocking` and 4 `open`
+- Inventory (`cases.toml`): 187 entries, and every oracle directory has
+  one: 94 `oracle`, 83 `planned`, 6 `conditional`, 4 `out_of_scope`.
+- Oracle cases (`oracle/`): 94, of which 90 `blocking` and 4 `open`
   (`cc-eqp-comment-only`, `cc-input-clang-config-file`,
   `cc-input-gcc-specs`, `cc-input-token-paste-probe`).
-- Gates: every Linux and macOS CI job is required (PR #50) and green on
-  main; KACH-21 and KACH-27 are closed. `make e2e` on this host needs
+- Gates: every Linux and macOS CI job is required (PR #50);
+  KACH-21 and KACH-27 are closed. Main had a one-off musl
+  `cc-out-diagnostics-color-reuse` failure after #136; it passed on rerun.
+  This is a correctness-CI flake note, not acceptance-timing evidence.
+  `make e2e` on the M1 host needs
   `PATH=/opt/homebrew/bin:$PATH`, because the gluon `ninja` at
   `~/.local/bin` stripped trailing spaces from variable values
   (laputa-systems/gluon GLU-29, fixed in its PR #34, merged 2026-11-19).
 
 Engineering work still open (not provisioning):
 
-- CCP-03: `@file` variants beyond the four blocking cases (`cc-rsp-escaped`,
+- CCP-03: additional `@file` variants (`cc-rsp-escaped`,
   `-empty`, `-cycle`, `-depth`, `-option-value`, `-relative-paths`,
   `-encoding`, `-content-change` are `planned`); clang `--config` and GCC
   `-specs` (open cases, correct passthrough).
@@ -193,25 +196,55 @@ acceptance evidence. Green CI correctness does not close those timing gaps.
 Both historical endpoints' default sockets exceed Linux's limit. The large
 twelve-TU/four-job warm regression reproduces in standalone fallback, not at
 comparable magnitude with verified private daemons. The bounded bisect identifies
-`438c5f04` (timestamp read-set scanning/allocation). Current `9553a432` retains
+`438c5f04` (timestamp read-set scanning/allocation). Measured baseline `9553a432` retains
 a standalone penalty through full header-analysis loading/deserialization.
 Native Clang tiny-C cold has +332.5 ms median paired excess [62.9, 430.1].
 GCC settled-header-edit is inconclusive: +138.6 ms [−632.2, 904.1]. Its historical
 +675.8 ms excess remains **unassigned**, not disproved or explained by phase sums.
 
+Subsequent fixes are merged on main through `c5c3d206`:
+
+- Correctness: #132 passes through prefix-mapped assembler listings; #133
+  repairs token-pasted timestamp keying; #134 fixes observation of private
+  response-file compiles; #135 requires self-identifying native Clang and keeps
+  GCC/opaque drivers whole-environment-keyed; #136 passes through ambiguous
+  form-feed/vertical-tab response files. These safeguards remain in force.
+- #138 replaces directive candidate enumeration with `memchr_iter`. On a real
+  2.0 MB preprocessed header-fixture TU, 21 alternating microbenchmark pairs
+  reduce directive-text scanning **8.098 → 1.521 ms (81.2%)** and the complete
+  raw/decoded hidden-input scan **14.325 → 7.859 ms (45.1%)**. These are scanner
+  measurements, not whole-build gains or attribution of the GCC excess.
+- #139 reads a validated timestamp-only projection of persisted header analyses,
+  upgrading to full analysis for probes. The v6 format and content-bound seal
+  are unchanged. Twenty alternating standalone pairs give **45.6 → 37.2 ms**,
+  ratio **0.816 [0.712, 0.875]**; thirty daemon pairs give **20.30 → 20.23 ms**,
+  ratio **0.997 [0.968, 1.051]**. These are diagnostic 95% bootstrap CIs against
+  the pre-fix baseline, not acceptance or a combined post-merge benchmark.
+  Standalone's median gain is 18.4%; its interval is not entirely above 15%,
+  and the daemon interval does not exclude a small regression.
+
 Ranked next actions, with correctness safeguards retained:
 
-1. Investigate directive-scanner `memchr_iter` candidate search. Preserve raw and
-   decoded-string checks, boundaries, operands and assembler refusals.
-2. Investigate Clang <16 compile-first for **proven time-macro-free cold misses**.
+1. Investigate Clang <16 compile-first for **proven time-macro-free cold misses**.
    Only Clang 14 was measured. Keep capability probing, complete dependency and
    race checks, and the existing-memo/revert path. This is an investigated
    opportunity, not an implemented optimization or permission to skip checks.
-3. Reduce standalone header-analysis load/deserialization cost without weakening
-   content-bound timestamp analysis, prefix-map handling or language-option keying.
-4. Then run locked LLVM performance acceptance on a quiet host with a verified
-   daemon and checked scratch ceilings. Keep M1, newer L1 compilers and native
-   ARM64 L2 acceptance gaps explicit until their own measurements close them.
+2. Reprofile the **remaining standalone header-analysis cost after #139** before
+   selecting another optimization. Full persisted JSON is still loaded; do not
+   assume the old full-deserialization hotspot survives unchanged. Preserve
+   content-bound verdicts, full probe upgrades and all keying safeguards.
+3. Investigate the **unassigned GCC settled-header-edit excess** with controlled
+   compiler/process evidence. Neither #138's microbenchmark nor the inconclusive
+   paired interval explains or proves recovery of the historical +675.8 ms.
+4. Rerun locked **L1 acceptance** after these merged changes with verified working
+   isolated daemons, unchanged jobs/activity thresholds and retained-sample rules.
+   Historical performance stays FAIL until a new eligible verdict replaces it.
+5. Obtain eligible **M1**, **newer-L1-compiler** and native **ARM64 L2** acceptance
+   evidence separately; provision M1 standalone LLVM Clang before claiming its
+   missing compiler cell. Shared CI correctness does not fill these timing gaps.
+6. Then run locked **LLVM subset performance acceptance** on a quiet host with
+   verified daemons and checked scratch ceilings. The 6–18 hour two-compiler
+   estimate remains uncertain planning evidence, not a measured acceptance result.
 
 ## Reference (see [lock.toml](lock.toml))
 
@@ -957,34 +990,17 @@ host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
    keeps older mtimes and a copy that built a hand-applied mutation keeps
    the mutated binary. `make e2e` on this host needs
    `PATH=/opt/homebrew/bin:$PATH`.
-3. Ranked next actions (2026-11-21, post-#101/#105/#109 L1 rerun):
-   1. Profile the largest eligible wall loss: Clang 14 tiny-C cold,
-      +724.8 ms mean paired excess. Its 48 compiles now use 48 rather than
-      96 preprocessors; epoch support still excludes compile-first capture.
-      The retained key phase totals 1061 ms across the units. Separate
-      remaining preprocessing, key bookkeeping and process/IPC cost against
-      ccache; do not mistake removing the sentinel for removing all miss cost.
-   2. Profile GCC C++ settled header edit (+675.8 ms), especially the
-      invalidated-memo fallback's 12 preprocessors and 1429 ms summed key
-      time before 12 required compiles. Also profile the actual twelve-TU,
-      four-job C++ hit path: warm ratios worsened from #99's 1.657/1.560 to
-      3.507/2.825 (GCC/Clang), despite zero compiler/preprocessor/probe runs.
-      GCC warm/relocated key totals are 110/154 ms. These are not explained
-      by the earlier single-TU timestamp microbenchmark; preserve revert
-      correctness and use a whole-path profile before choosing a fix.
-   3. After targeted fixes, retry the affected L1 acceptance workloads
-      with the same jobs, thresholds and retained-sample rules. The sampler
-      blocker is resolved: all six current workloads have ten eligible pairs,
-      but all FAIL. Obtain a quiet M1 baseline, newer L1 compiler-major and
-      L2 ARM64 evidence separately. Defer LLVM until the demonstrated small
-      losses are understood: roughly 6–18 hours for both compilers, highly
-      uncertain, with scratch ceilings still to verify. No LLVM acceptance
-      result exists. Commit every future report and link Current state.
-   4. Autotools/libtool launchers (CCP-07) now have a bounded local glibc
+3. Follow the current ranking under
+   [Diagnostic checkpoint and next actions](#diagnostic-checkpoint-and-next-actions-2026-11-22),
+   updated after #132–#136, #138 and #139. Do not repeat the pre-checkpoint
+   bisect or treat scanner/standalone diagnostics as passing acceptance.
+   Commit every future acceptance report and link Current state.
+   Additional engineering coverage remains open:
+   - Autotools/libtool launchers (CCP-07) now have a bounded local glibc
       fixture (`make cc-project-autotools`); provision and run other host
       cells before calling the matrix complete. Meson launchers remain open.
       zlib, LLVM and cc-rs build scripts already cache fully.
-   5. KACH-29 is implemented for self-identifying native Clang: documented
+   - KACH-29 is implemented for self-identifying native Clang: documented
       driver environment inputs and declared patterns key the probe;
       GCC and non-self-identifying drivers retain whole-environment keying. Native hits no longer
       need the hyperfine environment workaround. Cross-host timing remains

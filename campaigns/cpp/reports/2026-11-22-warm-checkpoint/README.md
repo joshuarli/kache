@@ -2,8 +2,11 @@
 
 Measured endpoints: `da350481a58373829051df9b6eff35400e0ba9a9` (A) and
 `c4d2b947f3cd1412decfed602a7ac8ded770df88` (B).
-Current-main measurements: `9553a432f80b8186bd89ed9443ee9c91f29ef16c`.
-Each step fetched origin first. Main remained at that revision throughout.
+Steps 1–3 current-main measurements: `9553a432f80b8186bd89ed9443ee9c91f29ef16c`.
+Each step fetched origin first. Main remained at that revision throughout those
+measurements. Later merged fixes and their separate diagnostics are recorded
+under [Merged follow-up](#merged-follow-up-through-139); the original observations
+and analyses below are unchanged.
 
 **These are diagnostics, not formal acceptance. Acceptance rules are unchanged.**
 This checkpoint neither replaces the historical FAIL verdicts nor establishes passing
@@ -17,7 +20,7 @@ No timestamp, prefix-map, language-option, hidden-input or race safeguard was re
    reproduces in standalone fallback, not at comparable magnitude with verified daemons.
 2. `438c5f04` introduces the large standalone regression through repeated timestamp
    scanning and allocation over the complete memo read set.
-3. Main still has a standalone penalty. Its measured hotspot has moved to loading
+3. Measured baseline `9553a432` has a standalone penalty. Its hotspot has moved to loading
    and deserializing persisted header analyses into a process-local cache.
 4. Main's native Clang tiny-C cold loss is smaller but measurable. Serial per-invocation
    bookkeeping contributes approximately 210 ms beyond ccache in separate profiles.
@@ -151,7 +154,7 @@ These checks locate the added approximately 17 ms/hit in timestamp scanning and
 allocation, not memo waiting, startup, restore or daemon serialization.
 The timestamp correctness repair must remain intact.
 
-### Main retains a different standalone cost
+### Measured main `9553a432` retains a different standalone cost
 
 Five alternating mode pairs on main use the same workload and GCC binary:
 
@@ -279,14 +282,42 @@ measurements.** The point estimate is noisy, ccache also preprocesses twelve uni
 and neither queueing, waits nor store work accounts for hundreds of milliseconds.
 Compiler-normalized or separately controlled historical-route evidence remains necessary.
 
-## Ranked next actions
+## Merged follow-up through #139
 
-1. **Directive scanner:** investigate `memchr_iter(b'.', ...)` in
-   `cc_directive_operands` at `src/compiler/cc.rs:2786–2806`.
-   Keep exact case-insensitive matches, boundaries, operands, decoded-string scanning,
-   computed-asm refusals and macro-directive checks. This is a measured hotspot, not
-   a demonstrated 676 ms recovery. No implementation or gain is claimed here.
-2. **Clang before 16:** investigate compile-first for certain cold misses whose complete
+Main `c5c3d206` includes the following merged work, after the measured baseline:
+
+- **#132:** pass through prefix-mapped assembler listings.
+- **#133:** repair token-pasted timestamp keying and preserve timestamp-sensitive reuse.
+- **#134:** observe private response-file compiles correctly in the oracle.
+- **#135:** require self-identifying native Clang; GCC and opaque drivers remain
+  whole-environment-keyed.
+- **#136:** pass through ambiguous form-feed/vertical-tab response files.
+- **#138:** implement `memchr_iter` directive candidate enumeration without changing
+  matching, raw/decoded checks or assembler refusals. A real 2,017,806-byte GCC 11
+  preprocessed header-fixture TU, 21 alternating pairs (32 calls/sample), gives
+  directive-text scanner medians **8.098 → 1.521 ms (81.2% reduction)** and full
+  raw/decoded hidden-input scanner medians **14.325 → 7.859 ms (45.1%)**.
+  This is a scanner microbenchmark, not a whole-build or GCC-loss recovery claim.
+- **#139:** decode the validated timestamp record without materializing unused
+  probes; full probe consumers upgrade/repair compact cache entries. The v6 JSON
+  writer/format, content-bound seal and identities are unchanged. On the same
+  GCC 11 twelve-TU/four-job warm workload, 20 alternating standalone pairs give
+  **45.6 → 37.2 ms**, ratio **0.816 [0.712, 0.875]**; 30 daemon pairs give
+  **20.30 → 20.23 ms**, ratio **0.997 [0.968, 1.051]** (95% paired-bootstrap CIs).
+  Standalone's median gain is 18.4%, with gain interval 12.5–28.8%; daemon results
+  are consistent with unchanged performance but cannot exclude a ~5.1% regression.
+  These are separate pre-fix-baseline diagnostics, not a combined post-merge run;
+  do not compare absolute times directly with Step 2's 65.57/24.10 ms results.
+
+Main had a one-off musl `cc-out-diagnostics-color-reuse` failure after #136;
+it passed on rerun. This CI flake does not change acceptance requirements or
+constitute acceptance-timing evidence. The original report still leaves L1
+performance FAIL and eligible M1, newer-L1-compiler, native ARM64 L2 and LLVM
+performance acceptance open. No acceptance rule or original raw table changed.
+
+## Ranked next actions (after the merged follow-up)
+
+1. **Clang before 16:** investigate compile-first for certain cold misses whose complete
    captured inputs and effective argv are proven time-macro-free. Only Clang 14 was
    measured. Retain capability probing rather than treating a version range as proof.
    Preserve capture-race, include-resolution and hidden-input checks. If proof fails,
@@ -295,10 +326,20 @@ Compiler-normalized or separately controlled historical-route evidence remains n
    The serial profile has approximately 0.87 seconds of content preprocessing available
    to avoid before replacement-proof costs. This is an investigated opportunity,
    not a measured optimization. Never mark unsupported epoch behavior safe globally.
-3. **Standalone header-analysis loading:** reduce full-analysis loading and deserialization
-   for timestamp sensitivity while retaining content-bound verdicts and invalidation.
-   Preserve timestamp, prefix-map and language-option correctness repairs.
-4. **LLVM acceptance:** after targeted fixes and quiet preflight, run the locked acceptance
+2. **Remaining standalone header-analysis cost:** reprofile after #139. Persisted JSON
+   is still loaded and timestamp-only parsing still has a cost; do not assume the
+   original full-deserialization hotspot survives unchanged. Retain content-bound
+   verdicts, full probe upgrades and all timestamp, prefix-map and language-option repairs.
+3. **Unassigned GCC header-edit excess:** control compiler/process variation before
+   attributing the historical +675.8 ms. The paired interval includes zero; neither
+   that result nor #138's scanner gain proves recovery of the old excess.
+4. **L1 acceptance rerun:** exercise the merged fixes with verified isolated daemons
+   and the same jobs, activity limits and retained-sample rules. Historical FAIL
+   remains until replaced by a new eligible acceptance verdict.
+5. **Missing host/compiler cells:** obtain eligible M1, newer L1 compiler-major and
+   native ARM64 L2 acceptance evidence separately. M1 standalone LLVM Clang is still
+   missing. Shared CI correctness cannot substitute for those timing measurements.
+6. **LLVM subset performance acceptance:** after targeted fixes and quiet preflight, run the locked acceptance
    protocol with verified working daemons. Keep the historical 6–18 hour two-compiler
    estimate as high-uncertainty planning evidence, not a measured new runtime.
    Check scratch ceilings first. Complete the missing compiler and host cells separately.
