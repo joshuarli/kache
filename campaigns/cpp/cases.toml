@@ -1128,7 +1128,7 @@ summary = "restored outputs are writable copies; cache blobs stay immutable, no 
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-pch-clang-use"
@@ -1285,7 +1285,7 @@ summary = "general standard C++20 module production is refused with a clear diag
 profiles = ["both"]
 compilers = ["clang", "gcc"]
 ccache.suite = "modules.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-host-universal-objects"
@@ -1564,7 +1564,7 @@ summary = "daemon crash/restart between phases: correct fallback, store intact"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-rel-cancellation-signals"
