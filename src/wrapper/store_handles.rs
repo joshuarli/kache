@@ -94,7 +94,7 @@ impl Lease {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 idle.iter()
                     .position(|entry| entry.key == key)
-                    .map(|index| idle.swap_remove(index))
+                    .map(|index| idle.remove(index))
             };
             if let Some(candidate) = candidate
                 && stamps(&candidate.stores).is_ok_and(|current| current == candidate.stamps)
@@ -149,9 +149,10 @@ impl Drop for Lease {
                 .idle
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if entries.len() < 16 {
-                entries.push(idle);
-            }
+            let retired = (entries.len() >= 16).then(|| entries.remove(0));
+            entries.push(idle);
+            drop(entries);
+            drop(retired);
         }
     }
 }
@@ -421,6 +422,31 @@ mod tests {
             f.finish(lease);
         }
         assert_eq!(f.opens(), 17);
+        assert_eq!(f.pool.idle.lock().unwrap().len(), 16);
+    }
+
+    #[test]
+    fn saturated_pool_retains_new_configs_in_return_order() {
+        let mut f = Fixture::new();
+        let original_size = f.config.max_size;
+        let leases: Vec<_> = (0..16).map(|_| f.lease()).collect();
+        for lease in leases {
+            f.finish(lease);
+        }
+        assert_eq!(f.opens(), 16);
+
+        f.config.max_size = original_size + 1;
+        f.finish(f.lease());
+        f.finish(f.lease());
+        assert_eq!(f.opens(), 17);
+
+        f.config.max_size = original_size;
+        f.finish(f.lease());
+        f.config.max_size = original_size + 2;
+        f.finish(f.lease());
+        f.config.max_size = original_size + 1;
+        f.finish(f.lease());
+        assert_eq!(f.opens(), 18);
         assert_eq!(f.pool.idle.lock().unwrap().len(), 16);
     }
 
