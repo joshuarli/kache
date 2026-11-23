@@ -960,6 +960,15 @@ ccache.suite = "kache-original"
 status = "oracle"
 
 [[case]]
+id = "cc-driver-unused-argument-warning"
+package = "CCP-03"
+summary = "a flag the driver ignores for the target prints a warning that a hit replays"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
 id = "cc-unknown-flag-passthrough"
 package = "CCP-03"
 summary = "unrecognized invocation shapes fall back to raw compile with raw behavior preserved"
