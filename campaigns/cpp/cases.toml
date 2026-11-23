@@ -1384,7 +1384,7 @@ summary = "paths with spaces and non-ASCII names work on both host families"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "basedir.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-host-zlib"
