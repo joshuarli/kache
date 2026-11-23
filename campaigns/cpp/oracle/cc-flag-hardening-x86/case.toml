@@ -1,0 +1,29 @@
+summary = "x86 hardening flags (-fcf-protection, -mno-red-zone) are keyed and cached"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["plain.o", "cf.o", "redzone.o"]
+requires = [["{cc}", "-fcf-protection=full", "-mno-red-zone", "-x", "c", "-c", "-", "-o", "probe.o"]]
+requires_stdin = "int u(void) { return 0; }\n"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-c", "u.c", "-o", "plain.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-fcf-protection=full", "-c", "u.c", "-o", "cf.o"]
+source = "u.c"
+reuse = "any"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-mno-red-zone", "-c", "u.c", "-o", "redzone.o"]
+source = "u.c"
+reuse = "any"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

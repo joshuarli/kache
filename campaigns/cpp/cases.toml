@@ -935,7 +935,16 @@ status = "oracle"
 [[case]]
 id = "cc-flag-hardening"
 package = "CCP-03"
-summary = "distribution hardening codegen flags (-fno-plt, -fcf-protection, -fzero-call-used-regs, -mno-red-zone) are keyed"
+summary = "portable hardening codegen flags (-fno-plt, -fzero-call-used-regs) are keyed"
+profiles = ["both"]
+compilers = ["gcc", "clang"]
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-hardening-x86"
+package = "CCP-03"
+summary = "x86 hardening codegen flags (-fcf-protection, -mno-red-zone) are keyed"
 profiles = ["both"]
 compilers = ["gcc", "clang"]
 ccache.suite = "kache-original"
