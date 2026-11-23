@@ -1,0 +1,32 @@
+summary = "a header added earlier on the include path than the one first read takes over: the compile misses and restores the new meaning, and removing it restores the old entry"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-Iearly", "-Ilate", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "add-earlier-header"
+reuse = "miss"
+action = [{ op = "write", path = "early/h.h", content = "#define H 7\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-added"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "remove-earlier-header"
+reuse = "hit"
+action = [{ op = "remove", path = "early/h.h" }, { op = "delete-outputs" }]
