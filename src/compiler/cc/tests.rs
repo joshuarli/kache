@@ -341,7 +341,7 @@ fn cc_time_macro_scan_requires_a_complete_readable_native_read_set() {
 }
 
 #[test]
-fn unpinned_captured_keys_require_a_complete_time_macro_free_proof() {
+fn unpinned_captured_keys_require_a_complete_proof_or_expansion() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let env = InvocationEnv::from_parts(
@@ -369,27 +369,58 @@ fn unpinned_captured_keys_require_a_complete_time_macro_free_proof() {
         }, &hasher)
     };
     assert!(cc_time_macro_free_sources(&parsed, &driver, &hasher));
-    assert!(matches!(check(&driver).unwrap(), CcKeyDiscovery::Captured(_)));
+    assert!(matches!(check(&driver), CcKeyDiscovery::Captured(_)));
     driver.native_driver = false;
     assert!(!cc_time_macro_free_sources(&parsed, &driver, &hasher));
-    assert!(check(&driver).is_err());
+    assert!(matches!(check(&driver), CcKeyDiscovery::CapturedExpansion(_)));
     driver.native_driver = true;
     driver.resolved_tokens = Some(s(&["-DVALUE=__TIME__"]));
     assert!(!cc_time_macro_free_sources(&parsed, &driver, &hasher));
-    assert!(check(&driver).is_err());
+    assert!(matches!(check(&driver), CcKeyDiscovery::CapturedExpansion(_)));
     driver.resolved_tokens = Some(Vec::new());
     for text in ["__DATE__", "__TIME__", "__TIMESTAMP__", "#define JOIN(a,b) a##b"] {
         fs::write(root.join("value.h"), text).unwrap();
-        assert!(check(&driver).err().unwrap().to_string().contains("not proven time-macro-free"));
+        assert!(matches!(check(&driver), CcKeyDiscovery::CapturedExpansion(_)));
     }
-    assert!(cc_captured_key_discovery(&parsed, &driver, CcCapturedInputs {
+    assert!(matches!(cc_captured_key_discovery(&parsed, &driver, CcCapturedInputs {
         fingerprints: Vec::new(), path_bound: false, inputs_changed: false,
-    }, &hasher).is_err());
+    }, &hasher), CcKeyDiscovery::CapturedExpansion(_)));
     fs::write(root.join("unit.c"), "const char *t = __TIME__;\n").unwrap();
     assert!(!cc_time_macro_free_sources(&parsed, &driver, &hasher));
     fs::remove_file(root.join("unit.c")).unwrap();
     assert!(!cc_time_macro_free_sources(&parsed, &driver, &hasher));
     assert!(compiler.pending_preprocess_memo.borrow().is_none());
+}
+
+#[test]
+fn captured_expansion_requires_the_same_read_set_and_retains_path_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let env = InvocationEnv::from_parts(
+        [("PATH", "/absent")], Some(root.path().into()), None, root.path().into(),
+    );
+    let parsed = CcArgs::parse_for(&s(&["clang", "-c", "unit.c"]), &env).unwrap();
+    fs::write(root.path().join("unit.c"), "int value;\n").unwrap();
+    let dep = root.path().join("inputs.d");
+    fs::write(&dep, "out: unit.c\n").unwrap();
+    let compiler = CcCompiler::new();
+    let inputs = || compiler.captured_inputs(&parsed, &dep, &crate::cache_key::FileHasher::new()).unwrap();
+    let captured = CcCapturedInputs {
+        fingerprints: inputs(), path_bound: true, inputs_changed: false,
+    };
+    let mut expansion = PreprocessHash {
+        hash: "expansion".into(), path_bound: false,
+        fingerprints: Some(inputs()), timestamp_sensitive: false,
+    };
+    cc_validate_captured_expansion(&captured, &mut expansion).unwrap();
+    assert!(expansion.path_bound);
+    assert_eq!(expansion.hash, "expansion");
+    fs::write(root.path().join("unit.c"), "int different;\n").unwrap();
+    expansion.fingerprints = Some(inputs());
+    assert!(cc_validate_captured_expansion(&captured, &mut expansion).is_err());
+    expansion.fingerprints = Some(Vec::new());
+    assert!(cc_validate_captured_expansion(&captured, &mut expansion).is_err());
+    expansion.fingerprints = None;
+    assert!(cc_validate_captured_expansion(&captured, &mut expansion).is_err());
 }
 
 #[test]

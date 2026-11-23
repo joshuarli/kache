@@ -8582,6 +8582,7 @@ pub(crate) enum CcKeyDiscovery {
     Expansion,
     Deferrable,
     Captured(CcCapturedInputs),
+    CapturedExpansion(CcCapturedInputs),
 }
 
 pub(crate) enum CcKeyOutcome {
@@ -8829,17 +8830,34 @@ fn cc_captured_key_discovery(
     resolved: &crate::probe::ResolvedConfig,
     captured: CcCapturedInputs,
     file_hasher: &crate::cache_key::FileHasher<'_>,
-) -> Result<CcKeyDiscovery> {
+) -> CcKeyDiscovery {
     if !cc_source_date_epoch_pins_timestamp(parsed) {
         let inputs = captured.fingerprints.iter()
             .map(|input| PathBuf::from(input.local_path())).collect::<Vec<_>>();
         if cc_time_macro_free_read_set(parsed, Some(resolved), &inputs, file_hasher).is_none() {
-            anyhow::ensure!(cc_source_date_epoch_is_pinned(parsed),
-                "cc: captured read set is not proven time-macro-free");
-            return Ok(CcKeyDiscovery::Expansion);
+            return if cc_source_date_epoch_is_pinned(parsed) {
+                CcKeyDiscovery::Expansion
+            } else {
+                CcKeyDiscovery::CapturedExpansion(captured)
+            };
         }
     }
-    Ok(CcKeyDiscovery::Captured(captured))
+    CcKeyDiscovery::Captured(captured)
+}
+
+fn cc_validate_captured_expansion(
+    captured: &CcCapturedInputs,
+    preprocessed: &mut PreprocessHash,
+) -> Result<()> {
+    let fingerprints = preprocessed.fingerprints.as_deref()
+        .context("cc: post-compile preprocessing captured no read set")?;
+    anyhow::ensure!(
+        !fingerprints.is_empty()
+            && cc_direct_inputs_digest(fingerprints) == cc_direct_inputs_digest(&captured.fingerprints),
+        "cc: post-compile preprocessing read set differs from the compile"
+    );
+    preprocessed.path_bound |= captured.path_bound;
+    Ok(())
 }
 
 fn cc_hash_driver_policy(hasher: &mut blake3::Hasher, native_driver: bool) {
@@ -10174,7 +10192,7 @@ impl CcCompiler {
         // the shadowing resolution below possible.
         let discovery = match discovery {
             CcKeyDiscovery::Captured(captured) =>
-                cc_captured_key_discovery(parsed, &resolved, captured, ctx.file_hasher)?,
+                cc_captured_key_discovery(parsed, &resolved, captured, ctx.file_hasher),
             other => other,
         };
         let mut timestamp_sensitive = false;
@@ -10240,11 +10258,14 @@ impl CcCompiler {
             }));
         } else {
             let _trace = crate::phase_trace::phase("cc_preprocess");
-            let preprocessed = if parsed.is_universal() {
+            let mut preprocessed = if parsed.is_universal() {
                 preprocess_universal_hash(parsed, &prefix_maps, ctx.file_hasher)?
             } else {
                 preprocess_hash(parsed, &prefix_maps, ctx.file_hasher, Some(&resolved))?
             };
+            if let CcKeyDiscovery::CapturedExpansion(captured) = &discovery {
+                cc_validate_captured_expansion(captured, &mut preprocessed)?;
+            }
             self.key_path_bound.set(preprocessed.path_bound);
             timestamp_sensitive = preprocessed.timestamp_sensitive;
             let read_inputs = preprocessed.fingerprints.as_ref().map(|inputs| {
