@@ -58,7 +58,7 @@ use std::process::Command;
 /// struct's shape or the probe logic changes in a way that would make
 /// an old on-disk record wrong: a mismatch turns the record into a
 /// cache miss (re-probe), never a wrong hit.
-pub const PROBE_SCHEMA_VERSION: u32 = 8;
+pub const PROBE_SCHEMA_VERSION: u32 = 9;
 
 /// The memoized result of probing a compiler.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

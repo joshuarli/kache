@@ -1,0 +1,22 @@
+summary = "-Xclang forwarded cc1 options are keyed: -Xclang -fwrapv and its absence are two entries"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["wrapv.o", "plain.o"]
+
+[[compile]]
+argv = ["{cc}", "-O2", "-Xclang", "-fwrapv", "-c", "u.c", "-o", "wrapv.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-c", "u.c", "-o", "plain.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

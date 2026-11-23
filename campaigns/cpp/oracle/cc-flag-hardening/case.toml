@@ -1,0 +1,28 @@
+summary = "portable distribution hardening flags (-fno-plt, -fzero-call-used-regs) are keyed and cached"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["plain.o", "noplt.o", "zero.o"]
+requires = [["{cc}", "-fno-plt", "-fzero-call-used-regs=all", "-x", "c", "-c", "-", "-o", "probe.o"]]
+requires_stdin = "int u(void) { return 0; }\n"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-c", "u.c", "-o", "plain.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-fno-plt", "-c", "u.c", "-o", "noplt.o"]
+source = "u.c"
+reuse = "any"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-fzero-call-used-regs=all", "-c", "u.c", "-o", "zero.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

@@ -454,15 +454,41 @@ pub fn resolved_semantic_tokens(
     windows_aware: bool,
     per_tu_paths: &[String],
 ) -> Option<Vec<String>> {
-    if let Some(line) = extract_cc1_line(stderr) {
-        return Some(semantic_tokens(line, windows_aware, per_tu_paths));
-    }
-    extract_gnu_cc1_line(stderr).map(|line| gnu_semantic_tokens(line, windows_aware, per_tu_paths))
+    let mut tokens = match extract_cc1_line(stderr) {
+        Some(line) => semantic_tokens(line, windows_aware, per_tu_paths),
+        None => gnu_semantic_tokens(extract_gnu_cc1_line(stderr)?, windows_aware, per_tu_paths),
+    };
+    tokens.extend(driver_diagnostics(stderr).map(|line| format!("driver-diagnostic={line}")));
+    Some(tokens)
+}
+
+/// Warnings the driver itself prints, such as an argument unused on this
+/// target. They reach the compile's stderr without changing the resolved
+/// compile line, so two invocations with equal lines can differ in output.
+fn driver_diagnostics(stderr: &str) -> impl Iterator<Item = &str> {
+    stderr.lines().map(str::trim).filter(|line| {
+        !line.starts_with('"')
+            && line.split_once(": ").is_some_and(|(driver, rest)| {
+                !driver.contains(' ') && (rest.starts_with("warning: ") || rest.starts_with("note: "))
+            })
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn driver_diagnostics_join_the_resolved_tokens() {
+        let cc1 = r#" "/usr/bin/clang" "-cc1" "-triple" "arm64-apple-macosx13.0.0" "-emit-obj""#;
+        let quiet = format!("clang version 23\nTarget: arm64-apple-macos13\n{cc1}\n");
+        let warned = format!("clang version 23\nclang: warning: argument unused during compilation: '-fno-plt' [-Wunused-command-line-argument]\n{cc1}\n");
+        let plain = resolved_semantic_tokens(&quiet, true, &[]).unwrap();
+        let flagged = resolved_semantic_tokens(&warned, true, &[]).unwrap();
+        assert_ne!(plain, flagged);
+        assert_eq!(&flagged[..plain.len()], &plain[..]);
+        assert_eq!(flagged.last().unwrap(), "driver-diagnostic=clang: warning: argument unused during compilation: '-fno-plt' [-Wunused-command-line-argument]");
+    }
 
     #[test]
     fn cc1_identity_path_is_not_the_banner_or_another_argument() {

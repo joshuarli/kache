@@ -714,7 +714,7 @@ summary = "-x c / -x c++ / -x none language selection is keyed"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-doubledash"
@@ -723,7 +723,7 @@ summary = "'--' end-of-options handling is keyed"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-joined-separate"
@@ -732,7 +732,7 @@ summary = "joined (-O2), separate (-O 2), and repeated options are normalized sa
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-wp"
@@ -741,7 +741,7 @@ summary = "-Wp, options are parsed and keyed through to the preprocessor"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-xpreprocessor"
@@ -750,7 +750,7 @@ summary = "-Xpreprocessor forwarding options are keyed"
 profiles = ["both"]
 compilers = ["gcc", "clang", "apple-clang"]
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-xclang"
@@ -759,7 +759,7 @@ summary = "-Xclang forwarded options are keyed, including the -Xclang -include-p
 profiles = ["both"]
 compilers = ["clang", "apple-clang"]
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-deps"
@@ -768,7 +768,7 @@ summary = "dependency options (-M, -MM, -MD, -MMD, -MF, -MT, -MQ, -MP) are model
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "depend.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-charset"
@@ -777,7 +777,16 @@ summary = "input/execution charsets (-finput-charset, -fexec-charset, -fwide-exe
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "input_charset.bash"
-status = "planned"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-charset-gcc"
+package = "CCP-03"
+summary = "a non-UTF-8 -fexec-charset is keyed (GCC only)"
+profiles = ["both"]
+compilers = ["gcc"]
+ccache.suite = "input_charset.bash"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-optimization"
@@ -786,7 +795,7 @@ summary = "optimization family (-O0..-O3, -Ofast, -Os, -Oz, -Og) is keyed"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "base.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-debug"
@@ -795,7 +804,16 @@ summary = "debug info family (-g, -g0..-g3, -gline-tables-only, -gmlt, -gno-colu
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "split_dwarf.bash"
-status = "planned"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-debug-clang"
+package = "CCP-03"
+summary = "Clang -gline-tables-only and -gmlt are keyed"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "kache-original"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-sanitize"
@@ -831,7 +849,7 @@ summary = "-fmodule-name is keyed (single-module production builds)"
 profiles = ["both"]
 compilers = ["clang"]
 ccache.suite = "modules.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-fcommon"
@@ -858,7 +876,7 @@ summary = "--warning-suppression-mappings content is keyed"
 profiles = ["both"]
 compilers = ["clang"]
 ccache.suite = "kache-observed (Chromium flag set)"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-profile-use"
@@ -867,7 +885,7 @@ summary = "-fprofile-use / --pgo-warn-misexpect content is keyed"
 profiles = ["both"]
 compilers = ["gcc", "clang", "apple-clang"]
 ccache.suite = "profiling_clang.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-crash-diagnostics-dir"
@@ -876,7 +894,7 @@ summary = "-fcrash-diagnostics-dir accepted; no effect on outputs; never stale-r
 profiles = ["both"]
 compilers = ["clang"]
 ccache.suite = "kache-observed (Chromium flag set)"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-chromium-codegen"
@@ -903,7 +921,7 @@ summary = "preprocessed C/C++ inputs (.i/.ii/-x c++-cpp-output) cached where the
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "direct.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-e-passthrough"
@@ -912,7 +930,43 @@ summary = "kache's existing -E behavior preserved even where ccache does not cac
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-hardening"
+package = "CCP-03"
+summary = "portable hardening codegen flags (-fno-plt, -fzero-call-used-regs) are keyed"
+profiles = ["both"]
+compilers = ["gcc", "clang"]
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-hardening-x86"
+package = "CCP-03"
+summary = "x86 hardening codegen flags (-fcf-protection, -mno-red-zone) are keyed"
+profiles = ["both"]
+compilers = ["gcc", "clang"]
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-flag-harden-compares-gcc"
+package = "CCP-03"
+summary = "GCC -fharden-compares is keyed"
+profiles = ["both"]
+compilers = ["gcc"]
+ccache.suite = "kache-original"
+status = "oracle"
+
+[[case]]
+id = "cc-driver-unused-argument-warning"
+package = "CCP-03"
+summary = "a flag the driver ignores for the target prints a warning that a hit replays"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "kache-original"
+status = "oracle"
 
 [[case]]
 id = "cc-unknown-flag-passthrough"
@@ -921,7 +975,7 @@ summary = "unrecognized invocation shapes fall back to raw compile with raw beha
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "base.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-eqp-comment-only"
@@ -939,6 +993,15 @@ summary = "unused macro change reuses (complete observable result unchanged)"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "direct.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-eqp-unused-macro-g3"
+package = "CCP-04"
+summary = "under -g3 an added unused macro changes the object and recompiles"
+profiles = ["both"]
+compilers = "all"
+ccache.suite = "kache-original"
 status = "oracle"
 
 [[case]]

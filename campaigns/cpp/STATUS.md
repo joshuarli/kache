@@ -78,6 +78,19 @@ Counts are taken from the files, not carried forward:
 
 Engineering work still open (not provisioning):
 
+- CCP-03 flags, 2026-11-23 (L3, GCC 15, Clang 23): `-x` operands with any
+  extension, `-Wp,`/`-Xpreprocessor` `-D`/`-U` forwarding, debug-detail
+  flags (`-g[no-]column-info`, `-gline-tables-only`, `-gmlt`), wchar and
+  charset flags, preprocessed `.i`/`.ii`/`-x *-cpp-output` input (keyed by
+  its bytes; previously refused, and compile-first capture leaked Clang
+  "argument unused" warnings), and GCC `-g3` (the time-macro check compared
+  the `#define` lines it injected) are cached and blocking oracle cases.
+  Distribution hardening flags (`-f[no-]plt`, `-fcf-protection`,
+  `-fzero-call-used-regs`, `-m[no-]red-zone`, GCC `-fharden-*`) are probe-keyed.
+  Unknown flags pass through with raw side files (`cc-unknown-flag-passthrough`).
+  Clang `-fprofile-instr-use=` and `-fprofile-sample-use=` are keyed by the
+  profile's content like `-fprofile-use=` (`cc-flag-profile-use`). GCC's
+  `-fprofile-use=` stays refused: it names a directory of per-object profiles.
 - CCP-03: the `@file` variants are oracle cases (see the owner ruling
   above); clang `--config` and GCC `-specs` remain open cases with correct
   passthrough.

@@ -1,0 +1,24 @@
+summary = "a flag the driver ignores for the target (-fno-plt on Mach-O) leaves the resolved compile line unchanged but prints a driver warning; its entry is separate and replays the warning"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["plain.o", "noplt.o"]
+requires = [["{cc}", "--target=arm64-apple-macos13", "-x", "c", "-c", "-", "-o", "probe.o"]]
+requires_stdin = "int u(void) { return 0; }\n"
+
+[[compile]]
+argv = ["{cc}", "--target=arm64-apple-macos13", "-c", "u.c", "-o", "plain.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "--target=arm64-apple-macos13", "-fno-plt", "-c", "u.c", "-o", "noplt.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

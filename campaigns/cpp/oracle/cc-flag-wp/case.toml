@@ -1,0 +1,26 @@
+summary = "-Wp, preprocessor options are keyed: a -Wp,-D value change misses, and the header it reaches is tracked"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["wp.o", "wp3.o"]
+
+[[compile]]
+argv = ["{cc}", "-Wp,-DVALUE=2", "-c", "u.c", "-o", "wp.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-Wp,-DVALUE=3", "-c", "u.c", "-o", "wp3.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-header"
+reuse = "miss"
+action = [{ op = "write", path = "h.h", content = "#define H VALUE\n" }, { op = "delete-outputs" }]

@@ -1,0 +1,19 @@
+summary = "an unmodeled invocation (GCC tree dumps write a side file) passes through every time with raw outputs and side files"
+cohort = "blocking"
+families = ["gcc"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-fdump-tree-original", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+reuse = "miss"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "again"
+reuse = "miss"
+action = [{ op = "delete-outputs" }]

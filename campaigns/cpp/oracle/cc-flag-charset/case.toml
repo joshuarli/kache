@@ -1,0 +1,25 @@
+summary = "input and wide/narrow execution charsets that change string bytes are keyed"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["utf8.o", "short.o", "wide.o"]
+
+[[compile]]
+argv = ["{cc}", "-finput-charset=UTF-8", "-c", "u.c", "-o", "utf8.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-fshort-wchar", "-c", "u.c", "-o", "short.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "wide.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

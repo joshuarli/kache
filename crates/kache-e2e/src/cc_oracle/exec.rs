@@ -525,7 +525,8 @@ fn ccache_config_text(settings: &std::collections::BTreeMap<String, String>) -> 
 pub fn effective_args(case_argv: &[String], profile: Profile, fixture: &Path) -> Vec<String> {
     let mut args: Vec<String> = case_argv[1..].iter().map(|a| expand(a, fixture)).collect();
     if profile == Profile::Reproducible {
-        args.push(format!("-ffile-prefix-map={}={KACHE_CC_ROOT}", fixture.display()));
+        let end_of_options = args.iter().position(|arg| arg == "--").unwrap_or(args.len());
+        args.insert(end_of_options, format!("-ffile-prefix-map={}={KACHE_CC_ROOT}", fixture.display()));
     }
     args
 }
@@ -1080,6 +1081,11 @@ mod tests {
         assert_eq!(
             effective_args(&argv, Profile::Reproducible, fx),
             ["-c", "a.c", "-ffile-prefix-map=/w/fixture=/kache/cc-root"]
+        );
+        let separated: Vec<String> = ["{cc}", "-c", "--", "a.c"].map(String::from).to_vec();
+        assert_eq!(
+            effective_args(&separated, Profile::Reproducible, fx),
+            ["-c", "-ffile-prefix-map=/w/fixture=/kache/cc-root", "--", "a.c"]
         );
     }
 

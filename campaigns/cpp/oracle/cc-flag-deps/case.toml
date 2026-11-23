@@ -1,0 +1,31 @@
+summary = "-MD, -MMD, -MF, -MT, -MQ and -MP compile and cache their depfiles; a header edit misses and restores the new depfile"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["md.o", "md.d", "mmd.o", "mmd.d"]
+
+[[compile]]
+argv = ["{cc}", "-MD", "-MF", "md.d", "-MT", "custom", "-MP", "-c", "u.c", "-o", "md.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-MMD", "-MQ", "q$name", "-c", "u.c", "-o", "mmd.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-header"
+reuse = "miss"
+action = [{ op = "write", path = "h.h", content = "#define H 9\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-edit"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

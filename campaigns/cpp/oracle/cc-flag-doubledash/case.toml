@@ -1,0 +1,28 @@
+summary = "'--' ends the options; the input after it is keyed and an edit to it misses (GCC rejects '--')"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "-o", "u.o", "--", "u.c"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-source"
+reuse = "miss"
+action = [{ op = "write", path = "u.c", content = "#include \"h.h\"\nint sum(const int *a, int n) { int s = 0; for (int i = 0; i < n; i++) s += a[i] * H; return s; }\nint main(void) { int a[8] = {1,2,3,4,5,6,7,8}; return sum(a, 8) & 0x3f; }\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-edit"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
