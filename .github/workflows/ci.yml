@@ -80,11 +80,15 @@ jobs:
           if-no-files-found: warn
 
   cc-oracle-negative-macos:
-    name: cc-oracle negative controls (macOS)
+    name: cc-oracle negative control (macOS, ${{ matrix.control }})
     runs-on: xcode-27
-    timeout-minutes: 45
+    timeout-minutes: 30
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        control: [stale-output, omit-sidecar, disabled-invalidation, cache-disabled, reference-failure, wrong-effective-args]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -94,13 +98,13 @@ jobs:
       - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: cc-oracle-negative-macos
-      - name: C/C++ oracle negative controls
-        run: make cc-oracle-negative-control
+      - name: C/C++ oracle negative control
+        run: make cc-oracle-negative-control CC_ORACLE_CONTROLS=${{ matrix.control }}
       - name: Upload oracle reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: cc-oracle-negative-macos-${{ github.run_id }}
+          name: cc-oracle-negative-macos-${{ matrix.control }}-${{ github.run_id }}
           path: .work/tmp/cc-oracle/*/report.*
           include-hidden-files: true
           if-no-files-found: warn
