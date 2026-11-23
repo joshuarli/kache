@@ -341,6 +341,58 @@ fn cc_time_macro_scan_requires_a_complete_readable_native_read_set() {
 }
 
 #[test]
+fn unpinned_captured_keys_require_a_complete_time_macro_free_proof() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let env = InvocationEnv::from_parts(
+        [("PATH", "/absent"), ("KACHE_CACHE_DIR", root.to_str().unwrap())],
+        Some(root.into()), None, root.into(),
+    );
+    let parsed = CcArgs::parse_for(&s(&["clang", "-c", "unit.c"]), &env).unwrap();
+    let mut driver = crate::probe::ResolvedConfig {
+        native_driver: true,
+        schema_version: crate::probe::PROBE_SCHEMA_VERSION,
+        prober: "cc".into(), compiler_name: "clang".into(),
+        version_line: "clang version 14".into(),
+        resolved_tokens: Some(Vec::new()), host_version_line: None,
+    };
+    let hasher = crate::cache_key::FileHasher::new();
+    let compiler = CcCompiler::new();
+    let dep = root.join("inputs.d");
+    fs::write(&dep, "out: unit.c value.h\n").unwrap();
+    fs::write(root.join("unit.c"), "#include \"value.h\"\nint x;\n").unwrap();
+    fs::write(root.join("value.h"), "#define VALUE 42\n").unwrap();
+    let check = |driver: &crate::probe::ResolvedConfig| {
+        let fingerprints = compiler.captured_inputs(&parsed, &dep, &hasher).unwrap();
+        cc_captured_key_discovery(&parsed, driver, CcCapturedInputs {
+            fingerprints, path_bound: false, inputs_changed: false,
+        }, &hasher)
+    };
+    assert!(cc_time_macro_free_sources(&parsed, &driver, &hasher));
+    assert!(matches!(check(&driver).unwrap(), CcKeyDiscovery::Captured(_)));
+    driver.native_driver = false;
+    assert!(!cc_time_macro_free_sources(&parsed, &driver, &hasher));
+    assert!(check(&driver).is_err());
+    driver.native_driver = true;
+    driver.resolved_tokens = Some(s(&["-DVALUE=__TIME__"]));
+    assert!(!cc_time_macro_free_sources(&parsed, &driver, &hasher));
+    assert!(check(&driver).is_err());
+    driver.resolved_tokens = Some(Vec::new());
+    for text in ["__DATE__", "__TIME__", "__TIMESTAMP__", "#define JOIN(a,b) a##b"] {
+        fs::write(root.join("value.h"), text).unwrap();
+        assert!(check(&driver).err().unwrap().to_string().contains("not proven time-macro-free"));
+    }
+    assert!(cc_captured_key_discovery(&parsed, &driver, CcCapturedInputs {
+        fingerprints: Vec::new(), path_bound: false, inputs_changed: false,
+    }, &hasher).is_err());
+    fs::write(root.join("unit.c"), "const char *t = __TIME__;\n").unwrap();
+    assert!(!cc_time_macro_free_sources(&parsed, &driver, &hasher));
+    fs::remove_file(root.join("unit.c")).unwrap();
+    assert!(!cc_time_macro_free_sources(&parsed, &driver, &hasher));
+    assert!(compiler.pending_preprocess_memo.borrow().is_none());
+}
+
+#[test]
 fn header_availability_uses_each_clients_relative_paths_and_include_environment() {
     let root = tempfile::tempdir().unwrap();
     let mut clients = Vec::new();

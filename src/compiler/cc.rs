@@ -8805,10 +8805,41 @@ const CC_DIRECT_CAPTURE_TARGET: &str = "__kache_direct_capture";
 pub(crate) fn cc_direct_key_eligible(parsed: &CcArgs) -> bool {
     cc_direct_key_shape_ok(parsed)
         && !parsed.is_universal()
-        && cc_source_date_epoch_is_pinned(parsed)
+        && (cc_source_date_epoch_is_pinned(parsed)
+            || (parsed.family == ToolFamily::Clang
+                && effective_source_date_epoch_for(&parsed.invocation_env).is_some()))
         && crate::config::probe_memo_dir_for(&parsed.invocation_env).is_ok_and(|memo| {
             cc_driver_captures_dependencies_for(&parsed.program, &memo, &parsed.invocation_env)
         })
+}
+
+fn cc_time_macro_free_sources(
+    parsed: &CcArgs,
+    resolved: &crate::probe::ResolvedConfig,
+    file_hasher: &crate::cache_key::FileHasher<'_>,
+) -> bool {
+    parsed.sources.iter().map(|source| parsed.invocation_env.resolve(source))
+        .collect::<Option<Vec<_>>>().is_some_and(|paths| {
+            cc_time_macro_free_read_set(parsed, Some(resolved), &paths, file_hasher).is_some()
+        })
+}
+
+fn cc_captured_key_discovery(
+    parsed: &CcArgs,
+    resolved: &crate::probe::ResolvedConfig,
+    captured: CcCapturedInputs,
+    file_hasher: &crate::cache_key::FileHasher<'_>,
+) -> Result<CcKeyDiscovery> {
+    if !cc_source_date_epoch_pins_timestamp(parsed) {
+        let inputs = captured.fingerprints.iter()
+            .map(|input| PathBuf::from(input.local_path())).collect::<Vec<_>>();
+        if cc_time_macro_free_read_set(parsed, Some(resolved), &inputs, file_hasher).is_none() {
+            anyhow::ensure!(cc_source_date_epoch_is_pinned(parsed),
+                "cc: captured read set is not proven time-macro-free");
+            return Ok(CcKeyDiscovery::Expansion);
+        }
+    }
+    Ok(CcKeyDiscovery::Captured(captured))
 }
 
 fn cc_hash_driver_policy(hasher: &mut blake3::Hasher, native_driver: bool) {
@@ -10141,17 +10172,10 @@ impl CcCompiler {
         // The read set comes back with the expansion, from the memo when it
         // answers and from the dependency capture otherwise. It is what makes
         // the shadowing resolution below possible.
-        let discovery = if let CcKeyDiscovery::Captured(ref captured) = discovery {
-            let inputs = captured.fingerprints.iter()
-                .map(|input| PathBuf::from(input.local_path())).collect::<Vec<_>>();
-            if !cc_source_date_epoch_pins_timestamp(parsed)
-                && cc_time_macro_free_read_set(parsed, Some(&resolved), &inputs, ctx.file_hasher).is_none() {
-                CcKeyDiscovery::Expansion
-            } else {
-                discovery
-            }
-        } else {
-            discovery
+        let discovery = match discovery {
+            CcKeyDiscovery::Captured(captured) =>
+                cc_captured_key_discovery(parsed, &resolved, captured, ctx.file_hasher)?,
+            other => other,
         };
         let mut timestamp_sensitive = false;
         let (pp_hash, read_inputs) = if let CcKeyDiscovery::Captured(captured) = discovery {
@@ -10194,6 +10218,8 @@ impl CcCompiler {
             (memo_hash.to_string(), Some(satisfied))
         } else if let (CcKeyDiscovery::Deferrable, Some(memo_key)) = (&discovery, &memo_key)
             && cc_direct_key_eligible(parsed)
+            && (cc_source_date_epoch_is_pinned(parsed)
+                || cc_time_macro_free_sources(parsed, &resolved, ctx.file_hasher))
             && parsed
                 .invocation_env
                 .cwd()
