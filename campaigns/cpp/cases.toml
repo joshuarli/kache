@@ -885,7 +885,7 @@ summary = "-fprofile-use / --pgo-warn-misexpect content is keyed"
 profiles = ["both"]
 compilers = ["gcc", "clang", "apple-clang"]
 ccache.suite = "profiling_clang.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-crash-diagnostics-dir"

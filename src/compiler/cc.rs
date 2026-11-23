@@ -3664,6 +3664,8 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Prefix("-fsanitize-ignore-for-ubsan-feature="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fmodule-name="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fprofile-use="), class: FlagClass::ParserHandled, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-fprofile-instr-use="), class: FlagClass::ParserHandled, source: "CCP-03 — clang instrumented profile, keyed by content like -fprofile-use=", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-fprofile-sample-use="), class: FlagClass::ParserHandled, source: "CCP-03 — clang sample profile, keyed by content", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("--warning-suppression-mappings="), class: FlagClass::ParserHandled, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fsanitize-ignorelist="), class: FlagClass::ParserHandled, source: "clang sanitizer ignorelist, keyed by content", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fcrash-diagnostics-dir="), class: FlagClass::NoObjectEffect, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
@@ -9982,6 +9984,8 @@ impl CcCompiler {
                 let mut token = tok.clone();
                 for (flag, resolved_prefix) in [
                     ("-fprofile-use=", "-fprofile-instrument-use-path="),
+                    ("-fprofile-instr-use=", "-fprofile-instrument-use-path="),
+                    ("-fprofile-sample-use=", "-fprofile-sample-use="),
                     ("--warning-suppression-mappings=", "--warning-suppression-mappings="),
                     ("-fsanitize-ignorelist=", "-fsanitize-ignorelist="),
                 ] {
@@ -10114,7 +10118,7 @@ impl CcCompiler {
         );
 
         for arg in &parsed.rest {
-            for prefix in ["-fprofile-use=", "--warning-suppression-mappings=", "-fsanitize-ignorelist="] {
+            for prefix in ["-fprofile-use=", "-fprofile-instr-use=", "-fprofile-sample-use=", "--warning-suppression-mappings=", "-fsanitize-ignorelist="] {
                 if let Some(path) = arg.strip_prefix(prefix) {
                     // GCC reads `<path>/<mangled object>.gcda`, not `path` itself.
                     anyhow::ensure!(

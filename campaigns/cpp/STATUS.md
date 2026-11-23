@@ -88,7 +88,9 @@ Engineering work still open (not provisioning):
   Distribution hardening flags (`-f[no-]plt`, `-fcf-protection`,
   `-fzero-call-used-regs`, `-m[no-]red-zone`, GCC `-fharden-*`) are probe-keyed.
   Unknown flags pass through with raw side files (`cc-unknown-flag-passthrough`).
-  `-fprofile-use` remains `planned`.
+  Clang `-fprofile-instr-use=` and `-fprofile-sample-use=` are keyed by the
+  profile's content like `-fprofile-use=` (`cc-flag-profile-use`). GCC's
+  `-fprofile-use=` stays refused: it names a directory of per-object profiles.
 - CCP-03: the `@file` variants are oracle cases (see the owner ruling
   above); clang `--config` and GCC `-specs` remain open cases with correct
   passthrough.

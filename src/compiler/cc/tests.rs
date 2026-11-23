@@ -11472,6 +11472,8 @@ fn chromium_file_flags_change_cache_key_with_contents() {
     std::os::unix::fs::symlink(&fake_cc, &fake_clang).unwrap();
     for (driver, prefix) in [
         (&fake_clang, "-fprofile-use="),
+        (&fake_clang, "-fprofile-instr-use="),
+        (&fake_clang, "-fprofile-sample-use="),
         (&fake_cc, "--warning-suppression-mappings="),
         (&fake_clang, "-fsanitize-ignorelist="),
     ] {

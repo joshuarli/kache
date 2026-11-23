@@ -1,0 +1,28 @@
+summary = "Clang sample-profile use is keyed by the profile's content: an edit with the same size and mtime misses, and reverting hits"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-O2", "-fprofile-sample-use=p.prof", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-profile"
+reuse = "miss"
+action = [{ op = "write", path = "p.prof", content = "f:900:90\n 1: 90\nmain:50:5\n 1: 5\n", keep_mtime = true }, { op = "delete-outputs" }]
+
+[[step]]
+name = "revert-profile"
+reuse = "hit"
+action = [{ op = "write", path = "p.prof", content = "f:100:10\n 1: 10\nmain:50:5\n 1: 5\n", keep_mtime = true }, { op = "delete-outputs" }]
