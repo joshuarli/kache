@@ -1,0 +1,27 @@
+summary = "a restored output is a writable file of its own: overwriting it in place leaves the cached entry intact for the next restore"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "scribble-restored-output"
+reuse = "hit"
+action = [{ op = "write", path = "u.o", content = "not an object\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-after-scribble"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
