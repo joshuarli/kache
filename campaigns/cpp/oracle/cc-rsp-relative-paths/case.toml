@@ -1,0 +1,28 @@
+summary = "relative paths inside a response file in a subdirectory resolve from cwd, not from the file's directory"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "@cfg/args.rsp"]
+source = "u.c"
+also_names = ["@cfg/args.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-cwd-header"
+reuse = "miss"
+action = [{ op = "write", path = "inc/h.h", content = "#define H 4\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "edit-sibling-header"
+reuse = "hit"
+action = [{ op = "write", path = "cfg/inc/h.h", content = "#define H 6\n" }, { op = "delete-outputs" }]

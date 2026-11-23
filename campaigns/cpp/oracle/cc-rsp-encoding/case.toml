@@ -1,0 +1,24 @@
+summary = "UTF-8 response files with non-ASCII text cache, and an edited non-ASCII operand invalidates"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "@args.rsp"]
+source = "u.c"
+also_names = ["@args.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-non-ascii"
+reuse = "miss"
+action = [{ op = "write", path = "args.rsp", content = "-c u.c -o u.o \"-DNAME=\\\"éé\\\"\"\n", keep_mtime = true }, { op = "delete-outputs" }]
+

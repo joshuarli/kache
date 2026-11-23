@@ -1,0 +1,28 @@
+summary = "changed response-file content invalidates even when size and mtime are unchanged, and reverting restores"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "@args.rsp"]
+source = "u.c"
+also_names = ["@args.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "same-size-same-mtime"
+reuse = "miss"
+action = [{ op = "write", path = "args.rsp", content = "-c u.c -o u.o -DVALUE=2\n", keep_mtime = true }, { op = "delete-outputs" }]
+
+[[step]]
+name = "revert"
+reuse = "hit"
+action = [{ op = "write", path = "args.rsp", content = "-c u.c -o u.o -DVALUE=1\n", keep_mtime = true }, { op = "delete-outputs" }]

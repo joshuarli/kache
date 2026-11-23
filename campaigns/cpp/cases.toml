@@ -606,7 +606,7 @@ summary = "backslash and quote escapes parse correctly per dialect"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-rsp-nested"
@@ -633,7 +633,7 @@ summary = "empty response file is accepted and keyed"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-rsp-missing"
@@ -651,7 +651,7 @@ summary = "self-referential/cyclic @file is bounded, not unbounded recursion"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-rsp-depth"
@@ -660,7 +660,7 @@ summary = "nesting depth bound is enforced and documented"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-rsp-option-value"
@@ -669,7 +669,7 @@ summary = "@foo as an ordinary option value is not mistaken for a response file"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-rsp-relative-paths"
@@ -678,7 +678,7 @@ summary = "relative paths inside response files resolve per the driver's dialect
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-rsp-encoding"
@@ -687,7 +687,16 @@ summary = "response file encoding (UTF-8/BOM/UTF-16 where dialects require) is h
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "unittest/test_argprocessing.cpp"
-status = "planned"
+status = "oracle"
+
+[[case]]
+id = "cc-rsp-encoding-bom-clang"
+package = "CCP-03"
+summary = "a response file with a UTF-8 byte-order mark compiles as Clang reads it"
+profiles = ["both"]
+compilers = ["clang"]
+ccache.suite = "kache-original"
+status = "oracle"
 
 [[case]]
 id = "cc-rsp-content-change"
@@ -696,7 +705,7 @@ summary = "changed response file content invalidates"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-x"

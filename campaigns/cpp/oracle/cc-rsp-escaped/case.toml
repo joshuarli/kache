@@ -1,0 +1,28 @@
+summary = "backslash and quote escapes in a GNU response file expand as the compiler reads them, and an edited escape invalidates"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "@args.rsp"]
+source = "u.c"
+also_names = ["@args.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-escape"
+reuse = "miss"
+action = [{ op = "write", path = "args.rsp", content = "-c u.c -o u.o -DMSG=\\\"a\\ bc\\\" '-DQ=\"x y\"'\n", keep_mtime = true }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-edit"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

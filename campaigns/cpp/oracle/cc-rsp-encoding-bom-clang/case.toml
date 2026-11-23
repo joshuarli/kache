@@ -1,0 +1,19 @@
+summary = "a response file starting with a UTF-8 byte-order mark compiles exactly as Clang reads it (GCC rejects the mark as an argument)"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "@args.rsp"]
+source = "u.c"
+also_names = ["@args.rsp"]
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "again"
+reuse = "any"
+action = [{ op = "delete-outputs" }]
