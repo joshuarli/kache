@@ -1,0 +1,23 @@
+summary = "-E output matches raw on every run, and edits reach it"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.i"]
+
+[[compile]]
+argv = ["{cc}", "-E", "u.c", "-o", "u.i"]
+source = "u.c"
+reuse = "any"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "again"
+reuse = "any"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-header"
+reuse = "any"
+action = [{ op = "write", path = "h.h", content = "#define H 4\n" }, { op = "delete-outputs" }]

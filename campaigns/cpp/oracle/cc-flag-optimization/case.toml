@@ -1,0 +1,41 @@
+summary = "every optimization level is its own entry"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["o0.o", "o1.o", "o2.o", "o3.o", "os.o", "oz.o", "og.o"]
+
+[[compile]]
+argv = ["{cc}", "-O0", "-c", "u.c", "-o", "o0.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-O1", "-c", "u.c", "-o", "o1.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-c", "u.c", "-o", "o2.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-O3", "-c", "u.c", "-o", "o3.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-Os", "-c", "u.c", "-o", "os.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-Oz", "-c", "u.c", "-o", "oz.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-Og", "-c", "u.c", "-o", "og.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

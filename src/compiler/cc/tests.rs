@@ -85,7 +85,9 @@ fn wp_depfiles_refuse_unsafe_or_ambiguous_forms() {
             "-Wp,-MMD,-",
             "-Wp,-MMD,u.d,-MT,u.o",
             "-Wp,-MMD,u.d,-DVALUE=1",
-            "-Wp,-DVALUE=1",
+            "-Wp,-DVALUE=1,-MD",
+            "-Wp,-DVALUE=a,b",
+            "-Wp,-D",
         ] {
             let parsed = wp_args_for_family(
                 &[program, flag, "-c", "unit.c", "-o", "out.o"],
@@ -390,6 +392,130 @@ fn unpinned_captured_keys_require_a_complete_proof_or_expansion() {
     fs::remove_file(root.join("unit.c")).unwrap();
     assert!(!cc_time_macro_free_sources(&parsed, &driver, &hasher));
     assert!(compiler.pending_preprocess_memo.borrow().is_none());
+}
+
+#[test]
+fn forwarded_macro_operands_are_accepted_and_other_forwarding_refuses() {
+    for program in ["gcc", "clang"] {
+        for args in [
+            &["-Wp,-DVALUE=1"][..],
+            &["-Wp,-DVALUE=1,-UOTHER"],
+            &["-Xpreprocessor", "-DVALUE=1"],
+            &["-Xpreprocessor", "-UVALUE"],
+        ] {
+            let argv = [&[program][..], args, &["-c", "unit.c", "-o", "out.o"]].concat();
+            let parsed = wp_args_for_family(&argv, Some(crate::probe::ProbedFamily::Gnu));
+            assert!(parsed.refuse_reasons(&[]).is_empty(), "{argv:?}: {:?}", parsed.refuse_reasons(&[]));
+        }
+        for args in [
+            &["-Xpreprocessor", "-MD"][..],
+            &["-Xpreprocessor", "-include"],
+            &["-c", "unit.c", "-o", "out.o", "-Xpreprocessor"],
+        ] {
+            let argv = [&[program][..], args, &["-c", "unit.c", "-o", "out.o"]].concat();
+            let parsed = wp_args_for_family(&argv, Some(crate::probe::ProbedFamily::Gnu));
+            assert!(!parsed.refuse_reasons(&[]).is_empty(), "{argv:?}");
+        }
+    }
+}
+
+#[test]
+fn debug_detail_and_charset_flags_are_cached() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = InvocationEnv::from_parts(
+        [("PATH", "/absent")], Some(dir.path().into()), None, dir.path().into(),
+    );
+    for flag in [
+        "-gno-column-info", "-gcolumn-info", "-gline-tables-only", "-gline-directives-only", "-gmlt",
+        "-fshort-wchar", "-fno-short-wchar", "-finput-charset=UTF-8", "-finput-charset=utf8",
+        "-fexec-charset=ISO-8859-1", "-fwide-exec-charset=UTF-32LE",
+    ] {
+        let parsed = CcArgs::parse_for(&s(&["gcc", flag, "-c", "unit.c", "-o", "out.o"]), &env).unwrap();
+        assert!(parsed.refuse_reasons(&[]).is_empty(), "{flag}: {:?}", parsed.refuse_reasons(&[]));
+        assert_eq!(classify_cc_flag(flag, Dialect::Gnu), Some(FlagClass::RawKeyed), "{flag}");
+    }
+    for flag in ["-finput-charset=ISO-8859-1", "-finput-charset=UTF-16"] {
+        let parsed = CcArgs::parse_for(&s(&["gcc", flag, "-c", "unit.c", "-o", "out.o"]), &env).unwrap();
+        assert!(!parsed.refuse_reasons(&[]).is_empty(), "{flag}");
+    }
+}
+
+#[test]
+fn operands_under_an_explicit_language_are_sources_until_x_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = InvocationEnv::from_parts(
+        [("PATH", "/absent")], Some(dir.path().into()), None, dir.path().into(),
+    );
+    let sources = |args: &[&str]| CcArgs::parse_for(&s(args), &env).unwrap().sources;
+    assert_eq!(sources(&["gcc", "-x", "c", "-c", "unit.src", "-o", "u.o"]), [PathBuf::from("unit.src")]);
+    assert_eq!(sources(&["gcc", "-xc++", "-c", "unit", "-o", "u.o"]), [PathBuf::from("unit")]);
+    assert!(sources(&["gcc", "-x", "c", "-x", "none", "-c", "unit.src", "-o", "u.o"]).is_empty());
+    assert!(sources(&["gcc", "-c", "unit.src", "-o", "u.o"]).is_empty());
+    let parsed = CcArgs::parse_for(&s(&["gcc", "-x", "c++", "-x", "none", "-c", "unit.c", "-o", "u.o"]), &env).unwrap();
+    assert_eq!(parsed.sources, [PathBuf::from("unit.c")]);
+    assert!(parsed.refuse_reasons(&[]).is_empty(), "{:?}", parsed.refuse_reasons(&[]));
+}
+
+#[test]
+fn time_check_ignores_only_the_definitions_it_injected() {
+    let original = b"int x;\n# 0 \"<command-line>\"\n#define A 1\n# 1 \"u.c\"\nint y;\n".to_vec();
+    let mut checked = original.clone();
+    let at = original.windows(10).position(|w| w == b"#define A ").unwrap() + b"#define A 1\n".len();
+    checked.splice(at..at, b"#define __DATE__ \"kache-unpinned-date\"\n# 0 \"<command-line>\"\n#define __TIME__ \"kache-unpinned-time\"\n# 0 \"<command-line>\"\n".iter().copied());
+    assert_eq!(cc_without_pinned_time_definitions(&checked), original);
+    let expanded = b"const char *t = \"kache-unpinned-time\";\n";
+    assert_eq!(cc_without_pinned_time_definitions(expanded), expanded);
+    assert_eq!(cc_without_pinned_time_definitions(b"#define __TIME__ \"other\"\n"), b"#define __TIME__ \"other\"\n");
+}
+
+#[test]
+fn preprocessed_inputs_are_keyed_by_their_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = InvocationEnv::from_parts(
+        [("PATH", "/absent")], Some(dir.path().into()), None, dir.path().into(),
+    );
+    let hasher = crate::cache_key::FileHasher::new();
+    let hash = |args: &[&str]| {
+        let parsed = CcArgs::parse_for(&s(args), &env).unwrap();
+        preprocess_hash(&parsed, &[], &hasher, None).unwrap()
+    };
+    fs::write(dir.path().join("u.i"), "int main(void) { return 3; }\n").unwrap();
+    fs::write(dir.path().join("u.pp"), "int main(void) { return 3; }\n").unwrap();
+    let first = hash(&["gcc", "-c", "u.i", "-o", "u.o"]);
+    assert_eq!(first.fingerprints.as_ref().map(Vec::len), Some(1));
+    assert_eq!(hash(&["gcc", "-x", "cpp-output", "-c", "u.pp", "-o", "u.o"]).hash, first.hash);
+    fs::write(dir.path().join("u.i"), "int main(void) { return 4; }\n").unwrap();
+    assert_ne!(hash(&["gcc", "-c", "u.i", "-o", "u.o"]).hash, first.hash);
+    assert!(cc_preprocessed_input(&CcArgs::parse_for(&s(&["gcc", "-x", "c", "-c", "u.i"]), &env).unwrap()).is_none());
+    assert!(cc_preprocessed_input(&CcArgs::parse_for(&s(&["gcc", "-x", "none", "-c", "u.i"]), &env).unwrap()).is_some());
+}
+
+#[test]
+fn module_interface_production_names_its_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = InvocationEnv::from_parts(
+        [("PATH", "/absent")], Some(dir.path().into()), None, dir.path().into(),
+    );
+    let parsed = CcArgs::parse_for(&s(&["clang++", "-std=c++20", "--precompile", "m.cppm", "-o", "m.pcm"]), &env).unwrap();
+    let reasons = format!("{:?}", parsed.refuse_reasons(&[]));
+    assert!(reasons.contains("--precompile"), "{reasons}");
+    let link = CcArgs::parse_for(&s(&["clang", "a.o", "-o", "app"]), &env).unwrap();
+    assert!(format!("{:?}", link.refuse_reasons(&[])).contains("link mode"));
+}
+
+#[test]
+fn direct_keying_excludes_preprocessed_inputs() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = InvocationEnv::from_parts(
+        [("PATH", "/absent")], Some(dir.path().into()), None, dir.path().into(),
+    );
+    for args in [
+        &["clang", "-c", "unit.i"][..], &["clang", "-c", "unit.ii"], &["clang", "-c", "unit.mi"],
+        &["clang", "-x", "c++-cpp-output", "-c", "unit.pp"], &["clang", "-x", "cpp-output", "-c", "unit.c"],
+    ] {
+        let parsed = CcArgs::parse_for(&s(args), &env).unwrap();
+        assert!(!cc_direct_key_shape_ok(&parsed), "{args:?}");
+    }
 }
 
 #[test]
@@ -3003,7 +3129,7 @@ fn refuses_flags_unclassified_in_cc_flags_table() {
         "-Ofast",
         "-gdwarf-5",
         "-ggdb",
-        "-gline-tables-only",
+        "-gz=zlib",
         // profiling instrumentation
         "-pg",
     ] {
@@ -3682,7 +3808,7 @@ fn classifier_does_not_overreach_117_additions() {
         "-gdwarf-5",
         "-gdwarf",
         // Other -g* options (already documented as out-of-set)
-        "-gline-tables-only",
+        "-gz=zlib",
         // -mllvm wildcards must stay refused. The exact-string row
         // for `-mllvm=-dwarf-linkage-names=Abstract` does NOT open
         // `-mllvm=*` as a prefix; that's deliberate (per the issue's

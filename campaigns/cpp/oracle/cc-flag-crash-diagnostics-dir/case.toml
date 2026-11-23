@@ -1,0 +1,23 @@
+summary = "-fcrash-diagnostics-dir is accepted and cached; it does not change the object"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-fcrash-diagnostics-dir=crash", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "again"
+reuse = "any"
+action = [{ op = "delete-outputs" }]

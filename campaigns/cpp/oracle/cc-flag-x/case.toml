@@ -1,0 +1,31 @@
+summary = "-x c, -x c++ and -x none select the language of the next input and key it; a header edit misses every variant"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["c.o", "cxx.o", "none.o"]
+
+[[compile]]
+argv = ["{cc}", "-x", "c", "-c", "u.src", "-o", "c.o"]
+source = "u.src"
+
+[[compile]]
+argv = ["{cc}", "-x", "c++", "-c", "u.src", "-o", "cxx.o"]
+source = "u.src"
+
+[[compile]]
+argv = ["{cc}", "-x", "c++", "-x", "none", "-c", "u.c", "-o", "none.o"]
+source = "u.c"
+reuse = "any"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-header"
+reuse = "miss"
+action = [{ op = "write", path = "h.h", content = "#define H 5\n" }, { op = "delete-outputs" }]

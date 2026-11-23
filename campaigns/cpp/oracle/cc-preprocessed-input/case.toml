@@ -1,0 +1,30 @@
+summary = "preprocessed .i and .ii inputs compile like the reference and cache where ccache does"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["c.o", "cxx.o", "x.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "u.i", "-o", "c.o"]
+source = "u.i"
+
+[[compile]]
+argv = ["{cxx}", "-c", "u.ii", "-o", "cxx.o"]
+source = "u.ii"
+
+[[compile]]
+argv = ["{cc}", "-x", "c++-cpp-output", "-c", "u.pp", "-o", "x.o"]
+source = "u.pp"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "like-ccache"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit"
+reuse = "miss"
+action = [{ op = "write", path = "u.i", content = "int main(void) { return 4; }\n" }, { op = "write", path = "u.ii", content = "int main() { return 4; }\n" }, { op = "write", path = "u.pp", content = "int main() { return 4; }\n" }, { op = "delete-outputs" }]

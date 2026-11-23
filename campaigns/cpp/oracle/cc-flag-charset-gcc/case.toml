@@ -1,0 +1,22 @@
+summary = "a non-UTF-8 -fexec-charset (GCC only) changes string bytes and is keyed"
+cohort = "blocking"
+families = ["gcc"]
+profiles = ["transparent", "reproducible"]
+outputs = ["latin1.o", "utf8.o"]
+
+[[compile]]
+argv = ["{cc}", "-fexec-charset=ISO-8859-1", "-c", "u.c", "-o", "latin1.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-fexec-charset=UTF-8", "-c", "u.c", "-o", "utf8.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

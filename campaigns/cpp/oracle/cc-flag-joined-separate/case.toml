@@ -1,0 +1,36 @@
+summary = "joined and separate -I/-D spellings and a repeated -O are keyed safely; the include directory named either way is tracked"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["joined.o", "separate.o", "o0.o", "repeated.o"]
+
+[[compile]]
+argv = ["{cc}", "-Iinc", "-DX=1", "-c", "u.c", "-o", "joined.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-I", "inc", "-D", "X=1", "-c", "u.c", "-o", "separate.o"]
+source = "u.c"
+reuse = "any"
+
+[[compile]]
+argv = ["{cc}", "-O0", "-Iinc", "-c", "u.c", "-o", "o0.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-O0", "-Iinc", "-c", "u.c", "-o", "repeated.o"]
+source = "u.c"
+reuse = "any"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-header"
+reuse = "miss"
+action = [{ op = "write", path = "inc/h.h", content = "#define H 7\n" }, { op = "delete-outputs" }]

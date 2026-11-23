@@ -1,0 +1,33 @@
+summary = "debug-info levels and column info are keyed and restore"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["g.o", "g0.o", "g1.o", "g3.o", "nocol.o"]
+
+[[compile]]
+argv = ["{cc}", "-g", "-c", "u.c", "-o", "g.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-g0", "-c", "u.c", "-o", "g0.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-g1", "-c", "u.c", "-o", "g1.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-g3", "-c", "u.c", "-o", "g3.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-g", "-gno-column-info", "-c", "u.c", "-o", "nocol.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

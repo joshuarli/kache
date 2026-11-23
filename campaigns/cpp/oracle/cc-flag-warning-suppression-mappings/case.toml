@@ -1,0 +1,28 @@
+summary = "--warning-suppression-mappings content is keyed: editing the mapping changes the diagnostics and misses"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-Wunused-variable", "--warning-suppression-mappings=map.txt", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-mapping"
+reuse = "miss"
+action = [{ op = "write", path = "map.txt", content = "[unused-variable]\nsrc:*/none.c\n", keep_mtime = true }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-edit"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

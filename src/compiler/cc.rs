@@ -313,6 +313,7 @@ const LANGUAGE_OVERRIDE_ALLOWLIST: &[&str] = &[
     "c++-cpp-output",
     "objective-c-cpp-output",
     "objective-c++-cpp-output",
+    "none",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -851,9 +852,13 @@ impl CcArgs {
         let mut depinfo: Option<DepInfoSpec> = None;
         let mut headers = Vec::new();
         let mut idx = 0;
+        let mut explicit_language = false;
         while idx < rest.len() {
             if let Some(arg) = parse_cc_arg_at(rest, idx, family.dialect()) {
                 apply_cc_arg(&mut parsed, &mut depinfo, &arg);
+                if matches!(arg.spec.action, CcArgAction::LanguageOverride) {
+                    explicit_language = arg.value.as_deref().is_some_and(|language| language != "none");
+                }
                 idx += arg.consumed;
                 continue;
             }
@@ -863,6 +868,8 @@ impl CcArgs {
                 parsed.sources.push(PathBuf::from(arg));
             } else if !arg.starts_with('-') && looks_like_header(arg) {
                 headers.push(PathBuf::from(arg));
+            } else if !arg.starts_with('-') && explicit_language {
+                parsed.sources.push(PathBuf::from(arg));
             }
             idx += 1;
         }
@@ -928,7 +935,15 @@ impl CcArgs {
             reasons.push(RefuseReason::Unsupported("cc LLVM emission requires a verified single-target Clang -c or -S invocation — not yet"));
         }
 
-        if self.rest.iter().any(|arg| arg.starts_with("-Wp,"))
+        if self.rest.windows(2).any(|pair| pair[0] == "-Xpreprocessor" && !cc_forwarded_macro_list(&format!("-Wp,{}", pair[1])))
+            || self.rest.last().is_some_and(|arg| arg == "-Xpreprocessor")
+        {
+            reasons.push(RefuseReason::Unsupported(
+                "cc -Xpreprocessor forwarding other than -D/-U — not yet",
+            ));
+        }
+
+        if self.rest.iter().any(|arg| arg.starts_with("-Wp,") && !cc_forwarded_macro_list(arg))
             && cc_wp_dependency_spec(self).is_none()
         {
             reasons.push(RefuseReason::Unsupported(
@@ -965,6 +980,11 @@ impl CcArgs {
         // anyone reading `kache report`.
         match self.mode {
             CompileMode::Compile => {}
+            CompileMode::Link if self.rest.iter().any(|arg| arg == "--precompile") => {
+                reasons.push(RefuseReason::Unsupported(
+                    "cc C++20 module interface production (--precompile) — not yet",
+                ));
+            }
             CompileMode::Link => reasons.push(RefuseReason::Unsupported(
                 "cc link mode (whole-program caching) — not yet",
             )),
@@ -2003,6 +2023,17 @@ fn cc_wp_dependency_option(arg: &str) -> Option<(bool, Option<&str>)> {
     }
 }
 
+/// A `-Wp,` list whose every operand is a joined `-D` or `-U`. The driver
+/// forwards them into the resolved `-cc1` line the key already hashes.
+fn cc_forwarded_macro_list(arg: &str) -> bool {
+    arg.strip_prefix("-Wp,").is_some_and(|list| {
+        list.split(',').all(|operand| {
+            operand.strip_prefix("-D").or_else(|| operand.strip_prefix("-U"))
+                .is_some_and(|name| !name.is_empty())
+        })
+    })
+}
+
 fn cc_wp_dependency_spec(parsed: &CcArgs) -> Option<DepInfoSpec> {
     if parsed.family.dialect() != Dialect::Gnu || parsed.mode != CompileMode::Compile {
         return None;
@@ -2339,6 +2370,28 @@ fn hash_cc_expansion(raw: Vec<u8>, prefix_maps: &[CcPrefixMap]) -> CcExpansionHa
         hash: hasher.finalize().to_hex().to_string(),
         path_bound: true,
     }
+}
+
+/// The check expansion without the definitions it injected. GCC keeps
+/// `#define` directives in `-E` output under `-g3`, each followed by a
+/// `<command-line>` marker, so they would differ from the original
+/// expansion even when nothing reads a time macro.
+fn cc_without_pinned_time_definitions(expansion: &[u8]) -> Vec<u8> {
+    const INJECTED: [&[u8]; 3] = [
+        b"#define __DATE__ \"kache-unpinned-date\"",
+        b"#define __TIME__ \"kache-unpinned-time\"",
+        b"#define __TIMESTAMP__ \"kache-unpinned-timestamp\"",
+    ];
+    let mut kept = Vec::with_capacity(expansion.len());
+    let mut lines = expansion.split_inclusive(|&byte| byte == b'\n').peekable();
+    while let Some(line) = lines.next() {
+        if INJECTED.contains(&line.strip_suffix(b"\n").unwrap_or(line)) {
+            lines.next_if(|next| next.strip_suffix(b"\n").unwrap_or(next) == b"# 0 \"<command-line>\"");
+        } else {
+            kept.extend_from_slice(line);
+        }
+    }
+    kept
 }
 
 /// Split a preprocessor expansion into its text and its line layout.
@@ -3314,6 +3367,9 @@ fn preprocess_hash(
     file_hasher: &crate::cache_key::FileHasher<'_>,
     resolved: Option<&crate::probe::ResolvedConfig>,
 ) -> Result<PreprocessHash> {
+    if let Some(input) = cc_preprocessed_input(parsed) {
+        return preprocessed_input_hash(&input, prefix_maps, file_hasher);
+    }
     let unpinned = !cc_source_date_epoch_is_pinned(parsed);
     let detect_timestamp = !unpinned && !cc_source_date_epoch_pins_timestamp(parsed);
     let pp_args = key_preprocess_args(parsed, prefix_maps);
@@ -3414,7 +3470,7 @@ fn preprocess_hash(
         let checked = run(&check_args)?;
         anyhow::ensure!(
             checked.status.success()
-                && checked.stdout == output.stdout
+                && cc_without_pinned_time_definitions(&checked.stdout) == output.stdout
                 && checked.stderr == output.stderr,
             "cc: unpinned time macros (not yet supported)"
         );
@@ -3482,6 +3538,47 @@ fn preprocess_hash(
     Ok(PreprocessHash {
         hash,
         timestamp_sensitive,
+        fingerprints,
+        path_bound,
+    })
+}
+
+/// The single already-preprocessed input of a compile, if that is what it
+/// compiles. `-E` prints nothing for such input, so its bytes stand in for
+/// the expansion. An explicit `-x` decides over the extension.
+fn cc_preprocessed_input(parsed: &CcArgs) -> Option<PathBuf> {
+    let [source] = parsed.sources.as_slice() else {
+        return None;
+    };
+    let preprocessed = match parsed.language_override.as_deref().filter(|language| *language != "none") {
+        Some(language) => language.ends_with("cpp-output"),
+        None => source.extension().and_then(|extension| extension.to_str())
+            .is_some_and(|extension| ["i", "ii", "mi", "mii"].contains(&extension)),
+    };
+    preprocessed.then(|| parsed.invocation_env.resolve(source)).flatten()
+}
+
+fn preprocessed_input_hash(
+    input: &Path,
+    prefix_maps: &[CcPrefixMap],
+    file_hasher: &crate::cache_key::FileHasher<'_>,
+) -> Result<PreprocessHash> {
+    crate::opcounts::record_preprocessor_run();
+    let bytes = std::fs::read(input)
+        .with_context(|| format!("reading preprocessed input {}", input.display()))?;
+    let (text, layout) = split_line_markers(&bytes, prefix_maps);
+    if let Some(construct) = cc_assembler_hidden_input(&text) {
+        return Err(CcHiddenInput { construct }.into());
+    }
+    let CcExpansionHash { hash, path_bound } = hash_cc_expansion(text, prefix_maps);
+    let fingerprints = file_hasher.cc_preprocess_fingerprints(
+        &[(cc_mapped_path(input, prefix_maps), input.to_path_buf())],
+        &cc_prefix_maps_key(prefix_maps),
+        &|path| cc_mapped_content_hash(path, prefix_maps),
+    );
+    Ok(PreprocessHash {
+        hash: fold_line_layout(hash, layout.as_deref()),
+        timestamp_sensitive: false,
         fingerprints,
         path_bound,
     })
@@ -3579,6 +3676,12 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Exact("-ftest-coverage"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov notes file", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Regex(r"-fprofile-dir=.+"), class: FlagClass::RawKeyed, source: "profile directory keyed verbatim; coverage keys the exact cwd and object spelling, retaining GCC path mangling; -fprofile-prefix-path remains unmodeled and GCC profile-use directories refuse", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Regex(r"-fprofile-generate=.+"), class: FlagClass::RawKeyed, source: "generation directory keyed verbatim and bound to cwd/object like gcov; notes, when requested, use the coverage sidecar model; bare/empty generation and profile-prefix-path remain unmodeled", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-g(no-)?column-info|-gline-tables-only|-gline-directives-only|-gmlt"), class: FlagClass::RawKeyed, source: "CCP-03 — debug-info detail; embedded paths follow the -g path handling", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-f(no-)?short-wchar"), class: FlagClass::RawKeyed, source: "CCP-03 — wchar_t width changes wide literal bytes", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-finput-charset=(?i:utf-?8)"), class: FlagClass::RawKeyed, source: "CCP-03 — UTF-8 input only; source scans assume ASCII-compatible bytes", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-f(wide-)?exec-charset=.+"), class: FlagClass::RawKeyed, source: "CCP-03 — execution charsets change string literal bytes", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-Wp,-[DU][^,]+(,-[DU][^,]+)*"), class: FlagClass::CapturedByProbe, source: "CCP-03 — forwarded defines reach the resolved -cc1 line", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-Xpreprocessor"), class: FlagClass::CapturedByProbe, source: "CCP-03 — forwarded -D/-U operand reaches the resolved -cc1 line; other operands refuse", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-gsplit-dwarf"), class: FlagClass::RawKeyed, source: "CCP-05 — split DWARF; the object names its .dwo as the output was spelled", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("--serialize-diagnostics"), class: FlagClass::NoObjectEffect, source: "CCP-05 — clang serialized diagnostics output path", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-serialize-diagnostics"), class: FlagClass::NoObjectEffect, source: "CCP-05 — clang serialized diagnostics output path", dialect: Some(Dialect::Gnu) },
@@ -8919,6 +9022,7 @@ fn cc_direct_key_shape_ok(parsed: &CcArgs) -> bool {
             .is_none_or(|extension| {
                 !["s", "sx", "asm"].iter().any(|suffix| extension.eq_ignore_ascii_case(suffix))
             })
+        && cc_preprocessed_input(parsed).is_none()
         && parsed
             .depinfo
             .as_ref()

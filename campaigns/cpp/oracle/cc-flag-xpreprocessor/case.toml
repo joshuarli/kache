@@ -1,0 +1,22 @@
+summary = "-Xpreprocessor forwarded options are keyed: two values are two entries"
+cohort = "blocking"
+families = ["gcc", "clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["a.o", "b.o"]
+
+[[compile]]
+argv = ["{cc}", "-Xpreprocessor", "-DH2=2", "-c", "u.c", "-o", "a.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-Xpreprocessor", "-DH2=3", "-c", "u.c", "-o", "b.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

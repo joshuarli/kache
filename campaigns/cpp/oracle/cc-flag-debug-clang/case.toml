@@ -1,0 +1,27 @@
+summary = "Clang's -gline-tables-only and -gmlt are keyed and restore"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["lto.o", "mlt.o", "full.o"]
+
+[[compile]]
+argv = ["{cc}", "-gline-tables-only", "-c", "u.c", "-o", "lto.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-gmlt", "-c", "u.c", "-o", "mlt.o"]
+source = "u.c"
+reuse = "any"
+
+[[compile]]
+argv = ["{cc}", "-g", "-c", "u.c", "-o", "full.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

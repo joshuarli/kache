@@ -1,0 +1,23 @@
+summary = "-fmodule-name without module builds is keyed and cached"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["foo.o", "bar.o"]
+
+[[compile]]
+argv = ["{cc}", "-fmodule-name=Foo", "-c", "u.c", "-o", "foo.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-fmodule-name=Bar", "-c", "u.c", "-o", "bar.o"]
+source = "u.c"
+reuse = "any"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
