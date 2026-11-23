@@ -1,0 +1,27 @@
+summary = "sources, include directories, outputs and depfiles whose paths contain spaces and non-ASCII names cache, restore and invalidate"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["out dir/\u00f6.o", "out dir/\u00f6.d"]
+
+[[compile]]
+argv = ["{cc}", "-I", "inc ü", "-MD", "-MF", "out dir/ö.d", "-c", "src dir/naïve é.c", "-o", "out dir/ö.o"]
+source = "src dir/naïve é.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-header"
+reuse = "miss"
+action = [{ op = "write", path = "inc ü/h ä.h", content = "#define H 4\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-edit"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
