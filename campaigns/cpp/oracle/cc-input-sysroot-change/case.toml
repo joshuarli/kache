@@ -1,0 +1,34 @@
+summary = "headers found through a --sysroot symlink are keyed: editing one misses, and retargeting the sysroot at another tree misses"
+cohort = "blocking"
+os = ["linux"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "--sysroot=sr", "-isystem", "=/inc", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+action = [{ op = "symlink", path = "sr", target = "base" }]
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-sysroot-header"
+reuse = "miss"
+action = [{ op = "write", path = "base/inc/s.h", content = "#define S 5\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "retarget-sysroot"
+reuse = "miss"
+action = [{ op = "symlink", path = "sr", target = "other" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "restore-retarget"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

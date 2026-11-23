@@ -165,7 +165,7 @@ summary = "header appears where __has_include would find it; prior hits invalida
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "depend.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-header-deleted"
@@ -228,7 +228,7 @@ summary = "SDK/sysroot (-isysroot, --sysroot) change invalidates"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "basedir.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-framework-change"
@@ -399,7 +399,7 @@ summary = "-march/-mtune native feature-set differences invalidate where they ch
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-input-option-order"
@@ -435,7 +435,7 @@ summary = "__BASE_FILE__ expands per relocation; profiles handled separately"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "debug_compilation_dir.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-macro-date-time"

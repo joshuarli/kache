@@ -1,0 +1,21 @@
+summary = "-march=native is resolved by the driver and keyed; the same host reuses it"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["native.o", "generic.o"]
+
+[[compile]]
+argv = ["{cc}", "-O2", "-march=native", "-c", "u.c", "-o", "native.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-O2", "-c", "u.c", "-o", "generic.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

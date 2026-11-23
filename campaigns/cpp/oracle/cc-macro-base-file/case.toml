@@ -1,0 +1,27 @@
+summary = "__BASE_FILE__ names the main source as spelled; a header using it restores the main file's name, and renaming the spelling misses"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o", "dot.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[compile]]
+argv = ["{cc}", "-c", "./u.c", "-o", "dot.o"]
+source = "./u.c"
+reuse = "any"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-header"
+reuse = "miss"
+action = [{ op = "write", path = "h.h", content = "static const char *base(void) { return __BASE_FILE__ \"!\"; }\n" }, { op = "delete-outputs" }]
