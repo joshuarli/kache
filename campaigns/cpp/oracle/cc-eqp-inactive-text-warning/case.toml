@@ -1,0 +1,28 @@
+summary = "an apostrophe added inside #if 0 leaves the -E text unchanged but GCC warns about it, so the compile must replay the new warning"
+cohort = "blocking"
+families = ["gcc"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-Wall", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "add-apostrophe"
+reuse = "any"
+action = [{ op = "write", path = "h.h", content = "#if 0\nit's here\n#else\n#define H 3\n#endif\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "again"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

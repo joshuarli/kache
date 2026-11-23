@@ -1,0 +1,32 @@
+summary = "a header edit that only adds an unused macro leaves the expansion unchanged; kache reuses wherever ccache's preprocessor mode does, and a later edit that uses it misses"
+cohort = "open"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "add-unused-macro"
+reuse = "like-ccache"
+action = [{ op = "write", path = "h.h", content = "#define H 3\n#define UNUSED 9\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "again"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "use-it"
+reuse = "miss"
+action = [{ op = "write", path = "h.h", content = "#define H UNUSED\n#define UNUSED 9\n" }, { op = "delete-outputs" }]

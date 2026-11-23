@@ -865,6 +865,18 @@ it: a comment edit recompiles. Decided 2026-11-19 under the campaign's
 correctness-first rule; `cc-eqp-comment-only` stays open as the recorded
 gap rather than being counted toward parity.
 
+**Extended 2026-11-23 (L3, GCC 15, Clang 23):** unused-macro and
+inactive-conditional edits are observable in the same way. Under `-g3` an
+added unused macro leaves the `-E` text unchanged but changes the object's
+macro debug info. An apostrophe added inside `#if 0` leaves the `-E` text
+unchanged, but GCC warns `missing terminating ' character`. kache therefore
+recompiles both, where ccache's preprocessor mode reuses.
+`cc-eqp-unused-macro` and `cc-eqp-inactive-conditional` are `open` gap cases.
+`cc-eqp-inactive-text-warning` (blocking) proves kache replays the new warning,
+and `cc-eqp-unused-macro-g3` (blocking) proves the object changes.
+`cc-eqp-dep-refresh` and `cc-eqp-memo-fastpath` stay `planned`: they only
+apply once equivalent reuse exists.
+
 ## CCP-09 baseline
 
 Everything in this section is **older diagnostics**. The runs were made in

@@ -930,7 +930,7 @@ summary = "unused macro change reuses (complete observable result unchanged)"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "direct.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-eqp-inactive-conditional"
@@ -939,7 +939,7 @@ summary = "inactive #if branch edit reuses (result unchanged)"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "direct.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-eqp-column-significance"
@@ -966,6 +966,15 @@ summary = "edit moving line numbers is NOT a hit (debug line info is observable)
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "debug_prefix_map.bash"
+status = "oracle"
+
+[[case]]
+id = "cc-eqp-inactive-text-warning"
+package = "CCP-04"
+summary = "text inside #if 0 that GCC warns about recompiles and replays the warning"
+profiles = ["both"]
+compilers = ["gcc"]
+ccache.suite = "kache-original"
 status = "oracle"
 
 [[case]]
