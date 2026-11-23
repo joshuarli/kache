@@ -442,6 +442,38 @@ fn captured_expansion_requires_the_same_read_set_and_retains_path_binding() {
 }
 
 #[test]
+fn captured_keys_expand_headers_whose_contents_spell_mapped_roots() {
+    let root = tempfile::tempdir().unwrap();
+    let env = InvocationEnv::from_parts(
+        [("PATH", "/absent"), ("KACHE_BASE_DIR", root.path().to_str().unwrap())],
+        Some(root.path().into()), None, root.path().into(),
+    );
+    let parsed = CcArgs::parse_for(&s(&["clang", "-c", "unit.c"]), &env).unwrap();
+    let driver = crate::probe::ResolvedConfig {
+        native_driver: true, schema_version: crate::probe::PROBE_SCHEMA_VERSION,
+        prober: "cc".into(), compiler_name: "clang".into(),
+        version_line: "clang version 14".into(),
+        resolved_tokens: Some(Vec::new()), host_version_line: None,
+    };
+    fs::write(root.path().join("unit.c"), "#include \"value.h\"\nint n = sizeof(VALUE);\n").unwrap();
+    let dep = root.path().join("unit.d");
+    fs::write(&dep, "unit.o: unit.c value.h\n").unwrap();
+    let check = |text: &str, mapped: bool| {
+        fs::write(root.path().join("value.h"), text).unwrap();
+        let hasher = crate::cache_key::FileHasher::new();
+        let fingerprints = CcCompiler::new().captured_inputs(&parsed, &dep, &hasher).unwrap();
+        assert_eq!(fingerprints.iter().any(|input| input.content != input.mapped), mapped);
+        cc_captured_key_discovery(&parsed, &driver, CcCapturedInputs {
+            fingerprints, path_bound: false, inputs_changed: false,
+        }, &hasher)
+    };
+    assert!(matches!(check("#define VALUE 1\n", false), CcKeyDiscovery::Captured(_)));
+    assert!(matches!(check(
+        &format!("#define VALUE \"{}/value.h\"\n", root.path().display()), true,
+    ), CcKeyDiscovery::CapturedExpansion(_)));
+}
+
+#[test]
 fn header_availability_uses_each_clients_relative_paths_and_include_environment() {
     let root = tempfile::tempdir().unwrap();
     let mut clients = Vec::new();

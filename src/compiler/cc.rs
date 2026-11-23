@@ -6379,7 +6379,7 @@ const CC_ARTIFACT_SCHEMA: &[u8] = b"cc_artifact_schema:4\n";
 /// v11: pinned expansions also check for token-pasted timestamp macros.
 /// v12: memos preserve timestamp sensitivity and force mtime keying on reuse.
 /// v13: opaque drivers key the whole invocation environment.
-const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v13";
+const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v14";
 
 /// Local identity for a preprocessor invocation. The environment is included
 /// as selected by [`cc_memo_env_is_keyed`].
@@ -8831,6 +8831,11 @@ fn cc_captured_key_discovery(
     captured: CcCapturedInputs,
     file_hasher: &crate::cache_key::FileHasher<'_>,
 ) -> CcKeyDiscovery {
+    if captured.fingerprints.iter().any(|input| {
+        !cc_system_path(input.local_path()) && input.content != input.mapped
+    }) {
+        return CcKeyDiscovery::CapturedExpansion(captured);
+    }
     if !cc_source_date_epoch_pins_timestamp(parsed) {
         let inputs = captured.fingerprints.iter()
             .map(|input| PathBuf::from(input.local_path())).collect::<Vec<_>>();
