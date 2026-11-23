@@ -133,6 +133,16 @@ pub enum StoreFault {
     DeleteBlobs,
     /// Replace every entry's metadata with bytes that do not parse.
     CorruptMeta,
+    /// Remove only the first blob in path order, leaving the rest of a
+    /// multi-output entry intact.
+    DeleteOneBlob,
+    /// Flip one byte in the middle of the first blob in path order only.
+    CorruptOneBlob,
+    /// Cut every entry's metadata to half its length, as an interrupted
+    /// write leaves it.
+    TruncateMeta,
+    /// Remove every entry's metadata, leaving its blobs.
+    DeleteMeta,
 }
 
 impl Action {

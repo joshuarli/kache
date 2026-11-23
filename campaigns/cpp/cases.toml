@@ -1101,7 +1101,7 @@ summary = "one missing blob triggers safe recovery (recompile or miss), never a 
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-out-corrupt-blob"
@@ -1110,7 +1110,7 @@ summary = "corrupt blob detected by verification and recovered safely"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-out-writable-no-alias"
@@ -1474,7 +1474,7 @@ summary = "truncated entry detected and recovered"
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "cleanup.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-rel-missing-entry"
@@ -1483,7 +1483,7 @@ summary = "missing referenced entry handled (skip/recompile), never wrong output
 profiles = ["both"]
 compilers = "all"
 ccache.suite = "kache-original"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-rel-size-limit-eviction"
