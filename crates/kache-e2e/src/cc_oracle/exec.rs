@@ -440,9 +440,10 @@ pub fn control_can_inject(control: Control, case: &Case, profile: Profile) -> bo
         .flat_map(|step| case.compiles.iter().map(move |compile| step.reuse_for(compile)));
     match control {
         Control::StaleOutput => !case.outputs.is_empty() && later.any(|reuse| reuse == Reuse::Miss),
-        Control::DisabledInvalidation | Control::WrongEffectiveArgs => {
-            later.any(|reuse| reuse == Reuse::Miss)
-        }
+        Control::DisabledInvalidation => later.any(|reuse| reuse == Reuse::Miss),
+        Control::WrongEffectiveArgs => case.steps.iter().skip(1).any(|step| {
+            step.status == 0 && case.compiles.iter().any(|compile| step.reuse_for(compile) == Reuse::Miss)
+        }),
         Control::OmitSidecar => !case.outputs.is_empty() && later.any(|reuse| reuse == Reuse::Hit),
         Control::CacheDisabled => cache_disabled_applies(Some(control), profile) && later.any(|reuse| reuse == Reuse::Hit),
         Control::ReferenceFailure => case.steps.iter().any(|step| step.status == 0),
@@ -740,6 +741,7 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                 .collect();
             let tamper = fault_here
                 && ctx.control == Some(Control::WrongEffectiveArgs)
+                && step.status == 0
                 && step.reuse_for(compile) == Reuse::Miss;
             let mut executions =
                 classify_captured(&log_text, ctx.fixture, &unit_names, Some(&captures), tamper);
@@ -990,6 +992,9 @@ mod tests {
             assert!(!control_can_inject(control, &restore, t), "{control:?}");
             assert!(control_can_inject(control, &edit, t), "{control:?}");
         }
+        let failing_edit = case("\n[[step]]\nname = \"edit\"\nreuse = \"miss\"\nstatus = 1\n");
+        assert!(control_can_inject(Control::DisabledInvalidation, &failing_edit, t));
+        assert!(!control_can_inject(Control::WrongEffectiveArgs, &failing_edit, t));
         assert!(!control_can_inject(Control::OmitSidecar, &edit, t));
         assert!(control_can_inject(Control::OmitSidecar, &restore, r));
         assert!(control_can_inject(Control::CacheDisabled, &restore, t));
