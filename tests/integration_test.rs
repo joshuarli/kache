@@ -1238,60 +1238,78 @@ fn probe_keyed_flags_cache_and_key_on_value_live() {
     let report = kache_report(cache_dir.path());
     assert_cc_report_counts(&report, 1, 1);
 
-    // Two values of one probe-keyed knob must key differently. `-fwrapv` /
-    // `-fno-wrapv` are both `CapturedByProbe` (the stem list covers both
-    // polarities) and both clang and gcc resolve them to different cc1
-    // streams. Asserted as "local_hits did not grow", not "misses grew": a
-    // distinct key whose object comes out byte-identical records as a `dup`,
-    // and a false HIT is the only wrong answer (see the #580 test's note).
+    // Distinct values of probe-keyed knobs key apart exactly when the driver
+    // resolves them to different compile lines. A value that equals the
+    // driver's default (Alpine GCC enables -fstack-protector-strong, and
+    // -fno-wrapv is everyone's default) resolves to the same line and
+    // correctly shares the entry, so the expectation comes from `cc -###`
+    // rather than from an assumption about the host's defaults. A new
+    // spelling has no read-set memo and compiles before it is keyed, so it
+    // may miss even when it shares a line; it must never hit when it does not.
     let wrapv = ["cc", "-c", "tu.c", "-o", "tu.o", "-fwrapv", "-O0", "-g0"];
     let no_wrapv = ["cc", "-c", "tu.c", "-o", "tu.o", "-fno-wrapv", "-O0", "-g0"];
-    std::fs::remove_file(work.path().join("tu.o")).unwrap();
-    run_kache_cc(work.path(), cache_dir.path(), &wrapv);
-    let report = kache_report(cache_dir.path());
-    assert_eq!(
-        report["summary"]["local_hits"].as_u64(),
-        Some(1),
-        "-fwrapv must not hit the -fstack-protector-strong entry: {report:?}"
-    );
-    std::fs::remove_file(work.path().join("tu.o")).unwrap();
-    run_kache_cc(work.path(), cache_dir.path(), &no_wrapv);
-    let report = kache_report(cache_dir.path());
-    assert_eq!(
-        report["summary"]["local_hits"].as_u64(),
-        Some(1),
-        "-fno-wrapv must not hit the -fwrapv (or any earlier) entry: {report:?}"
-    );
+    let sets = [&strong[..], &wrapv[..], &no_wrapv[..]];
+    let lines: Vec<String> = sets.iter().map(|set| resolved_compile_line(work.path(), &set[1..])).collect();
+    let mut hits = 1;
+    for (index, set) in sets.iter().enumerate().skip(1) {
+        std::fs::remove_file(work.path().join("tu.o")).unwrap();
+        run_kache_cc(work.path(), cache_dir.path(), set);
+        let report = kache_report(cache_dir.path());
+        let now = report["summary"]["local_hits"].as_u64().unwrap_or_default();
+        assert!(
+            now == hits || (now == hits + 1 && lines[..index].contains(&lines[index])),
+            "{:?} may hit only an entry whose resolved compile line it shares: {report:?}",
+            &set[5..6]
+        );
+        hits = now;
+    }
 
-    // The distinct key stored something reusable: repeating the value hits.
+    // The last entry is reusable: repeating its flags hits.
     std::fs::remove_file(work.path().join("tu.o")).unwrap();
     run_kache_cc(work.path(), cache_dir.path(), &no_wrapv);
     let report = kache_report(cache_dir.path());
     assert_eq!(
         report["summary"]["local_hits"].as_u64(),
-        Some(2),
+        Some(hits + 1),
         "repeated -fno-wrapv compile should hit its own entry: {report:?}"
     );
 
-    // Key-level proof, straight from the events: five compiles, three flag
-    // sets, exactly three distinct cache keys.
+    // Key-level proof, straight from the events: keys are equal exactly when
+    // the resolved compile lines are.
     let events = report["all_events"]
         .as_seq()
         .expect("report should include all_events");
     assert_eq!(events.len(), 5, "expected one event per compile: {report:?}");
-    let keys: rustc_hash::FxHashSet<&str> = events
-        .iter()
-        .map(|e| {
-            let key = e["cache_key"].as_str().unwrap_or_default();
-            assert!(!key.is_empty(), "every event should carry a cache key: {e:?}");
-            key
-        })
-        .collect();
-    assert_eq!(
-        keys.len(),
-        3,
-        "each probe-keyed flag value must map to its own cache key: {report:?}"
-    );
+    let key = |index: usize| {
+        let key = events[index]["cache_key"].as_str().unwrap_or_default();
+        assert!(!key.is_empty(), "every event should carry a cache key: {:?}", events[index]);
+        key
+    };
+    let set_keys = [key(0), key(2), key(3)];
+    for a in 0..3 {
+        for b in a + 1..3 {
+            assert_eq!(
+                set_keys[a] == set_keys[b],
+                lines[a] == lines[b],
+                "flag sets {a} and {b}: keys must match exactly when `cc -###` resolves them alike: {report:?}"
+            );
+        }
+    }
+}
+
+/// The driver's resolved compile line for `args`, as `cc -###` prints it.
+fn resolved_compile_line(cwd: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("cc")
+        .arg("-###")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("running cc -###");
+    String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .find(|line| line.contains("cc1"))
+        .unwrap_or_else(|| panic!("cc -### printed no compile line for {args:?}"))
+        .to_string()
 }
 
 /// Regression for #645. Existing output symlink semantics differ by compiler:
