@@ -32,8 +32,8 @@ for tc in ['gcc', 'clang']:
         activities = []
         for replay in workload['timed']:
             replay_count += 1
-            wall = sum(o['activity']['wall_ms'] for o in replay['observations'])
-            cpu = sum(o['activity']['unrelated_cpu_ms'] for o in replay['observations'])
+            wall = math.fsum(o['activity']['wall_ms'] for o in replay['observations'])
+            cpu = math.fsum(o['activity']['unrelated_cpu_ms'] for o in replay['observations'])
             activities.append({'pair': replay['pair'], 'arm': replay['arm'],
                                'admitted': replay['admitted'], 'unrelated_cores': cpu / wall})
             for observation in replay['observations']:

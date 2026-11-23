@@ -214,6 +214,10 @@ python analyze.py
 ```
 
 The standard-library-only [analysis script](analyze.py) independently reproduces
+the summary on Python 3.10 and 3.15. Replay activity totals use `math.fsum`
+rather than version-dependent built-in float summation; exact summary equality
+is retained without rounding or relaxing any admission/acceptance comparison.
+The script reproduces
 all 116 reported paired estimates/95% log-t intervals and locked target verdicts;
 checks the exact clean revision, seed/jobs/compiler/input-digest continuity;
 verifies all 180 retained replays, 1740 observer-free observations and complete-pair
