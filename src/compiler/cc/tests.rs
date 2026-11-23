@@ -400,8 +400,9 @@ fn direct_keying_excludes_assembler_sources_and_language_overrides() {
     );
     let parse = |source: &str| CcArgs::parse_for(&s(&["clang", "-c", source]), &env).unwrap();
     assert!(cc_direct_key_shape_ok(&parse("unit.c")));
-    assert!(!cc_direct_key_shape_ok(&parse("unit.S")));
-    assert!(!cc_direct_key_shape_ok(&parse("unit.s")));
+    for source in ["unit.s", "unit.S", "unit.sx", "unit.SX", "unit.asm", "unit.ASM"] {
+        assert!(!cc_direct_key_shape_ok(&parse(source)), "{source}");
+    }
     for language in ["assembler", "assembler-with-cpp"] {
         let parsed = CcArgs::parse_for(
             &s(&["clang", "-x", language, "-c", "unit.c"]), &env,

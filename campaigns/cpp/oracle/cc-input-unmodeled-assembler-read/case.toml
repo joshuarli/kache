@@ -1,11 +1,15 @@
 summary = "an assembler .incbin read the preprocessor cannot see invalidates; kache refuses to cache it"
 cohort = "blocking"
 profiles = ["transparent", "reproducible"]
-outputs = ["a.o"]
+outputs = ["a.o", "macro.o"]
 
 [[compile]]
 argv = ["{cc}", "-c", "a.S", "-o", "a.o"]
 source = "a.S"
+
+[[compile]]
+argv = ["{cc}", "-x", "assembler-with-cpp", "-c", "macro.sx", "-o", "macro.o"]
+source = "macro.sx"
 
 [[step]]
 name = "populate"

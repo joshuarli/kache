@@ -6379,7 +6379,9 @@ const CC_ARTIFACT_SCHEMA: &[u8] = b"cc_artifact_schema:4\n";
 /// v11: pinned expansions also check for token-pasted timestamp macros.
 /// v12: memos preserve timestamp sensitivity and force mtime keying on reuse.
 /// v13: opaque drivers key the whole invocation environment.
-const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v14";
+/// v14: captured project text containing mapped roots requires expansion.
+/// v15: all assembler suffixes retain expansion checks for hidden reads.
+const CC_PREPROCESS_MEMO_SCHEMA: &[u8] = b"cc-preprocess-memo-v15";
 
 /// Local identity for a preprocessor invocation. The environment is included
 /// as selected by [`cc_memo_env_is_keyed`].
@@ -8887,7 +8889,9 @@ fn cc_direct_key_shape_ok(parsed: &CcArgs) -> bool {
         && parsed.sources[0]
             .extension()
             .and_then(|extension| extension.to_str())
-            .is_none_or(|extension| !extension.eq_ignore_ascii_case("s"))
+            .is_none_or(|extension| {
+                !["s", "sx", "asm"].iter().any(|suffix| extension.eq_ignore_ascii_case(suffix))
+            })
         && parsed
             .depinfo
             .as_ref()
