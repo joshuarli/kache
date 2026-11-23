@@ -18,6 +18,7 @@ jobs:
   macos:
     name: cc-oracle-full (macOS)
     runs-on: xcode-27
+    if: vars.KACHE_MACOS_CI != 'off'
     timeout-minutes: 45
     permissions:
       contents: read
