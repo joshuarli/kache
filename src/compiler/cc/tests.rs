@@ -393,6 +393,24 @@ fn unpinned_captured_keys_require_a_complete_proof_or_expansion() {
 }
 
 #[test]
+fn direct_keying_excludes_assembler_sources_and_language_overrides() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = InvocationEnv::from_parts(
+        [("PATH", "/absent")], Some(dir.path().into()), None, dir.path().into(),
+    );
+    let parse = |source: &str| CcArgs::parse_for(&s(&["clang", "-c", source]), &env).unwrap();
+    assert!(cc_direct_key_shape_ok(&parse("unit.c")));
+    assert!(!cc_direct_key_shape_ok(&parse("unit.S")));
+    assert!(!cc_direct_key_shape_ok(&parse("unit.s")));
+    for language in ["assembler", "assembler-with-cpp"] {
+        let parsed = CcArgs::parse_for(
+            &s(&["clang", "-x", language, "-c", "unit.c"]), &env,
+        ).unwrap();
+        assert!(!cc_direct_key_shape_ok(&parsed), "{language}");
+    }
+}
+
+#[test]
 fn captured_expansion_requires_the_same_read_set_and_retains_path_binding() {
     let root = tempfile::tempdir().unwrap();
     let env = InvocationEnv::from_parts(

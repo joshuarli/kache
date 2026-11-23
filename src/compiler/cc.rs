@@ -8876,6 +8876,13 @@ fn cc_direct_key_shape_ok(parsed: &CcArgs) -> bool {
         && !parsed.emits_reports()
         && parsed.mode == CompileMode::Compile
         && parsed.sources.len() == 1
+        && parsed.language_override.as_deref().is_none_or(|language| {
+            !matches!(language, "assembler" | "assembler-with-cpp")
+        })
+        && parsed.sources[0]
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_none_or(|extension| !extension.eq_ignore_ascii_case("s"))
         && parsed
             .depinfo
             .as_ref()
