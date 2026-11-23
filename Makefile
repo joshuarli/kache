@@ -17,7 +17,7 @@ endif
 
 .PHONY: help build test check test-ci release verify-release lint \
   client-crates-check test-resource-guard-check pr mutants-diff \
-  e2e e2e-negative-control cc-oracle-tools cc-oracle cc-oracle-full cc-oracle-negative-control cc-project-zlib cc-project-llvm cc-project-autotools cc-project-meson cc-gcov-roundtrip cc-bench \
+  e2e e2e-negative-control cc-oracle-tools cc-oracle cc-oracle-full cc-oracle-negative-control cc-project-zlib cc-project-llvm cc-project-autotools cc-project-meson cc-project-cc-crate cc-gcov-roundtrip cc-bench \
   bench bench-retry bench-trace bench-sccache bench-mbx bench-pr \
   bench-short test-bench-short test-bench-edit-loop bench-contention test-bench-contention \
   perf-gate-local trace-phases bump release-tag crates-status \
@@ -72,6 +72,7 @@ help:
 	@echo "cc-project-zlib [TOOLCHAINS=cc]  pinned zlib raw vs kache per toolchain: identical objects, warm compiles nothing"
 	@echo "cc-project-autotools [TOOLCHAINS=cc]  Autotools/libtool fixture: raw, cold/warm, edit/revert, relocation; prefix and PATH shims"
 	@echo "cc-project-meson [TOOLCHAINS=cc] [GLUON_BIN=]  Meson/Ninja launcher: raw, cold/warm, edit/revert, relocation"
+	@echo "cc-project-cc-crate [TOOLCHAINS=cc]  cc-rs C/C++: raw, cold/warm, edit/revert, relocation"
 	@echo "cc-project-llvm [TOOLCHAINS=cc]  pinned LLVM subset raw vs kache per toolchain: identical objects, warm compiles nothing"
 	@echo "cc-gcov-roundtrip [TOOLCHAINS=cc] [GCOV=]  kache-restored coverage objects report like raw ones"
 	@echo "cc-bench [TOOLCHAINS=cc] [BENCH_ARGS=]  raw/ccache/kache timing under the locked protocol (validates first)"
@@ -189,6 +190,9 @@ GLUON_BIN ?= $(HOME)/d/gluon/target/dist
 
 cc-project-meson: cc-oracle-tools
 	python3 ./scripts/cc-project-meson.py ./target/release/kache .work/tmp/cc-project-meson $(GLUON_BIN) $(TOOLCHAINS)
+
+cc-project-cc-crate: cc-oracle-tools
+	python3 ./scripts/cc-project-cc-crate.py ./target/release/kache .work/tmp/cc-project-cc-crate $(TOOLCHAINS)
 
 cc-project-llvm: cc-oracle-tools
 	@for tc in $(TOOLCHAINS); do \
