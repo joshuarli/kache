@@ -11944,3 +11944,32 @@ fn only_declared_base_dirs_key_the_probe_cwd() {
         ]
     );
 }
+
+#[test]
+fn driver_files_are_keyed_by_content_and_refuse_searched_or_nested_inputs() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = InvocationEnv::from_parts(
+        [("PATH", "/absent")], Some(dir.path().into()), None, dir.path().into(),
+    );
+    let parsed = CcArgs::parse_for(&s(&["gcc", "-c", "u.c", "-o", "u.o"]), &env).unwrap();
+    let digest = |prefix: &str, path: &str| cc_driver_file_digest(&parsed, prefix, path);
+    fs::write(dir.path().join("a.specs"), "*cpp_unique_options:\n+ -DA=1\n").unwrap();
+    let first = digest("-specs=", "./a.specs").unwrap();
+    fs::write(dir.path().join("a.specs"), "*cpp_unique_options:\n+ -DA=2\n").unwrap();
+    assert_ne!(digest("-specs=", "./a.specs").unwrap(), first);
+    assert!(digest("-specs=", "a.specs").is_err());
+    for include in ["%include <x.specs>\n", "%:include(x.specs)\n"] {
+        fs::write(dir.path().join("a.specs"), include).unwrap();
+        assert!(digest("--specs=", "./a.specs").is_err(), "{include}");
+    }
+    fs::write(dir.path().join("a.cfg"), "-DCFG=1\n").unwrap();
+    assert!(digest("--config=", "./a.cfg").is_ok());
+    assert!(digest("--config=", "a.cfg").is_err());
+    fs::write(dir.path().join("a.cfg"), "-DCFG=1 @other.cfg\n").unwrap();
+    assert!(digest("--config=", "./a.cfg").is_err());
+    assert!(digest("--config=", "./missing.cfg").is_err());
+    for flag in ["-specs=./a.specs", "--specs=/abs/a.specs", "--config=./a.cfg"] {
+        let parsed = CcArgs::parse_for(&s(&["gcc", flag, "-c", "u.c", "-o", "u.o"]), &env).unwrap();
+        assert!(parsed.refuse_reasons(&[]).is_empty(), "{flag}: {:?}", parsed.refuse_reasons(&[]));
+    }
+}

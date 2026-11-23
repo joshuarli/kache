@@ -65,8 +65,8 @@ Counts are taken from the files, not carried forward:
 - Inventory (`cases.toml`): 188 entries, and every oracle directory has
   one: 103 `oracle`, 75 `planned`, 6 `conditional`, 4 `out_of_scope`.
 - Oracle cases (`oracle/`): 103, of which 99 `blocking` and 4 `open`
-  (`cc-eqp-comment-only`, `cc-input-clang-config-file`,
-  `cc-input-gcc-specs`, `cc-input-token-paste-probe`).
+  (`cc-eqp-comment-only`, `cc-input-token-paste-probe` and the CCP-04
+  equivalent-expansion gaps).
 - Gates: every Linux and macOS CI job is required (PR #50);
   KACH-21 and KACH-27 are closed. Main had a one-off musl
   `cc-out-diagnostics-color-reuse` failure after #136; it passed on rerun.
@@ -92,8 +92,10 @@ Engineering work still open (not provisioning):
   profile's content like `-fprofile-use=` (`cc-flag-profile-use`). GCC's
   `-fprofile-use=` stays refused: it names a directory of per-object profiles.
 - CCP-03: the `@file` variants are oracle cases (see the owner ruling
-  above); clang `--config` and GCC `-specs` remain open cases with correct
-  passthrough.
+  above). Clang `--config=` and GCC `-specs=` files named by a path are keyed
+  by content (`cc-input-clang-config-file`, `cc-input-gcc-specs`, blocking);
+  bare names (searched in the driver's directories), specs `%include` and
+  nested config `@` files still pass through.
 - CCP-04: comment-only reuse is declined by decision (LIMIT, below); the
   token-pasted header probe stays an open case.
 - CCP-05: sidecars under `-S` pass through.
