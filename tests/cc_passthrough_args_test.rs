@@ -1816,3 +1816,98 @@ fn clang_runtime_driver_flags_cache_without_hiding_warning_errors() {
     let output = compile(&["-Werror=unused-command-line-argument"]);
     assert!(!output.status.success());
 }
+
+#[test]
+fn quoted_root_macros_compile_each_checkouts_text_from_a_shared_cache() {
+    if !Command::new("clang").arg("--version").output().is_ok_and(|output| output.status.success()) {
+        eprintln!("skipping quoted root macros: clang unavailable");
+        return;
+    }
+    for (discovery, epoch) in [("1", None), ("1", Some("0")), ("0", None)] {
+        for (body, relocated) in [
+            ("int main(void) { return sizeof(ROOT_TEXT); }\n", "miss"),
+            ("int main(void) { return 0; }\n", "local_hit"),
+        ] {
+            let dir = FixtureDir::new();
+            let root = dir.path().canonicalize().unwrap();
+            let cache = root.join("cache");
+            let event_path = cache.join("events.jsonl");
+            fs::create_dir(root.join("home")).unwrap();
+            let checkouts = ["a", "checkout-with-a-longer-root"];
+            for copy in checkouts {
+                let clone = root.join(copy);
+                fs::create_dir(&clone).unwrap();
+                fs::write(clone.join("kache.toml"), "").unwrap();
+                fs::write(clone.join("unit.c"), body).unwrap();
+            }
+            let run = |clone: &std::path::Path, wrapped: bool| {
+                let _ = fs::remove_file(clone.join("unit.o"));
+                let previous_events = match fs::read_to_string(&event_path) {
+                    Ok(events) => events.lines().count(),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+                    Err(error) => panic!("reading {}: {error}", event_path.display()),
+                };
+                let define = format!("-DROOT_TEXT=\"{}/asset\"", clone.display());
+                let mut command = if wrapped {
+                    let mut command = cacheable_cc_command(clone);
+                    command.arg("clang");
+                    command
+                } else {
+                    common::hermetic_command("clang", &cache, None)
+                };
+                command
+                    .current_dir(clone)
+                    .args(["-c", "unit.c", "-o", "unit.o", &define])
+                    .env("HOME", root.join("home"))
+                    .env("KACHE_CACHE_DIR", &cache)
+                    .env("KACHE_RUNTIME_DIR", &cache)
+                    .env("KACHE_DEFERRED_DISCOVERY", discovery)
+                    .env("KACHE_DAEMON_PUBLISH", "0")
+                    .env("KACHE_MIN_STORE_COMPILE_MS", "0")
+                    .env_remove("RUSTC_WRAPPER");
+                match epoch {
+                    Some(epoch) => command.env("SOURCE_DATE_EPOCH", epoch),
+                    None => command.env_remove("SOURCE_DATE_EPOCH"),
+                };
+                let compiled = command.output().unwrap();
+                assert!(compiled.status.success(), "{compiled:?}");
+                let linked = common::hermetic_command("clang", &cache, None)
+                    .current_dir(clone)
+                    .env("HOME", root.join("home"))
+                    .args(["unit.o", "-o", "path-size"])
+                    .output()
+                    .unwrap();
+                assert!(linked.status.success(), "{linked:?}");
+                let code = Command::new(clone.join("path-size")).status().unwrap().code().unwrap();
+                if !wrapped {
+                    return (code, String::new());
+                }
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let event: deser_value::Value = loop {
+                    if let Ok(events) = fs::read_to_string(&event_path)
+                        && events.ends_with('\n')
+                        && let Some(line) = events.lines().nth(previous_events)
+                    {
+                        break deser_json::from_str(line).unwrap();
+                    }
+                    assert!(std::time::Instant::now() < deadline, "event not published");
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                };
+                (code, event["result"].as_str().unwrap().to_string())
+            };
+            for (index, copy) in checkouts.into_iter().enumerate() {
+                let clone = root.join(copy);
+                let (expected, _) = run(&clone, false);
+                let cold = if index == 0 { "miss" } else { relocated };
+                for (phase, result) in [("cold", cold), ("warm", "local_hit")] {
+                    assert_eq!(
+                        run(&clone, true),
+                        (expected, result.to_string()),
+                        "{copy} {phase}: kache must compile this checkout's root text \
+                         (discovery={discovery}, epoch={epoch:?}, body={body:?})"
+                    );
+                }
+            }
+        }
+    }
+}
