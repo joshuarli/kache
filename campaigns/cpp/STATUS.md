@@ -23,6 +23,12 @@ Main's exact-source post-merge checks are **11/11 green**. Acceptance rules
 are unchanged; M1, newer-L1 compilers, native ARM64 L2 and LLVM timing gaps
 remain open.
 
+Since that run, #143 (leased store-connection pool) merged at `c56bfcb5`;
+merged-main `ci` and `lint` are green. Its A/B is diagnostic only, and **no
+formal acceptance result exists for a revision containing the pool**. The
+current work order is
+[Focused cycle after #143](#focused-cycle-after-143-2026-11-23).
+
 Counts are taken from the files, not carried forward:
 `grep '^status = ' campaigns/cpp/cases.toml | sort | uniq -c` and
 `grep -l '^cohort = ' campaigns/cpp/oracle/*/case.toml`.
@@ -192,6 +198,116 @@ Provisioning, not engineering:
   assignment, bootstrap PR notes) is in git: `git log -p --
   campaigns/cpp/STATUS.md` before 2026-11-19.
 
+## Focused cycle after #143, 2026-11-23
+
+This replaces the 2026-11-22 ranking below as the work order. Review baseline
+is `c56bfcb5` (includes #143). Refresh main and read what merged after it
+before acting; do not reopen issues it already resolved. Work the steps in
+order. Do not widen scope into another architecture exercise.
+
+**Retired criticisms.** Token-pasted timestamp keying (#133), compiled-wrapper
+driver identity (#135), private response-file observation (#134), mapped
+assembler listings (#132) and response-file control characters (#136) are
+resolved. Keep their regressions. Do not reopen them without new evidence.
+The historical warm regression is already bisected to `438c5f04`; **do not
+repeat that bisect.** Keep the timestamp correctness repair and profile only
+losses that current code reproduces.
+
+### 1. Quoted-macro capture risk (correctness, first)
+
+Suspected collision, not yet reproduced end to end. Identical source in two
+checkouts whose roots differ in length:
+
+    int path_size(void) { return sizeof(ROOT_TEXT); }
+
+Each checkout passes its own absolute path as `-DROOT_TEXT='"<root>/asset"'`,
+with its declared base directory and the normal path-mapping policy. The
+hypothesis has three parts. Root normalization can make the two `-D` operands
+agree. The capture guard (`f109aad6`) inspects only captured file contents,
+which contain no root. Constant folding removes the root string from the
+object, so the object scan cannot see it. A local GCC check already shows the
+two raw objects differ (47 vs 78) and neither contains a root.
+
+- Add a bounded end-to-end regression: one native Clang, one shared cache,
+  the public kache invocation, the compile-first capture path. Populate and
+  warm checkout A, then compile in checkout B. Compare B's object and its
+  observable result with raw Clang under the same effective policy. Also
+  check warm reuse within each checkout.
+- Cover the epoch-capability variants where available. Cover definitions
+  injected through compiler configuration as well as explicit `-D`.
+- The existing preprocessing-path regression for literal `-D` roots
+  (`src/compiler/cc/tests.rs`) does not exercise the capture bypass. It does
+  not settle this question.
+- If it reproduces: make the smallest repair. Either key the semantic macro
+  operand raw, or route these captures through the existing expansion and
+  path-binding mechanism. Retire affected memo versions. Keep portable
+  `__FILE__` behavior and warm reuse.
+- If an existing guard prevents it: name the guard, keep the regression, and
+  make no speculative production change.
+
+### 2. Measure the integrated pool revision
+
+After step 1 and its gates, run scoped locked acceptance on one exact
+revision containing #143 (and step 1, if it changed code). Scope: tiny C and
+C++ headers, GCC and Clang, on the same native L1 host.
+
+- Keep every scenario and its parallelism. Formal tiny C stays **serial**;
+  C++ headers keep their defined job count. Cover cold, warm, relocation,
+  edit and revert.
+- Thresholds, sample limits, estimator and quiet-host policy are locked.
+- Retain raw observations, exact source and executable identities, compiler
+  versions, and correctness/reuse evidence.
+- Verify daemon readiness and executable identity before replays. Record any
+  standalone fallback separately. Establish compiler/preprocessor activity
+  from execution counters or separate untimed traces.
+- #143's numbers (about 11% single warm hit, 17% on a 48-TU `-j4` build)
+  come from a parallel fixture. Do not multiply them into the serial tiny-C
+  ratios; only this rerun establishes the integrated effect.
+- Commit the report through the existing reporting machinery and link it
+  from Current state.
+
+### 3. One measured loss, one focused change
+
+From step 2's results, pick **one** bottleneck. Weigh absolute time and
+distance from its target. Baseline gaps from `ee2402bf`: tiny-C warm 2.468×
+(GCC) and 2.448× (Clang) against a 1.15× target; C++ headers warm 1.307× and
+1.339×; Clang tiny-C cold is 0.716× ccache but 1.343× raw, and GCC tiny-C
+cold is 1.994× raw, against a 1.15× cold-vs-raw target.
+
+- If tiny warm hits are still far behind, profile the whole request path and
+  name its largest remaining fixed cost. If miss or edit work dominates the
+  chosen workload, trace that path before choosing an optimization.
+- Make one change. Run a bounded parent-versus-change comparison, then rerun
+  only the affected acceptance workload.
+- Keep timestamp sensitivity, opaque-wrapper environment keying, artifact
+  verification and the pool's conservative invalidation. A faster result
+  must keep correct outputs and required reuse.
+
+**Milestone:** one named compiler × workload × host cell passing every
+required scenario. If it stays blocked, report the specific failing
+criterion and its evidence rather than expanding scope.
+
+### 4. Host-evidence gaps
+
+Keep the macOS and Linux correctness CI gates as they are. Get a quiet
+native macOS acceptance result, and advance newer-compiler and native ARM64
+performance evidence as suitable hosts appear. Independent hosts may run
+concurrently; a timed host must stay uncontended. The LLVM workload stays in
+the campaign; check its time and scratch limits before launch. It comes
+after this cycle, not before.
+
+### Cycle report
+
+End the cycle with focused code/test commits where justified, committed
+benchmark evidence, and a short report stating:
+
+- whether the quoted-macro collision reproduced, and the fix or the guard
+  that prevents it;
+- the exact revision tested and its completed CI status;
+- current PASS, FAIL, INCONCLUSIVE and UNMEASURED results;
+- before/after ratios with confidence intervals and useful absolute times;
+- the next single blocking issue.
+
 ## Formal L1 acceptance rerun, 2026-11-23
 
 Clean main **`ee2402bfb20c2d018c4036bec5e53a1084f79a9a`** (#141), same native
@@ -281,7 +397,10 @@ also includes #140 (short native-daemon runtimes) and #141 (safe Clang capture):
   Standalone's median gain is 18.4%; its interval is not entirely above 15%,
   and the daemon interval does not exclude a small regression.
 
-Ranked next actions, with correctness safeguards retained:
+Ranked next actions, with correctness safeguards retained. **Superseded as
+the work order by
+[Focused cycle after #143](#focused-cycle-after-143-2026-11-23);** kept as
+the diagnostic record:
 
 1. Profile the **remaining current L1 misses** in the 2026-11-23 formal report:
    warm/revert/relocation overhead, GCC tiny-C and C++ cold, Clang zlib cold
@@ -1052,10 +1171,11 @@ host-local. Run L4 oracle passes with `CC_ORACLE_OUT=/tmp/cc-oracle`.
    keeps older mtimes and a copy that built a hand-applied mutation keeps
    the mutated binary. `make e2e` on this host needs
    `PATH=/opt/homebrew/bin:$PATH`.
-3. Follow the current ranking under
-   [Diagnostic checkpoint and next actions](#diagnostic-checkpoint-and-next-actions-2026-11-22),
-   updated after #132–#136, #138 and #139. Do not repeat the pre-checkpoint
-   bisect or treat scanner/standalone diagnostics as passing acceptance.
+3. Follow
+   [Focused cycle after #143](#focused-cycle-after-143-2026-11-23), in
+   order: quoted-macro capture regression, integrated pool acceptance, one
+   measured loss, then host gaps. Do not repeat the pre-checkpoint bisect or
+   treat scanner, standalone or PR A/B diagnostics as passing acceptance.
    Commit every future acceptance report and link Current state.
    Additional engineering coverage remains open:
    - Autotools/libtool launchers (CCP-07) now have a bounded local glibc
