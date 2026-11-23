@@ -473,7 +473,7 @@ the diagnostic record:
 | M1 | xcode-27 CI runner / Apple Silicon Mac | RUNNING (partial) | Apple clang 21.0.0 / Xcode 27.0 covered. Standalone LLVM clang not provisioned (missing cell, see Current state). |
 | L1 | ubuntu-26.04 | RUNNING (required, green) | e2e-linux-glibc and cc-oracle (apt GCC + clang) jobs |
 | L2 | ubuntu-26.04-arm | RUNNING (required, green) | Same jobs on ARM64 |
-| L3 | Alpine 3.24.2 musl x86_64 (container on ubuntu-26.04) | RUNNING (required, green) | linux-musl job: image LLVM 23.1.5 (prerelease b29e4d0), gluon ninja, apk GCC 15.2.0; `make test`, in-image e2e and cc-oracle |
+| L3 | Alpine 3.24.2 musl x86_64 (container on ubuntu-26.04) | RUNNING (required, green) | linux-musl job: image LLVM 23.1.5 (prerelease b29e4d0), gluon ninja, apk GCC 15.2.0; `make test`, in-image e2e and cc-oracle; native L3 host 2026-11-23 (Alpine 3.25 edge x86_64, GCC 15.2.0, Clang 23.1.4, ccache 4.14.3 musl-static, kache `a828da56`): `make cc-project-zlib` 17/17 objects identical raw/cold/warm for both compilers; `make cc-project-autotools` passes for both compilers in prefix and shim launcher styles; `make cc-project-llvm` built with gluon `ninja` (`5616e911`) passes for both compilers (381 objects identical, warm 377/377 local hits); libdrm 2.4.134 through gluon `meson`/`ninja` with kache as launcher: transparent cold and warm objects byte-identical to raw for both compilers, and with default path mapping warm and relocated builds hit and equal cold (exploratory, no committed script) |
 | L4 | Alpine 3.24.2 musl aarch64 (container on ubuntu-26.04-arm) | RUNNING (required, green) | Same image on ARM64; also this host's local Linux lane under OrbStack |
 
 ## Package ledger
