@@ -1,5 +1,6 @@
 summary = "headers found through a --sysroot symlink are keyed: editing one misses, and retargeting the sysroot at another tree misses"
 cohort = "blocking"
+os = ["linux"]
 profiles = ["transparent", "reproducible"]
 outputs = ["u.o"]
 
