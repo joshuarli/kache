@@ -887,41 +887,57 @@ fn apply(action: &Action, case: &Case, arm: Arm, ctx: &ArmContext<'_>, store: &P
 pub fn damage_store(store: &Path, fault: StoreFault) -> Result<usize> {
     let mut damaged = 0;
     match fault {
-        StoreFault::CorruptMeta => {
+        StoreFault::CorruptMeta | StoreFault::TruncateMeta | StoreFault::DeleteMeta => {
             for entry in std::fs::read_dir(store)? {
                 let meta = entry?.path().join("meta.json");
                 if meta.is_file() {
                     make_writable(&meta)?;
-                    std::fs::write(&meta, b"{ not json")?;
+                    match fault {
+                        StoreFault::DeleteMeta => std::fs::remove_file(&meta)?,
+                        StoreFault::TruncateMeta => {
+                            let mut bytes = std::fs::read(&meta)?;
+                            bytes.truncate(bytes.len() / 2);
+                            std::fs::write(&meta, bytes)?;
+                        }
+                        _ => std::fs::write(&meta, b"{ not json")?,
+                    }
                     damaged += 1;
                 }
             }
         }
-        StoreFault::TruncateBlobs | StoreFault::CorruptBlobs | StoreFault::DeleteBlobs => {
+        StoreFault::TruncateBlobs | StoreFault::CorruptBlobs | StoreFault::DeleteBlobs
+        | StoreFault::DeleteOneBlob | StoreFault::CorruptOneBlob => {
             let blobs = store.join("blobs");
             if !blobs.is_dir() {
                 return Ok(0);
             }
+            let mut paths = Vec::new();
             for shard in std::fs::read_dir(&blobs)? {
                 for blob in std::fs::read_dir(shard?.path())? {
-                    let blob = blob?.path();
-                    if fault == StoreFault::DeleteBlobs {
-                        std::fs::remove_file(&blob)?;
-                    } else {
-                        make_writable(&blob)?;
-                        let mut bytes = std::fs::read(&blob)?;
-                        if fault == StoreFault::TruncateBlobs {
-                            bytes.truncate(bytes.len() / 2);
-                        } else {
-                            let middle = bytes.len() / 2;
-                            if let Some(byte) = bytes.get_mut(middle) {
-                                *byte ^= 0xff;
-                            }
-                        }
-                        std::fs::write(&blob, bytes)?;
-                    }
-                    damaged += 1;
+                    paths.push(blob?.path());
                 }
+            }
+            paths.sort();
+            if matches!(fault, StoreFault::DeleteOneBlob | StoreFault::CorruptOneBlob) {
+                paths.truncate(1);
+            }
+            for blob in paths {
+                if matches!(fault, StoreFault::DeleteBlobs | StoreFault::DeleteOneBlob) {
+                    std::fs::remove_file(&blob)?;
+                } else {
+                    make_writable(&blob)?;
+                    let mut bytes = std::fs::read(&blob)?;
+                    if fault == StoreFault::TruncateBlobs {
+                        bytes.truncate(bytes.len() / 2);
+                    } else {
+                        let middle = bytes.len() / 2;
+                        if let Some(byte) = bytes.get_mut(middle) {
+                            *byte ^= 0xff;
+                        }
+                    }
+                    std::fs::write(&blob, bytes)?;
+                }
+                damaged += 1;
             }
         }
     }
@@ -1116,6 +1132,7 @@ mod tests {
         let blob = store.join("blobs/ab/abcd");
         let meta = store.join("key1/meta.json");
         let reset = || {
+            let _ = std::fs::remove_file(&blob);
             std::fs::write(&blob, b"0123456789").unwrap();
             std::fs::set_permissions(&blob, std::fs::Permissions::from_mode(0o444)).unwrap();
             std::fs::write(&meta, b"{}").unwrap();
@@ -1133,6 +1150,22 @@ mod tests {
         assert_eq!(std::fs::read(&meta).unwrap(), b"{ not json");
         assert_eq!(damage_store(store, StoreFault::DeleteBlobs).unwrap(), 1);
         assert!(!blob.exists());
+        reset();
+        assert_eq!(damage_store(store, StoreFault::TruncateMeta).unwrap(), 1);
+        assert_eq!(std::fs::read(&meta).unwrap(), b"{");
+        reset();
+        assert_eq!(damage_store(store, StoreFault::DeleteMeta).unwrap(), 1);
+        assert!(!meta.exists() && blob.exists());
+        let second = store.join("blobs/cd/cdef");
+        std::fs::create_dir_all(second.parent().unwrap()).unwrap();
+        reset();
+        std::fs::write(&second, b"abcdefghij").unwrap();
+        assert_eq!(damage_store(store, StoreFault::CorruptOneBlob).unwrap(), 1);
+        assert_ne!(std::fs::read(&blob).unwrap(), b"0123456789");
+        assert_eq!(std::fs::read(&second).unwrap(), b"abcdefghij");
+        reset();
+        assert_eq!(damage_store(store, StoreFault::DeleteOneBlob).unwrap(), 1);
+        assert!(!blob.exists() && second.exists());
         let empty = tempfile::tempdir().unwrap();
         assert_eq!(damage_store(empty.path(), StoreFault::DeleteBlobs).unwrap(), 0);
     }

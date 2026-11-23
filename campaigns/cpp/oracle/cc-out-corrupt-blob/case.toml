@@ -1,0 +1,22 @@
+summary = "one corrupted blob of a two-output entry is detected before any output is replaced; the compile recovers and the repaired entry is reused"
+cohort = "blocking"
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o", "u.d"]
+
+[[compile]]
+argv = ["{cc}", "-MD", "-MF", "u.d", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "damaged-store"
+reuse = "any"
+action = [{ op = "kache-store-fault", fault = "corrupt-one-blob" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "reuse-after-recovery"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]

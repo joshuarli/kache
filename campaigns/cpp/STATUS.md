@@ -69,7 +69,12 @@ Engineering work still open (not provisioning):
   (`cc` vs `/usr/bin/cc`), and `kache cc` behind shims resolved `cc` to the
   shim, so its probe and memo keyed kache's own binary and would not follow
   a replaced compiler. Store races, covered by kache-only tests rather than
-  ccache-compared oracle cases, so the `cc-rel-*` rows stay `planned`:
+  ccache-compared oracle cases, so most `cc-rel-*` rows stay `planned`.
+  Partial damage is now oracle-covered on L3 (2026-11-23, GCC 15 and Clang 23):
+  `cc-out-missing-blob` and `cc-out-corrupt-blob` damage one blob of an
+  object-plus-depfile entry, `cc-rel-truncated-entry` cuts metadata in half and
+  `cc-rel-missing-entry` removes it; each recovers by compiling and then hits.
+  Kache-only race coverage:
   - Eviction: a blob removed between lookup and restore leaves every output
     as it was and recompiles; nothing is published before every artifact is
     staged (`a_cc_hit_whose_blob_goes_before_restore_leaves_every_output_and_recompiles`).
