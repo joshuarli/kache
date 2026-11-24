@@ -4,7 +4,7 @@
 # case IDs. ccache's suites and unit tests are cited as provenance hints
 # only; this file enumerates ORIGINAL kache cases — no upstream text is
 # carried here. A "happy path" does not close a family; each entry states
-# what would falsify it (via the transition set in C_CPP_PARITY_CAMPAIGN.md:
+# what would falsify it (via the transition set in docs/roadmap.md:
 # empty → populate, delete-outputs → restore, semantic edit → miss, revert →
 # reuse earlier, irrelevant edit → reuse, relocate/toolchain/policy switches).
 #

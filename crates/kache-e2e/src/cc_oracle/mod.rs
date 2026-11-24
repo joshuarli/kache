@@ -1,7 +1,7 @@
 //! C/C++ differential oracle: each case runs through the raw compiler, the
 //! pinned ccache in its normal and forced-preprocessor configurations, and
 //! kache, with independent state per arm, then judges kache against raw.
-//! See `C_CPP_PARITY_CAMPAIGN.md` (CCP-01) for the contract.
+//! See `docs/roadmap.md` (CCP-01) for the contract.
 
 pub mod case;
 pub mod exec;

@@ -2,7 +2,7 @@
 #
 # Locks the reference toolchain, matrix hosts, project inputs, budgets and
 # the performance estimator for the campaign described in
-# C_CPP_PARITY_CAMPAIGN.md. Updating anything in this file requires an
+# docs/roadmap.md. Updating anything in this file requires an
 # explicit baseline-change commit and a differential rerun of the affected
 # evidence.
 #
@@ -36,7 +36,7 @@ ccache_binaries = [
 [host_snapshot_m1]
 # Recorded on the Apple Silicon host used for the 2026-11-17 baseline
 # (Josh's workstation). This host qualifies as an M1 lane host for
-# correctness work; see STATUS.md for the standalone-LLVM gap.
+# correctness work; see docs/roadmap.md for the standalone-LLVM gap.
 platform = "macOS 27.2.1 (26B131), Darwin 27.2.0"
 xcode = "Xcode 27.0 (27A266a)"
 apple_clang = "Apple clang 21.0.0 (clang-2100.3.34.2)"
@@ -47,7 +47,7 @@ make = "GNU Make 3.81"
 cmake = "4.4.2 (Homebrew)"
 ninja = "1.13.2 (Homebrew, /opt/homebrew/bin/ninja)"
 ninja_host_path_shadow = "~/.local/bin/ninja is a gluon-managed Mach-O that reports 1.13.2 but strips trailing variable whitespace, breaking CMAKE_CXX_COMPILER_LAUNCHER emission; e2e-cmake-ninja-flagset fails with it and passes with Homebrew ninja. CMake C/C++ fixture work on this host must use Homebrew ninja (PATH=/opt/homebrew/bin:$PATH)."
-standalone_llvm = "NOT provisioned on this host (no /opt/homebrew/opt/llvm); M1 requires Apple Clang AND standalone LLVM Clang — see STATUS.md"
+standalone_llvm = "NOT provisioned on this host (no /opt/homebrew/opt/llvm); M1 requires Apple Clang AND standalone LLVM Clang — see docs/roadmap.md"
 
 [matrix]
 # Native execution is required for host correctness/performance claims.

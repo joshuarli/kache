@@ -4,12 +4,12 @@ Next: 36
 ### KACH-26 · P1 · Reach ccache-level local C/C++ compatibility
 
 - **Area:** Compiler compatibility, correctness, tests
-- **Where:** campaigns/cpp/STATUS.md (progress ledger), campaigns/cpp/cases.toml (inventory), campaigns/cpp/oracle/ (cases)
+- **Where:** docs/roadmap.md (status), campaigns/cpp/cases.toml (inventory), campaigns/cpp/oracle/ (cases)
 - **Problem:** Kache does not yet match pinned ccache's local C/C++ compatibility: inventory rows remain planned or open, and some lanes are unexecuted. Pinned ccache is the compatibility and reuse oracle and raw compilers are the correctness ground truth, across response files and flags, invalidation, equivalent-preprocessing reuse, complete output sets, conditional PCH/module support, host integration and local reliability. Remote storage stays on the later roadmap.
 - **Recommendation:** Execute the campaign until every final acceptance criterion in the plan passes on one integrated revision; safe passthrough, missing tools and unexecuted lanes do not count as cached parity. KACH-22 (mutants in no gate) stays open alongside.
 - **Fix with:** reference-parity
 - **Effort:** L
-- **Design:** [C_CPP_PARITY_CAMPAIGN.md](C_CPP_PARITY_CAMPAIGN.md)
+- **Design:** [C/C++ parity](docs/roadmap.md#campaign-cc-parity)
 
 ### KACH-22 · P3 · Changed-line mutation testing runs in no gate
 

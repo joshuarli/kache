@@ -1,11 +1,7 @@
 Prefix: DSLP
 Next: 126
 
-Deslop campaign backlog ([plan](https://github.com/laputa-systems/stuff/blob/main/docs/campaigns/deslop.md), tier D). One agent works this file with the `deslop` skill: take the lowest-numbered open ticket whose area does not start with `Needs owner ·`. After DSLP-5, work the open P1 and P2 findings, then fill in `## Report` below.
-
-## Report
-
-Not started.
+Deslop ticket backlog. See the [roadmap](docs/roadmap.md).
 
 ## Tickets
 
@@ -220,7 +216,7 @@ Not started.
 
 - **Area:** Dead code · docs
 - **Where:** Cross.toml, Cargo.toml [features], README.md, TODO.md:8, AGENTS.md (DSLP-89 gap)
-- **Problem:** Cross.toml has no in-repo consumer and [features] default = [] is unused (consumer questions); README links a missing bug_report issue template; TODO.md says 67 oracle cases where STATUS.md and cases.toml say 72; AGENTS.md lists DSLP-89 as open though cache_key_underkeying_test.rs:1166-1174 guards it.
+- **Problem:** Cross.toml has no in-repo consumer and [features] default = [] is unused (consumer questions); README links a missing bug_report issue template; TODO.md says 67 oracle cases where docs/roadmap.md and cases.toml say 72; AGENTS.md lists DSLP-89 as open though cache_key_underkeying_test.rs:1166-1174 guards it.
 - **Recommendation:** Confirm consumers then remove Cross.toml and the empty features table; fix the README link and the case count; drop the stale AGENTS.md gap.
 - **Fix with:** dead-code-archaeology
 - **Effort:** S

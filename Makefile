@@ -150,7 +150,7 @@ e2e-negative-control:
 	  --negative-control \
 	  --out tmp/e2e/negative-control.json
 
-# C/C++ differential oracle (C_CPP_PARITY_CAMPAIGN.md, CCP-01). Each case
+# C/C++ differential oracle (docs/roadmap.md, CCP-01). Each case
 # runs through the raw compiler, the pinned ccache, and kache; reports land
 # in .work/tmp/cc-oracle/<run-id>/. TOOLCHAINS names C drivers on PATH
 # (cc, gcc, clang, gcc-15, ...); CASE and PROFILES narrow the selection.

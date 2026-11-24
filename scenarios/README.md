@@ -1,5 +1,16 @@
 # Scenarios
 
+## Firefox cross-checkout result
+
+The cross-checkout convergence experiment reduced divergent crates from 119 to
+one (`remote_settings`, #167), with `gkrust` hitting across checkouts. Its
+reported warm build fell from about 1149 s to 187 s on the measured clones.
+The result used Firefox path-clean patches, `MOZ_BUILD_DATE`, and the gated
+`KACHE_PATH_ONLY_ENV_VARS` include-only normalization. Do not normalize
+`CARGO_MANIFEST_DIR`: its value is baked into the `remote_settings` output.
+The key-diff harness had paired different unified translation units as if they
+were the same; match them by clone-invariant identity when interpreting results.
+
 Every runnable e2e or benchmark case lives under one scenario directory:
 
 ```text

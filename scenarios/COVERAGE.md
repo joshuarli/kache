@@ -7,7 +7,7 @@ load benchmarks, not feature tests).
 
 This is a historical coverage inventory, not the current execution order. The
 active local C/C++ work is defined by
-[the ccache parity campaign](../C_CPP_PARITY_CAMPAIGN.md), including macOS/Linux
+[the ccache parity campaign](../docs/roadmap.md#campaign-cc-parity), including macOS/Linux
 gates and a raw-compiler correctness oracle. Remote/S3 storage is deferred to its
 later roadmap. Recheck the counts and behavior below against current source;
 existing refusal coverage does not establish cached compatibility, and the

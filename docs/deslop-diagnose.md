@@ -99,7 +99,7 @@ and `cargo-mutants` are not installed on the host.
 ## Not reviewed
 
 - The C/C++ wrapper, oracle and benchmarks (`src/compiler/cc*`, `kache-cc*`):
-  owned by `C_CPP_PARITY_CAMPAIGN.md`.
+  owned by `docs/roadmap.md`.
 - Linux and Windows behavior, including Linux linker scripts (DSLP-89 predicts
   the same defect), musl, and cgroup scheduling.
 - The daemon wire protocol and `kache-protocol` fuzzing beyond the guard tests.
