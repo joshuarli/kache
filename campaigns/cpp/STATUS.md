@@ -68,11 +68,11 @@ Counts are taken from the files, not carried forward:
 `grep '^status = ' campaigns/cpp/cases.toml | sort | uniq -c` and
 `grep -l '^cohort = ' campaigns/cpp/oracle/*/case.toml`.
 
-- Inventory (`cases.toml`): 188 entries, and every oracle directory has
-  one: 103 `oracle`, 75 `planned`, 6 `conditional`, 4 `out_of_scope`.
-- Oracle cases (`oracle/`): 103, of which 99 `blocking` and 4 `open`
-  (`cc-eqp-comment-only`, `cc-input-token-paste-probe` and the CCP-04
-  equivalent-expansion gaps).
+- Inventory (`cases.toml`): 196 entries, and every oracle directory has
+  one: 143 `oracle`, 43 `planned`, 6 `conditional`, 4 `out_of_scope`.
+- Oracle cases (`oracle/`): 143, of which 139 `blocking` and 4 `open`
+  (`cc-eqp-comment-only`, `cc-eqp-unused-macro`, `cc-eqp-inactive-conditional`,
+  `cc-input-token-paste-probe`).
 - Gates: every Linux and macOS CI job is required (PR #50);
   KACH-21 and KACH-27 are closed. Main had a one-off musl
   `cc-out-diagnostics-color-reuse` failure after #136; it passed on rerun.
