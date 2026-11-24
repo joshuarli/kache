@@ -3584,6 +3584,57 @@ fn preprocessed_input_hash(
     })
 }
 
+/// Digest of the profile data a `-fprofile-use` compile reads, or `None`
+/// when no such profile applies. GCC reads `<dir>/<mangled object path>.gcda`
+/// for a directory and the `.gcda` beside the object otherwise; Clang's bare
+/// form reads `default.profdata` in the working directory. A directory is
+/// keyed as every file name and content under it, which covers whichever file
+/// GCC picks. An absent profile is keyed too, because the compile differs.
+fn cc_profile_use_digest(parsed: &CcArgs) -> Result<Option<String>> {
+    let gnu = parsed.family == ToolFamily::Gnu;
+    let named = parsed.rest.iter().find_map(|arg| arg.strip_prefix("-fprofile-use=")).filter(|_| gnu);
+    let bare = parsed.rest.iter().any(|arg| arg == "-fprofile-use");
+    if named.is_none() && !bare {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        !(gnu && parsed.rest.iter().any(|arg| arg.starts_with("-fprofile-dir=") || arg.starts_with("-fprofile-prefix-path="))),
+        "gcc -fprofile-use with -fprofile-dir reads a mangled path the key does not model"
+    );
+    let profile = match named {
+        Some(path) => PathBuf::from(path),
+        None if gnu => parsed.object_output_path().context("cc -fprofile-use without an object path")?.with_extension("gcda"),
+        None => PathBuf::from("default.profdata"),
+    };
+    let resolved = parsed.invocation_env.resolve(&profile).context("resolving cc profile")?;
+    let mut hasher = blake3::Hasher::new();
+    let mut files = 0usize;
+    let mut stack = vec![resolved.clone()];
+    while let Some(path) = stack.pop() {
+        let Ok(metadata) = std::fs::metadata(&path) else {
+            hasher.update(b"absent\0");
+            hasher.update(path.strip_prefix(&resolved).unwrap_or(&path).as_os_str().as_encoded_bytes());
+            continue;
+        };
+        if metadata.is_dir() {
+            let mut entries = std::fs::read_dir(&path)
+                .with_context(|| format!("reading cc profile directory {}", path.display()))?
+                .map(|entry| entry.map(|entry| entry.path()))
+                .collect::<std::io::Result<Vec<_>>>()?;
+            entries.sort();
+            stack.extend(entries.into_iter().rev());
+            continue;
+        }
+        files += 1;
+        anyhow::ensure!(files <= 100_000, "cc profile directory holds too many files to key");
+        let bytes = std::fs::read(&path).with_context(|| format!("reading cc profile {}", path.display()))?;
+        hasher.update(path.strip_prefix(&resolved).unwrap_or(&path).as_os_str().as_encoded_bytes());
+        hasher.update(b"\0");
+        hasher.update(blake3::hash(&bytes).as_bytes());
+    }
+    Ok(Some(hasher.finalize().to_hex().to_string()))
+}
+
 /// Digest of a file the driver reads to change its own options: a GCC
 /// specs file or a Clang config file. A bare name is searched in the
 /// driver's own directories, and a file that pulls in another one hides that
@@ -3681,6 +3732,7 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Prefix("-fsanitize-ignore-for-ubsan-feature="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fmodule-name="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fprofile-use="), class: FlagClass::ParserHandled, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-fprofile-use"), class: FlagClass::ParserHandled, source: "KACH-34 — profile next to the object (GCC) or default.profdata (Clang), keyed by content or absence", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fprofile-instr-use="), class: FlagClass::ParserHandled, source: "CCP-03 — clang instrumented profile, keyed by content like -fprofile-use=", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fprofile-sample-use="), class: FlagClass::ParserHandled, source: "CCP-03 — clang sample profile, keyed by content", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Regex(r"--?specs=.+"), class: FlagClass::ParserHandled, source: "CCP-02 — GCC specs file keyed by content; searched names and %include refuse", dialect: Some(Dialect::Gnu) },
@@ -10139,11 +10191,9 @@ impl CcCompiler {
         for arg in &parsed.rest {
             for prefix in ["-fprofile-use=", "-fprofile-instr-use=", "-fprofile-sample-use=", "--warning-suppression-mappings=", "-fsanitize-ignorelist="] {
                 if let Some(path) = arg.strip_prefix(prefix) {
-                    // GCC reads `<path>/<mangled object>.gcda`, not `path` itself.
-                    anyhow::ensure!(
-                        !(prefix == "-fprofile-use=" && parsed.family == ToolFamily::Gnu),
-                        "gcc -fprofile-use= names a profile directory whose per-object files the key cannot see"
-                    );
+                    if prefix == "-fprofile-use=" && parsed.family == ToolFamily::Gnu {
+                        continue;
+                    }
                     let resolved = parsed.invocation_env.resolve(Path::new(path))
                         .context("resolving cc flag input")?;
                     let digest = ctx.file_hasher.hash(&resolved)
@@ -10154,6 +10204,12 @@ impl CcCompiler {
                     hasher.update(b"\n");
                 }
             }
+        }
+
+        if let Some(digest) = cc_profile_use_digest(parsed)? {
+            hasher.update(b"cc_profile_use:");
+            hasher.update(digest.as_bytes());
+            hasher.update(b"\n");
         }
 
         for (prefix, arg) in parsed.rest.iter().filter_map(|arg| {

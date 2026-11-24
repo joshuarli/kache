@@ -47,15 +47,6 @@ Next: 36
 - **Fix with:** reference-parity
 - **Effort:** M
 
-### KACH-34 · P3 · GCC -fprofile-use with a profile directory is never cached
-
-- **Area:** Compiler compatibility
-- **Where:** src/compiler/cc.rs cache key loop for -fprofile-use= (bails for GCC), and bare -fprofile-use (unsupported flag)
-- **Problem:** GCC reads <dir>/<mangled object path>.gcda for -fprofile-use[=dir], a file the key cannot see from the flag, so kache refuses these compiles; PGO builds with GCC therefore never cache.
-- **Recommendation:** Derive the .gcda path GCC reads from the object path, cwd and -fprofile-dir/-fprofile-prefix-path the way GCC mangles it, key that file (absent vs present), and cover it with an oracle case that edits the profile.
-- **Fix with:** reference-parity
-- **Effort:** M
-
 ### KACH-35 · P4 · No read-only store mode for shared or CI caches
 
 - **Area:** Store
