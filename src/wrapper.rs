@@ -898,7 +898,7 @@ pub(crate) fn run_cc_probe_for(
         crate::invocation::io::status(env.command(&program)?.args(args)).with_context(|| {
             format!("spawning `{program}` to forward cc-crate compiler-family probe")
         })?;
-    Ok(status.code().unwrap_or(1))
+    Ok(crate::platform::exit_code_of(&status))
 }
 
 /// Resolve the compiler a cc-crate family probe should forward to: the
@@ -1918,7 +1918,7 @@ fn cc_passthrough(
     )
     .with_context(|| format!("executing {}", parsed.program))?;
     Ok(PassthroughOutput {
-        exit_code: status.code().unwrap_or(1),
+        exit_code: crate::platform::exit_code_of(&status),
         fallback: false,
         fallback_attempt: None,
     })
@@ -6891,7 +6891,7 @@ fn passthrough(args: &RustcArgs) -> Result<PassthroughOutput> {
     let status = crate::invocation::io::status(&mut cmd)
         .with_context(|| format!("executing {}", args.rustc.display()))?;
     Ok(PassthroughOutput {
-        exit_code: status.code().unwrap_or(1),
+        exit_code: crate::platform::exit_code_of(&status),
         fallback: false,
         fallback_attempt: None,
     })

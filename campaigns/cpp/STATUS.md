@@ -128,7 +128,8 @@ Engineering work still open (not provisioning):
   miss; failed copies and renames leave no temp file or read-only source);
   `cc-rel-stale-locks` by `sweep_stale_staging_respects_min_age`;
   `cc-rel-cancellation-signals` by `a_compiler_killed_by_a_signal_fails_and_is_never_cached`
-  (no success, object or entry; kache exits 1 where raw dies by the signal: KACH-32);
+  (no success, object or entry, and kache now dies of the compiler's signal as raw
+  does; pinned ccache exits 255);
   `cc-rel-size-limit-eviction` cannot be an oracle case because the eviction grace
   period protects recently accessed entries; `cc-rel-readonly-disabled` has no
   read-only mode to exercise (KACH-35; the disabled half is the `cache-disabled`

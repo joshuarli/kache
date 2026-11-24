@@ -10824,7 +10824,7 @@ impl CcCompiler {
         let output = command
             .invocation_output()
             .with_context(|| format!("executing {}", parsed.program))?;
-        let exit_code = output.status.code().unwrap_or(1);
+        let exit_code = crate::platform::exit_code_of(&output.status);
 
         // Output discovery: on a successful compile the named output is the
         // cacheable artifact. Skip on failure, and skip for the modes that
