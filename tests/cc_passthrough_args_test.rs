@@ -1911,3 +1911,43 @@ fn quoted_root_macros_compile_each_checkouts_text_from_a_shared_cache() {
         }
     }
 }
+
+#[test]
+fn a_compiler_killed_by_a_signal_fails_and_is_never_cached() {
+    let dir = FixtureDir::new();
+    let root = dir.path().canonicalize().unwrap();
+    fs::create_dir(root.join("bin")).unwrap();
+    let Some(real_cc) = ["/usr/bin/cc", "/usr/bin/clang", "/usr/bin/gcc"].into_iter().find(|cc| std::path::Path::new(cc).exists()) else {
+        eprintln!("skipping: no system C compiler");
+        return;
+    };
+    kache_fs::testutil::write_executable(
+        &root.join("bin/cc"),
+        format!(
+            "#!/bin/sh\ncase \" $* \" in *\" -E \"*|*-###*|*--version*|*\" -v \"*|*-dumpversion*|*-dumpmachine*) exec {real_cc} \"$@\";; esac\n\
+             for a; do case \"$a\" in *unit.c) kill -SEGV $$;; esac; done\nexec {real_cc} \"$@\"\n"
+        ),
+    );
+    fs::write(root.join("kache.toml"), "").unwrap();
+    fs::write(root.join("unit.c"), "int main(void) { return 0; }\n").unwrap();
+    let event_path = root.join("cache/events.jsonl");
+    for run in ["first", "second"] {
+        let _ = fs::remove_file(root.join("unit.o"));
+        let compiled = cacheable_cc_command(&root)
+            .arg(root.join("bin/cc"))
+            .args(["-c", "unit.c", "-o", "unit.o"])
+            .env("HOME", &root)
+            .env("KACHE_DAEMON_PUBLISH", "0")
+            .env("KACHE_MIN_STORE_COMPILE_MS", "0")
+            .env_remove("RUSTC_WRAPPER")
+            .output()
+            .unwrap();
+        assert!(!compiled.status.success(), "{run}: a compiler killed by SIGSEGV must not look successful: {compiled:?}");
+        assert!(!root.join("unit.o").exists(), "{run}: no object may appear for a killed compile");
+    }
+    let events = fs::read_to_string(&event_path).unwrap_or_default();
+    assert!(
+        !events.contains("\"local_hit\"") && !events.contains("\"miss\""),
+        "a killed compile must never be stored or restored: {events}"
+    );
+}

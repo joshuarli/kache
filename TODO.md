@@ -1,24 +1,15 @@
 Prefix: KACH
-Next: 32
+Next: 33
 
 ### KACH-26 · P1 · Reach ccache-level local C/C++ compatibility
 
 - **Area:** Compiler compatibility, correctness, tests
-- **Plan:** [C_CPP_PARITY_CAMPAIGN.md](C_CPP_PARITY_CAMPAIGN.md)
-- **Status:** Running. Differential oracle, 67 oracle cases (63 blocking), required macOS/Linux gates and the zlib/LLVM project checks have landed; a provisional timed baseline (`make cc-bench`) ranks the losses; a quiet-host rerun is next. Progress: [campaigns/cpp/STATUS.md](campaigns/cpp/STATUS.md).
-- **Goal:** Execute the unattended campaign using pinned ccache as the compatibility/reuse oracle and raw compilers as correctness ground truth, with native macOS and Linux coverage.
-- **Scope:** Response files and flags, invalidation, equivalent-preprocessing reuse, complete output sets, conditional PCH/module support, host integration, local reliability, and measured performance. Remote storage stays on the later roadmap.
-- **Coordination:** KACH-21 and KACH-27 closed when the Linux gates became required (PR #50). KACH-22 (mutants in no gate) stays open. Evidence lives in the campaign ledger.
-- **Done when:** Every final acceptance criterion in the plan passes on the same integrated revision; safe passthrough, missing tools, and unexecuted lanes do not count as cached parity.
-
-### KACH-29 · P3 · Narrow native C/C++ compiler probe environment keys — implemented
-
-- **Area:** Performance
-- **Where:** `src/probe/cache.rs`, `src/probe/mod.rs`, `src/compiler/cc.rs`
-- **Problem:** The `cc -###` probe record is keyed on every environment variable except `KACHE_*` and the per-command shell and build-driver variables (`PER_COMMAND_ENV`: `_`, `SHLVL`, `MAKEFLAGS`, …). Any other variable that changes per invocation therefore reruns the probe (about 30 ms) on every hit and writes one more record under `probes/`. Under hyperfine (`HYPERFINE_ITERATION`), a warm hit took 42 ms instead of 14, and 68 runs left 68 records. Builds that export a per-job counter or a timestamp pay the same.
-- **Resolution:** Probe schema 8 narrows environment inputs only for native ELF/Mach-O Clang drivers whose `-###` cc1 executable canonicalizes to the invoked executable. GCC has no OS-derived self path and stays opaque, as do forwarding wrappers, Apple's xcrun shim, scripts and launchers. Opaque probes and preprocess memos retain whole-environment keying; direct-capability and epoch probes also key the whole environment. Preprocess memo v11, direct-capability material v4 and epoch probe v2 retire the previous policy. User `key_env_vars` patterns still join both probe modes and override internal-variable exclusions.
-- **Fix with:** native-driver table tests assert that each input re-probes, while `HYPERFINE_ITERATION` preserves one record; compiled GCC/Clang forwarding wrappers re-probe on arbitrary inputs and match raw signed/unsigned objects. Old native probe records cannot bypass identity checks. Hyperfine's environment-unsetting workaround is unnecessary only for qualifying self-identifying Clang drivers.
-- **Effort:** M
+- **Where:** campaigns/cpp/STATUS.md (progress ledger), campaigns/cpp/cases.toml (inventory), campaigns/cpp/oracle/ (cases)
+- **Problem:** Kache does not yet match pinned ccache's local C/C++ compatibility: inventory rows remain planned or open, and some lanes are unexecuted. Pinned ccache is the compatibility and reuse oracle and raw compilers are the correctness ground truth, across response files and flags, invalidation, equivalent-preprocessing reuse, complete output sets, conditional PCH/module support, host integration and local reliability. Remote storage stays on the later roadmap.
+- **Recommendation:** Execute the campaign until every final acceptance criterion in the plan passes on one integrated revision; safe passthrough, missing tools and unexecuted lanes do not count as cached parity. KACH-22 (mutants in no gate) stays open alongside.
+- **Fix with:** reference-parity
+- **Effort:** L
+- **Design:** [C_CPP_PARITY_CAMPAIGN.md](C_CPP_PARITY_CAMPAIGN.md)
 
 ### KACH-22 · P3 · Changed-line mutation testing runs in no gate
 
@@ -46,3 +37,13 @@ Next: 32
 - **Recommendation:** Lead those pages with this fork's release archives and source install (both kache and kache-engine), and keep the upstream channels only as attributed alternatives, or drop them.
 - **Fix with:** rg -n "cargo install kache --locked|cargo-binstall" docs/ finds no primary install instruction that selects the upstream distribution.
 - **Effort:** S
+
+### KACH-32 · P3 · A compiler killed by a signal is reported as exit status 1
+
+- **Area:** wrapper
+- **Where:** src/wrapper.rs and src/main.rs (status.code().unwrap_or(1) at the compile result sites), src/compiler/cc.rs (output.status.code().unwrap_or(1)); the daemon execution result carries only an integer exit code
+- **Problem:** When the compiler kache runs dies from a signal (a SIGSEGV in cc1, an OOM kill), raw exits by that signal (a shell shows 139) while kache exits 1; pinned ccache 4.14.3 exits 255. The build still fails and nothing is cached (a_compiler_killed_by_a_signal_fails_and_is_never_cached), but make and shells no longer report the crash as a signal, so a compiler crash reads like an ordinary error.
+- **Recommendation:** Carry the terminating signal with the compile result, including across the daemon execution protocol, and once outputs are settled re-raise it in the wrapper with the default disposition; keep exit codes unchanged for normal exits.
+- **Fix with:** error-model
+- **Effort:** M
+
