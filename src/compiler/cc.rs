@@ -346,6 +346,9 @@ enum CcArgAction {
     /// key through the preprocessor expansion like `-isystem`'s; the
     /// parser only has to consume the value.
     SystemInclude,
+    /// Clang `-ivfsoverlay`: the overlay's bytes are keyed with the other
+    /// driver files; the parser only consumes the value.
+    VfsOverlay,
     Define,
 }
 
@@ -674,6 +677,14 @@ static CC_ARG_SPECS: &[CcArgSpec] = &[
         action: CcArgAction::DepTarget,
         bucket: CcArgBucket::NoObjectEffect,
         source: "dependency target",
+        dialect: Some(Dialect::Gnu),
+    },
+    CcArgSpec {
+        matcher: Matcher::Exact("-ivfsoverlay"),
+        value_form: CcArgValueForm::Separated,
+        action: CcArgAction::VfsOverlay,
+        bucket: CcArgBucket::Preprocessor,
+        source: "KACH-33 — clang virtual file system overlay, keyed by content",
         dialect: Some(Dialect::Gnu),
     },
     CcArgSpec {
@@ -1899,7 +1910,7 @@ fn apply_cc_arg(parsed: &mut CcArgs, depinfo: &mut Option<DepInfoSpec>, arg: &Pa
                 parsed.defines.push(parse_define(value));
             }
         }
-        CcArgAction::SystemInclude | CcArgAction::AuxInfo => {}
+        CcArgAction::SystemInclude | CcArgAction::AuxInfo | CcArgAction::VfsOverlay => {}
     }
 }
 
@@ -3584,6 +3595,25 @@ fn preprocessed_input_hash(
     })
 }
 
+/// Digest of a Clang VFS overlay. The files it maps reach the read set under
+/// their external names, so the overlay's own bytes are what remains to key.
+/// An overlay that reports virtual names instead (`use-external-names`
+/// false) would put paths the key cannot read into that read set, so it
+/// refuses.
+fn cc_vfs_overlay_digest(parsed: &CcArgs, overlay: &str) -> Result<String> {
+    let resolved = parsed.invocation_env.resolve(Path::new(overlay)).context("resolving cc VFS overlay")?;
+    let bytes = std::fs::read(&resolved).with_context(|| format!("reading cc VFS overlay {}", resolved.display()))?;
+    let text = String::from_utf8_lossy(&bytes);
+    anyhow::ensure!(
+        !text.split("use-external-names").skip(1).any(|rest| {
+            rest.trim_start_matches(|c: char| c == '\'' || c == '"' || c == ':' || c.is_whitespace())
+                .to_ascii_lowercase().starts_with("false")
+        }),
+        "cc VFS overlay reports virtual file names"
+    );
+    Ok(blake3::hash(&bytes).to_hex().to_string())
+}
+
 /// Digest of the profile data a `-fprofile-use` compile reads, or `None`
 /// when no such profile applies. GCC reads `<dir>/<mangled object path>.gcda`
 /// for a directory and the `.gcda` beside the object otherwise; Clang's bare
@@ -3743,6 +3773,7 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Prefix("-Xarch_"), class: FlagClass::RawKeyed, source: "CCP-07 — clang per-slice operand; keyed with its operand, and each slice is preprocessed with its own operands", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fmodule-file="), class: FlagClass::ParserHandled, source: "CCP-06 — clang explicit module consumer; the key folds the module file's bytes", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fprebuilt-module-path="), class: FlagClass::ParserHandled, source: "CCP-06 — clang prebuilt module directory; the key folds every module file in it", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Exact("-ivfsoverlay"), class: FlagClass::ParserHandled, source: "KACH-33 — clang VFS overlay keyed by content; overlays that report virtual names refuse", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-include-pch"), class: FlagClass::ParserHandled, source: "CCP-06 — clang PCH consumer; the key folds the PCH bytes and its inputs' stamps", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("--coverage"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov instrumentation and notes; the sidecar key folds the paths the outputs embed", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Exact("-fprofile-arcs"), class: FlagClass::RawKeyed, source: "CCP-05 — gcov arc instrumentation; the object names its absolute .gcda path", dialect: Some(Dialect::Gnu) },
@@ -10204,6 +10235,12 @@ impl CcCompiler {
                     hasher.update(b"\n");
                 }
             }
+        }
+
+        for overlay in parsed.rest.windows(2).filter(|pair| pair[0] == "-ivfsoverlay").map(|pair| &pair[1]) {
+            hasher.update(b"cc_vfs_overlay:");
+            hasher.update(cc_vfs_overlay_digest(parsed, overlay)?.as_bytes());
+            hasher.update(b"\n");
         }
 
         if let Some(digest) = cc_profile_use_digest(parsed)? {

@@ -12012,3 +12012,25 @@ fn profile_use_keys_the_profile_the_driver_reads() {
     assert_ne!(digest(&["clang", "-fprofile-use", "-c", "u.c", "-o", "u.o"]).unwrap().unwrap(), clang);
     assert_eq!(digest(&["clang", "-fprofile-use=x.profdata", "-c", "u.c"]).unwrap(), None);
 }
+
+#[test]
+fn vfs_overlays_are_keyed_by_content_and_virtual_names_refuse() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = InvocationEnv::from_parts(
+        [("PATH", "/absent")], Some(dir.path().into()), None, dir.path().into(),
+    );
+    let parsed = CcArgs::parse_for(&s(&["clang", "-ivfsoverlay", "vfs.json", "-c", "u.c", "-o", "u.o"]), &env).unwrap();
+    assert!(parsed.refuse_reasons(&[]).is_empty(), "{:?}", parsed.refuse_reasons(&[]));
+    assert_eq!(parsed.sources, [PathBuf::from("u.c")]);
+    fs::write(dir.path().join("vfs.json"), r#"{"version": 0, "roots": []}"#).unwrap();
+    let first = cc_vfs_overlay_digest(&parsed, "vfs.json").unwrap();
+    fs::write(dir.path().join("vfs.json"), r#"{"version": 0, "roots": [{"name": "/v", "type": "directory", "contents": []}]}"#).unwrap();
+    assert_ne!(cc_vfs_overlay_digest(&parsed, "vfs.json").unwrap(), first);
+    for virtual_names in [r#"{"use-external-names": false, "roots": []}"#, "use-external-names: 'false'\nroots: []\n", "'use-external-names': FALSE\n"] {
+        fs::write(dir.path().join("vfs.json"), virtual_names).unwrap();
+        assert!(cc_vfs_overlay_digest(&parsed, "vfs.json").is_err(), "{virtual_names}");
+    }
+    fs::write(dir.path().join("vfs.json"), r#"{"use-external-names": true, "roots": []}"#).unwrap();
+    assert!(cc_vfs_overlay_digest(&parsed, "vfs.json").is_ok());
+    assert!(cc_vfs_overlay_digest(&parsed, "missing.json").is_err());
+}
