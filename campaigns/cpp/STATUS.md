@@ -101,6 +101,9 @@ Engineering work still open (not provisioning):
   or `default.profdata`, each including absence; `-fprofile-dir` with profile use
   still refuses. Verified on L3: objects equal raw with and without the profile,
   and removing it misses.
+- CCP-02 VFS overlays, 2026-11-24 (L3, Clang 23): `-ivfsoverlay` compiles cache, keyed by
+  the overlay's bytes; mapped headers reach the read set under their external names.
+  Overlays with `use-external-names: false` pass through (`cc-input-vfs-overlay`).
 - CCP-03: the `@file` variants are oracle cases (see the owner ruling
   above). Clang `--config=` and GCC `-specs=` files named by a path are keyed
   by content (`cc-input-clang-config-file`, `cc-input-gcc-specs`, blocking);

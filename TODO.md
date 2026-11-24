@@ -38,15 +38,6 @@ Next: 36
 - **Fix with:** rg -n "cargo install kache --locked|cargo-binstall" docs/ finds no primary install instruction that selects the upstream distribution.
 - **Effort:** S
 
-### KACH-33 · P3 · Clang -ivfsoverlay compiles are never cached
-
-- **Area:** Compiler compatibility
-- **Where:** src/compiler/cc.rs CC_FLAGS (no -ivfsoverlay row); inventory row cc-input-vfs-overlay
-- **Problem:** A compile with -ivfsoverlay <file> is refused as an unsupported flag, so builds that use VFS overlays (Swift/Clang module setups, some Bazel toolchains) never cache. Keying the overlay file alone is unsafe: the overlay redirects reads to external files that the depfile names only by their virtual paths, so the read set does not see the real inputs.
-- **Recommendation:** Parse the overlay (YAML/JSON roots, external-contents) and key the overlay bytes plus every external-contents file it maps, or refuse when the overlay cannot be fully resolved; add cc-input-vfs-overlay as a blocking oracle case.
-- **Fix with:** reference-parity
-- **Effort:** M
-
 ### KACH-35 · P4 · No read-only store mode for shared or CI caches
 
 - **Area:** Store

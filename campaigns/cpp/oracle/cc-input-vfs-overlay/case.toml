@@ -1,0 +1,33 @@
+summary = "a Clang VFS overlay is keyed by content: editing the mapped header misses, retargeting the overlay misses, and returning to a mapping hits"
+cohort = "blocking"
+families = ["clang"]
+profiles = ["transparent", "reproducible"]
+outputs = ["u.o"]
+
+[[compile]]
+argv = ["{cc}", "-ivfsoverlay", "vfs.json", "-c", "u.c", "-o", "u.o"]
+source = "u.c"
+
+[[step]]
+name = "populate"
+reuse = "miss"
+
+[[step]]
+name = "restore"
+reuse = "hit"
+action = [{ op = "delete-outputs" }]
+
+[[step]]
+name = "edit-mapped-header"
+reuse = "miss"
+action = [{ op = "write", path = "real/a.h", content = "#define H 4\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "retarget-overlay"
+reuse = "miss"
+action = [{ op = "write", path = "vfs.json", content = "{\"version\": 0, \"overlay-relative\": true, \"roots\": [{\"name\": \"virt\", \"type\": \"directory\", \"contents\": [{\"name\": \"h.h\", \"type\": \"file\", \"external-contents\": \"real/b.h\"}]}]}\n" }, { op = "delete-outputs" }]
+
+[[step]]
+name = "back-to-a"
+reuse = "hit"
+action = [{ op = "write", path = "vfs.json", content = "{\"version\": 0, \"overlay-relative\": true, \"roots\": [{\"name\": \"virt\", \"type\": \"directory\", \"contents\": [{\"name\": \"h.h\", \"type\": \"file\", \"external-contents\": \"real/a.h\"}]}]}\n" }, { op = "delete-outputs" }]

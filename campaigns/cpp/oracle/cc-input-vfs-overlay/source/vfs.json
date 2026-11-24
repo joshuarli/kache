@@ -1,0 +1,1 @@
+{"version": 0, "overlay-relative": true, "roots": [{"name": "virt", "type": "directory", "contents": [{"name": "h.h", "type": "file", "external-contents": "real/a.h"}]}]}

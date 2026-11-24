@@ -300,7 +300,7 @@ summary = "-ivfsoverlay file change (and absence) invalidates"
 profiles = ["both"]
 compilers = ["clang", "apple-clang"]
 ccache.suite = "ivfsoverlay.bash"
-status = "planned"
+status = "oracle"
 
 [[case]]
 id = "cc-flag-profile-dir"
