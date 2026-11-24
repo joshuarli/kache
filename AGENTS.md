@@ -10,8 +10,7 @@
 - Change (config component): `cargo test -p kache-config --all-features`; 117 tests, 0.05s execution / 1.73s total
   on Linux x86_64, capped to 4 of 8 CPUs. Explicit invocation snapshots and private temp files; no live-env tests added.
 - Change (consumers): `make check` is the pre-PR gate: lint, client graph, resource guard, workspace tests.
-  Warm `make test` 269.79s → 269.99s here (4 CPUs); costs and fault proofs: `docs/deslop-kache-config-tests.md`.
-  Use system `TMPDIR`, unset `KACHE_CACHE_DIR`: checkout-local temp roots / ambient cache roots fail tests (DSLP-88).
+  Use system `TMPDIR`, unset `KACHE_CACHE_DIR`: checkout-local temp roots / ambient cache roots fail tests.
 - Scenario: PR CI runs workspace `make test` (`ci.yml`, Linux musl and macOS), `make lint` (`lint.yml`), and e2e/oracles.
   macOS jobs run only while the repository variable `KACHE_MACOS_CI` is not `off`
   (`gh variable set KACHE_MACOS_CI --body on` re-enables them); each macOS negative control is its own job.
@@ -20,19 +19,13 @@
 - Full: performance/project/oracle campaigns and `make pr` are manual/on request; not run in the config tests slice.
 - CLI flags and exit codes: `tests/cli_commands_test.rs` (`argument_errors_exit_two`); wrapper invocation:
   `tests/integration_test.rs` (`test_wrapper_hello_world`, `test_rust_restored_outputs_allow_build_without_wrapper`).
-- Cache key (a wrong hit silently serves a stale artifact): `tests/cache_key_underkeying_test.rs`, `src/cache_key/tests.rs`. Known gap: linker input files named by
-  `-C link-arg` (DSLP-89).
+- Cache key (a wrong hit silently serves a stale artifact): `tests/cache_key_underkeying_test.rs`, `src/cache_key/tests.rs`.
 - On-disk store format, integrity, concurrent writers: `crates/kache-store/src/store/tests.rs`; entry schema in `crates/kache-format`.
 - Wrapper/daemon wire protocol: `crates/kache-protocol/src/execution.rs`
   (`native_strings_round_trip_without_loss_and_reject_nuls`, `execution_diagnostics_reject_legacy_and_foreign_protocols`).
 - Performance workload: `make perf-gate-local` (HEAD against its merge base) and `make bench-short PROJECT=<project>`
-  (cold and warm builds); neither ran in Ground.
-- Review findings and scope: `docs/deslop-diagnose.md`.
-- No vendored trees. DSLP-4 installed `cargo-llvm-cov 0.9.2` and `cargo-mutants 27.1.0`; scoped scratch recipes
-  and coverage limits are in the audit. No new coverage/mutation CI lane is qualified by that local audit.
-- Components, one deslop slice each (about 5k to 19k lines; scopes in `TODO-DESLOP.md`): `crates/kache-config`,
-  `kache-e2e` (2), `kache-fs`, `kache-store` (3), the small `crates/kache-*`, top-level `src` module groups,
-  `src/cache_key`, `src/compiler`, `src/wrapper`, `src/cli`, `tests` (2), `scripts`, `test-projects`, build and docs.
+  (cold and warm builds).
+- No vendored trees.
 
 ## C/C++ parity campaign
 

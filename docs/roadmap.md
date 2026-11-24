@@ -26,7 +26,7 @@ This is the single plan for this repository: all current and future work, and th
 
 ### Goal and state
 
-KACH-26: match the pinned ccache's safe local compiler-cache coverage and observable behavior on macOS and Linux. Ccache is the reuse reference; the raw compiler is the correctness oracle. Preserve Rust support, local storage, scheduling and cross-worktree reuse. Correct passthrough is not cached parity. Work the [ticket backlog](../TODO.md); the separate [deslop backlog](../TODO-DESLOP.md) retains its tickets. Its former tier-D instruction selected the lowest-numbered open ticket outside `Needs owner ·`, then open P1/P2 findings after DSLP-5; its report had not started.
+KACH-26: match the pinned ccache's safe local compiler-cache coverage and observable behavior on macOS and Linux. Ccache is the reuse reference; the raw compiler is the correctness oracle. Preserve Rust support, local storage, scheduling and cross-worktree reuse. Correct passthrough is not cached parity. Work the [ticket backlog](../TODO.md).
 
 CCP-00 bootstrap and CCP-01 runner exist. CCP-02–08 have landed substantial coverage but remain incomplete; the inventory is authoritative. The latest ledger records 196 inventory entries: 143 oracle, 43 planned, 6 conditional and 4 out of scope; 139 cases block and four remain open: `cc-eqp-comment-only`, `cc-eqp-unused-macro`, `cc-eqp-inactive-conditional`, and `cc-input-token-paste-probe`. Recount from the inventory before relying on these figures.
 
@@ -77,4 +77,4 @@ Pinned [ccache 4.14.3](https://ccache.dev/manual/4.14.3.html), tag `v4.14.3`, co
 - Remote storage: after local parity, decide whether to pursue versioned artifacts, backend selection, verified transfers, authentication, retention and independent operational acceptance.
 - Firefox cross-checkout: productionize and upstream the cache-agnostic patches; address vendored checksums, system-NSS, bare-Cargo and Windows support, and consider the `remote_settings` residual (#167).
 - Firefox: consider a config-file `path_only_env_vars` setting and dedicated test, retaining the include-only safety gate.
-- KACH-22, KACH-24, KACH-25, KACH-35 and DSLP tickets: see [TODO.md](../TODO.md) and [TODO-DESLOP.md](../TODO-DESLOP.md).
+- Other open work: see [TODO.md](../TODO.md).
