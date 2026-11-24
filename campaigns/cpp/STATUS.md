@@ -95,8 +95,12 @@ Engineering work still open (not provisioning):
   `-fzero-call-used-regs`, `-m[no-]red-zone`, GCC `-fharden-*`) are probe-keyed.
   Unknown flags pass through with raw side files (`cc-unknown-flag-passthrough`).
   Clang `-fprofile-instr-use=` and `-fprofile-sample-use=` are keyed by the
-  profile's content like `-fprofile-use=` (`cc-flag-profile-use`). GCC's
-  `-fprofile-use=` stays refused: it names a directory of per-object profiles.
+  profile's content like `-fprofile-use=` (`cc-flag-profile-use`). GCC
+  `-fprofile-use[=dir]` and Clang's bare `-fprofile-use` are keyed too: every file
+  name and content under a GCC profile directory, the `.gcda` beside the object,
+  or `default.profdata`, each including absence; `-fprofile-dir` with profile use
+  still refuses. Verified on L3: objects equal raw with and without the profile,
+  and removing it misses.
 - CCP-03: the `@file` variants are oracle cases (see the owner ruling
   above). Clang `--config=` and GCC `-specs=` files named by a path are keyed
   by content (`cc-input-clang-config-file`, `cc-input-gcc-specs`, blocking);

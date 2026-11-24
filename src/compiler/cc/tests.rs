@@ -11492,8 +11492,11 @@ fn chromium_file_flags_change_cache_key_with_contents() {
     }
     let input = temp.path().join("input");
     let gcc_profile = compiler.parse(&[fake_cc.to_string_lossy().into_owned(), "-c".into(), source.to_string_lossy().into_owned(), format!("-fprofile-use={}", input.display())]).unwrap();
-    let refused = compiler.cache_key_with(&gcc_profile, &ctx, CcKeyDiscovery::Expansion);
-    assert!(refused.is_err_and(|e| e.to_string().contains("profile directory")), "gcc reads per-object profiles the key cannot see");
+    let before = compiler.key_for_test(&gcc_profile, &ctx);
+    std::fs::write(&input, "third content").unwrap();
+    assert_ne!(compiler.key_for_test(&gcc_profile, &ctx), before, "gcc profile data is keyed by content");
+    let with_dir = compiler.parse(&[fake_cc.to_string_lossy().into_owned(), "-c".into(), source.to_string_lossy().into_owned(), format!("-fprofile-use={}", input.display()), "-fprofile-dir=pd".into()]).unwrap();
+    assert!(compiler.cache_key_with(&with_dir, &ctx, CcKeyDiscovery::Expansion).is_err_and(|e| e.to_string().contains("-fprofile-dir")));
 }
 
 #[test]
@@ -11978,4 +11981,34 @@ fn driver_files_are_keyed_by_content_and_refuse_searched_or_nested_inputs() {
         let parsed = CcArgs::parse_for(&s(&["gcc", flag, "-c", "u.c", "-o", "u.o"]), &env).unwrap();
         assert!(parsed.refuse_reasons(&[]).is_empty(), "{flag}: {:?}", parsed.refuse_reasons(&[]));
     }
+}
+
+#[test]
+fn profile_use_keys_the_profile_the_driver_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = InvocationEnv::from_parts(
+        [("PATH", "/absent")], Some(dir.path().into()), None, dir.path().into(),
+    );
+    let digest = |args: &[&str]| cc_profile_use_digest(&CcArgs::parse_for(&s(args), &env).unwrap());
+    assert_eq!(digest(&["gcc", "-c", "u.c", "-o", "out/u.o"]).unwrap(), None);
+    let beside = digest(&["gcc", "-fprofile-use", "-c", "u.c", "-o", "out/u.o"]).unwrap().unwrap();
+    fs::create_dir(dir.path().join("out")).unwrap();
+    fs::write(dir.path().join("out/u.gcda"), "counts-1").unwrap();
+    let present = digest(&["gcc", "-fprofile-use", "-c", "u.c", "-o", "out/u.o"]).unwrap().unwrap();
+    assert_ne!(beside, present);
+    fs::write(dir.path().join("out/u.gcda"), "counts-2").unwrap();
+    assert_ne!(digest(&["gcc", "-fprofile-use", "-c", "u.c", "-o", "out/u.o"]).unwrap().unwrap(), present);
+    fs::create_dir_all(dir.path().join("prof/sub")).unwrap();
+    fs::write(dir.path().join("prof/#a#u.gcda"), "one").unwrap();
+    let tree = digest(&["gcc", "-fprofile-use=prof", "-c", "u.c", "-o", "u.o"]).unwrap().unwrap();
+    fs::write(dir.path().join("prof/sub/#b#v.gcda"), "two").unwrap();
+    let grown = digest(&["gcc", "-fprofile-use=prof", "-c", "u.c", "-o", "u.o"]).unwrap().unwrap();
+    assert_ne!(tree, grown);
+    fs::rename(dir.path().join("prof/#a#u.gcda"), dir.path().join("prof/#a#w.gcda")).unwrap();
+    assert_ne!(digest(&["gcc", "-fprofile-use=prof", "-c", "u.c", "-o", "u.o"]).unwrap().unwrap(), grown);
+    assert!(digest(&["gcc", "-fprofile-use", "-fprofile-dir=prof", "-c", "u.c", "-o", "u.o"]).is_err());
+    let clang = digest(&["clang", "-fprofile-use", "-c", "u.c", "-o", "u.o"]).unwrap().unwrap();
+    fs::write(dir.path().join("default.profdata"), "indexed").unwrap();
+    assert_ne!(digest(&["clang", "-fprofile-use", "-c", "u.c", "-o", "u.o"]).unwrap().unwrap(), clang);
+    assert_eq!(digest(&["clang", "-fprofile-use=x.profdata", "-c", "u.c"]).unwrap(), None);
 }
