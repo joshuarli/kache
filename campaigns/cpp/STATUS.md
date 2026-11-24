@@ -13,6 +13,12 @@ plan: [C_CPP_PARITY_CAMPAIGN.md](../../C_CPP_PARITY_CAMPAIGN.md); tracking
 entry: KACH-26 in [TODO.md](../../TODO.md). Groundwork branch:
 `feat/ccp00-campaign-groundwork`.
 
+## Owner ruling, 2026-11-23 (later): CI runs in the background
+
+Performance gates and macOS CI are waived; `KACHE_MACOS_CI=off` skips the
+macOS jobs. Linux CI does not block merges: PRs merge after their local
+verification on L3, and Linux CI results are reconciled afterwards.
+
 ## Owner ruling, 2026-11-23: performance gates waived
 
 The owner waived the performance acceptance gates. Feature completion now
@@ -117,6 +123,24 @@ Engineering work still open (not provisioning):
   `cc-out-missing-blob` and `cc-out-corrupt-blob` damage one blob of an
   object-plus-depfile entry, `cc-rel-truncated-entry` cuts metadata in half and
   `cc-rel-missing-entry` removes it; each recovers by compiling and then hits.
+  Remaining CCP-08 rows, 2026-11-24 (L3): `cc-rel-output-materialization-failure`
+  is covered by the `materialize_*` store and wrapper tests (a missing blob is a
+  miss; failed copies and renames leave no temp file or read-only source);
+  `cc-rel-stale-locks` by `sweep_stale_staging_respects_min_age`;
+  `cc-rel-cancellation-signals` by `a_compiler_killed_by_a_signal_fails_and_is_never_cached`
+  (no success, object or entry; kache exits 1 where raw dies by the signal: KACH-32);
+  `cc-rel-size-limit-eviction` cannot be an oracle case because the eviction grace
+  period protects recently accessed entries; `cc-rel-readonly-disabled` has no
+  read-only mode to exercise (KACH-35; the disabled half is the `cache-disabled`
+  negative control); `cc-rel-stats-reset` does not apply, because kache's statistics
+  are computed from the event log over a time window rather than kept as counters.
+  CCP-04/05 rows answered by existing cases, 2026-11-24: `cc-out-depinfo-full` by
+  `cc-flag-deps`, `cc-core-user-depfile` and `cc-depfile-escape` (restored depfiles
+  equal raw); `cc-out-full-inventory-validation` by `cc-out-missing-blob` and
+  `cc-out-corrupt-blob` (a partial or damaged entry never reports a hit);
+  `cc-eqp-compile-first-miss` by `probe_keyed_flags_cache_and_key_on_value_live`
+  (a new spelling compiles first and later hits); `cc-eqp-dep-refresh` and
+  `cc-eqp-memo-fastpath` wait on equivalent reuse, which CCP-04 declines.
   Kache-only race coverage:
   - Eviction: a blob removed between lookup and restore leaves every output
     as it was and recompiles; nothing is published before every artifact is

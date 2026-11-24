@@ -1,5 +1,5 @@
 Prefix: KACH
-Next: 33
+Next: 36
 
 ### KACH-26 · P1 · Reach ccache-level local C/C++ compatibility
 
@@ -45,5 +45,32 @@ Next: 33
 - **Problem:** When the compiler kache runs dies from a signal (a SIGSEGV in cc1, an OOM kill), raw exits by that signal (a shell shows 139) while kache exits 1; pinned ccache 4.14.3 exits 255. The build still fails and nothing is cached (a_compiler_killed_by_a_signal_fails_and_is_never_cached), but make and shells no longer report the crash as a signal, so a compiler crash reads like an ordinary error.
 - **Recommendation:** Carry the terminating signal with the compile result, including across the daemon execution protocol, and once outputs are settled re-raise it in the wrapper with the default disposition; keep exit codes unchanged for normal exits.
 - **Fix with:** error-model
+- **Effort:** M
+
+### KACH-33 · P3 · Clang -ivfsoverlay compiles are never cached
+
+- **Area:** Compiler compatibility
+- **Where:** src/compiler/cc.rs CC_FLAGS (no -ivfsoverlay row); inventory row cc-input-vfs-overlay
+- **Problem:** A compile with -ivfsoverlay <file> is refused as an unsupported flag, so builds that use VFS overlays (Swift/Clang module setups, some Bazel toolchains) never cache. Keying the overlay file alone is unsafe: the overlay redirects reads to external files that the depfile names only by their virtual paths, so the read set does not see the real inputs.
+- **Recommendation:** Parse the overlay (YAML/JSON roots, external-contents) and key the overlay bytes plus every external-contents file it maps, or refuse when the overlay cannot be fully resolved; add cc-input-vfs-overlay as a blocking oracle case.
+- **Fix with:** reference-parity
+- **Effort:** M
+
+### KACH-34 · P3 · GCC -fprofile-use with a profile directory is never cached
+
+- **Area:** Compiler compatibility
+- **Where:** src/compiler/cc.rs cache key loop for -fprofile-use= (bails for GCC), and bare -fprofile-use (unsupported flag)
+- **Problem:** GCC reads <dir>/<mangled object path>.gcda for -fprofile-use[=dir], a file the key cannot see from the flag, so kache refuses these compiles; PGO builds with GCC therefore never cache.
+- **Recommendation:** Derive the .gcda path GCC reads from the object path, cwd and -fprofile-dir/-fprofile-prefix-path the way GCC mangles it, key that file (absent vs present), and cover it with an oracle case that edits the profile.
+- **Fix with:** reference-parity
+- **Effort:** M
+
+### KACH-35 · P4 · No read-only store mode for shared or CI caches
+
+- **Area:** Store
+- **Where:** crates/kache-config/src/config.rs (no read-only setting); store writes in src/wrapper.rs (cc publish and daemon handoff), src/daemon_publish.rs, the rustc store path, preprocess memo and probe-record writes, and access-time updates on hits; inventory row cc-rel-readonly-disabled
+- **Problem:** Kache can be disabled (KACHE_DISABLED) but cannot use a store read-only: a CI job or a shared cache that should restore but never write has no supported mode, and the inventory row for read-only behaviour has nothing to exercise.
+- **Recommendation:** Add a read-only setting that restores hits, skips publication and leaves the store untouched, and cover it with an oracle case that asserts misses compile and nothing is stored.
+- **Fix with:** none
 - **Effort:** M
 

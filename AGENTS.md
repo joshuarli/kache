@@ -13,6 +13,10 @@
   Warm `make test` 269.79s → 269.99s here (4 CPUs); costs and fault proofs: `docs/deslop-kache-config-tests.md`.
   Use system `TMPDIR`, unset `KACHE_CACHE_DIR`: checkout-local temp roots / ambient cache roots fail tests (DSLP-88).
 - Scenario: PR CI runs workspace `make test` (`ci.yml`, Linux musl and macOS), `make lint` (`lint.yml`), and e2e/oracles.
+  macOS jobs run only while the repository variable `KACHE_MACOS_CI` is not `off`
+  (`gh variable set KACHE_MACOS_CI --body on` re-enables them); each macOS negative control is its own job.
+  `make test` runs every test binary (`--no-fail-fast`). The oracle fails a case whose compiler, ccache or kache
+  invocation runs past 300 s instead of stalling the run.
 - Full: performance/project/oracle campaigns and `make pr` are manual/on request; not run in the config tests slice.
 - CLI flags and exit codes: `tests/cli_commands_test.rs` (`argument_errors_exit_two`); wrapper invocation:
   `tests/integration_test.rs` (`test_wrapper_hello_world`, `test_rust_restored_outputs_allow_build_without_wrapper`).
