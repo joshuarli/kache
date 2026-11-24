@@ -38,15 +38,6 @@ Next: 36
 - **Fix with:** rg -n "cargo install kache --locked|cargo-binstall" docs/ finds no primary install instruction that selects the upstream distribution.
 - **Effort:** S
 
-### KACH-32 · P3 · A compiler killed by a signal is reported as exit status 1
-
-- **Area:** wrapper
-- **Where:** src/wrapper.rs and src/main.rs (status.code().unwrap_or(1) at the compile result sites), src/compiler/cc.rs (output.status.code().unwrap_or(1)); the daemon execution result carries only an integer exit code
-- **Problem:** When the compiler kache runs dies from a signal (a SIGSEGV in cc1, an OOM kill), raw exits by that signal (a shell shows 139) while kache exits 1; pinned ccache 4.14.3 exits 255. The build still fails and nothing is cached (a_compiler_killed_by_a_signal_fails_and_is_never_cached), but make and shells no longer report the crash as a signal, so a compiler crash reads like an ordinary error.
-- **Recommendation:** Carry the terminating signal with the compile result, including across the daemon execution protocol, and once outputs are settled re-raise it in the wrapper with the default disposition; keep exit codes unchanged for normal exits.
-- **Fix with:** error-model
-- **Effort:** M
-
 ### KACH-33 · P3 · Clang -ivfsoverlay compiles are never cached
 
 - **Area:** Compiler compatibility

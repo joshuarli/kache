@@ -716,3 +716,22 @@ mod tests {
         assert_eq!(super::current_uid(), expected);
     }
 }
+
+/// The status a wrapped process reports to its own parent: its exit code, or
+/// the negated signal that killed it.
+pub(crate) fn exit_code_of(status: &std::process::ExitStatus) -> i32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        if let Some(signal) = status.signal() {
+            return -signal;
+        }
+    }
+    status.code().unwrap_or(1)
+}
+
+/// End this process the way the wrapped process ended: exit with its code,
+/// or die of the signal [`exit_code_of`] negated.
+pub(crate) fn exit_process(code: i32) -> ! {
+    kache_client::exit_process(code)
+}

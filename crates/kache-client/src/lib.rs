@@ -6,6 +6,8 @@ pub use execution::Execution;
 mod stdio;
 pub use stdio::Stdio;
 mod creation_mask;
+mod exit;
+pub use exit::{exit_process, raise_to_signal};
 pub use creation_mask::creation_mask;
 mod frontend;
 pub use frontend::run;

@@ -14,5 +14,5 @@ fn main() {
             1
         }
     };
-    std::process::exit(exit);
+    kache_client::exit_process(exit);
 }

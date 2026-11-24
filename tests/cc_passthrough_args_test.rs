@@ -1913,7 +1913,7 @@ fn quoted_root_macros_compile_each_checkouts_text_from_a_shared_cache() {
 }
 
 #[test]
-fn a_compiler_killed_by_a_signal_fails_and_is_never_cached() {
+fn a_compiler_killed_by_a_signal_dies_of_it_and_is_never_cached() {
     let dir = FixtureDir::new();
     let root = dir.path().canonicalize().unwrap();
     fs::create_dir(root.join("bin")).unwrap();
@@ -1943,6 +1943,10 @@ fn a_compiler_killed_by_a_signal_fails_and_is_never_cached() {
             .output()
             .unwrap();
         assert!(!compiled.status.success(), "{run}: a compiler killed by SIGSEGV must not look successful: {compiled:?}");
+        {
+            use std::os::unix::process::ExitStatusExt as _;
+            assert_eq!(compiled.status.signal(), Some(libc::SIGSEGV), "{run}: kache must die of the compiler's signal: {compiled:?}");
+        }
         assert!(!root.join("unit.o").exists(), "{run}: no object may appear for a killed compile");
     }
     let events = fs::read_to_string(&event_path).unwrap_or_default();

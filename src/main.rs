@@ -982,7 +982,7 @@ fn run_compiler_process_directly_for(
         configured_rustc || rustc_args_for_direct_preclean_for(args, env).is_some();
     if !rustc_invocation {
         let status = invocation::io::status(env.command(&args[0])?.args(&args[1..]))?;
-        return Ok(status.code().unwrap_or(1));
+        return Ok(platform::exit_code_of(&status));
     }
 
     // C/C++ output paths have compiler-specific symlink, hardlink, device,
@@ -1022,7 +1022,7 @@ fn run_compiler_process_directly_for(
     toolchain_dylib::apply_for(&mut command, &program, env);
     command.args(&args[1..]);
     let status = invocation::io::status(&mut command)?;
-    Ok(status.code().unwrap_or(1))
+    Ok(platform::exit_code_of(&status))
 }
 
 #[cfg(test)]
@@ -1090,7 +1090,7 @@ fn run_wrapper_mode(args: &[String]) -> Result<()> {
             &context,
             config.trust_daemon_execution,
         )? {
-            std::process::exit(exit);
+            platform::exit_process(exit);
         }
         // A held run lock can belong to the release we just upgraded from.
         // The coordinator checks its version and drains it before replacing it.
@@ -1103,7 +1103,7 @@ fn run_wrapper_mode(args: &[String]) -> Result<()> {
                         &context,
                         config.trust_daemon_execution,
                     )? {
-                        std::process::exit(exit);
+                        platform::exit_process(exit);
                     }
                     let eligibility = daemon::compiler_execution_status(&config)
                         .ok()
@@ -1122,7 +1122,7 @@ fn run_wrapper_mode(args: &[String]) -> Result<()> {
     #[cfg(not(unix))]
     let config = None;
     let exit = run_compiler_invocation_with_config(args, context, config)?;
-    std::process::exit(exit);
+    platform::exit_process(exit);
 }
 
 #[cfg(unix)]
