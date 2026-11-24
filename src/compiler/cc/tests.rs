@@ -9469,8 +9469,14 @@ fn include_dir_digest_missing_dir_is_empty_not_an_error() {
         missing.to_str().unwrap(),
     ]))
     .unwrap();
-    digest_cc_include_dir_names(&parsed)
+    let missing_digest = digest_cc_include_dir_names(&parsed)
         .expect("ENOENT include dir must hash as empty, not fail closed");
+    let empty = temp.path().join("empty-inc");
+    fs::create_dir(&empty).unwrap();
+    let with_empty = CcArgs::parse(&s(&["cc", "-c", source.to_str().unwrap(), "-I", empty.to_str().unwrap()])).unwrap();
+    assert_eq!(missing_digest, digest_cc_include_dir_names(&with_empty).unwrap());
+    fs::write(empty.join("h.h"), "int h;\n").unwrap();
+    assert_ne!(missing_digest, digest_cc_include_dir_names(&with_empty).unwrap());
 }
 
 #[test]

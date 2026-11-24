@@ -684,7 +684,7 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
         injected: false,
     };
     let mut populated: Vec<(PathBuf, Vec<u8>)> = Vec::new();
-    let mut kache_events = 0usize;
+    let mut kache_events = (0usize, 0u64);
     for (index, step) in case.steps.iter().enumerate() {
         for action in &step.action {
             apply(action, case, arm, ctx, store, index)?;
@@ -731,9 +731,8 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
             std::fs::remove_dir_all(&captures)?;
             std::fs::create_dir_all(&captures)?;
             let started = Instant::now();
-            let output = command
-                .output()
-                .with_context(|| format!("{} arm: spawning {}", arm.as_str(), driver.display()))?;
+            let output = output_within(&mut command, INVOCATION_LIMIT)
+                .with_context(|| format!("{} arm: running {}", arm.as_str(), driver.display()))?;
             step_ms.push(started.elapsed().as_millis() as u64);
             let log_text = std::fs::read_to_string(log).unwrap_or_default();
             let unit_names: Vec<String> = std::iter::once(&compile.source)
@@ -750,8 +749,7 @@ fn run_steps(case: &Case, profile: Profile, arm: Arm, ctx: &ArmContext<'_>, arm_
                 run.injected = true;
             }
             let kache_result = if arm == Arm::Kache {
-                let events = kache_events_since(ctx.kache, store, &mut kache_events)?;
-                events.last().cloned()
+                kache_event_since(ctx.kache, store, &mut kache_events, !cache_disabled_applies(ctx.control, profile))?
             } else {
                 None
             };
@@ -966,31 +964,79 @@ fn remove_if_present(path: &Path) -> Result<()> {
 
 /// Results of the compile events kache recorded since the last call,
 /// skipping probe passthroughs.
-fn kache_events_since(kache: &Path, store: &Path, seen: &mut usize) -> Result<Vec<String>> {
-    let output = Command::new(kache)
-        .args(["report", "--format", "json", "--since", "1h"])
-        .env_clear()
-        .env("KACHE_CACHE_DIR", store)
-        .env("KACHE_CONFIG", store.with_file_name("config"))
-        .env("HOME", store.with_file_name("home"))
-        .output()
-        .context("running kache report")?;
-    if !output.status.success() {
-        bail!("kache report exited {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+/// How long one compiler, cache or kache invocation may run. A hang (ccache
+/// 4.14.3 never returns on a cyclic response file) becomes this case's
+/// harness error instead of stalling the run.
+const INVOCATION_LIMIT: Duration = Duration::from_secs(300);
+
+fn output_within(command: &mut Command, limit: Duration) -> Result<std::process::Output> {
+    let streams = tempfile::tempdir()?;
+    let (stdout_path, stderr_path) = (streams.path().join("stdout"), streams.path().join("stderr"));
+    let mut child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::fs::File::create(&stdout_path)?)
+        .stderr(std::fs::File::create(&stderr_path)?)
+        .spawn()?;
+    let deadline = Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("timed out after {}s", limit.as_secs());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    Ok(std::process::Output { status, stdout: std::fs::read(&stdout_path)?, stderr: std::fs::read(&stderr_path)? })
+}
+
+/// The result of the compile that just ran. The daemon publishes a `dup`
+/// after the compile returns, so wait for this compile's own event before
+/// the next compile starts; otherwise a late event lands on the next one.
+/// A disabled kache records nothing, so it is read once without waiting.
+fn kache_event_since(kache: &Path, store: &Path, seen: &mut (usize, u64), records_events: bool) -> Result<Option<String>> {
+    let deadline = Instant::now() + if records_events { Duration::from_secs(30) } else { Duration::ZERO };
+    loop {
+        let output = Command::new(kache)
+            .args(["report", "--format", "json", "--since", "1h"])
+            .env_clear()
+            .env("KACHE_CACHE_DIR", store)
+            .env("KACHE_CONFIG", store.with_file_name("config"))
+            .env("HOME", store.with_file_name("home"))
+            .output()
+            .context("running kache report")?;
+        if !output.status.success() {
+            bail!("kache report exited {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+        }
+        let (report, raw) = crate::report::parse_report_json(&output.stdout)?;
+        let recorded = report.all_events.len() as u64
+            + ["passthroughs", "errors", "skipped", "fallbacks"].iter()
+                .map(|counter| raw["summary"][*counter].as_u64().unwrap_or(0)).sum::<u64>();
+        if recorded > seen.1 || Instant::now() >= deadline {
+            let fresh = report.all_events.get(seen.0..).unwrap_or_default().iter()
+                .filter(|e| !e.is_probe_passthrough()).last().map(|e| e.result.clone());
+            *seen = (report.all_events.len(), recorded);
+            return Ok(fresh);
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
-    let (report, _) = crate::report::parse_report_json(&output.stdout)?;
-    let events = report.all_events.get(*seen..).unwrap_or_default();
-    *seen = report.all_events.len();
-    Ok(events
-        .iter()
-        .filter(|e| !e.is_probe_passthrough())
-        .map(|e| e.result.clone())
-        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invocations_past_the_limit_fail_instead_of_hanging() {
+        let started = Instant::now();
+        let error = output_within(Command::new("sleep").arg("30"), Duration::from_millis(200)).unwrap_err();
+        assert!(error.to_string().contains("timed out"), "{error:#}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        let output = output_within(Command::new("sh").args(["-c", "printf out; printf err >&2; exit 3"]), Duration::from_secs(10)).unwrap();
+        assert_eq!((output.status.code(), &output.stdout[..], &output.stderr[..]), (Some(3), &b"out"[..], &b"err"[..]));
+    }
 
     #[test]
     fn controls_skip_cases_without_a_step_to_fault() {
