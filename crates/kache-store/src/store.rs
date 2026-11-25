@@ -3009,7 +3009,41 @@ impl<P: ArtifactPolicy> ArtifactStore<P> {
         )
     }
 
+    /// [`Self::put_once`], retried while another index writer wins the
+    /// write lock. A failed attempt rolls back and re-publishing its staged
+    /// blobs is idempotent, so a build never loses an entry to contention.
+    #[allow(clippy::too_many_arguments)]
     fn put_with_compile_time_policy(
+        &self,
+        cache_key: &str,
+        crate_name: &str,
+        crate_types: &[String],
+        features: &[String],
+        target: &str,
+        profile: &str,
+        output_files: &[(PathBuf, String)],
+        stdout: &str,
+        stderr: &str,
+        compile_time_ms: u64,
+        allow_source_hardlinks: bool,
+    ) -> Result<StorePutResult> {
+        let mut attempt = 1;
+        loop {
+            let result = self.put_once(
+                cache_key, crate_name, crate_types, features, target, profile,
+                output_files, stdout, stderr, compile_time_ms, allow_source_hardlinks,
+            );
+            match result {
+                Err(error) if attempt < STORE_OPEN_MAX_ATTEMPTS && is_sqlite_contention(&error) => {
+                    std::thread::sleep(sqlite_open_retry_delay(attempt));
+                    attempt += 1;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    fn put_once(
         &self,
         cache_key: &str,
         crate_name: &str,

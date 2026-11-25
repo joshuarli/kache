@@ -14781,3 +14781,27 @@ fn an_index_from_before_the_header_scan_memo_gains_its_table() {
         "a scan of a memo's input survives the prune"
     );
 }
+
+#[test]
+fn a_put_that_loses_the_write_lock_retries_instead_of_dropping_the_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let store = Store::open(&config).unwrap();
+    store.db.busy_timeout(std::time::Duration::ZERO).unwrap();
+    let holder = rusqlite::Connection::open(config.index_db_path()).unwrap();
+    holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        holder.execute_batch("COMMIT").unwrap();
+    });
+    let output = dir.path().join("unit.o");
+    fs::write(&output, b"object").unwrap();
+    store
+        .put_with_compile_time_independent(
+            "contended", "unit.c", &[], &[], "x86_64-unknown-linux-gnu", "",
+            &[(output, "unit.o".to_string())], "", "", 1,
+        )
+        .unwrap();
+    release.join().unwrap();
+    assert!(store.get("contended").unwrap().is_some());
+}
