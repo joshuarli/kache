@@ -71,6 +71,7 @@ jobs:
       - name: Install compilers
         run: |
           sudo apt-get update
+          # llvm-prebuilt-musl publishes Linux musl assets; this job runs on glibc.
           sudo apt-get install -y --no-install-recommends build-essential clang
       - name: Full oracle corpus
         run: make cc-oracle-full TOOLCHAINS="gcc clang" || true
