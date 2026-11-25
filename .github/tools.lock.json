@@ -5,23 +5,23 @@
       "assets": {
         "aarch64-apple-darwin": {
           "name": "gluon-aarch64-apple-darwin.tar.xz",
-          "sha256": "4c103442555d8e76a5d57bd4d9b4e90fa86e715ffe1a8e23bcbb3a6247618c6e",
-          "size": 860740
+          "sha256": "0d6d1e75ff062415cc6446167675cea0512a9995d37b54953dbdeddaf23d5c9a",
+          "size": 883200
         },
         "aarch64-unknown-linux-musl": {
           "name": "gluon-aarch64-unknown-linux-musl.tar.xz",
-          "sha256": "6b352c03399cf41f45ee5d9ff601ea17cf4768f74aff31a164e145e6e2326e56",
-          "size": 831344
+          "sha256": "e972a27dbfccf188ee1994f88b95dc5cac8f915e0e6cce181107014061e3be96",
+          "size": 861096
         },
         "x86_64-unknown-linux-musl": {
           "name": "gluon-x86_64-unknown-linux-musl.tar.xz",
-          "sha256": "3aacbd8756a4dcfeff9cd139ebcd5a3b4cb2cc433c599b7e21f446c716987ce8",
-          "size": 945204
+          "sha256": "fdbfc23eaa666384eed6a7baa95022fbb05281c9ed210370d43b231281bb13f5",
+          "size": 982492
         }
       },
       "product": "gluon",
       "repository": "laputa-systems/gluon",
-      "tag": "release-fa8b6aace38683a17ee3f398d8b568341c7192fe",
+      "tag": "release-2cb44faa2ff4a5c9d1be1780dc97c3398f54ef38",
       "version": ""
     }
   }
