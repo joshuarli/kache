@@ -20,15 +20,6 @@ Next: 77
 - **Fix with:** test-audit
 - **Effort:** M
 
-### KACH-57 · P2 · Keep Cargo test binary paths available through the installed rustc wrapper (was DSLP-125)
-
-- **Area:** Cargo integration
-- **Where:** src/cache_key/tests.rs and src/build_script_inputs.rs
-- **Problem:** Reproduced 2026-11-25 with the installed kache 2.0.0-rc.2 (~/.cargo/config.toml build.rustc-wrapper): integration tests that use env!("CARGO_BIN_EXE_<name>") (directly or through assert_cmd's cargo_bin!) fail to compile with `environment variable CARGO_BIN_EXE_<name> not defined at compile time`, while the same command with RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER= passes. Seen in laputa-systems/ast-grep (`cargo test -p ast-grep --test help_test`, every CLI test target) and laputa-systems/stuff (`stuff-server` test `http_compat` under `make lint`'s clippy). Any fleet Rust repository with binary integration tests cannot run them locally through kache.
-- **Recommendation:** Reproduce with the installed release and current source using a bin plus integration test pair, then require the wrapped build to see the same Cargo-provided binary path as a direct build after a cold invocation and a cache hit.
-- **Fix with:** root-cause
-- **Effort:** M
-
 ### KACH-22 · P3 · Changed-line mutation testing runs in no gate
 
 - **Area:** Tests
