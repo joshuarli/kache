@@ -38,6 +38,15 @@ Next: 79
 - **Fix with:** reference-parity
 - **Effort:** M
 
+### KACH-79 · P3 · Chromium's last cc passthroughs: unresolvable probes, -mllvm, -mprefer-vector-width
+
+- **Area:** C/C++ compatibility
+- **Where:** src/compiler/cc.rs (cc_resolve_read_set_probes, CC_FLAGS)
+- **Problem:** A warm Chromium 156 chrome build at 91ae65b passes 30 of 44,255 C/C++ compiles through: header availability probes the scanner cannot resolve from literal text in v8/src/parsing/parser-base.h and scanner-inl.h, the crubit support headers, a chromium_crates_io cxx header, Skia's GrGLUtil, device_signals and unrar's ulinks.cpp; and the unmodeled flags -mllvm (two compiles) and -mprefer-vector-width=512 (two).
+- **Recommendation:** Classify each probe shape the scanner rejects from those files and resolve the ones that are provably literal; key -mprefer-vector-width= raw and model the -mllvm options Chromium passes individually, refusing unknown ones. Acceptance: those compiles miss then hit with raw-identical objects.
+- **Fix with:** reference-parity
+- **Effort:** M
+
 ### KACH-22 · P3 · Changed-line mutation testing runs in no gate
 
 - **Area:** Tests
