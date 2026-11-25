@@ -69,12 +69,14 @@ dependency_check() {
   gh auth status >/dev/null 2>&1 || die "gh not authenticated — run 'gh auth login'"
 }
 
-# Portable epoch conversion (GNU vs BSD date)
-if date --version >/dev/null 2>&1; then
-  epoch() { date -d "$1" +%s 2>/dev/null || echo 0; }
-else
-  epoch() { date -jf "%Y-%m-%dT%H:%M:%SZ" "$1" +%s 2>/dev/null || echo 0; }
-fi
+epoch() {
+  python3 -c 'import datetime, sys
+try:
+    value = datetime.datetime.strptime(sys.argv[1], "%Y-%m-%dT%H:%M:%SZ")
+    print(int(value.replace(tzinfo=datetime.timezone.utc).timestamp()))
+except (ValueError, OverflowError, OSError):
+    print(0)' "$1"
+}
 
 # ─── Initialize colors early (needed by usage/die) ──────────────────────────
 setup_colors

@@ -18,7 +18,7 @@ archive=$work/zlib-1.3.2.tar.gz
 if [ ! -f "$archive" ]; then
   if command -v curl >/dev/null 2>&1; then curl -fsSLo "$archive" "$url"; else wget -q -O "$archive" "$url"; fi
 fi
-got=$( (sha256sum "$archive" 2>/dev/null || shasum -a 256 "$archive") | cut -d' ' -f1)
+got=$(sha256sum "$archive" | cut -d' ' -f1)
 [ "$got" = "$sha" ] || { echo "zlib digest $got does not match the lock" >&2; exit 1; }
 
 export KACHE_CACHE_DIR="$work/kache-store" KACHE_CONFIG="$work/kache-config.toml"
@@ -33,7 +33,7 @@ build() {
   (cd "$tree" && CC="$1" ./configure --static >/dev/null && make -s libz.a example minigzip >/dev/null)
 }
 digests() {
-  (cd "$tree" && for f in *.o; do printf '%s ' "$f"; (sha256sum "$f" 2>/dev/null || shasum -a 256 "$f") | cut -d' ' -f1; done)
+  (cd "$tree" && for f in *.o; do printf '%s ' "$f"; sha256sum "$f" | cut -d' ' -f1; done)
 }
 # Results for the build's own units, one event per line of the event log.
 # configure's ztest<pid>.c probes get a new name every run, so they cannot be

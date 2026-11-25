@@ -30,7 +30,7 @@ archive=$work/llvm-project-$version.src.tar.xz
 if [ ! -f "$archive" ]; then
   if command -v curl >/dev/null 2>&1; then curl -fsSLo "$archive" "$url"; else wget -q -O "$archive" "$url"; fi
 fi
-got=$( (sha256sum "$archive" 2>/dev/null || shasum -a 256 "$archive") | cut -d' ' -f1)
+got=$(sha256sum "$archive" | cut -d' ' -f1)
 [ "$got" = "$sha" ] || { echo "llvm-project digest $got does not match the lock ($sha)" >&2; exit 1; }
 
 src=$work/llvm-project-$version.src
@@ -62,12 +62,12 @@ configure() {
 }
 digests() {
   (cd "$build" && find . -name '*.o' | LC_ALL=C sort | while read -r f; do
-    printf '%s ' "$f"; (sha256sum "$f" 2>/dev/null || shasum -a 256 "$f") | cut -d' ' -f1
+    printf '%s ' "$f"; sha256sum "$f" | cut -d' ' -f1
   done)
 }
 tablegen() {
   "$build/bin/llvm-tblgen" -gen-intrinsic-enums -I "$src/llvm/include" \
-    "$src/llvm/include/llvm/IR/Intrinsics.td" | (sha256sum 2>/dev/null || shasum -a 256) | cut -d' ' -f1
+    "$src/llvm/include/llvm/IR/Intrinsics.td" | sha256sum | cut -d' ' -f1
 }
 # Results for the build's own units. CMake's try-compile probes run in fresh
 # scratch directories each configure, so they cannot be reused and are left out.

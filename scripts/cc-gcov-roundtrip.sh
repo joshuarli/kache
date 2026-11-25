@@ -85,4 +85,4 @@ results=$(grep -o '"result":"[a-z_]*"' "$KACHE_CACHE_DIR/events.jsonl" | tr -d '
 echo "$results"
 hits=$(echo "$results" | awk '$2 == "result:local_hit" {print $1}')
 [ "${hits:-0}" -eq 2 ] || { echo "the warm build restored ${hits:-0} of 2 units" >&2; exit 1; }
-echo "$(echo "$raw" | grep -c '^ *[0-9][0-9]*\*\?:') executed lines report identically; PASS"
+echo "$(printf '%s\n' "$raw" | grep -Ec '^[[:space:]]*[0-9]+[*]?:') executed lines report identically; PASS"
