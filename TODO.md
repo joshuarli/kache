@@ -1,5 +1,5 @@
 Prefix: KACH
-Next: 77
+Next: 79
 
 ### KACH-26 · P1 · Reach ccache-level local C/C++ compatibility
 
@@ -18,6 +18,24 @@ Next: 77
 - **Problem:** With TMPDIR inside the checkout, library tests fail because scratch paths inherit workspace, toolchain and path-normalization context; deep worktrees can also exceed Unix socket path limits. With KACHE_CACHE_DIR exported, config::tests::probe_memos_live_under_the_configured_cache_dir reads the ambient value instead of the expected default.
 - **Recommendation:** Make test fixtures explicitly control workspace ancestry, path-normalization roots and socket path length while keeping caches and configuration isolated; run make test with TMPDIR under .work/tmp.
 - **Fix with:** test-audit
+- **Effort:** M
+
+### KACH-77 · P2 · KACHE_CC_SOURCE_DATE_EPOCH=passthrough preprocesses every hit twice
+
+- **Area:** C/C++ performance
+- **Where:** src/compiler/cc.rs (time-macro handling on the memo path)
+- **Problem:** With KACHE_CC_SOURCE_DATE_EPOCH=passthrough, every C/C++ hit runs the preprocessor twice (events report preprocessor_runs=2) even for translation units the header scan has proven time-free. On 59 Chromium compiles the second warm pass took 5 s against 1 s with the default epoch handling; ccache keeps direct mode unless the source actually uses __DATE__ or __TIME__.
+- **Recommendation:** Let proven time-free translation units use the direct memo under passthrough, and preprocess only those whose scan finds a time macro. Acceptance: a warm pass under passthrough reports preprocessor_runs=0 for time-free inputs, and an oracle case with __TIME__ still misses when the time changes.
+- **Fix with:** make-it-fast
+- **Effort:** M
+
+### KACH-78 · P2 · rustc --emit=dep-info=PATH,link from GN passes through
+
+- **Area:** Rust compatibility
+- **Where:** src/args.rs (explicit_emit_output), src/compiler/rustc.rs (rustc_refuse_reasons)
+- **Problem:** GN's rustc_wrapper.py passes --emit=dep-info=<out>.d,link -o <out>, so every Rust target of a Chromium build passes through with 'rustc explicit --emit output path — not cacheable' (observed on Chromium 156 for serde, hashbrown, miniz_oxide, url and the rest of its Rust graph).
+- **Recommendation:** Cache an explicit dep-info path the way -o is cached: store the dep-info file as an output and restore it to the requested path, keeping other explicit emit kinds refused. Acceptance: a GN-style rustc invocation misses then hits with byte-identical rlib and dep-info at the requested paths.
+- **Fix with:** reference-parity
 - **Effort:** M
 
 ### KACH-22 · P3 · Changed-line mutation testing runs in no gate
@@ -406,3 +424,4 @@ Next: 77
 - **Recommendation:** Point the links to the supported issue creation flow.
 - **Fix with:** technical-writing
 - **Effort:** S
+
