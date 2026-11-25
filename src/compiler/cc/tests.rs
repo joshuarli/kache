@@ -11482,7 +11482,7 @@ fn chromium_linux_flags_are_classified_and_keyed() {
     let flags = [
         "-fPIE", "-fpie", "-fno-unique-section-names", "-funique-section-names",
         "-ffile-compilation-dir=.", "-Wa,--crel,--allow-experimental-crel", "-Wa,--crel",
-        "-mamx-int8", "-mamx-tile", "-mavxvnniint8", "-mno-amx-tile",
+        "-mamx-int8", "-mamx-tile", "-mavxvnniint8", "-mno-amx-tile", "-fno-sanitize=function",
     ];
     let mut args = vec!["clang++", "-c", "unit.cc"];
     args.extend(flags);
@@ -11498,6 +11498,7 @@ fn chromium_linux_flags_are_classified_and_keyed() {
     assert_ne!(raw(&["-fno-unique-section-names"]), raw(&["-funique-section-names"]));
     assert_ne!(raw(&["-ffile-compilation-dir=."]), raw(&["-ffile-compilation-dir=/build"]));
     assert_ne!(raw(&["-Wa,--crel,--allow-experimental-crel"]), raw(&[]));
+    assert_ne!(raw(&["-fno-sanitize=function"]), raw(&[]));
     for refused in ["-Wa,--crel,-adhln", "-Wa,--allow-experimental-crel,--gen-debug", "-Wa,--crelx"] {
         let parsed = CcArgs::parse(&s(&["clang++", "-c", "unit.cc", refused])).unwrap();
         assert!(!classify_and_trace_cc_flags(&parsed, &[]).is_empty(), "{refused}");
@@ -12084,4 +12085,20 @@ fn vfs_overlays_are_keyed_by_content_and_virtual_names_refuse() {
     fs::write(dir.path().join("vfs.json"), r#"{"use-external-names": true, "roots": []}"#).unwrap();
     assert!(cc_vfs_overlay_digest(&parsed, "vfs.json").is_ok());
     assert!(cc_vfs_overlay_digest(&parsed, "missing.json").is_err());
+}
+
+#[test]
+fn header_probe_scanner_accepts_cxx_dollar_include_guards() {
+    let probe = Some(vec![CcHeaderProbe { name: "optional.h".into(), quoted: false }]);
+    let text = b"#ifndef CXXBRIDGE1_STRUCT_ffi$Item\n#define CXXBRIDGE1_STRUCT_ffi$Item\nstruct Item;\n#endif\n#define HAS(x) __has_include(x)\n#if HAS(<optional.h>)\n#endif\n";
+    assert_eq!(cc_header_probes(text), probe);
+    for text in [
+        "#define GUARD$A HAS\n#define HAS(x) __has_include(x)\n#if HAS(<optional.h>)\n#endif\n",
+        "#define GUARD$A(x) x\n#define HAS(x) __has_include(x)\n#if HAS(<optional.h>)\n#endif\n",
+        "#define GUARD $A\n#define HAS(x) __has_include(x)\n#if HAS(<optional.h>)\n#endif\n",
+        "#define F H$A\n#define HAS(x) __has_include(x)\n#if HAS(<optional.h>)\n#endif\n",
+        "#define HAS(x) __has_include(x)\n#if GUARD$A || HAS(<optional.h>)\n#endif\n",
+    ] {
+        assert_eq!(cc_header_probes(text.as_bytes()), None, "{text}");
+    }
 }

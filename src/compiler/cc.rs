@@ -3758,6 +3758,7 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Exact("-no-canonical-prefixes"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-mmacos-version-min="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fsanitize="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-fno-sanitize="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fsanitize-trap="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fsanitize-ignore-for-ubsan-feature="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fmodule-name="), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
@@ -7438,7 +7439,7 @@ fn cc_shadowing_names(
 }
 
 /// Version of the header scans [`cc_resolve_read_set_probes`] reads.
-const CC_HEADER_SCAN_VERSION: i64 = 7;
+const CC_HEADER_SCAN_VERSION: i64 = 8;
 
 /// The probes a read set's headers make once every header's aliases are
 /// known. A function of the headers' bytes and the command-line
@@ -8042,6 +8043,9 @@ fn cc_scan_header_probe_line(
     if offset != 0 && matches!(directive.first(), Some(&b"ifdef" | &b"ifndef" | &b"undef")) {
         return Some(());
     }
+    if offset != 0 && directive.contains(&b"$".as_slice()) {
+        return cc_header_dollar_guard(spans, directive).then_some(());
+    }
     let identifier = cc_header_probe_identifier;
     if definition {
         let name = directive.get(1)?;
@@ -8235,6 +8239,19 @@ fn cc_header_call_forwarder(
         target: String::from_utf8_lossy(target).into_owned(),
         arguments,
     })
+}
+
+/// `#define NAME$SUFFIX` alone, as cxx bridge include guards spell it. With
+/// `$` in identifiers it is an empty object-like macro, which cannot form a
+/// probe; any other directive spelling `$` cannot be resolved by this scanner.
+fn cc_header_dollar_guard(spans: &[std::ops::Range<usize>], directive: &[&[u8]]) -> bool {
+    let name = &spans[spans.len() - directive.len() + 1..];
+    directive.first() == Some(&b"define".as_slice())
+        && directive.get(1).is_some_and(|word| cc_header_probe_identifier(word))
+        && name.windows(2).all(|pair| pair[0].end == pair[1].start)
+        && directive[1..].iter().all(|word| {
+            *word == b"$" || word.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        })
 }
 
 fn cc_header_probe_identifier(word: &[u8]) -> bool {
