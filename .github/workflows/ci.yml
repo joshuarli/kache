@@ -61,7 +61,7 @@ jobs:
       - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: macos-26-e2e
-      - uses: laputa-systems/buildlib/setup@1cd9d482a684e72c68ac6fea7f4ee3a3e9c4a161 # v0.3.1
+      - uses: laputa-systems/buildlib/setup@4ed2e0a1e0a5d23911ffccdd97349d30a7885f01 # v0.3.2
         with:
           tools: gluon
           lock: .github/tools.lock.json
