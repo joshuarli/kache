@@ -213,6 +213,15 @@ ccache.suite = "kache-observed (src/compiler/cc.rs guard)"
 status = "oracle"
 
 [[case]]
+id = "cc-input-buildflag-paste"
+package = "CCP-02"
+summary = "Chromium BUILDFLAG call-only paste indirection with a fixed prefix hits, and a header availability probe beside it still invalidates"
+profiles = ["both"]
+compilers = ["all"]
+ccache.suite = "kache-observed (Chromium base/partition_alloc buildflag.h)"
+status = "oracle"
+
+[[case]]
 id = "cc-input-forced-include"
 package = "CCP-02"
 summary = "-include forced header content change invalidates"

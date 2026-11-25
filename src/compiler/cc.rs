@@ -3770,6 +3770,10 @@ pub static CC_FLAGS: &[FlagSpec] = &[
     FlagSpec { matcher: Matcher::Prefix("--warning-suppression-mappings="), class: FlagClass::ParserHandled, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fsanitize-ignorelist="), class: FlagClass::ParserHandled, source: "clang sanitizer ignorelist, keyed by content", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fcrash-diagnostics-dir="), class: FlagClass::NoObjectEffect, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-f(?:no-)?unique-section-names"), class: FlagClass::RawKeyed, source: "clang compile flag", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-f(?:PIE|pie)"), class: FlagClass::RawKeyed, source: "position-independent executable code", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Prefix("-ffile-compilation-dir="), class: FlagClass::RawKeyed, source: "compilation directory embedded in debug and coverage data; keyed by value", dialect: Some(Dialect::Gnu) },
+    FlagSpec { matcher: Matcher::Regex(r"-Wa,(?:--crel|--allow-experimental-crel)(?:,(?:--crel|--allow-experimental-crel))*"), class: FlagClass::RawKeyed, source: "assembler: compact relocations (CREL); exact options only so other assembler flags still refuse", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-Xarch_"), class: FlagClass::RawKeyed, source: "CCP-07 — clang per-slice operand; keyed with its operand, and each slice is preprocessed with its own operands", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fmodule-file="), class: FlagClass::ParserHandled, source: "CCP-06 — clang explicit module consumer; the key folds the module file's bytes", dialect: Some(Dialect::Gnu) },
     FlagSpec { matcher: Matcher::Prefix("-fprebuilt-module-path="), class: FlagClass::ParserHandled, source: "CCP-06 — clang prebuilt module directory; the key folds every module file in it", dialect: Some(Dialect::Gnu) },
@@ -3970,7 +3974,7 @@ pub static CC_FLAGS: &[FlagSpec] = &[
             "fast-math|finite-math-only|freestanding|function-sections|math-errno|",
             "merge-all-constants|omit-frame-pointer|reciprocal-math|rounding-math|",
             "semantic-interposition|signaling-nans|signed-zeros|strict-aliasing|",
-            "trapping-math|unsafe-math-optimizations|unroll-loops|unwind-tables|wrapv",
+            "trapping-math|tree-vectorize|unsafe-math-optimizations|unroll-loops|unwind-tables|wrapv",
             ")",
         )),
         class: FlagClass::CapturedByProbe,
@@ -4472,7 +4476,7 @@ pub static CC_FLAGS: &[FlagSpec] = &[
         // (`-mtune=`, `-mcpu=`, `-mcmodel=`) and unmodeled `-m` flags still
         // refuse. `-mabi=` is modeled separately above.
         matcher: Matcher::Regex(
-            r"^-m(?:no-)?(?:32|64|mmx|sse|sse2|sse3|ssse3|sse4|sse4\.1|sse4\.2|sse4a|avx|avx2|avxvnni|avx512[a-z0-9]+|fma|fma4|f16c|bmi|bmi2|abm|popcnt|lzcnt|aes|vaes|pclmul|vpclmulqdq|gfni|sha|movbe|rdrnd|rdseed|adx|fsgsbase|xsave|xsaveopt|xsavec|xsaves|prfchw|clflushopt|clwb|cldemote|fxsr)$",
+            r"^-m(?:no-)?(?:32|64|mmx|sse|sse2|sse3|ssse3|sse4|sse4\.1|sse4\.2|sse4a|amx-int8|amx-tile|avx|avx2|avxvnni|avxvnniint8|avx512[a-z0-9]+|fma|fma4|f16c|bmi|bmi2|abm|popcnt|lzcnt|aes|vaes|pclmul|vpclmulqdq|gfni|sha|movbe|rdrnd|rdseed|adx|fsgsbase|xsave|xsaveopt|xsavec|xsaves|prfchw|clflushopt|clwb|cldemote|fxsr)$",
         ),
         class: FlagClass::CapturedByProbe,
         source: "Issue #375 (extended, Firefox nightly bench) — x86 width + SIMD/ISA codec feature flags; resolved into target-cpu/target-feature tokens.",
@@ -7434,7 +7438,7 @@ fn cc_shadowing_names(
 }
 
 /// Version of the header scans [`cc_resolve_read_set_probes`] reads.
-const CC_HEADER_SCAN_VERSION: i64 = 6;
+const CC_HEADER_SCAN_VERSION: i64 = 7;
 
 /// The probes a read set's headers make once every header's aliases are
 /// known. A function of the headers' bytes and the command-line
@@ -7723,6 +7727,7 @@ struct CcHeaderProbeScan {
     conditionals: Vec<CcHeaderMacroUse>,
     pastes: Vec<(String, String)>,
     paste_forwarders: Vec<CcHeaderPasteForwarder>,
+    call_forwarders: Vec<CcHeaderCallForwarder>,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, deser::Serialize, deser::Deserialize)]
@@ -7731,11 +7736,21 @@ struct CcHeaderMacroUse {
     arguments: Option<Vec<Vec<String>>>,
 }
 
-#[derive(deser::Serialize, deser::Deserialize)]
+#[derive(Clone, deser::Serialize, deser::Deserialize)]
 struct CcHeaderPasteForwarder {
     name: String,
     parameters: Option<Vec<String>>,
     parts: Vec<String>,
+}
+
+/// A function-like macro whose whole body is one call with single-identifier
+/// arguments, such as `CAT(a, b) CAT_INDIRECT(a, b)`.
+#[derive(deser::Serialize, deser::Deserialize)]
+struct CcHeaderCallForwarder {
+    name: String,
+    parameters: Vec<String>,
+    target: String,
+    arguments: Vec<String>,
 }
 
 fn cc_header_probe_aliases<'a>(
@@ -7781,7 +7796,8 @@ fn cc_header_probe_pastes_are_resolved<'a>(
     for (name, _, _) in scans.iter().flat_map(|scan| &scan.macro_uses) {
         *definitions.entry(name).or_default() += 1;
     }
-    for forwarder in scans.iter().flat_map(|scan| &scan.paste_forwarders) {
+    let composed = cc_compose_paste_forwarders(&scans, &definitions);
+    for forwarder in scans.iter().flat_map(|scan| &scan.paste_forwarders).chain(&composed) {
         forwarders
             .entry(&forwarder.name)
             .or_default()
@@ -7818,6 +7834,68 @@ fn cc_header_probe_pastes_are_resolved<'a>(
         }
     }
     Ok(true)
+}
+
+/// Forwarders that reach a paste helper through call-only indirection
+/// (`CAT(a, b) CAT_INDIRECT(a, b)`), with the helper's parts rewritten in the
+/// caller's parameters. Each link must be the only definition of its name,
+/// and a literal argument must not name a macro, since arguments of a call
+/// are expanded before they reach the paste.
+fn cc_compose_paste_forwarders(
+    scans: &[&CcHeaderProbeScan],
+    definitions: &std::collections::HashMap<&str, usize>,
+) -> Vec<CcHeaderPasteForwarder> {
+    let mut known = std::collections::HashMap::<&str, Vec<CcHeaderPasteForwarder>>::new();
+    for forwarder in scans.iter().flat_map(|scan| &scan.paste_forwarders) {
+        known.entry(&forwarder.name).or_default().push(forwarder.clone());
+    }
+    let calls = scans.iter().flat_map(|scan| &scan.call_forwarders).collect::<Vec<_>>();
+    let mut composed = Vec::new();
+    let mut done = HashSet::new();
+    loop {
+        let mut progressed = false;
+        for call in &calls {
+            if done.contains(call.name.as_str())
+                || definitions.get(call.name.as_str()) != Some(&1)
+                || definitions.get(call.target.as_str()) != Some(&1)
+                || call.arguments.iter().any(|argument| {
+                    !call.parameters.contains(argument) && definitions.contains_key(argument.as_str())
+                })
+            {
+                continue;
+            }
+            let Some([target]) = known.get(call.target.as_str()).map(Vec::as_slice) else {
+                continue;
+            };
+            let Some(formals) = &target.parameters else {
+                continue;
+            };
+            let captured = |part: &String| !formals.contains(part) && call.parameters.contains(part);
+            if formals.len() != call.arguments.len() || target.parts.iter().any(captured) {
+                continue;
+            }
+            let parts = target
+                .parts
+                .iter()
+                .map(|part| match formals.iter().position(|formal| formal == part) {
+                    Some(index) => call.arguments[index].clone(),
+                    None => part.clone(),
+                })
+                .collect();
+            let forwarder = CcHeaderPasteForwarder {
+                name: call.name.clone(),
+                parameters: Some(call.parameters.clone()),
+                parts,
+            };
+            known.entry(&call.name).or_default().push(forwarder.clone());
+            composed.push(forwarder);
+            done.insert(call.name.as_str());
+            progressed = true;
+        }
+        if !progressed {
+            return composed;
+        }
+    }
 }
 
 /// Bind literal arguments to a pure concatenation helper. Caller parameters
@@ -8026,6 +8104,12 @@ fn cc_scan_header_probe_line(
         if parameters.contains(&b".".as_slice()) {
             parameter_names.push("__VA_ARGS__".into());
         }
+        if function
+            && !parameters.contains(&b".".as_slice())
+            && let Some(call) = cc_header_call_forwarder(&name, &parameter_names, body)
+        {
+            scan.call_forwarders.push(call);
+        }
         scan.macro_uses.push((name.clone(), parameter_names, uses));
         if let Some(target) = target {
             scan.aliases.push((name, target));
@@ -8122,6 +8206,35 @@ fn cc_header_macro_pastes(
         }
         scanned_to = end;
     }
+}
+
+fn cc_header_call_forwarder(
+    name: &str,
+    parameters: &[String],
+    body: &[&[u8]],
+) -> Option<CcHeaderCallForwarder> {
+    let [target, b"(", inner @ .., b")"] = body else {
+        return None;
+    };
+    if !cc_header_probe_identifier(target) {
+        return None;
+    }
+    let mut arguments = Vec::new();
+    for (index, token) in inner.iter().enumerate() {
+        let separator = index % 2 == 1;
+        if separator != (*token == b",") || (!separator && !cc_header_probe_identifier(token)) {
+            return None;
+        }
+        if !separator {
+            arguments.push(String::from_utf8_lossy(token).into_owned());
+        }
+    }
+    (inner.len() % 2 == 1).then(|| CcHeaderCallForwarder {
+        name: name.to_owned(),
+        parameters: parameters.to_vec(),
+        target: String::from_utf8_lossy(target).into_owned(),
+        arguments,
+    })
 }
 
 fn cc_header_probe_identifier(word: &[u8]) -> bool {

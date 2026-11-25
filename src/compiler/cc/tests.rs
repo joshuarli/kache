@@ -3295,6 +3295,7 @@ fn codegen_knob_stems_classify_in_both_polarities() {
         "unroll-loops",
         "fast-math",
         "finite-math-only",
+        "tree-vectorize",
     ] {
         for flag in [format!("-f{stem}"), format!("-fno-{stem}")] {
             let descs = refuse_descriptions(&["cc", "-c", "foo.c", "-o", "foo.o", &flag]);
@@ -8813,6 +8814,29 @@ fn header_probe_scanner_binds_constant_arguments_to_token_paste_helpers() {
 }
 
 #[test]
+fn header_probe_scanner_composes_call_only_paste_indirection() {
+    let probe = Some(vec![CcHeaderProbe { name: "optional.h".into(), quoted: false }]);
+    for paste in ["a##b", "a ## b"] {
+        let text = format!(
+            "#define CAT_INDIRECT(a, b) {paste}\n#define CAT(a, b) CAT_INDIRECT(a, b)\n#define FLAG(flag) (CAT(FLAG_INTERNAL_, flag)())\n#define FLAG_INTERNAL_ON() (1)\n#define HAS(x) __has_include(x)\n#if FLAG(ON) && HAS(<optional.h>)\n#endif\n"
+        );
+        assert_eq!(cc_header_probes(text.as_bytes()), probe, "{paste}");
+    }
+    let text = b"#define IND(a, b) a##b\n#define CAT(a, b) IND(a, b)\n#define CAT2(a, b) CAT(a, b)\n#define FLAG(f) CAT2(PFX_, f)\n#define HAS(x) __has_include(x)\n#if FLAG(ON) && HAS(<optional.h>)\n#endif\n";
+    assert_eq!(cc_header_probes(text), probe, "composition is transitive");
+    for text in [
+        "#define IND(a, b) a##b\n#define CAT(a, b) IND(a, b)\n#define HAS(x) __has_include(x)\n#if CAT(H, AS)(<optional.h>)\n#endif\n",
+        "#define IND(a, b) a##b\n#define CAT(a, b) IND(a, b)\n#define PFX H\n#define FLAG(f) CAT(PFX, f)\n#define HAS(x) __has_include(x)\n#if FLAG(AS)(<optional.h>)\n#endif\n",
+        "#define IND(a, b) a##b\n#define CAT(a, b) IND(a, b)\n#define CAT(a, b) OTHER(a, b)\n#define FLAG(f) CAT(PFX_, f)\n#define HAS(x) __has_include(x)\n#if FLAG(ON)(<optional.h>)\n#endif\n",
+        "#define IND(a, b) a##b\n#define IND(a, b) b##a\n#define CAT(a, b) IND(a, b)\n#define FLAG(f) CAT(PFX_, f)\n#define HAS(x) __has_include(x)\n#if FLAG(ON)(<optional.h>)\n#endif\n",
+        "#define IND(x) H##x\n#define CAT(H) IND(H)\n#define HAS(x) __has_include(x)\n#if CAT(AS)(<optional.h>)\n#endif\n",
+        "#define IND(a, b) a##b\n#define CAT(...) IND(__VA_ARGS__)\n#define HAS(x) __has_include(x)\n#if CAT(H, AS)(<optional.h>)\n#endif\n",
+    ] {
+        assert_eq!(cc_header_probes(text.as_bytes()), None, "{text}");
+    }
+}
+
+#[test]
 fn header_probe_macro_parameters_shadow_global_paste_helpers() {
     let text = b"#define JOIN(a,b) a##b\n#define SAFE(JOIN) (JOIN)\n#define HAS(x) __has_include(x)\n#if SAFE(1) && HAS(<optional.h>)\n#endif\n";
     assert_eq!(
@@ -11451,6 +11475,33 @@ fn chromium_codegen_flags_are_classified_and_keyed() {
     assert_ne!(raw(&["-mllvm", "-inlinehint-threshold=360"]), raw(&["-mllvm", "-inlinehint-threshold=361"]));
     assert_ne!(raw(&["-flto=thin"]), raw(&["-flto=full"]));
     assert_eq!(raw(&["-fcrash-diagnostics-dir=one"]), raw(&["-fcrash-diagnostics-dir=two"]));
+}
+
+#[test]
+fn chromium_linux_flags_are_classified_and_keyed() {
+    let flags = [
+        "-fPIE", "-fpie", "-fno-unique-section-names", "-funique-section-names",
+        "-ffile-compilation-dir=.", "-Wa,--crel,--allow-experimental-crel", "-Wa,--crel",
+        "-mamx-int8", "-mamx-tile", "-mavxvnniint8", "-mno-amx-tile",
+    ];
+    let mut args = vec!["clang++", "-c", "unit.cc"];
+    args.extend(flags);
+    let parsed = CcArgs::parse(&s(&args)).unwrap();
+    assert!(classify_and_trace_cc_flags(&parsed, &[]).is_empty());
+    let raw = |flags: &[&str]| {
+        let mut args = vec!["clang++", "-c", "unit.cc"];
+        args.extend_from_slice(flags);
+        cc_raw_flags_for_key(&CcArgs::parse(&s(&args)).unwrap(), &[])
+    };
+    assert_ne!(raw(&["-fPIE"]), raw(&[]));
+    assert_ne!(raw(&["-fPIE"]), raw(&["-fpie"]));
+    assert_ne!(raw(&["-fno-unique-section-names"]), raw(&["-funique-section-names"]));
+    assert_ne!(raw(&["-ffile-compilation-dir=."]), raw(&["-ffile-compilation-dir=/build"]));
+    assert_ne!(raw(&["-Wa,--crel,--allow-experimental-crel"]), raw(&[]));
+    for refused in ["-Wa,--crel,-adhln", "-Wa,--allow-experimental-crel,--gen-debug", "-Wa,--crelx"] {
+        let parsed = CcArgs::parse(&s(&["clang++", "-c", "unit.cc", refused])).unwrap();
+        assert!(!classify_and_trace_cc_flags(&parsed, &[]).is_empty(), "{refused}");
+    }
 }
 
 #[cfg(unix)]
