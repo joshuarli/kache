@@ -1016,7 +1016,7 @@ fn kache_event_since(kache: &Path, store: &Path, seen: &mut (usize, u64), record
                 .map(|counter| raw["summary"][*counter].as_u64().unwrap_or(0)).sum::<u64>();
         if recorded > seen.1 || Instant::now() >= deadline {
             let fresh = report.all_events.get(seen.0..).unwrap_or_default().iter()
-                .filter(|e| !e.is_probe_passthrough()).last().map(|e| e.result.clone());
+                .rfind(|e| !e.is_probe_passthrough()).map(|e| e.result.clone());
             *seen = (report.all_events.len(), recorded);
             return Ok(fresh);
         }
