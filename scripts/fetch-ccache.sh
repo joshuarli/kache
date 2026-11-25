@@ -17,11 +17,7 @@ if command -v curl >/dev/null 2>&1; then
 else
   wget -q -O "$archive.part" "$url"
 fi
-if command -v sha256sum >/dev/null 2>&1; then
-  got=$(sha256sum "$archive.part" | cut -d' ' -f1)
-else
-  got=$(shasum -a 256 "$archive.part" | cut -d' ' -f1)
-fi
+got=$(sha256sum "$archive.part" | cut -d' ' -f1)
 if [ "$got" != "$sha" ]; then
   echo "fetch-ccache: $url digest $got does not match the $lane pin $sha" >&2
   rm -f "$archive.part"
