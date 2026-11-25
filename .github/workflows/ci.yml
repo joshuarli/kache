@@ -61,9 +61,14 @@ jobs:
       - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: macos-26-e2e
+      - uses: laputa-systems/buildlib/setup@1cd9d482a684e72c68ac6fea7f4ee3a3e9c4a161 # v0.3.1
+        with:
+          tools: gluon
+          lock: .github/tools.lock.json
       - name: Install fixture tools
         run: |
-          for tool in cmake ninja; do
+          # cmake-build publishes Linux musl assets only.
+          for tool in cmake; do
             command -v "$tool" >/dev/null || brew install "$tool"
           done
       - name: Fixture scenarios
@@ -224,6 +229,7 @@ jobs:
       - name: Install compilers
         run: |
           sudo apt-get update
+          # llvm-prebuilt-musl publishes Linux musl assets; this job runs on glibc.
           sudo apt-get install -y --no-install-recommends build-essential clang
       - name: C/C++ differential oracle
         run: make cc-oracle TOOLCHAINS="gcc clang"
@@ -267,6 +273,7 @@ jobs:
       - name: Install fixture tools
         run: |
           sudo apt-get update
+          # cmake-build and gluon publish Linux musl assets; this job runs on glibc.
           sudo apt-get install -y --no-install-recommends \
             build-essential \
             cmake \
