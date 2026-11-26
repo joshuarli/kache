@@ -1,6 +1,29 @@
 {
   "schema": 1,
   "tools": {
+    "cmake": {
+      "assets": {
+        "aarch64-apple-darwin": {
+          "name": "cmake-4.4.5-aarch64-apple-darwin.tar.xz",
+          "sha256": "d1257c242d33a12bca60e0c1ac7f39b51a7f9b2eddde39b3f4b682ebdfbabb7e",
+          "size": 18839448
+        },
+        "aarch64-unknown-linux-musl": {
+          "name": "cmake-4.4.5-aarch64-unknown-linux-musl.tar.xz",
+          "sha256": "b7dd9a8ea2420967fa63b4f8b2e1973d55e00c40f708e386622d15791219a27f",
+          "size": 19019992
+        },
+        "x86_64-unknown-linux-musl": {
+          "name": "cmake-4.4.5-x86_64-unknown-linux-musl.tar.xz",
+          "sha256": "60e75652165f81c38d6db1d3dec2f173cf1529df85c185899f5e7a47fc0e1892",
+          "size": 20747536
+        }
+      },
+      "product": "cmake",
+      "repository": "laputa-systems/cmake-build",
+      "tag": "release-973009dec3f690c9d41122d27c6e8f93ef7f7e70",
+      "version": "4.4.5"
+    },
     "gluon": {
       "assets": {
         "aarch64-apple-darwin": {
